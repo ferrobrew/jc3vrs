@@ -1,0 +1,12 @@
+[package]
+name = "jc3vrs_payload"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+windows = { workspace = true }
+re-utilities = { workspace = true }
+detours-macro = { workspace = true }

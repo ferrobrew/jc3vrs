@@ -1,0 +1,30 @@
+[workspace]
+members = ["injector", "payload"]
+resolver = "3"
+default-members = ["injector"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# re-utilities = { path = "../re-utilities/utilities" }
+re-utilities = { git = "https://github.com/ferrobrew/re-utilities.git" }
+
+# re-utilities-injector = { path = "../re-utilities/injector" }
+re-utilities-injector = { git = "https://github.com/ferrobrew/re-utilities.git" }
+
+# detours-macro = { path = "../re-utilities/detours-macro" }
+detours-macro = { git = "https://github.com/ferrobrew/re-utilities.git" }
+
+# pyxis = { path = "../pyxis" }
+pyxis = { git = "https://github.com/ferrobrew/pyxis.git" }
