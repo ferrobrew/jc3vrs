@@ -54,15 +54,17 @@ fn shutdown() {
     }
     SHUTDOWN.set(true).unwrap();
 
-    uninstall();
+    std::thread::spawn(|| {
+        uninstall();
 
-    unsafe {
-        MessageBoxA(None, s!("Hello, world!"), s!("Time to unload!"), MB_OK);
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        if let Some(module) = MODULE.get() {
-            FreeLibraryAndExitThread(module.0, 0);
+        unsafe {
+            MessageBoxA(None, s!("Hello, world!"), s!("Time to unload!"), MB_OK);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if let Some(module) = MODULE.get() {
+                FreeLibraryAndExitThread(module.0, 0);
+            }
         }
-    }
+    });
 }
 
 static HOOK_LIBRARY: OnceLock<MainHookLibraries> = OnceLock::new();
@@ -108,7 +110,7 @@ fn uninstall() {
 fn game_update_hook(game: *const c_void) -> bool {
     unsafe {
         if GetAsyncKeyState(VK_F5.0 as _) != 0 {
-            std::thread::spawn(shutdown);
+            shutdown();
         }
     }
     GAME_UPDATE_HOOK.get().unwrap().call(game)
