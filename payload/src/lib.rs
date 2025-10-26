@@ -13,7 +13,7 @@ use re_utilities::{
 };
 use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 use windows::Win32::{
-    Foundation::{HINSTANCE, MAX_PATH},
+    Foundation::{HMODULE, MAX_PATH},
     System::{
         Console::{
             AllocConsole, ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, FreeConsole,
@@ -25,7 +25,7 @@ use windows::Win32::{
     UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY, VK_F5, VK_F7},
 };
 
-struct ThisModule(HINSTANCE);
+struct ThisModule(HMODULE);
 unsafe impl Send for ThisModule {}
 unsafe impl Sync for ThisModule {}
 
@@ -35,7 +35,7 @@ fn get_module_path() -> Option<PathBuf> {
     unsafe {
         if let Some(module) = MODULE.get() {
             let mut buffer = [0u16; MAX_PATH as usize];
-            let result = GetModuleFileNameW(module.0, &mut buffer);
+            let result = GetModuleFileNameW(Some(module.0), &mut buffer);
             if result > 0 {
                 let path_os_string = OsString::from_wide(&buffer[..result as usize]);
                 return Some(PathBuf::from(path_os_string));
@@ -74,7 +74,7 @@ fn setup_tracing() {
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
-pub extern "system" fn DllMain(module: HINSTANCE, reason: u32, _unk: *mut c_void) -> bool {
+pub extern "system" fn DllMain(module: HMODULE, reason: u32, _unk: *mut c_void) -> bool {
     if reason == DLL_PROCESS_ATTACH {
         unsafe {
             DisableThreadLibraryCalls(module).ok();
