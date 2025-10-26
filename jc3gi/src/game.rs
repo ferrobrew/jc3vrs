@@ -6,7 +6,7 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-struct Game {
+pub struct Game {
     _field_0: [u8; 16],
     m_CountAccumulator: u64,
     m_UpdateFrequency: u32,
@@ -26,7 +26,7 @@ fn _Game_size_check() {
     unreachable!()
 }
 impl Game {
-    unsafe fn get() -> Option<&'static mut Self> {
+    pub unsafe fn get() -> Option<&'static mut Self> {
         unsafe {
             let ptr: *mut Self = *(5417086568usize as *mut *mut Self);
             ptr.as_mut()

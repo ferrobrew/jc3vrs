@@ -1,5 +1,5 @@
 #[singleton(0x142E22E68), size(0x2C0 /* actually 0x2BC, but Pyxis requires an alignment of 8 */)]
-type Game {
+pub type Game {
     #[address(0x10)]
     m_CountAccumulator: u64,
     m_UpdateFrequency: u32,
