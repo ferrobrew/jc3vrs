@@ -64,6 +64,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9"
 
 [[package]]
+name = "clipboard-win"
+version = "5.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bde03770d3df201d4fb868f2c9c59e66a3e4e2bd06692a0fe701e7103c7e84d4"
+dependencies = [
+ "error-code",
+]
+
+[[package]]
 name = "crc"
 version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -206,6 +215,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1537accc50c9cab5a272c39300bdd0dd5dca210f6e5e8d70be048df9596e7ca2"
 
 [[package]]
+name = "error-code"
+version = "3.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -275,6 +290,7 @@ name = "jc3vrs_payload"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clipboard-win",
  "detours-macro",
  "egui",
  "egui-directx11",
@@ -498,7 +514,7 @@ checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
 [[package]]
 name = "pyxis"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/pyxis.git#7eaa9549770af503b17b23ce36865f610bfcde79"
+source = "git+https://github.com/ferrobrew/pyxis.git#4db11f9ddae71471fc09fbf617420ba52ffa5c34"
 dependencies = [
  "anyhow",
  "glob",

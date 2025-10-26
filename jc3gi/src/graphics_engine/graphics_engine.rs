@@ -6,11 +6,28 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::HICON};
+#[repr(i32)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
+pub enum ActiveCursor {
+    None = -1isize as _,
+    Arrow = 0isize as _,
+    Cross = 1isize as _,
+    Slider = 2isize as _,
+    Zoom = 3isize as _,
+}
+fn _ActiveCursor_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x4], ActiveCursor>([0u8; 0x4]);
+    }
+    unreachable!()
+}
 #[repr(C, align(8))]
 pub struct GraphicsEngine {
     _field_0: [u8; 24],
     pub m_CPUFinishedDrawingEvent: u32,
-    _field_1c: [u8; 3732],
+    _field_1c: [u8; 268],
+    pub m_ActiveCursor: crate::graphics_engine::graphics_engine::ActiveCursor,
+    _field_12c: [u8; 3460],
     pub m_Device: *mut crate::graphics_engine::device::Device,
     _field_eb8: [u8; 888],
     pub m_BackBufferLinear: *mut crate::graphics_engine::texture::Texture,
