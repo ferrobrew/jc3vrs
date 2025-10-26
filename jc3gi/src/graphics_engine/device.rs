@@ -6,11 +6,14 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 use windows::Win32::Graphics::{
-    Direct3D11::ID3D11Device, Dxgi::{IDXGISwapChain, IDXGIOutput},
+    Direct3D11::{ID3D11Device, ID3D11DeviceContext},
+    Dxgi::{IDXGISwapChain, IDXGIOutput},
 };
-#[repr(C, align(1))]
+#[repr(C, align(8))]
 pub struct Context {
-    _field_0: [u8; 36080],
+    _field_0: [u8; 32800],
+    pub m_Context: crate::graphics_engine::device::ID3D11DeviceContext,
+    _field_8028: [u8; 3272],
 }
 fn _Context_size_check() {
     unsafe {
@@ -32,7 +35,8 @@ impl std::convert::AsMut<Context> for Context {
 #[repr(C, align(8))]
 pub struct Device {
     pub m_Context: *mut crate::graphics_engine::device::Context,
-    _field_8: [u8; 24],
+    pub m_BackBuffer: *mut crate::graphics_engine::texture::Texture,
+    _field_10: [u8; 16],
     pub m_SwapChain: crate::graphics_engine::device::IDXGISwapChain,
     pub m_Device: crate::graphics_engine::device::ID3D11Device,
     _field_30: [u8; 8],

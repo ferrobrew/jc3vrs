@@ -1,4 +1,15 @@
 use graphics_engine::device::Device;
+use graphics_engine::texture::Texture;
+
+backend rust prologue r#"
+use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::HICON};
+"#;
+
+#[size(8), align(8)]
+extern type HICON;
+
+#[size(8), align(8)]
+extern type HWND;
 
 #[singleton(0x142E2B6F0), size(0x1F10 /* actually 0x1F09, but Pyxis requires an alignment of 8 */)]
 pub type GraphicsEngine {
@@ -7,4 +18,33 @@ pub type GraphicsEngine {
 
     #[address(0xEB0)]
     pub m_Device: *mut Device,
+
+    #[address(0x1230)]
+    pub m_BackBufferLinear: *mut Texture,
 }
+
+#[size(0x70)]
+pub type GraphicsParams {
+    pub m_AppTitle: *const u8,
+    pub m_Cursors: [HICON; 4],
+    pub m_Hwnd: HWND,
+    pub m_FullscreenWidth: i32,
+    pub m_FullscreenHeight: i32,
+    pub m_WindowedWidth: i32,
+    pub m_WindowedHeight: i32,
+    pub m_Fullscreen: bool,
+    pub m_HighResShadows: bool,
+
+    #[address(0x44)]
+    pub m_Width: u32,
+    pub m_Height: u32,
+    pub m_IsHighDef: bool,
+
+    #[address(0x50)]
+    pub m_DisplayPresentationInterval: u32,
+    pub m_RendertargetCount: u32,
+    pub m_RefreshRate: u16,
+}
+
+#[address(0x142_D3A_850)]
+pub extern graphics_params: GraphicsParams;
