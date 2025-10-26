@@ -8,10 +8,10 @@
 #[repr(C, align(8))]
 pub struct CameraManager {
     _field_0: [u8; 16],
-    m_DefaultCamera: crate::graphics_engine::camera::Camera,
-    m_ActiveCamera: *mut crate::graphics_engine::camera::Camera,
-    m_RenderCamera: *mut crate::graphics_engine::camera::Camera,
-    m_AspectRatio: f32,
+    pub m_DefaultCamera: crate::graphics_engine::camera::Camera,
+    pub m_ActiveCamera: *mut crate::graphics_engine::camera::Camera,
+    pub m_RenderCamera: *mut crate::graphics_engine::camera::Camera,
+    pub m_AspectRatio: f32,
     _field_5d4: [u8; 20],
 }
 fn _CameraManager_size_check() {

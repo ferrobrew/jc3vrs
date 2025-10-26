@@ -6,6 +6,7 @@ use std::{
 };
 
 use detours_macro::detour;
+use jc3gi::{graphics_engine::camera::Camera, types::math::Matrix4};
 use re_utilities::{
     ThreadSuspender,
     hook_library::{HookLibraries, HookLibrary},
@@ -21,7 +22,7 @@ use windows::Win32::{
         LibraryLoader::{DisableThreadLibraryCalls, FreeLibraryAndExitThread, GetModuleFileNameW},
         SystemServices::DLL_PROCESS_ATTACH,
     },
-    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F5},
+    UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY, VK_F5, VK_F7},
 };
 
 struct ThisModule(HINSTANCE);
@@ -137,7 +138,7 @@ unsafe impl Sync for MainHookLibraries {}
 fn install() {
     let mut patcher = re_utilities::Patcher::new();
     let hook_libraries = ThreadSuspender::for_block(|| {
-        HookLibraries::new([game_update_hook_library()]).enable(&mut patcher)
+        HookLibraries::new([game_update_hook_library(), camera_hook_library()]).enable(&mut patcher)
     });
     let hook_libraries = match hook_libraries {
         Ok(hook_libraries) => hook_libraries,
@@ -152,10 +153,6 @@ fn install() {
     });
 }
 
-fn game_update_hook_library() -> HookLibrary {
-    HookLibrary::new().with_static_binder(&GAME_UPDATE_HOOK_BINDER)
-}
-
 fn uninstall() {
     let hook_libraries = HOOK_LIBRARY.get().unwrap();
     let _ = ThreadSuspender::for_block(|| {
@@ -165,12 +162,71 @@ fn uninstall() {
     });
 }
 
+static FREEZE_TRANSFORM: Mutex<Option<Matrix4>> = Mutex::new(None);
+
+fn game_update_hook_library() -> HookLibrary {
+    HookLibrary::new().with_static_binder(&GAME_UPDATE_BINDER)
+}
+
 #[detour(address = 0x143_C7B_6A0)]
-fn game_update_hook(game: *const c_void) -> bool {
-    unsafe {
-        if GetAsyncKeyState(VK_F5.0 as _) != 0 {
-            shutdown();
+fn game_update(game: *const c_void) -> bool {
+    fn is_pressed(key: VIRTUAL_KEY) -> bool {
+        static LAST_INPUT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+        if LAST_INPUT
+            .lock()
+            .unwrap()
+            .is_some_and(|last_input| last_input.elapsed() < std::time::Duration::from_millis(250))
+        {
+            return false;
+        }
+
+        let output = unsafe { GetAsyncKeyState(key.0 as _) != 0 };
+
+        if output {
+            *LAST_INPUT.lock().unwrap() = Some(std::time::Instant::now());
+        }
+
+        output
+    }
+
+    if is_pressed(VK_F5) {
+        shutdown();
+    } else if is_pressed(VK_F7) {
+        unsafe {
+            let is_frozen = FREEZE_TRANSFORM.lock().unwrap().is_some();
+            if is_frozen {
+                tracing::info!("Unfreezing position");
+                FREEZE_TRANSFORM.lock().unwrap().take();
+            } else if let Some(cm) = jc3gi::graphics_engine::camera_manager::CameraManager::get()
+                && let Some(camera) = cm.m_ActiveCamera.as_mut()
+            {
+                tracing::info!(position=?camera.m_TransformF.data[12..15], "Freezing position");
+                FREEZE_TRANSFORM
+                    .lock()
+                    .unwrap()
+                    .replace(camera.m_TransformF);
+            }
         }
     }
-    GAME_UPDATE_HOOK.get().unwrap().call(game)
+
+    GAME_UPDATE.get().unwrap().call(game)
+}
+
+fn camera_hook_library() -> HookLibrary {
+    HookLibrary::new().with_static_binder(&CAMERA_UPDATE_RENDER_BINDER)
+}
+
+#[detour(address = 0x143_2EB_C70)]
+fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
+    unsafe {
+        if let Some(cm) = jc3gi::graphics_engine::camera_manager::CameraManager::get()
+            && camera == cm.m_ActiveCamera
+            && let Some(freeze_transform) = *FREEZE_TRANSFORM.lock().unwrap()
+            && let Some(camera) = camera.as_mut()
+        {
+            camera.m_TransformT0 = freeze_transform;
+            camera.m_TransformT1 = freeze_transform;
+        }
+    }
+    CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
 }
