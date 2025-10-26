@@ -2,11 +2,11 @@ use std::{
     ffi::{OsString, c_void},
     os::windows::ffi::OsStringExt as _,
     path::PathBuf,
-    sync::{Mutex, OnceLock},
+    sync::OnceLock,
 };
 
 use detours_macro::detour;
-use jc3gi::{graphics_engine::camera::Camera, types::math::Matrix4};
+use parking_lot::Mutex;
 use re_utilities::{
     ThreadSuspender,
     hook_library::{HookLibraries, HookLibrary},
@@ -158,8 +158,7 @@ fn uninstall() {
     let _ = ThreadSuspender::for_block(|| {
         hook_libraries
             .hook_libraries
-            .set_enabled(&mut hook_libraries.patcher.lock().unwrap(), false)
-    });
+            .set_enabled(&mut hook_libraries.patcher.lock(), false)
 }
 
 static FREEZE_TRANSFORM: Mutex<Option<Matrix4>> = Mutex::new(None);
@@ -174,7 +173,6 @@ fn game_update(game: *const c_void) -> bool {
         static LAST_INPUT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
         if LAST_INPUT
             .lock()
-            .unwrap()
             .is_some_and(|last_input| last_input.elapsed() < std::time::Duration::from_millis(250))
         {
             return false;
@@ -183,7 +181,7 @@ fn game_update(game: *const c_void) -> bool {
         let output = unsafe { GetAsyncKeyState(key.0 as _) != 0 };
 
         if output {
-            *LAST_INPUT.lock().unwrap() = Some(std::time::Instant::now());
+            *LAST_INPUT.lock() = Some(std::time::Instant::now());
         }
 
         output
@@ -193,18 +191,15 @@ fn game_update(game: *const c_void) -> bool {
         shutdown();
     } else if is_pressed(VK_F7) {
         unsafe {
-            let is_frozen = FREEZE_TRANSFORM.lock().unwrap().is_some();
+            let is_frozen = FREEZE_TRANSFORM.lock().is_some();
             if is_frozen {
                 tracing::info!("Unfreezing position");
-                FREEZE_TRANSFORM.lock().unwrap().take();
+                FREEZE_TRANSFORM.lock().take();
             } else if let Some(cm) = jc3gi::graphics_engine::camera_manager::CameraManager::get()
                 && let Some(camera) = cm.m_ActiveCamera.as_mut()
             {
                 tracing::info!(position=?camera.m_TransformF.data[12..15], "Freezing position");
-                FREEZE_TRANSFORM
-                    .lock()
-                    .unwrap()
-                    .replace(camera.m_TransformF);
+                FREEZE_TRANSFORM.lock().replace(camera.m_TransformF);
             }
         }
     }
@@ -221,7 +216,7 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
     unsafe {
         if let Some(cm) = jc3gi::graphics_engine::camera_manager::CameraManager::get()
             && camera == cm.m_ActiveCamera
-            && let Some(freeze_transform) = *FREEZE_TRANSFORM.lock().unwrap()
+            && let Some(freeze_transform) = *FREEZE_TRANSFORM.lock()
             && let Some(camera) = camera.as_mut()
         {
             camera.m_TransformT0 = freeze_transform;
