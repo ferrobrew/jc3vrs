@@ -1,5 +1,5 @@
 use detours_macro::detour;
-use jc3gi::graphics_engine::camera::Camera;
+use jc3gi::camera::camera::Camera;
 use re_utilities::hook_library::HookLibrary;
 
 pub(super) fn hook_library() -> HookLibrary {
