@@ -10,3 +10,5 @@ crate-type = ["cdylib"]
 windows = { workspace = true }
 re-utilities = { workspace = true }
 detours-macro = { workspace = true }
+
+jc3gi = { path = "../jc3gi" }

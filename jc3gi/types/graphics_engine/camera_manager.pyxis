@@ -1,0 +1,11 @@
+use graphics_engine::camera::Camera;
+
+#[singleton(0x142ED0E20), size(0x5E8)]
+pub type CameraManager {
+    #[address(0x10)]
+    m_DefaultCamera: Camera,
+    m_ActiveCamera: *mut Camera,
+    m_RenderCamera: *mut Camera,
+    #[address(0x5D0)]
+    m_AspectRatio: f32,
+}
