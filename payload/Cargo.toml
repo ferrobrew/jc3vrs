@@ -10,5 +10,8 @@ crate-type = ["cdylib"]
 windows = { workspace = true }
 re-utilities = { workspace = true }
 detours-macro = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 jc3gi = { path = "../jc3gi" }
