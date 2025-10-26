@@ -1,0 +1,27 @@
+backend rust prologue r#"
+use windows::Win32::Graphics::{Direct3D11::ID3D11Device, Dxgi::{IDXGISwapChain, IDXGIOutput}};
+"#;
+
+#[size(8), align(8)]
+extern type ID3D11Device;
+
+#[size(8), align(8)]
+extern type IDXGISwapChain;
+
+#[size(8), align(8)]
+extern type IDXGIOutput;
+
+#[size(0x8CF0)]
+pub type Context {
+
+}
+
+#[size(0x8D80)]
+pub type Device {
+    pub m_Context: *mut Context,
+    #[address(0x20)]
+    pub m_SwapChain: IDXGISwapChain,
+    pub m_Device: ID3D11Device,
+    #[address(0x38)]
+    pub m_DXGIOutput: IDXGIOutput,
+}

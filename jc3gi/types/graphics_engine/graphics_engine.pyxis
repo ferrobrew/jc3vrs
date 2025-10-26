@@ -1,5 +1,10 @@
+use graphics_engine::device::Device;
+
 #[singleton(0x142E2B6F0), size(0x1F10 /* actually 0x1F09, but Pyxis requires an alignment of 8 */)]
 pub type GraphicsEngine {
     #[address(0x18)]
-    m_CPUFinishedDrawingEvent: u32,
+    pub m_CPUFinishedDrawingEvent: u32,
+
+    #[address(0xEB0)]
+    pub m_Device: *mut Device,
 }

@@ -8,8 +8,10 @@
 #[repr(C, align(8))]
 pub struct GraphicsEngine {
     _field_0: [u8; 24],
-    m_CPUFinishedDrawingEvent: u32,
-    _field_1c: [u8; 7924],
+    pub m_CPUFinishedDrawingEvent: u32,
+    _field_1c: [u8; 3732],
+    pub m_Device: *mut crate::graphics_engine::device::Device,
+    _field_eb8: [u8; 4184],
 }
 fn _GraphicsEngine_size_check() {
     unsafe {

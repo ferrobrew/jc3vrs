@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 glam = "0.30.8"
+windows = { workspace = true }
 
 [build-dependencies]
 pyxis = { workspace = true }
