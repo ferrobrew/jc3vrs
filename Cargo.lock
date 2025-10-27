@@ -294,6 +294,7 @@ dependencies = [
  "detours-macro",
  "egui",
  "egui-directx11",
+ "glam",
  "jc3gi",
  "parking_lot",
  "re-utilities",

@@ -5,9 +5,11 @@
     clippy::unnecessary_cast
 )]
 #![cfg_attr(any(), rustfmt::skip)]
-#[repr(C, align(1))]
+#[repr(C, align(8))]
 pub struct GameCameraManager {
-    _field_0: [u8; 1880],
+    _field_0: [u8; 224],
+    pub m_ControlContext: crate::camera::camera_context::CameraControlContext,
+    _field_6b0: [u8; 168],
 }
 fn _GameCameraManager_size_check() {
     unsafe {

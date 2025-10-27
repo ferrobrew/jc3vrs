@@ -1,0 +1,15 @@
+use types::math::Matrix4;
+use types::math::Vector3;
+
+#[size(0x3540)]
+pub type Character {
+    #[address(0x2830)]
+    m_WorldMatrixT1: Matrix4,
+}
+impl Character {
+    #[address(0x143_AD7_B70)]
+    pub fn get_local_player_character() -> *mut Character;
+
+    #[address(0x143_AAE_940)]
+    pub fn get_head_position(&mut self, position: *mut Vector3) -> *mut Vector3;
+}

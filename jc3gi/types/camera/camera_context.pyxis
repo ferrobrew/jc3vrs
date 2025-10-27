@@ -1,0 +1,84 @@
+use types::math::Matrix4;
+use types::math::Vector3;
+
+#[size(0x1C), align(4)]
+pub type CameraDOFParameters {
+    pub m_FocalDistanceNear: f32,
+    pub m_FocalDistanceFar: f32,
+    pub m_MaxDOF: f32,
+    pub m_MaxDOFNear: f32,
+    pub m_DOFSmoothness: f32,
+    pub m_DOFSmoothnessNear: f32,
+    pub m_DOFHeightFalloff: f32,
+}
+
+#[size(0x150)]
+pub type CameraContext {
+    pub m_CameraTransform: Matrix4,
+    pub m_AlternateAimTransform: Matrix4,
+    pub m_ListenerTransform: Matrix4,
+    pub m_FOV: f32,
+    pub m_DOFParameters: CameraDOFParameters,
+    pub m_MotionBlurShutterExposure: f32,
+    pub m_MaxMotionBlur: f32,
+    pub m_MotionBlurFactor: f32,
+    pub m_RadialBlurFactor: f32,
+    pub m_RadialBlurOffset: f32,
+    pub m_RadialBlurPosX: f32,
+    pub m_RadialBlurPosY: f32,
+    pub m_ExposureValue: f32,
+    pub m_BloomLighten: f32,
+    pub m_BloomContrast: f32,
+    pub m_BloomSecontaryLighten: f32,
+    pub m_BloomThreshold: f32,
+    pub m_ColorTint: Vector3,
+    pub m_ColorTintCurveTexWeight: f32,
+    pub m_VignetteIndex: i32,
+
+    #[address(0x128)]
+    pub m_ShadowFocusAlias: u64,
+    pub m_ColorTintCurveTexturePath: u32,
+
+    #[address(0x138)]
+    pub m_ShadowRadiusNear: f32,
+    pub m_ShadowRadiusMedium: f32,
+    pub m_ShadowRadiusFar: f32,
+    pub m_ShadowFocusOffsetNear: f32,
+    pub m_ShadowFocusOffsetMedium: f32,
+    pub m_ShadowFocusOffsetFar: f32,
+}
+
+#[size(0x50)]
+pub type CameraEnvironmentPresetWeights {
+    pub m_DOFParameters: CameraDOFParameters,
+    pub m_MotionBlurShutterExposureWeight: f32,
+    pub m_MotionBlurFactorWeight: f32,
+    pub m_MaxMotionBlurWeight: f32,
+    pub m_RadialBlurFactorWeight: f32,
+    pub m_RadialBlurOffsetWeight: f32,
+    pub m_RadialBlurPosXWeight: f32,
+    pub m_RadialBlurPosYWeight: f32,
+    pub m_BloomContrastWeight: f32,
+    pub m_BloomLightenWeight: f32,
+    pub m_BloomSecontaryLightenWeight: f32,
+    pub m_BloomThresholdWeight: f32,
+    pub m_ColorTintWeight: f32,
+    pub m_ColorTintCurveTexWeight: f32,
+}
+
+#[size(0x5D0)]
+pub type CameraControlContext {
+  pub m_Dt: f32,
+  pub m_RenderDt: f32,
+  pub m_RenderDtf: f32,
+  pub m_BlendDt: f32,
+  pub m_CAMERA_DT_EPSILON: f32,
+
+  #[address(0x20)]
+  pub m_PreviousCameraContext: CameraContext,
+  pub m_NextCameraContext: CameraContext,
+  pub m_PreviousRenderContext: CameraContext,
+  pub m_NextRenderContext: CameraContext,
+  pub m_PresetWeights: CameraEnvironmentPresetWeights,
+  pub m_ActivePipelines: [u8; 32],
+}

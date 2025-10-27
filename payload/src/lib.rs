@@ -91,21 +91,58 @@ fn update() {
         shutdown();
     }
 
-    if let Some(egui_state) = EguiState::get().as_mut() {
-        egui_state.run(|ctx| {
-            egui::Window::new("Hello world!").show(ctx, |ui| {
-                ui.label("Hi from egui!");
-                ui.spinner();
-            });
-        });
-    }
+    let panic = std::panic::catch_unwind(|| {
+        if let Some(egui_state) = EguiState::get().as_mut() {
+            egui_state.run(|ctx| {
+                egui::Window::new("Hello world!").show(ctx, |ui| unsafe {
+                    if let Some(gcm) = jc3gi::camera::game_camera_manager::GameCameraManager::get()
+                    {
+                        let next_camera_context = &gcm.m_ControlContext.m_NextCameraContext;
 
-    if util::is_pressed(VK_F5) {
+                        let next_transform: glam::Mat4 =
+                            next_camera_context.m_CameraTransform.into();
+                        let aim_transform: glam::Mat4 =
+                            next_camera_context.m_AlternateAimTransform.into();
+                        let listener_transform: glam::Mat4 =
+                            next_camera_context.m_ListenerTransform.into();
+
+                        let fov = next_camera_context.m_FOV.to_degrees();
+
+                        ui.label(format!("Next transform: {next_transform:?}"));
+                        ui.label(format!("Aim transform: {aim_transform:?}"));
+                        ui.label(format!("Listener transform: {listener_transform:?}"));
+                        ui.label(format!("FOV: {fov}"));
+
+                        if let Some(character) =
+                            jc3gi::character::character::Character::get_local_player_character()
+                                .as_mut()
+                        {
+                            let mut head_position = jc3gi::types::math::Vector3::default();
+                            character.get_head_position(&mut head_position);
+                            let head_position: glam::Vec3 = head_position.into();
+
+                            ui.label(format!("Head position: {head_position:?}"));
+                        }
+                    }
+                });
+            });
+        }
+
+        if util::is_pressed(VK_F5) {
+            shutdown();
+        } else if util::is_pressed(VK_F6)
+            && let Some(egui_state) = EguiState::get().as_mut()
+        {
+            egui_state.toggle_game_input_capture();
+        }
+    });
+    if let Err(e) = panic {
+        let panic_msg = e
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()));
+        tracing::error!("Panic in update, shutting down: {panic_msg:?}");
         shutdown();
-    } else if util::is_pressed(VK_F6)
-        && let Some(egui_state) = EguiState::get().as_mut()
-    {
-        egui_state.toggle_game_input_capture();
     }
 }
 

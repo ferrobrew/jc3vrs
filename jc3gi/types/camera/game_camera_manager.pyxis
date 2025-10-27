@@ -1,3 +1,7 @@
+use camera::camera_context::CameraControlContext;
+
 #[singleton(0x142F186B0), size(0x758)]
 pub type GameCameraManager {
+    #[address(0xE0)]
+    pub m_ControlContext: CameraControlContext,
 }
