@@ -123,6 +123,32 @@ fn update() {
 
                             ui.label(format!("Head position: {head_position:?}"));
                         }
+
+                        {
+                            let mut camera_offset = hooks::camera::CAMERA_HEAD_OFFSET.lock();
+                            ui.add(
+                                egui::Slider::new(&mut camera_offset.x, -1.0..=1.0).text("Head X"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut camera_offset.y, -1.0..=1.0).text("Head Y"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut camera_offset.z, -1.0..=1.0).text("Head Z"),
+                            );
+                        }
+
+                        {
+                            let mut camera_offset = hooks::camera::CAMERA_BODY_OFFSET.lock();
+                            ui.add(
+                                egui::Slider::new(&mut camera_offset.x, -1.0..=1.0).text("Body X"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut camera_offset.y, -1.0..=1.0).text("Body Y"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut camera_offset.z, -1.0..=1.0).text("Body Z"),
+                            );
+                        }
                     }
                 });
             });
