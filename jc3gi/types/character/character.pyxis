@@ -3,7 +3,8 @@ use types::math::Vector3;
 
 #[size(0x3540)]
 pub type Character {
-    #[address(0x2830)]
+    #[address(0x27F0)]
+    pub m_WorldMatrixT0: Matrix4,
     pub m_WorldMatrixT1: Matrix4,
 }
 impl Character {

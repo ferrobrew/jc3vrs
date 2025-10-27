@@ -7,7 +7,8 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 pub struct Character {
-    _field_0: [u8; 10288],
+    _field_0: [u8; 10224],
+    pub m_WorldMatrixT0: crate::types::math::Matrix4,
     pub m_WorldMatrixT1: crate::types::math::Matrix4,
     _field_2870: [u8; 3280],
 }

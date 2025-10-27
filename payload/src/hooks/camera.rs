@@ -59,36 +59,57 @@ fn camera_tree_update_render_contexts(
         let Some(local_character) = Character::get_local_player_character().as_mut() else {
             return;
         };
-
-        let character_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
-        let (_, character_rotation, _character_position) =
-            character_matrix.to_scale_rotation_translation();
+        let Some(ccc) = camera_control_context.as_mut() else {
+            return;
+        };
 
         let mut head_matrix = Matrix4::default();
         local_character.get_safe_bone_matrix(SafeBoneIndex::HEAD, &mut head_matrix);
         let head_matrix = glam::Mat4::from(head_matrix);
 
-        let head_worldspace_matrix = character_matrix * head_matrix;
-        let (_, head_rotation, mut head_position) =
-            head_worldspace_matrix.to_scale_rotation_translation();
+        let character_t0_matrix = glam::Mat4::from(local_character.m_WorldMatrixT0);
+        let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
 
         let camera_settings = *CAMERA_SETTINGS.lock();
-        head_position += head_rotation * camera_settings.head_offset;
-        head_position += character_rotation * camera_settings.body_offset;
 
-        let Some(ccc) = camera_control_context.as_mut() else {
-            return;
-        };
+        patch_context(
+            &mut ccc.m_PreviousCameraContext,
+            calculate_head_position(character_t0_matrix, head_matrix, &camera_settings),
+            camera_settings.blurs_enabled,
+        );
+        patch_context(
+            &mut ccc.m_PreviousRenderContext,
+            calculate_head_position(character_t0_matrix, head_matrix, &camera_settings),
+            camera_settings.blurs_enabled,
+        );
         patch_context(
             &mut ccc.m_NextCameraContext,
-            head_position,
+            calculate_head_position(character_t1_matrix, head_matrix, &camera_settings),
             camera_settings.blurs_enabled,
         );
         patch_context(
             &mut ccc.m_NextRenderContext,
-            head_position,
+            calculate_head_position(character_t1_matrix, head_matrix, &camera_settings),
             camera_settings.blurs_enabled,
         );
+    }
+
+    fn calculate_head_position(
+        character_matrix: glam::Mat4,
+        head_matrix: glam::Mat4,
+        camera_settings: &CameraSettings,
+    ) -> glam::Vec3 {
+        let (_, character_rotation, _character_position) =
+            character_matrix.to_scale_rotation_translation();
+
+        let head_worldspace_matrix = character_matrix * head_matrix;
+        let (_, head_rotation, mut head_position) =
+            head_worldspace_matrix.to_scale_rotation_translation();
+
+        head_position += head_rotation * camera_settings.head_offset;
+        head_position += character_rotation * camera_settings.body_offset;
+
+        head_position
     }
 
     fn patch_context(context: &mut CameraContext, head_position: glam::Vec3, blurs_enabled: bool) {
