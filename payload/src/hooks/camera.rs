@@ -28,8 +28,22 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
     CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
 }
 
-pub static CAMERA_BODY_OFFSET: Mutex<glam::Vec3> = Mutex::new(glam::Vec3::new(0.0, 0.1, 0.0));
-pub static CAMERA_HEAD_OFFSET: Mutex<glam::Vec3> = Mutex::new(glam::Vec3::new(0.0, -0.1, 0.0));
+#[derive(Copy, Clone)]
+pub struct CameraSettings {
+    pub body_offset: glam::Vec3,
+    pub head_offset: glam::Vec3,
+    pub blurs_enabled: bool,
+}
+impl CameraSettings {
+    pub const fn new() -> Self {
+        Self {
+            body_offset: glam::Vec3::new(0.0, 0.1, 0.0),
+            head_offset: glam::Vec3::new(0.0, -0.1, 0.0),
+            blurs_enabled: false,
+        }
+    }
+}
+pub static CAMERA_SETTINGS: Mutex<CameraSettings> = Mutex::new(CameraSettings::new());
 
 #[detour(address = 0x143_705_610)]
 fn camera_tree_update_render_contexts(
@@ -58,22 +72,37 @@ fn camera_tree_update_render_contexts(
         let (_, head_rotation, mut head_position) =
             head_worldspace_matrix.to_scale_rotation_translation();
 
-        head_position += head_rotation * *CAMERA_HEAD_OFFSET.lock();
-        head_position += character_rotation * *CAMERA_BODY_OFFSET.lock();
+        let camera_settings = *CAMERA_SETTINGS.lock();
+        head_position += head_rotation * camera_settings.head_offset;
+        head_position += character_rotation * camera_settings.body_offset;
 
         let Some(ccc) = camera_control_context.as_mut() else {
             return;
         };
-        patch_context(&mut ccc.m_NextCameraContext, head_position);
-        patch_context(&mut ccc.m_NextRenderContext, head_position);
+        patch_context(
+            &mut ccc.m_NextCameraContext,
+            head_position,
+            camera_settings.blurs_enabled,
+        );
+        patch_context(
+            &mut ccc.m_NextRenderContext,
+            head_position,
+            camera_settings.blurs_enabled,
+        );
     }
 
-    fn patch_context(context: &mut CameraContext, head_position: glam::Vec3) {
+    fn patch_context(context: &mut CameraContext, head_position: glam::Vec3, blurs_enabled: bool) {
         context.m_CameraTransform.data[12] = head_position.x;
         context.m_CameraTransform.data[13] = head_position.y;
         context.m_CameraTransform.data[14] = head_position.z;
         context.m_AlternateAimTransform = context.m_CameraTransform;
         context.m_ListenerTransform = context.m_CameraTransform;
         context.m_FOV = 90.0_f32.to_radians();
+
+        if !blurs_enabled {
+            context.m_MaxMotionBlur = 0.0;
+            context.m_MotionBlurFactor = 0.0_f32;
+            context.m_RadialBlurFactor = 0.0;
+        }
     }
 }

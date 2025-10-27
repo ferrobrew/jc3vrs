@@ -125,29 +125,17 @@ fn update() {
                         }
 
                         {
-                            let mut camera_offset = hooks::camera::CAMERA_HEAD_OFFSET.lock();
-                            ui.add(
-                                egui::Slider::new(&mut camera_offset.x, -1.0..=1.0).text("Head X"),
-                            );
-                            ui.add(
-                                egui::Slider::new(&mut camera_offset.y, -1.0..=1.0).text("Head Y"),
-                            );
-                            ui.add(
-                                egui::Slider::new(&mut camera_offset.z, -1.0..=1.0).text("Head Z"),
-                            );
-                        }
+                            let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
+                            use egui::Slider;
+                            ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
+                            ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
+                            ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text("Head Z"));
 
-                        {
-                            let mut camera_offset = hooks::camera::CAMERA_BODY_OFFSET.lock();
-                            ui.add(
-                                egui::Slider::new(&mut camera_offset.x, -1.0..=1.0).text("Body X"),
-                            );
-                            ui.add(
-                                egui::Slider::new(&mut camera_offset.y, -1.0..=1.0).text("Body Y"),
-                            );
-                            ui.add(
-                                egui::Slider::new(&mut camera_offset.z, -1.0..=1.0).text("Body Z"),
-                            );
+                            ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
+                            ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
+                            ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
+
+                            ui.add(egui::Checkbox::new(&mut cs.blurs_enabled, "Blurs"));
                         }
                     }
                 });
