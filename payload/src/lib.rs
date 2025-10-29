@@ -172,6 +172,8 @@ fn update() {
                     ui.heading("Camera");
                     {
                         let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
+                        ui.checkbox(&mut cs.enabled, "Enabled");
+
                         use egui::Slider;
                         ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
                         ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
