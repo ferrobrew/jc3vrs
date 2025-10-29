@@ -1,8 +1,13 @@
 use types::math::Matrix4;
 use types::math::Vector3;
+use types::vector_math::AlignedVector3;
+use types::vector_math::AlignedQuat;
 
 #[size(0x3540)]
 pub type Character {
+    #[address(0x1780)]
+    pub m_AnimatedModel: AnimatedModel,
+
     #[address(0x262A)]
     pub m_IsLocalCharacter: bool,
 
@@ -17,8 +22,36 @@ impl Character {
     #[address(0x143_AAE_940)]
     pub fn get_head_position(&mut self, position: *mut Vector3) -> *mut Vector3;
 
+    #[address(0x143_A99_0A0)]
+    pub fn get_safe_index(&mut self, safe_index: SafeBoneIndex) -> u64;
+
     #[address(0x143_A99_1B0)]
     pub fn get_safe_bone_matrix(&mut self, safe_index: SafeBoneIndex, matrix: *mut Matrix4);
+}
+
+#[size(0x240)]
+pub type AnimatedModel {
+    #[address(0x178)]
+    pub animation_controller: *mut AnimationController,
+}
+
+pub type AnimationController {}
+impl AnimationController {
+    #[address(0x143_6CB_7C0)]
+    pub fn get_bone_index(&self, hash: u32) -> u64;
+
+    #[address(0x143_6DA_C90)]
+    pub fn get_joint(&mut self, index: u64, joint: *mut Joint);
+
+    #[address(0x143_6DA_CF0)]
+    pub fn set_joint(&mut self, index: u64, joint: *mut Joint);
+}
+
+#[copyable, defaultable, align(16), size(0x30)]
+pub type Joint {
+    pub m_Translation: AlignedVector3,
+    pub m_Orientation: AlignedQuat,
+    pub m_Scale: AlignedVector3,
 }
 
 // Note: We might want to add support for putting this in an impl at some point

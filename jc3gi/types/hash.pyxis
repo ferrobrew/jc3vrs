@@ -1,0 +1,12 @@
+type Hashlittle {}
+impl Hashlittle {
+    // Hack: https://github.com/ferrobrew/pyxis/issues/27 no free functions
+    #[address(0x144_A8C_B00)]
+    fn hashlittle(data: *const u8, len: u64, seed: u32) -> u64;
+}
+
+backend rust epilogue r#"
+pub fn hashlittle(data: &[u8]) -> u64 {
+    unsafe { Hashlittle::hashlittle(data.as_ptr(), data.len() as u64, 0) }
+}
+"#;

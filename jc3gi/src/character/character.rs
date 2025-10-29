@@ -6,8 +6,83 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+pub struct AnimatedModel {
+    _field_0: [u8; 376],
+    pub animation_controller: *mut crate::character::character::AnimationController,
+    _field_180: [u8; 192],
+}
+fn _AnimatedModel_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x240], AnimatedModel>([0u8; 0x240]);
+    }
+    unreachable!()
+}
+impl AnimatedModel {}
+impl std::convert::AsRef<AnimatedModel> for AnimatedModel {
+    fn as_ref(&self) -> &AnimatedModel {
+        self
+    }
+}
+impl std::convert::AsMut<AnimatedModel> for AnimatedModel {
+    fn as_mut(&mut self) -> &mut AnimatedModel {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct AnimationController {}
+impl AnimationController {
+    pub unsafe fn get_bone_index(&self, hash: u32) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *const Self, hash: u32) -> u64 = ::std::mem::transmute(
+                0x1436CB7C0 as usize,
+            );
+            f(self as *const Self as _, hash)
+        }
+    }
+    pub unsafe fn get_joint(
+        &mut self,
+        index: u64,
+        joint: *mut crate::character::character::Joint,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                index: u64,
+                joint: *mut crate::character::character::Joint,
+            ) = ::std::mem::transmute(0x1436DAC90 as usize);
+            f(self as *mut Self as _, index, joint)
+        }
+    }
+    pub unsafe fn set_joint(
+        &mut self,
+        index: u64,
+        joint: *mut crate::character::character::Joint,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                index: u64,
+                joint: *mut crate::character::character::Joint,
+            ) = ::std::mem::transmute(0x1436DACF0 as usize);
+            f(self as *mut Self as _, index, joint)
+        }
+    }
+}
+impl std::convert::AsRef<AnimationController> for AnimationController {
+    fn as_ref(&self) -> &AnimationController {
+        self
+    }
+}
+impl std::convert::AsMut<AnimationController> for AnimationController {
+    fn as_mut(&mut self) -> &mut AnimationController {
+        self
+    }
+}
+#[repr(C, align(8))]
 pub struct Character {
-    _field_0: [u8; 9770],
+    _field_0: [u8; 6016],
+    pub m_AnimatedModel: crate::character::character::AnimatedModel,
+    _field_19c0: [u8; 3178],
     pub m_IsLocalCharacter: bool,
     _field_262b: [u8; 453],
     pub m_WorldMatrixT0: crate::types::math::Matrix4,
@@ -43,6 +118,18 @@ impl Character {
             f(self as *mut Self as _, position)
         }
     }
+    pub unsafe fn get_safe_index(
+        &mut self,
+        safe_index: crate::character::character::SafeBoneIndex,
+    ) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                safe_index: crate::character::character::SafeBoneIndex,
+            ) -> u64 = ::std::mem::transmute(0x143A990A0 as usize);
+            f(self as *mut Self as _, safe_index)
+        }
+    }
     pub unsafe fn get_safe_bone_matrix(
         &mut self,
         safe_index: crate::character::character::SafeBoneIndex,
@@ -65,6 +152,30 @@ impl std::convert::AsRef<Character> for Character {
 }
 impl std::convert::AsMut<Character> for Character {
     fn as_mut(&mut self) -> &mut Character {
+        self
+    }
+}
+#[derive(Copy, Clone, Default)]
+#[repr(C, align(16))]
+pub struct Joint {
+    pub m_Translation: crate::types::vector_math::AlignedVector3,
+    pub m_Orientation: crate::types::vector_math::AlignedQuat,
+    pub m_Scale: crate::types::vector_math::AlignedVector3,
+}
+fn _Joint_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x30], Joint>([0u8; 0x30]);
+    }
+    unreachable!()
+}
+impl Joint {}
+impl std::convert::AsRef<Joint> for Joint {
+    fn as_ref(&self) -> &Joint {
+        self
+    }
+}
+impl std::convert::AsMut<Joint> for Joint {
+    fn as_mut(&mut self) -> &mut Joint {
         self
     }
 }

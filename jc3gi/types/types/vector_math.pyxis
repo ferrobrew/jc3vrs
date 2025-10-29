@@ -1,0 +1,10 @@
+#[copyable, defaultable, align(16)]
+pub type AlignedVector3 {
+    pub data: [f32; 3],
+    pub _w: f32, // alignment
+}
+
+#[copyable, defaultable, align(16)]
+pub type AlignedQuat {
+    pub data: [f32; 4],
+}
