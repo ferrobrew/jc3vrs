@@ -127,49 +127,61 @@ fn update() {
             }
 
             egui_state.run(|ctx| {
-                egui::Window::new("Hello world!").show(ctx, |ui| unsafe {
-                    if let Some(gcm) = jc3gi::camera::game_camera_manager::GameCameraManager::get()
+                egui::Window::new("Debug").show(ctx, |ui| unsafe {
+                    let Some(game) = jc3gi::game::Game::get() else {
+                        return;
+                    };
+                    let Some(clock) = jc3gi::clock::Clock::get() else {
+                        return;
+                    };
+
+                    fn patchbox(ui: &mut egui::Ui, label: &str, value: *mut bool) {
+                        let mut enabled = unsafe { *value };
+                        if ui.checkbox(&mut enabled, label).changed()
+                            && let Some(mut patcher) = hooks::patcher()
+                        {
+                            unsafe {
+                                patcher.patch(
+                                    value as *const bool as usize,
+                                    &[if enabled { 1 } else { 0 }],
+                                );
+                            }
+                        }
+                    }
+
+                    ui.heading("Game");
+                    ui.label(format!("Update frequency: {}Hz", game.m_UpdateFrequency));
+                    ui.label(format!("Update flags: {:X}", game.m_UpdateFlags));
+                    ui.label(format!(
+                        "Interpolation method: {:X}",
+                        game.m_InterpolationMethod
+                    ));
+                    patchbox(ui, "Decouple enabled", &mut game.m_DecoupleEnabled);
+
+                    ui.heading("Clock");
+                    ui.label(format!("FPS: {}", clock.m_FPS));
+                    ui.label(format!("SPF: {}", clock.m_SPF));
+                    ui.label(format!("Real FPS: {}", clock.m_RealFPS));
+                    ui.label(format!("Real SPF: {}", clock.m_RealSPF));
+                    ui.label(format!("Update speed: {}", clock.m_UpdateSpeed));
+                    ui.label(format!("Force to FPS: {}", clock.m_ForceToThisFPS));
+                    ui.label(format!("Force to SPF: {}", clock.m_ForceToThisSPF));
+                    patchbox(ui, "Stop", &mut clock.m_Stop);
+                    patchbox(ui, "Force to FPS", &mut clock.m_ForceToFps);
+
+                    ui.heading("Camera");
                     {
-                        let next_camera_context = &gcm.m_ControlContext.m_NextCameraContext;
+                        let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
+                        use egui::Slider;
+                        ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
+                        ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
+                        ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text("Head Z"));
 
-                        let next_transform: glam::Mat4 =
-                            next_camera_context.m_CameraTransform.into();
-                        let aim_transform: glam::Mat4 =
-                            next_camera_context.m_AlternateAimTransform.into();
-                        let listener_transform: glam::Mat4 =
-                            next_camera_context.m_ListenerTransform.into();
+                        ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
+                        ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
+                        ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
 
-                        let fov = next_camera_context.m_FOV.to_degrees();
-
-                        ui.label(format!("Next transform: {next_transform:?}"));
-                        ui.label(format!("Aim transform: {aim_transform:?}"));
-                        ui.label(format!("Listener transform: {listener_transform:?}"));
-                        ui.label(format!("FOV: {fov}"));
-
-                        if let Some(character) =
-                            jc3gi::character::character::Character::get_local_player_character()
-                                .as_mut()
-                        {
-                            let mut head_position = jc3gi::types::math::Vector3::default();
-                            character.get_head_position(&mut head_position);
-                            let head_position: glam::Vec3 = head_position.into();
-
-                            ui.label(format!("Head position: {head_position:?}"));
-                        }
-
-                        {
-                            let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
-                            use egui::Slider;
-                            ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
-                            ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
-                            ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text("Head Z"));
-
-                            ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
-                            ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
-                            ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
-
-                            ui.add(egui::Checkbox::new(&mut cs.blurs_enabled, "Blurs"));
-                        }
+                        ui.add(egui::Checkbox::new(&mut cs.blurs_enabled, "Blurs"));
                     }
                 });
             });

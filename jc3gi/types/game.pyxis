@@ -1,18 +1,27 @@
 #[singleton(0x142E22E68), size(0x2C0 /* actually 0x2BC, but Pyxis requires an alignment of 8 */)]
 pub type Game {
     #[address(0x10)]
-    m_CountAccumulator: u64,
-    m_UpdateFrequency: u32,
-    m_DefaultUpdateFrequency: u32,
+    pub m_CountAccumulator: u64,
+    pub m_UpdateFrequency: u32,
+    pub m_DefaultUpdateFrequency: u32,
 
     #[address(0x34)]
-    m_Exit: u8,
+    pub m_Exit: u8,
 
     #[address(0x80)]
-    m_FilteredDrawTime: u64,
+    pub m_FilteredDrawTime: u64,
 
     #[address(0x94)]
-    m_RenderCount: u32,
+    pub m_RenderCount: u32,
+    pub m_InterpolationMethod: u32,
+    pub m_PrevInterpolationMethod: u32,
+    pub m_InterpolationOverride: u32,
+
+    #[address(0x260)]
+    pub m_DecoupleEnabled: bool,
+
+    #[address(0x2B8)]
+    pub m_UpdateFlags: u32,
 }
 
 #[singleton(0x142F3404C), copyable]

@@ -1,0 +1,26 @@
+#[singleton(0x142_ED0_E78), size(0x70)]
+pub type Clock {
+    pub __vftable: u64,
+    pub m_HasBeenInitialized: bool,
+
+    #[address(0x10)]
+    pub m_FPS: f32,
+    pub m_SPF: f32,
+    pub m_RealFPS: f32,
+    pub m_RealSPF: f32,
+    pub m_UpdateSpeed: f32,
+    pub m_ForceToThisFPS: f32,
+    pub m_ForceToThisSPF: f32,
+    pub m_Stop: bool,
+    pub m_ForceToFps: bool,
+
+    #[address(0x30)]
+    pub m_Time: u64,
+    pub m_RealTimeAtUpdateGame: u64,
+    pub m_PauseTimeAtUpdateGame: u64,
+    pub m_GameTimeMicro: u64,
+    pub m_GameRunTimeMicro: u64,
+    pub m_ElapsedTime: u64,
+    pub m_LastCount: u64,
+    pub m_CpuFrequency: u64,
+}

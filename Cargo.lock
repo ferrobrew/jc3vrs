@@ -114,7 +114,7 @@ dependencies = [
 [[package]]
 name = "detours-macro"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#31195b93cc5ba8135423117420bbe99588e1df16"
+source = "git+https://github.com/ferrobrew/re-utilities.git#aa0484ab7b4c151d53075521f02da5922d3161af"
 dependencies = [
  "anyhow",
  "proc-macro2",
@@ -537,7 +537,7 @@ dependencies = [
 [[package]]
 name = "re-utilities"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#31195b93cc5ba8135423117420bbe99588e1df16"
+source = "git+https://github.com/ferrobrew/re-utilities.git#aa0484ab7b4c151d53075521f02da5922d3161af"
 dependencies = [
  "anyhow",
  "patternscan",
@@ -548,7 +548,7 @@ dependencies = [
 [[package]]
 name = "re-utilities-injector"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#31195b93cc5ba8135423117420bbe99588e1df16"
+source = "git+https://github.com/ferrobrew/re-utilities.git#aa0484ab7b4c151d53075521f02da5922d3161af"
 dependencies = [
  "anyhow",
  "dunce",

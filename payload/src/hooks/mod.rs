@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use re_utilities::{ThreadSuspender, hook_library::HookLibraries};
 
 pub mod camera;
@@ -8,7 +8,7 @@ pub mod game;
 pub mod graphics;
 pub mod wndproc;
 
-static HOOK_LIBRARY: OnceLock<HookState> = OnceLock::new();
+static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
 struct HookState {
     patcher: Mutex<re_utilities::Patcher>,
     hook_libraries: HookLibraries,
@@ -34,17 +34,21 @@ pub(super) fn install() {
             return;
         }
     };
-    let _ = HOOK_LIBRARY.set(HookState {
+    let _ = HOOK_STATE.set(HookState {
         patcher: Mutex::new(patcher),
         hook_libraries,
     });
 }
 
 pub(super) fn uninstall() {
-    let hook_libraries = HOOK_LIBRARY.get().unwrap();
+    let hook_libraries = HOOK_STATE.get().unwrap();
     let _ = ThreadSuspender::for_block(|| {
         hook_libraries
             .hook_libraries
             .set_enabled(&mut hook_libraries.patcher.lock(), false)
     });
+}
+
+pub(super) fn patcher() -> Option<MutexGuard<'static, re_utilities::Patcher>> {
+    HOOK_STATE.get().map(|state| state.patcher.lock())
 }
