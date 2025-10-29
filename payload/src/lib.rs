@@ -35,6 +35,29 @@ pub extern "system" fn run(_: *mut c_void) {
 
 /// Called when the DLL is loaded
 fn initialize_startup() {
+    std::panic::set_hook(Box::new(|info| {
+        let payload = info.payload();
+
+        #[allow(clippy::manual_map)]
+        let payload = if let Some(s) = payload.downcast_ref::<&str>() {
+            Some(&**s)
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            Some(s.as_str())
+        } else {
+            None
+        };
+
+        let location = info.location().map(|l| l.to_string());
+        let backtrace = std::backtrace::Backtrace::capture();
+
+        tracing::error!(
+            panic.payload = payload,
+            panic.location = location,
+            panic.backtrace = tracing::field::display(backtrace),
+            "A panic occurred",
+        );
+    }));
+
     logging::install();
     tracing::info!("JC3VRS startup");
     hooks::install();
@@ -89,10 +112,20 @@ fn update() {
     if let Err(e) = initialize_from_game() {
         tracing::error!("Failed to initialize in game thread, shutting down: {e:?}");
         shutdown();
+        return;
     }
 
     let panic = std::panic::catch_unwind(|| {
+        if util::is_pressed(VK_F5) {
+            shutdown();
+            return;
+        }
+
         if let Some(egui_state) = EguiState::get().as_mut() {
+            if util::is_pressed(VK_F6) {
+                egui_state.toggle_game_input_capture();
+            }
+
             egui_state.run(|ctx| {
                 egui::Window::new("Hello world!").show(ctx, |ui| unsafe {
                     if let Some(gcm) = jc3gi::camera::game_camera_manager::GameCameraManager::get()
@@ -140,14 +173,6 @@ fn update() {
                     }
                 });
             });
-        }
-
-        if util::is_pressed(VK_F5) {
-            shutdown();
-        } else if util::is_pressed(VK_F6)
-            && let Some(egui_state) = EguiState::get().as_mut()
-        {
-            egui_state.toggle_game_input_capture();
         }
     });
     if let Err(e) = panic {
