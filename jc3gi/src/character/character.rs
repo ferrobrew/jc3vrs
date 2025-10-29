@@ -7,7 +7,9 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 pub struct Character {
-    _field_0: [u8; 10224],
+    _field_0: [u8; 9770],
+    pub m_IsLocalCharacter: bool,
+    _field_262b: [u8; 453],
     pub m_WorldMatrixT0: crate::types::math::Matrix4,
     pub m_WorldMatrixT1: crate::types::math::Matrix4,
     _field_2870: [u8; 3280],
@@ -125,4 +127,7 @@ fn _SafeBoneIndex_size_check() {
         ::std::mem::transmute::<[u8; 0x4], SafeBoneIndex>([0u8; 0x4]);
     }
     unreachable!()
+}
+pub unsafe fn get_Character_GoreEnabled() -> &'static mut bool {
+    unsafe { &mut *(0x142F2F301 as *mut bool) }
 }

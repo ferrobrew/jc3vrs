@@ -4,6 +4,7 @@ use parking_lot::{Mutex, MutexGuard};
 use re_utilities::{ThreadSuspender, hook_library::HookLibraries};
 
 pub mod camera;
+pub mod character;
 pub mod game;
 pub mod graphics;
 pub mod wndproc;
@@ -24,6 +25,7 @@ pub(super) fn install() {
             camera::hook_library(),
             graphics::hook_library(),
             wndproc::hook_library(),
+            character::hook_library(),
         ])
         .enable(&mut patcher)
     });

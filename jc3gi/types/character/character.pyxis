@@ -3,6 +3,9 @@ use types::math::Vector3;
 
 #[size(0x3540)]
 pub type Character {
+    #[address(0x262A)]
+    pub m_IsLocalCharacter: bool,
+
     #[address(0x27F0)]
     pub m_WorldMatrixT0: Matrix4,
     pub m_WorldMatrixT1: Matrix4,
@@ -17,6 +20,10 @@ impl Character {
     #[address(0x143_A99_1B0)]
     pub fn get_safe_bone_matrix(&mut self, safe_index: SafeBoneIndex, matrix: *mut Matrix4);
 }
+
+// Note: We might want to add support for putting this in an impl at some point
+#[address(0x142_F2F_301)]
+pub extern Character_GoreEnabled: bool;
 
 pub enum SafeBoneIndex : u32 {
     REFERENCE = 0x8EB2FD7C,
