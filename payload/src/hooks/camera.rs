@@ -5,6 +5,7 @@ use jc3gi::{
     camera::{
         camera::Camera,
         camera_context::{CameraContext, CameraControlContext},
+        camera_manager::CameraManager,
     },
     character::character::{Character, SafeBoneIndex},
     types::math::Matrix4,
@@ -20,11 +21,45 @@ pub(super) fn hook_library() -> HookLibrary {
 
 #[detour(address = 0x143_2EB_C70)]
 fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
-    // Can override the camera's view by setting m_TransformT0
-    // and m_TransformT1 if the camera is the active camera, but
-    // this is well after the camera position for gameplay is established,
-    // so it's not ideal as an override target. Still, could be useful for
-    // matching the headset's view?
+    unsafe {
+        if let Some(local_character) = Character::get_local_player_character().as_mut()
+            && let Some(camera) = camera.as_mut()
+            && let Some(cm) = CameraManager::get()
+            && cm.m_ActiveCamera == camera
+        {
+            let camera_settings = *CAMERA_SETTINGS.lock();
+            if !camera_settings.enabled {
+                return;
+            }
+
+            let head_matrix = head_matrix(local_character);
+
+            if !camera_settings.always_use_t1 {
+                let character_t0_matrix = glam::Mat4::from(if camera_settings.always_use_t1 {
+                    local_character.m_WorldMatrixT1
+                } else {
+                    local_character.m_WorldMatrixT0
+                });
+                let head_position =
+                    calculate_head_position(character_t0_matrix, head_matrix, &camera_settings);
+                camera.m_TransformT0.data[12] = head_position.x;
+                camera.m_TransformT0.data[13] = head_position.y;
+                camera.m_TransformT0.data[14] = head_position.z;
+            }
+
+            let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
+            let head_position =
+                calculate_head_position(character_t1_matrix, head_matrix, &camera_settings);
+            camera.m_TransformT1.data[12] = head_position.x;
+            camera.m_TransformT1.data[13] = head_position.y;
+            camera.m_TransformT1.data[14] = head_position.z;
+
+            if camera_settings.always_use_t1 {
+                camera.m_TransformT0 = camera.m_TransformT1;
+            }
+        }
+    }
+
     CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
 }
 
@@ -72,9 +107,7 @@ fn camera_tree_update_render_contexts(
             return;
         }
 
-        let mut head_matrix = Matrix4::default();
-        local_character.get_safe_bone_matrix(SafeBoneIndex::HEAD, &mut head_matrix);
-        let head_matrix = glam::Mat4::from(head_matrix);
+        let head_matrix = head_matrix(local_character);
 
         let character_t0_matrix = glam::Mat4::from(if camera_settings.always_use_t1 {
             local_character.m_WorldMatrixT1
@@ -85,12 +118,28 @@ fn camera_tree_update_render_contexts(
 
         patch_context(
             &mut ccc.m_PreviousCameraContext,
-            calculate_head_position(character_t0_matrix, head_matrix, &camera_settings),
+            calculate_head_position(
+                if camera_settings.always_use_t1 {
+                    character_t1_matrix
+                } else {
+                    character_t0_matrix
+                },
+                head_matrix,
+                &camera_settings,
+            ),
             camera_settings.blurs_enabled,
         );
         patch_context(
             &mut ccc.m_PreviousRenderContext,
-            calculate_head_position(character_t0_matrix, head_matrix, &camera_settings),
+            calculate_head_position(
+                if camera_settings.always_use_t1 {
+                    character_t1_matrix
+                } else {
+                    character_t0_matrix
+                },
+                head_matrix,
+                &camera_settings,
+            ),
             camera_settings.blurs_enabled,
         );
         patch_context(
@@ -103,24 +152,6 @@ fn camera_tree_update_render_contexts(
             calculate_head_position(character_t1_matrix, head_matrix, &camera_settings),
             camera_settings.blurs_enabled,
         );
-    }
-
-    fn calculate_head_position(
-        character_matrix: glam::Mat4,
-        head_matrix: glam::Mat4,
-        camera_settings: &CameraSettings,
-    ) -> glam::Vec3 {
-        let (_, character_rotation, _character_position) =
-            character_matrix.to_scale_rotation_translation();
-
-        let head_worldspace_matrix = character_matrix * head_matrix;
-        let (_, head_rotation, mut head_position) =
-            head_worldspace_matrix.to_scale_rotation_translation();
-
-        head_position += head_rotation * camera_settings.head_offset;
-        head_position += character_rotation * camera_settings.body_offset;
-
-        head_position
     }
 
     fn patch_context(context: &mut CameraContext, head_position: glam::Vec3, blurs_enabled: bool) {
@@ -137,4 +168,30 @@ fn camera_tree_update_render_contexts(
             context.m_RadialBlurFactor = 0.0;
         }
     }
+}
+
+fn head_matrix(character: &mut Character) -> glam::Mat4 {
+    let mut head_matrix = Matrix4::default();
+    unsafe {
+        character.get_safe_bone_matrix(SafeBoneIndex::HEAD, &mut head_matrix);
+    }
+    glam::Mat4::from(head_matrix)
+}
+
+fn calculate_head_position(
+    character_matrix: glam::Mat4,
+    head_matrix: glam::Mat4,
+    camera_settings: &CameraSettings,
+) -> glam::Vec3 {
+    let (_, character_rotation, _character_position) =
+        character_matrix.to_scale_rotation_translation();
+
+    let head_worldspace_matrix = character_matrix * head_matrix;
+    let (_, head_rotation, mut head_position) =
+        head_worldspace_matrix.to_scale_rotation_translation();
+
+    head_position += head_rotation * camera_settings.head_offset;
+    head_position += character_rotation * camera_settings.body_offset;
+
+    head_position
 }
