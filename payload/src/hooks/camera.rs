@@ -8,6 +8,7 @@ use jc3gi::{
         camera_manager::CameraManager,
     },
     character::character::{Character, SafeBoneIndex},
+    hash::hashlittle,
     types::math::Matrix4,
 };
 use parking_lot::Mutex;
@@ -33,6 +34,7 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
             }
 
             let head_matrix = head_matrix(local_character);
+            let (left_eye_matrix, right_eye_matrix) = eye_matrices(local_character);
 
             if !camera_settings.always_use_t1 {
                 let character_t0_matrix = glam::Mat4::from(if camera_settings.always_use_t1 {
@@ -40,16 +42,28 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
                 } else {
                     local_character.m_WorldMatrixT0
                 });
-                let head_position =
-                    calculate_head_position(character_t0_matrix, head_matrix, &camera_settings);
+                let head_position = calculate_head_position(
+                    character_t0_matrix,
+                    head_matrix,
+                    left_eye_matrix,
+                    right_eye_matrix,
+                    camera_settings.use_eye_matrices,
+                    &camera_settings,
+                );
                 camera.m_TransformT0.data[12] = head_position.x;
                 camera.m_TransformT0.data[13] = head_position.y;
                 camera.m_TransformT0.data[14] = head_position.z;
             }
 
             let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
-            let head_position =
-                calculate_head_position(character_t1_matrix, head_matrix, &camera_settings);
+            let head_position = calculate_head_position(
+                character_t1_matrix,
+                head_matrix,
+                left_eye_matrix,
+                right_eye_matrix,
+                camera_settings.use_eye_matrices,
+                &camera_settings,
+            );
             camera.m_TransformT1.data[12] = head_position.x;
             camera.m_TransformT1.data[13] = head_position.y;
             camera.m_TransformT1.data[14] = head_position.z;
@@ -68,6 +82,7 @@ pub struct CameraSettings {
     pub enabled: bool,
     pub body_offset: glam::Vec3,
     pub head_offset: glam::Vec3,
+    pub use_eye_matrices: bool,
     pub blurs_enabled: bool,
     pub always_use_t1: bool,
 }
@@ -77,6 +92,7 @@ impl CameraSettings {
             enabled: true,
             body_offset: glam::Vec3::new(0.0, 0.1, 0.0),
             head_offset: glam::Vec3::new(0.0, -0.1, 0.0),
+            use_eye_matrices: true,
             blurs_enabled: false,
             always_use_t1: false,
         }
@@ -108,6 +124,7 @@ fn camera_tree_update_render_contexts(
         }
 
         let head_matrix = head_matrix(local_character);
+        let (left_eye_matrix, right_eye_matrix) = eye_matrices(local_character);
 
         let character_t0_matrix = glam::Mat4::from(if camera_settings.always_use_t1 {
             local_character.m_WorldMatrixT1
@@ -125,6 +142,9 @@ fn camera_tree_update_render_contexts(
                     character_t0_matrix
                 },
                 head_matrix,
+                left_eye_matrix,
+                right_eye_matrix,
+                camera_settings.use_eye_matrices,
                 &camera_settings,
             ),
             camera_settings.blurs_enabled,
@@ -138,18 +158,35 @@ fn camera_tree_update_render_contexts(
                     character_t0_matrix
                 },
                 head_matrix,
+                left_eye_matrix,
+                right_eye_matrix,
+                camera_settings.use_eye_matrices,
                 &camera_settings,
             ),
             camera_settings.blurs_enabled,
         );
         patch_context(
             &mut ccc.m_NextCameraContext,
-            calculate_head_position(character_t1_matrix, head_matrix, &camera_settings),
+            calculate_head_position(
+                character_t1_matrix,
+                head_matrix,
+                left_eye_matrix,
+                right_eye_matrix,
+                camera_settings.use_eye_matrices,
+                &camera_settings,
+            ),
             camera_settings.blurs_enabled,
         );
         patch_context(
             &mut ccc.m_NextRenderContext,
-            calculate_head_position(character_t1_matrix, head_matrix, &camera_settings),
+            calculate_head_position(
+                character_t1_matrix,
+                head_matrix,
+                left_eye_matrix,
+                right_eye_matrix,
+                camera_settings.use_eye_matrices,
+                &camera_settings,
+            ),
             camera_settings.blurs_enabled,
         );
     }
@@ -178,20 +215,55 @@ fn head_matrix(character: &mut Character) -> glam::Mat4 {
     glam::Mat4::from(head_matrix)
 }
 
+fn eye_matrices(character: &mut Character) -> (glam::Mat4, glam::Mat4) {
+    let mut left_eye_matrix = Matrix4::default();
+    let mut right_eye_matrix = Matrix4::default();
+    unsafe {
+        if let Some(ac) = character.m_AnimatedModel.m_AnimationController.as_mut() {
+            ac.get_bone_matrix(
+                ac.get_bone_index(hashlittle(b"fLeftEye") as u32),
+                &mut left_eye_matrix,
+            );
+            ac.get_bone_matrix(
+                ac.get_bone_index(hashlittle(b"fRightEye") as u32),
+                &mut right_eye_matrix,
+            );
+        }
+    }
+    (
+        glam::Mat4::from(left_eye_matrix),
+        glam::Mat4::from(right_eye_matrix),
+    )
+}
+
 fn calculate_head_position(
     character_matrix: glam::Mat4,
     head_matrix: glam::Mat4,
+    left_eye_matrix: glam::Mat4,
+    right_eye_matrix: glam::Mat4,
+    use_eye_matrices: bool,
     camera_settings: &CameraSettings,
 ) -> glam::Vec3 {
     let (_, character_rotation, _character_position) =
         character_matrix.to_scale_rotation_translation();
 
-    let head_worldspace_matrix = character_matrix * head_matrix;
-    let (_, head_rotation, mut head_position) =
-        head_worldspace_matrix.to_scale_rotation_translation();
+    if use_eye_matrices {
+        let left_eye_worldspace_matrix = character_matrix * left_eye_matrix;
+        let (_, _, left_eye_position) = left_eye_worldspace_matrix.to_scale_rotation_translation();
 
-    head_position += head_rotation * camera_settings.head_offset;
-    head_position += character_rotation * camera_settings.body_offset;
+        let right_eye_worldspace_matrix = character_matrix * right_eye_matrix;
+        let (_, _, right_eye_position) =
+            right_eye_worldspace_matrix.to_scale_rotation_translation();
 
-    head_position
+        (left_eye_position + right_eye_position) / 2.0
+    } else {
+        let head_worldspace_matrix = character_matrix * head_matrix;
+        let (_, head_rotation, mut head_position) =
+            head_worldspace_matrix.to_scale_rotation_translation();
+
+        head_position += head_rotation * camera_settings.head_offset;
+        head_position += character_rotation * camera_settings.body_offset;
+
+        head_position
+    }
 }

@@ -196,17 +196,19 @@ fn update() {
                         let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
                         ui.checkbox(&mut cs.enabled, "Enabled");
                         ui.checkbox(&mut cs.always_use_t1, "Always use T1");
+                        ui.checkbox(&mut cs.blurs_enabled, "Blurs");
+                        ui.checkbox(&mut cs.use_eye_matrices, "Use eye matrices");
 
-                        use egui::Slider;
-                        ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
-                        ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
-                        ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text("Head Z"));
+                        ui.add_enabled_ui(!cs.use_eye_matrices, |ui| {
+                            use egui::Slider;
+                            ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
+                            ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
+                            ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text("Head Z"));
 
-                        ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
-                        ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
-                        ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
-
-                        ui.add(egui::Checkbox::new(&mut cs.blurs_enabled, "Blurs"));
+                            ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
+                            ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
+                            ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
+                        });
                     }
                 });
             });

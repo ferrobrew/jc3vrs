@@ -20,31 +20,34 @@ impl Character {
     pub fn get_local_player_character() -> *mut Character;
 
     #[address(0x143_AAE_940)]
-    pub fn get_head_position(&mut self, position: *mut Vector3) -> *mut Vector3;
+    pub fn get_head_position(&self, position: *mut Vector3) -> *mut Vector3;
 
     #[address(0x143_A99_0A0)]
-    pub fn get_safe_index(&mut self, safe_index: SafeBoneIndex) -> u64;
+    pub fn get_safe_index(&self, safe_index: SafeBoneIndex) -> u32;
 
     #[address(0x143_A99_1B0)]
-    pub fn get_safe_bone_matrix(&mut self, safe_index: SafeBoneIndex, matrix: *mut Matrix4);
+    pub fn get_safe_bone_matrix(&self, safe_index: SafeBoneIndex, matrix: *mut Matrix4);
 }
 
 #[size(0x240)]
 pub type AnimatedModel {
     #[address(0x178)]
-    pub animation_controller: *mut AnimationController,
+    pub m_AnimationController: *mut AnimationController,
 }
 
 pub type AnimationController {}
 impl AnimationController {
     #[address(0x143_6CB_7C0)]
-    pub fn get_bone_index(&self, hash: u32) -> u64;
+    pub fn get_bone_index(&self, hash: u32) -> u32;
+
+    #[address(0x143_6DA_B60)]
+    pub fn get_bone_matrix(&self, index: u32, matrix: *mut Matrix4);
 
     #[address(0x143_6DA_C90)]
-    pub fn get_joint(&mut self, index: u64, joint: *mut Joint);
+    pub fn get_joint(&self, index: u32, joint: *mut Joint);
 
     #[address(0x143_6DA_CF0)]
-    pub fn set_joint(&mut self, index: u64, joint: *mut Joint);
+    pub fn set_joint(&mut self, index: u32, joint: *mut Joint);
 }
 
 #[copyable, defaultable, align(16), size(0x30)]

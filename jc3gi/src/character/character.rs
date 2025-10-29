@@ -8,7 +8,7 @@
 #[repr(C, align(8))]
 pub struct AnimatedModel {
     _field_0: [u8; 376],
-    pub animation_controller: *mut crate::character::character::AnimationController,
+    pub m_AnimationController: *mut crate::character::character::AnimationController,
     _field_180: [u8; 192],
 }
 fn _AnimatedModel_size_check() {
@@ -31,37 +31,51 @@ impl std::convert::AsMut<AnimatedModel> for AnimatedModel {
 #[repr(C, align(8))]
 pub struct AnimationController {}
 impl AnimationController {
-    pub unsafe fn get_bone_index(&self, hash: u32) -> u64 {
+    pub unsafe fn get_bone_index(&self, hash: u32) -> u32 {
         unsafe {
-            let f: unsafe extern "system" fn(this: *const Self, hash: u32) -> u64 = ::std::mem::transmute(
+            let f: unsafe extern "system" fn(this: *const Self, hash: u32) -> u32 = ::std::mem::transmute(
                 0x1436CB7C0 as usize,
             );
             f(self as *const Self as _, hash)
         }
     }
+    pub unsafe fn get_bone_matrix(
+        &self,
+        index: u32,
+        matrix: *mut crate::types::math::Matrix4,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                index: u32,
+                matrix: *mut crate::types::math::Matrix4,
+            ) = ::std::mem::transmute(0x1436DAB60 as usize);
+            f(self as *const Self as _, index, matrix)
+        }
+    }
     pub unsafe fn get_joint(
-        &mut self,
-        index: u64,
+        &self,
+        index: u32,
         joint: *mut crate::character::character::Joint,
     ) {
         unsafe {
             let f: unsafe extern "system" fn(
-                this: *mut Self,
-                index: u64,
+                this: *const Self,
+                index: u32,
                 joint: *mut crate::character::character::Joint,
             ) = ::std::mem::transmute(0x1436DAC90 as usize);
-            f(self as *mut Self as _, index, joint)
+            f(self as *const Self as _, index, joint)
         }
     }
     pub unsafe fn set_joint(
         &mut self,
-        index: u64,
+        index: u32,
         joint: *mut crate::character::character::Joint,
     ) {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
-                index: u64,
+                index: u32,
                 joint: *mut crate::character::character::Joint,
             ) = ::std::mem::transmute(0x1436DACF0 as usize);
             f(self as *mut Self as _, index, joint)
@@ -105,43 +119,43 @@ impl Character {
         }
     }
     pub unsafe fn get_head_position(
-        &mut self,
+        &self,
         position: *mut crate::types::math::Vector3,
     ) -> *mut crate::types::math::Vector3 {
         unsafe {
             let f: unsafe extern "system" fn(
-                this: *mut Self,
+                this: *const Self,
                 position: *mut crate::types::math::Vector3,
             ) -> *mut crate::types::math::Vector3 = ::std::mem::transmute(
                 0x143AAE940 as usize,
             );
-            f(self as *mut Self as _, position)
+            f(self as *const Self as _, position)
         }
     }
     pub unsafe fn get_safe_index(
-        &mut self,
+        &self,
         safe_index: crate::character::character::SafeBoneIndex,
-    ) -> u64 {
+    ) -> u32 {
         unsafe {
             let f: unsafe extern "system" fn(
-                this: *mut Self,
+                this: *const Self,
                 safe_index: crate::character::character::SafeBoneIndex,
-            ) -> u64 = ::std::mem::transmute(0x143A990A0 as usize);
-            f(self as *mut Self as _, safe_index)
+            ) -> u32 = ::std::mem::transmute(0x143A990A0 as usize);
+            f(self as *const Self as _, safe_index)
         }
     }
     pub unsafe fn get_safe_bone_matrix(
-        &mut self,
+        &self,
         safe_index: crate::character::character::SafeBoneIndex,
         matrix: *mut crate::types::math::Matrix4,
     ) {
         unsafe {
             let f: unsafe extern "system" fn(
-                this: *mut Self,
+                this: *const Self,
                 safe_index: crate::character::character::SafeBoneIndex,
                 matrix: *mut crate::types::math::Matrix4,
             ) = ::std::mem::transmute(0x143A991B0 as usize);
-            f(self as *mut Self as _, safe_index, matrix)
+            f(self as *const Self as _, safe_index, matrix)
         }
     }
 }

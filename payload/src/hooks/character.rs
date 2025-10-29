@@ -19,7 +19,7 @@ fn character_update_prop_effects(character: *mut Character) {
             return;
         };
 
-        let Some(animation_controller) = character.m_AnimatedModel.animation_controller.as_mut()
+        let Some(animation_controller) = character.m_AnimatedModel.m_AnimationController.as_mut()
         else {
             return;
         };
