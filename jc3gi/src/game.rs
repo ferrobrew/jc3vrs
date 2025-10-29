@@ -19,7 +19,7 @@ pub struct Game {
     pub m_RenderCount: u32,
     pub m_InterpolationMethod: u32,
     pub m_PrevInterpolationMethod: u32,
-    pub m_InterpolationOverride: u32,
+    pub m_InterpolationOverride: i32,
     _field_a4: [u8; 444],
     pub m_DecoupleEnabled: bool,
     _field_261: [u8; 87],

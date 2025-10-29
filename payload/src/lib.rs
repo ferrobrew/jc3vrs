@@ -142,7 +142,7 @@ fn update() {
                         {
                             unsafe {
                                 patcher.patch(
-                                    value as *const bool as usize,
+                                    value as *const _ as usize,
                                     &[if enabled { 1 } else { 0 }],
                                 );
                             }
@@ -156,6 +156,28 @@ fn update() {
                         "Interpolation method: {:X}",
                         game.m_InterpolationMethod
                     ));
+                    {
+                        let mut interpolation_override = game.m_InterpolationOverride;
+                        let before = interpolation_override;
+                        egui::ComboBox::from_label("Interpolation override")
+                            .selected_text(interpolation_override.to_string())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut interpolation_override, -1, "Really None");
+                                ui.selectable_value(&mut interpolation_override, 0, "None");
+                                ui.selectable_value(&mut interpolation_override, 1, "1");
+                                ui.selectable_value(&mut interpolation_override, 2, "2");
+                                ui.selectable_value(&mut interpolation_override, 3, "3");
+                            });
+
+                        if before != interpolation_override
+                            && let Some(mut patcher) = hooks::patcher()
+                        {
+                            patcher.patch(
+                                &mut game.m_InterpolationOverride as *mut _ as usize,
+                                &interpolation_override.to_le_bytes(),
+                            );
+                        }
+                    }
                     patchbox(ui, "Decouple enabled", &mut game.m_DecoupleEnabled);
 
                     ui.heading("Clock");
@@ -173,6 +195,7 @@ fn update() {
                     {
                         let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
                         ui.checkbox(&mut cs.enabled, "Enabled");
+                        ui.checkbox(&mut cs.always_use_t1, "Always use T1");
 
                         use egui::Slider;
                         ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));

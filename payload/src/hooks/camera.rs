@@ -34,6 +34,7 @@ pub struct CameraSettings {
     pub body_offset: glam::Vec3,
     pub head_offset: glam::Vec3,
     pub blurs_enabled: bool,
+    pub always_use_t1: bool,
 }
 impl CameraSettings {
     pub const fn new() -> Self {
@@ -42,6 +43,7 @@ impl CameraSettings {
             body_offset: glam::Vec3::new(0.0, 0.1, 0.0),
             head_offset: glam::Vec3::new(0.0, -0.1, 0.0),
             blurs_enabled: false,
+            always_use_t1: false,
         }
     }
 }
@@ -74,7 +76,11 @@ fn camera_tree_update_render_contexts(
         local_character.get_safe_bone_matrix(SafeBoneIndex::HEAD, &mut head_matrix);
         let head_matrix = glam::Mat4::from(head_matrix);
 
-        let character_t0_matrix = glam::Mat4::from(local_character.m_WorldMatrixT0);
+        let character_t0_matrix = glam::Mat4::from(if camera_settings.always_use_t1 {
+            local_character.m_WorldMatrixT1
+        } else {
+            local_character.m_WorldMatrixT0
+        });
         let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
 
         patch_context(

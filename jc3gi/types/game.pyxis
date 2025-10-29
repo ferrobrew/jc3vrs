@@ -15,7 +15,7 @@ pub type Game {
     pub m_RenderCount: u32,
     pub m_InterpolationMethod: u32,
     pub m_PrevInterpolationMethod: u32,
-    pub m_InterpolationOverride: u32,
+    pub m_InterpolationOverride: i32,
 
     #[address(0x260)]
     pub m_DecoupleEnabled: bool,
