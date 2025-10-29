@@ -46,7 +46,7 @@ fn character_update_prop_effects(character: *mut Character) {
                 // "fRightEar",
             ]
             .iter()
-            .map(|s: &&str| animation_controller.get_bone_index(hashlittle(&s.as_bytes()) as u32)),
+            .map(|s: &&str| animation_controller.get_bone_index(hashlittle(s.as_bytes()) as u32)),
         );
         for index in indices {
             let mut joint = Joint::default();

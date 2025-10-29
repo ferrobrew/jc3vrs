@@ -44,10 +44,10 @@ impl EguiState {
     }
 
     pub fn uninstall() {
-        if let Some(mut state) = STATE.lock().take() {
-            if state.game_input_state.is_some() {
-                state.toggle_game_input_capture();
-            }
+        if let Some(mut state) = STATE.lock().take()
+            && state.game_input_state.is_some()
+        {
+            state.toggle_game_input_capture();
         }
         tracing::info!("Uninitialized egui");
     }
