@@ -16,7 +16,10 @@ pub struct Texture {
     pub m_SRV: crate::graphics_engine::texture::ID3D11ShaderResourceView,
     pub m_RTV: crate::graphics_engine::texture::ID3D11RenderTargetView,
     pub m_DSV: crate::graphics_engine::texture::ID3D11DepthStencilView,
-    _field_28: [u8; 20],
+    _field_28: [u8; 8],
+    pub m_Width: u16,
+    pub m_Height: u16,
+    _field_34: [u8; 8],
     pub m_Format: u32,
     _field_40: [u8; 24],
 }

@@ -93,6 +93,10 @@ fn initialize_from_game() -> anyhow::Result<()> {
 
 /// Called to undo `initialize_from_game`; called once shutdown is triggered
 fn shutdown_from_game() {
+    if let Some(egui_state) = EguiState::get().as_mut() {
+        let mut state = EGUI_DEBUG_RENDER_STATE.lock();
+        state.uninstall(&mut egui_state.egui_renderer);
+    }
     EguiState::uninstall();
 }
 
@@ -127,8 +131,8 @@ fn update() {
                 egui_state.toggle_game_input_capture();
             }
 
-            egui_state.run(|ctx| {
-                egui::Window::new("Debug").show(ctx, |ui| egui_debug_window(ui));
+            egui_state.run(|ctx, renderer| {
+                egui::Window::new("Debug").show(ctx, |ui| egui_debug_window(ui, renderer));
             });
         }
     });
@@ -144,6 +148,7 @@ fn update() {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EguiTab {
+    Render,
     Camera,
     Game,
 }
@@ -152,12 +157,12 @@ impl std::fmt::Display for EguiTab {
         write!(f, "{:?}", self)
     }
 }
-static EGUI_TAB: Mutex<EguiTab> = Mutex::new(EguiTab::Camera);
+static EGUI_TAB: Mutex<EguiTab> = Mutex::new(EguiTab::Render);
 impl EguiTab {
     fn ui(ui: &mut egui::Ui) {
         let mut tab = EGUI_TAB.lock();
         ui.horizontal(|ui| {
-            for candidate_tab in [EguiTab::Camera, EguiTab::Game] {
+            for candidate_tab in [EguiTab::Render, EguiTab::Camera, EguiTab::Game] {
                 if ui
                     .add(
                         egui::Button::new(candidate_tab.to_string())
@@ -176,16 +181,71 @@ impl EguiTab {
     }
 }
 
-pub fn egui_debug_window(ui: &mut egui::Ui) {
+pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
     EguiTab::ui(ui);
 
     match EguiTab::get() {
+        EguiTab::Render => {
+            egui_debug_render(ui, renderer);
+        }
         EguiTab::Camera => {
             egui_debug_camera(ui);
         }
         EguiTab::Game => {
             egui_debug_game(ui);
         }
+    }
+}
+
+struct EguiDebugRenderState {
+    main_color_buffer_texture: Option<(egui::TextureId, (usize, usize))>,
+}
+impl EguiDebugRenderState {
+    const fn new() -> Self {
+        Self {
+            main_color_buffer_texture: None,
+        }
+    }
+
+    fn prepare_if_necessary(&mut self, renderer: &mut egui_directx11::Renderer) {
+        if self.main_color_buffer_texture.is_some() {
+            return;
+        }
+        unsafe {
+            let Some(mcb) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
+                .and_then(|ge| ge.m_MainColorBuffer.as_mut())
+            else {
+                return;
+            };
+
+            self.main_color_buffer_texture = Some((
+                renderer.register_user_texture(mcb.m_SRV.clone()),
+                (mcb.m_Width as usize, mcb.m_Height as usize),
+            ));
+        }
+    }
+
+    fn uninstall(&mut self, renderer: &mut egui_directx11::Renderer) {
+        if let Some((texture_id, _)) = self.main_color_buffer_texture.take() {
+            renderer.unregister_user_texture(texture_id);
+        }
+    }
+}
+static EGUI_DEBUG_RENDER_STATE: Mutex<EguiDebugRenderState> =
+    Mutex::new(EguiDebugRenderState::new());
+
+fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
+    let mut state = EGUI_DEBUG_RENDER_STATE.lock();
+    state.prepare_if_necessary(renderer);
+
+    if let Some((texture_id, texture_size)) = state.main_color_buffer_texture {
+        let size = egui::vec2(texture_size.0 as f32, texture_size.1 as f32);
+        ui.add(egui::Image::new(egui::ImageSource::Texture(
+            egui::load::SizedTexture {
+                id: texture_id,
+                size: size / 4.0,
+            },
+        )));
     }
 }
 

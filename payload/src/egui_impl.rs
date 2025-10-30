@@ -6,7 +6,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 pub struct EguiState {
     start_time: std::time::Instant,
     egui_context: egui::Context,
-    egui_renderer: egui_directx11::Renderer,
+    pub egui_renderer: egui_directx11::Renderer,
     renderer_output: Option<egui_directx11::RendererOutput>,
     game_input_state: Option<GameInputState>,
     events: Vec<egui::Event>,
@@ -56,7 +56,7 @@ impl EguiState {
         STATE.lock()
     }
 
-    pub fn run(&mut self, callback: impl FnMut(&egui::Context)) {
+    pub fn run(&mut self, mut callback: impl FnMut(&egui::Context, &mut egui_directx11::Renderer)) {
         let params = unsafe { get_graphics_params() };
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_max(
@@ -68,7 +68,9 @@ impl EguiState {
             events: std::mem::take(&mut self.events),
             ..Default::default()
         };
-        let egui_output = self.egui_context.run(input, callback);
+        let egui_output = self
+            .egui_context
+            .run(input, |ctx| callback(ctx, &mut self.egui_renderer));
         let (renderer_output, platform_output, _) = egui_directx11::split_output(egui_output);
 
         if self.is_input_captured()
@@ -105,7 +107,6 @@ impl EguiState {
                 &backbuffer.m_RTV,
                 &self.egui_context,
                 renderer_output,
-                1.0,
             ) {
                 tracing::error!("Failed to render egui: {e:?}");
             }

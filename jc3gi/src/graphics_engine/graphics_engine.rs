@@ -29,7 +29,9 @@ pub struct GraphicsEngine {
     pub m_ActiveCursor: crate::graphics_engine::graphics_engine::ActiveCursor,
     _field_12c: [u8; 3460],
     pub m_Device: *mut crate::graphics_engine::device::Device,
-    _field_eb8: [u8; 888],
+    _field_eb8: [u8; 432],
+    pub m_MainColorBuffer: *mut crate::graphics_engine::texture::Texture,
+    _field_1070: [u8; 448],
     pub m_BackBufferLinear: *mut crate::graphics_engine::texture::Texture,
     _field_1238: [u8; 3288],
 }

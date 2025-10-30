@@ -31,6 +31,9 @@ pub type GraphicsEngine {
     #[address(0xEB0)]
     pub m_Device: *mut Device,
 
+    #[address(0x1068)]
+    pub m_MainColorBuffer: *mut Texture,
+
     #[address(0x1230)]
     pub m_BackBufferLinear: *mut Texture,
 }

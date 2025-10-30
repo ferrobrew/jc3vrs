@@ -23,6 +23,10 @@ pub type Texture {
     pub m_RTV: ID3D11RenderTargetView,
     pub m_DSV: ID3D11DepthStencilView,
 
+    #[address(0x30)]
+    pub m_Width: u16,
+    pub m_Height: u16,
+
     #[address(0x3C)]
     pub m_Format: u32,
 }
