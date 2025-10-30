@@ -3,6 +3,13 @@ use std::{ffi::c_void, sync::OnceLock};
 use parking_lot::Mutex;
 use windows::Win32::{
     Foundation::HMODULE,
+    Graphics::{
+        Direct3D11::{
+            D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+            ID3D11ShaderResourceView, ID3D11Texture2D,
+        },
+        Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
+    },
     System::{LibraryLoader::DisableThreadLibraryCalls, SystemServices::DLL_PROCESS_ATTACH},
     UI::Input::KeyboardAndMouse::{VK_F5, VK_F6},
 };
@@ -198,35 +205,85 @@ pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
 }
 
 struct EguiDebugRenderState {
-    main_color_buffer_texture: Option<(egui::TextureId, (usize, usize))>,
+    target_texture: Option<(ID3D11Texture2D, egui::TextureId)>,
 }
 impl EguiDebugRenderState {
     const fn new() -> Self {
         Self {
-            main_color_buffer_texture: None,
+            target_texture: None,
         }
     }
 
     fn prepare_if_necessary(&mut self, renderer: &mut egui_directx11::Renderer) {
-        if self.main_color_buffer_texture.is_some() {
+        if self.target_texture.is_some() {
             return;
         }
         unsafe {
-            let Some(mcb) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
-                .and_then(|ge| ge.m_MainColorBuffer.as_mut())
-            else {
+            let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
                 return;
             };
 
-            self.main_color_buffer_texture = Some((
-                renderer.register_user_texture(mcb.m_SRV.clone()),
-                (mcb.m_Width as usize, mcb.m_Height as usize),
-            ));
+            let Some(device) = ge.m_Device.as_mut() else {
+                return;
+            };
+
+            let Some(back_buffer) = device.m_BackBuffer.as_ref() else {
+                return;
+            };
+
+            let mut texture: Option<ID3D11Texture2D> = None;
+            // TODO: recreate on resize
+            // TODO: figure out why this lcoks up / crashes over time
+            if let Err(e) = device.m_Device.CreateTexture2D(
+                &D3D11_TEXTURE2D_DESC {
+                    Width: back_buffer.m_Width as u32,
+                    Height: back_buffer.m_Height as u32,
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as _,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                },
+                None,
+                Some(&mut texture),
+            ) {
+                tracing::error!("Failed to create texture: {e:?}");
+                return;
+            }
+            let Some(texture) = texture else {
+                tracing::error!("Failed to create texture");
+                return;
+            };
+
+            let mut srv: Option<ID3D11ShaderResourceView> = None;
+            if let Err(e) = device
+                .m_Device
+                .CreateShaderResourceView(&texture, None, Some(&mut srv))
+            {
+                tracing::error!("Failed to create shader resource view: {e:?}");
+                return;
+            }
+            let Some(srv) = srv else {
+                tracing::error!("Failed to create shader resource view");
+                return;
+            };
+
+            self.target_texture = Some((texture, renderer.register_user_texture(srv)));
         }
     }
 
+    pub fn texture(&self) -> Option<&ID3D11Texture2D> {
+        self.target_texture.as_ref().map(|(texture, _)| texture)
+    }
+
     fn uninstall(&mut self, renderer: &mut egui_directx11::Renderer) {
-        if let Some((texture_id, _)) = self.main_color_buffer_texture.take() {
+        if let Some((_, texture_id)) = self.target_texture.take() {
             renderer.unregister_user_texture(texture_id);
         }
     }
@@ -238,8 +295,14 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
     let mut state = EGUI_DEBUG_RENDER_STATE.lock();
     state.prepare_if_necessary(renderer);
 
-    if let Some((texture_id, texture_size)) = state.main_color_buffer_texture {
-        let size = egui::vec2(texture_size.0 as f32, texture_size.1 as f32);
+    if let Some((_, texture_id)) = state.target_texture
+        && let Some((width, height)) = unsafe {
+            jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
+                .and_then(|ge| ge.m_MainColorBuffer.as_mut())
+                .map(|mcb| (mcb.m_Width as usize, mcb.m_Height as usize))
+        }
+    {
+        let size = egui::vec2(width as f32, height as f32);
         ui.add(egui::Image::new(egui::ImageSource::Texture(
             egui::load::SizedTexture {
                 id: texture_id,

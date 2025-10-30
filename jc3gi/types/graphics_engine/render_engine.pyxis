@@ -1,0 +1,3 @@
+#[singleton(0x142_ED0_E18), size(0x2220)]
+pub type RenderEngine {
+}
