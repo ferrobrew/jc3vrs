@@ -30,6 +30,7 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
         {
             let camera_settings = *CAMERA_SETTINGS.lock();
             if !camera_settings.enabled {
+                CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
                 return;
             }
 
