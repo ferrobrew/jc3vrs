@@ -1,5 +1,6 @@
 use std::{ffi::c_void, sync::OnceLock};
 
+use parking_lot::Mutex;
 use windows::Win32::{
     Foundation::HMODULE,
     System::{LibraryLoader::DisableThreadLibraryCalls, SystemServices::DLL_PROCESS_ATTACH},
@@ -127,90 +128,7 @@ fn update() {
             }
 
             egui_state.run(|ctx| {
-                egui::Window::new("Debug").show(ctx, |ui| unsafe {
-                    let Some(game) = jc3gi::game::Game::get() else {
-                        return;
-                    };
-                    let Some(clock) = jc3gi::clock::Clock::get() else {
-                        return;
-                    };
-
-                    fn patchbox(ui: &mut egui::Ui, label: &str, value: *mut bool) {
-                        let mut enabled = unsafe { *value };
-                        if ui.checkbox(&mut enabled, label).changed()
-                            && let Some(mut patcher) = hooks::patcher()
-                        {
-                            unsafe {
-                                patcher.patch(
-                                    value as *const _ as usize,
-                                    &[if enabled { 1 } else { 0 }],
-                                );
-                            }
-                        }
-                    }
-
-                    ui.heading("Game");
-                    ui.label(format!("Update frequency: {}Hz", game.m_UpdateFrequency));
-                    ui.label(format!("Update flags: {:X}", game.m_UpdateFlags));
-                    ui.label(format!(
-                        "Interpolation method: {:X}",
-                        game.m_InterpolationMethod
-                    ));
-                    {
-                        let mut interpolation_override = game.m_InterpolationOverride;
-                        let before = interpolation_override;
-                        egui::ComboBox::from_label("Interpolation override")
-                            .selected_text(interpolation_override.to_string())
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut interpolation_override, -1, "Really None");
-                                ui.selectable_value(&mut interpolation_override, 0, "None");
-                                ui.selectable_value(&mut interpolation_override, 1, "1");
-                                ui.selectable_value(&mut interpolation_override, 2, "2");
-                                ui.selectable_value(&mut interpolation_override, 3, "3");
-                            });
-
-                        if before != interpolation_override
-                            && let Some(mut patcher) = hooks::patcher()
-                        {
-                            patcher.patch(
-                                &mut game.m_InterpolationOverride as *mut _ as usize,
-                                &interpolation_override.to_le_bytes(),
-                            );
-                        }
-                    }
-                    patchbox(ui, "Decouple enabled", &mut game.m_DecoupleEnabled);
-
-                    ui.heading("Clock");
-                    ui.label(format!("FPS: {}", clock.m_FPS));
-                    ui.label(format!("SPF: {}", clock.m_SPF));
-                    ui.label(format!("Real FPS: {}", clock.m_RealFPS));
-                    ui.label(format!("Real SPF: {}", clock.m_RealSPF));
-                    ui.label(format!("Update speed: {}", clock.m_UpdateSpeed));
-                    ui.label(format!("Force to FPS: {}", clock.m_ForceToThisFPS));
-                    ui.label(format!("Force to SPF: {}", clock.m_ForceToThisSPF));
-                    patchbox(ui, "Stop", &mut clock.m_Stop);
-                    patchbox(ui, "Force to FPS", &mut clock.m_ForceToFps);
-
-                    ui.heading("Camera");
-                    {
-                        let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
-                        ui.checkbox(&mut cs.enabled, "Enabled");
-                        ui.checkbox(&mut cs.always_use_t1, "Always use T1");
-                        ui.checkbox(&mut cs.blurs_enabled, "Blurs");
-                        ui.checkbox(&mut cs.use_eye_matrices, "Use eye matrices");
-
-                        ui.add_enabled_ui(!cs.use_eye_matrices, |ui| {
-                            use egui::Slider;
-                            ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
-                            ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
-                            ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text("Head Z"));
-
-                            ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
-                            ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
-                            ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
-                        });
-                    }
-                });
+                egui::Window::new("Debug").show(ctx, |ui| egui_debug_window(ui));
             });
         }
     });
@@ -224,4 +142,132 @@ fn update() {
     }
 }
 
-pub fn render() {}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EguiTab {
+    Camera,
+    Game,
+}
+impl std::fmt::Display for EguiTab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+static EGUI_TAB: Mutex<EguiTab> = Mutex::new(EguiTab::Camera);
+impl EguiTab {
+    fn ui(ui: &mut egui::Ui) {
+        let mut tab = EGUI_TAB.lock();
+        ui.horizontal(|ui| {
+            for candidate_tab in [EguiTab::Camera, EguiTab::Game] {
+                if ui
+                    .add(
+                        egui::Button::new(candidate_tab.to_string())
+                            .selected(*tab == candidate_tab),
+                    )
+                    .clicked()
+                {
+                    *tab = candidate_tab;
+                }
+            }
+        });
+    }
+
+    fn get() -> EguiTab {
+        *EGUI_TAB.lock()
+    }
+}
+
+pub fn egui_debug_window(ui: &mut egui::Ui) {
+    EguiTab::ui(ui);
+
+    match EguiTab::get() {
+        EguiTab::Camera => {
+            egui_debug_camera(ui);
+        }
+        EguiTab::Game => {
+            egui_debug_game(ui);
+        }
+    }
+}
+
+fn egui_debug_camera(ui: &mut egui::Ui) {
+    let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
+    ui.checkbox(&mut cs.enabled, "Enabled");
+    ui.checkbox(&mut cs.always_use_t1, "Always use T1");
+    ui.checkbox(&mut cs.blurs_enabled, "Blurs");
+    ui.checkbox(&mut cs.use_eye_matrices, "Use eye matrices");
+
+    ui.add_enabled_ui(!cs.use_eye_matrices, |ui| {
+        use egui::Slider;
+        ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
+        ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
+        ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text("Head Z"));
+
+        ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
+        ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
+        ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
+    });
+}
+
+fn egui_debug_game(ui: &mut egui::Ui) {
+    unsafe {
+        let Some(game) = jc3gi::game::Game::get() else {
+            return;
+        };
+        let Some(clock) = jc3gi::clock::Clock::get() else {
+            return;
+        };
+
+        ui.heading("Game");
+        ui.label(format!("Update frequency: {}Hz", game.m_UpdateFrequency));
+        ui.label(format!("Update flags: {:X}", game.m_UpdateFlags));
+        ui.label(format!(
+            "Interpolation method: {:X}",
+            game.m_InterpolationMethod
+        ));
+        {
+            let mut interpolation_override = game.m_InterpolationOverride;
+            let before = interpolation_override;
+            egui::ComboBox::from_label("Interpolation override")
+                .selected_text(interpolation_override.to_string())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut interpolation_override, -1, "Really None");
+                    ui.selectable_value(&mut interpolation_override, 0, "None");
+                    ui.selectable_value(&mut interpolation_override, 1, "1");
+                    ui.selectable_value(&mut interpolation_override, 2, "2");
+                    ui.selectable_value(&mut interpolation_override, 3, "3");
+                });
+
+            if before != interpolation_override
+                && let Some(mut patcher) = hooks::patcher()
+            {
+                patcher.patch(
+                    &mut game.m_InterpolationOverride as *mut _ as usize,
+                    &interpolation_override.to_le_bytes(),
+                );
+            }
+        }
+        patchbox(ui, "Decouple enabled", &mut game.m_DecoupleEnabled);
+
+        ui.heading("Clock");
+        ui.label(format!("FPS: {}", clock.m_FPS));
+        ui.label(format!("SPF: {}", clock.m_SPF));
+        ui.label(format!("Real FPS: {}", clock.m_RealFPS));
+        ui.label(format!("Real SPF: {}", clock.m_RealSPF));
+        ui.label(format!("Update speed: {}", clock.m_UpdateSpeed));
+        ui.label(format!("Force to FPS: {}", clock.m_ForceToThisFPS));
+        ui.label(format!("Force to SPF: {}", clock.m_ForceToThisSPF));
+        patchbox(ui, "Stop", &mut clock.m_Stop);
+        patchbox(ui, "Force to FPS", &mut clock.m_ForceToFps);
+    }
+}
+
+fn patchbox(ui: &mut egui::Ui, label: &str, value: *mut bool) {
+    let mut enabled = unsafe { *value };
+    if ui.checkbox(&mut enabled, label).changed()
+        && let Some(mut patcher) = hooks::patcher()
+    {
+        unsafe {
+            patcher.patch(value as *const _ as usize, &[if enabled { 1 } else { 0 }]);
+        }
+    }
+}
