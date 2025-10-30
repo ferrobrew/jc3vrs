@@ -178,8 +178,9 @@ dependencies = [
 
 [[package]]
 name = "egui-directx11"
-version = "0.12.0"
-source = "git+https://github.com/ferrobrew/egui-directx11.git?branch=user-texture-support#bdc25011d81c9c88dce28f21e223e5f09af8ec0a"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1a3fea83a5effd3fa95902753dd54021c263e49af39953424e7b25f84040cb6"
 dependencies = [
  "egui",
  "log",
