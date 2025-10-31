@@ -1,8 +1,11 @@
 use graphics_engine::texture::Texture;
 
 backend rust prologue r#"
-use windows::Win32::Graphics::{Direct3D11::{ID3D11Device, ID3D11DeviceContext}, Dxgi::{IDXGISwapChain, IDXGIOutput}};
+use windows::Win32::{Graphics::{Direct3D11::{ID3D11Device, ID3D11DeviceContext}, Dxgi::{IDXGISwapChain, IDXGIOutput}}, System::Threading::CRITICAL_SECTION};
 "#;
+
+#[size(40), align(8)]
+extern type CRITICAL_SECTION;
 
 #[size(8), align(8)]
 extern type ID3D11Device;
@@ -20,6 +23,9 @@ extern type IDXGIOutput;
 pub type Context {
     #[address(0x8020)]
     pub m_Context: ID3D11DeviceContext,
+
+    #[address(0x8028)]
+    pub m_Mutex: *mut CRITICAL_SECTION,
 }
 
 #[size(0x8D80)]

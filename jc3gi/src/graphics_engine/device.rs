@@ -5,15 +5,19 @@
     clippy::unnecessary_cast
 )]
 #![cfg_attr(any(), rustfmt::skip)]
-use windows::Win32::Graphics::{
-    Direct3D11::{ID3D11Device, ID3D11DeviceContext},
-    Dxgi::{IDXGISwapChain, IDXGIOutput},
+use windows::Win32::{
+    Graphics::{
+        Direct3D11::{ID3D11Device, ID3D11DeviceContext},
+        Dxgi::{IDXGISwapChain, IDXGIOutput},
+    },
+    System::Threading::CRITICAL_SECTION,
 };
 #[repr(C, align(8))]
 pub struct Context {
     _field_0: [u8; 32800],
     pub m_Context: crate::graphics_engine::device::ID3D11DeviceContext,
-    _field_8028: [u8; 3272],
+    pub m_Mutex: *mut crate::graphics_engine::device::CRITICAL_SECTION,
+    _field_8030: [u8; 3264],
 }
 fn _Context_size_check() {
     unsafe {

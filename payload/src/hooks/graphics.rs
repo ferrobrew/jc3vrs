@@ -5,6 +5,7 @@ use jc3gi::graphics_engine::{
     render_engine::RenderEngine,
 };
 use re_utilities::hook_library::HookLibrary;
+use windows::Win32::System::Threading::{EnterCriticalSection, LeaveCriticalSection};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -45,9 +46,13 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             return result;
         };
 
+        EnterCriticalSection(context.m_Mutex);
+
         context
             .m_Context
             .CopyResource(texture, &backbuffer_linear.m_Texture);
+
+        LeaveCriticalSection(context.m_Mutex);
     }
 
     result
