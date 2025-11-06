@@ -40,7 +40,16 @@ impl Game {
         }
     }
 }
-impl Game {}
+impl Game {
+    pub unsafe fn draw(&self, dt: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *const Self, dt: f32) = ::std::mem::transmute(
+                0x143C69C40 as usize,
+            );
+            f(self as *const Self as _, dt)
+        }
+    }
+}
 impl std::convert::AsRef<Game> for Game {
     fn as_ref(&self) -> &Game {
         self
@@ -48,6 +57,90 @@ impl std::convert::AsRef<Game> for Game {
 }
 impl std::convert::AsMut<Game> for Game {
     fn as_mut(&mut self) -> &mut Game {
+        self
+    }
+}
+#[derive(Copy, Clone)]
+#[repr(C, align(8))]
+pub struct GameObjectInitContext {
+    pub m_Dt: f32,
+    pub m_DtIgnorePause: f32,
+    pub m_RealDt: f32,
+    _field_c: [u8; 4],
+    pub m_ResourceCache: *const ::std::ffi::c_void,
+    pub m_ProjectContext: *const ::std::ffi::c_void,
+}
+fn _GameObjectInitContext_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x20], GameObjectInitContext>([0u8; 0x20]);
+    }
+    unreachable!()
+}
+impl GameObjectInitContext {}
+impl std::convert::AsRef<GameObjectInitContext> for GameObjectInitContext {
+    fn as_ref(&self) -> &GameObjectInitContext {
+        self
+    }
+}
+impl std::convert::AsMut<GameObjectInitContext> for GameObjectInitContext {
+    fn as_mut(&mut self) -> &mut GameObjectInitContext {
+        self
+    }
+}
+#[derive(Copy, Clone)]
+#[repr(C, align(8))]
+pub struct GameObjectRenderContext {
+    pub m_Dt: f32,
+    pub m_Dtf: f32,
+    pub m_OriginalDt: f32,
+    pub m_DtIgnorePause: f32,
+    pub m_RealDt: f32,
+    _field_14: [u8; 4],
+    pub m_ProjectContext: *const ::std::ffi::c_void,
+}
+fn _GameObjectRenderContext_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x20], GameObjectRenderContext>([0u8; 0x20]);
+    }
+    unreachable!()
+}
+impl GameObjectRenderContext {}
+impl std::convert::AsRef<GameObjectRenderContext> for GameObjectRenderContext {
+    fn as_ref(&self) -> &GameObjectRenderContext {
+        self
+    }
+}
+impl std::convert::AsMut<GameObjectRenderContext> for GameObjectRenderContext {
+    fn as_mut(&mut self) -> &mut GameObjectRenderContext {
+        self
+    }
+}
+#[derive(Copy, Clone)]
+#[repr(C, align(8))]
+pub struct GameObjectUpdateContext {
+    pub m_Dt: f32,
+    pub m_OriginalDt: f32,
+    pub m_DtIgnorePause: f32,
+    pub m_RealDt: f32,
+    pub m_SkippedDt: f32,
+    pub m_Paused: bool,
+    _field_15: [u8; 3],
+    pub m_ProjectContext: *const ::std::ffi::c_void,
+}
+fn _GameObjectUpdateContext_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x20], GameObjectUpdateContext>([0u8; 0x20]);
+    }
+    unreachable!()
+}
+impl GameObjectUpdateContext {}
+impl std::convert::AsRef<GameObjectUpdateContext> for GameObjectUpdateContext {
+    fn as_ref(&self) -> &GameObjectUpdateContext {
+        self
+    }
+}
+impl std::convert::AsMut<GameObjectUpdateContext> for GameObjectUpdateContext {
+    fn as_mut(&mut self) -> &mut GameObjectUpdateContext {
         self
     }
 }
@@ -71,5 +164,41 @@ fn _GameState_size_check() {
 impl GameState {
     pub unsafe fn get() -> Self {
         unsafe { *(0x142F3404C as *const Self) }
+    }
+}
+impl GameState {
+    pub unsafe fn post_update_render(
+        update_contexts: *const crate::game::UpdateContexts,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                update_contexts: *const crate::game::UpdateContexts,
+            ) = ::std::mem::transmute(0x143D2F130 as usize);
+            f(update_contexts)
+        }
+    }
+}
+#[derive(Copy, Clone)]
+#[repr(C, align(8))]
+pub struct UpdateContexts {
+    pub m_InitContext: crate::game::GameObjectInitContext,
+    pub m_UpdateContext: crate::game::GameObjectUpdateContext,
+    pub m_RenderContext: crate::game::GameObjectRenderContext,
+}
+fn _UpdateContexts_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x60], UpdateContexts>([0u8; 0x60]);
+    }
+    unreachable!()
+}
+impl UpdateContexts {}
+impl std::convert::AsRef<UpdateContexts> for UpdateContexts {
+    fn as_ref(&self) -> &UpdateContexts {
+        self
+    }
+}
+impl std::convert::AsMut<UpdateContexts> for UpdateContexts {
+    fn as_mut(&mut self) -> &mut UpdateContexts {
+        self
     }
 }

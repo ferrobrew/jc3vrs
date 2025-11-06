@@ -23,6 +23,53 @@ pub type Game {
     #[address(0x2B8)]
     pub m_UpdateFlags: u32,
 }
+impl Game {
+    #[address(0x143_C69_C40)]
+    pub fn draw(&self, dt: f32);
+}
+
+#[size(0x20), copyable]
+pub type GameObjectInitContext {
+    pub m_Dt: f32,
+    pub m_DtIgnorePause: f32,
+    pub m_RealDt: f32,
+
+    #[address(0x10)]
+    pub m_ResourceCache: *const void,
+    pub m_ProjectContext: *const void,
+}
+
+#[size(0x20), copyable]
+pub type GameObjectUpdateContext {
+    pub m_Dt: f32,
+    pub m_OriginalDt: f32,
+    pub m_DtIgnorePause: f32,
+    pub m_RealDt: f32,
+    pub m_SkippedDt: f32,
+    pub m_Paused: bool,
+
+    #[address(0x18)]
+    pub m_ProjectContext: *const void,
+}
+
+#[size(0x20), copyable]
+pub type GameObjectRenderContext {
+    pub m_Dt: f32,
+    pub m_Dtf: f32,
+    pub m_OriginalDt: f32,
+    pub m_DtIgnorePause: f32,
+    pub m_RealDt: f32,
+
+    #[address(0x18)]
+    pub m_ProjectContext: *const void,
+}
+
+#[size(0x60), copyable]
+pub type UpdateContexts {
+    pub m_InitContext: GameObjectInitContext,
+    pub m_UpdateContext: GameObjectUpdateContext,
+    pub m_RenderContext: GameObjectRenderContext,
+}
 
 #[singleton(0x142F3404C), copyable]
 pub enum GameState: u32 {
@@ -33,4 +80,8 @@ pub enum GameState: u32 {
     E_GAME_RUN      = 0x4,
     E_GAME_STARTUP  = 0x5,
     NOF_GAME_STATES = 0x6,
+}
+impl GameState {
+    #[address(0x143_D2F_130)]
+    pub fn post_update_render(update_contexts: *const UpdateContexts);
 }
