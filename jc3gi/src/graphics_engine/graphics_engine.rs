@@ -49,7 +49,16 @@ impl GraphicsEngine {
         }
     }
 }
-impl GraphicsEngine {}
+impl GraphicsEngine {
+    pub unsafe fn wait_for_cpu_to_finish_drawing(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                0x1432ED380 as usize,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+}
 impl std::convert::AsRef<GraphicsEngine> for GraphicsEngine {
     fn as_ref(&self) -> &GraphicsEngine {
         self

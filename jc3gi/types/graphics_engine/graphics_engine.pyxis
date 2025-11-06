@@ -37,6 +37,10 @@ pub type GraphicsEngine {
     #[address(0x1230)]
     pub m_BackBufferLinear: *mut Texture,
 }
+impl GraphicsEngine {
+    #[address(0x143_2ED_380)]
+    pub fn wait_for_cpu_to_finish_drawing(&mut self);
+}
 
 #[size(0x70)]
 pub type GraphicsParams {

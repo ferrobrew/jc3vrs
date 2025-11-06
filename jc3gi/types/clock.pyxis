@@ -24,3 +24,10 @@ pub type Clock {
     pub m_LastCount: u64,
     pub m_CpuFrequency: u64,
 }
+impl Clock {
+    #[address(0x143_2AC_860)]
+    pub fn get_spf(&self, ignore_pause: bool) -> f32;
+
+    #[address(0x143_2AC_7E0)]
+    pub fn pause(&mut self, pause: bool);
+}

@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicBool;
+
 use detours_macro::detour;
 use jc3gi::graphics_engine::{
     device::{Context, Device},
@@ -13,8 +15,14 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&RENDER_ENGINE_POST_DRAW_BINDER)
 }
 
+pub static BLOCK_FLIP: AtomicBool = AtomicBool::new(false);
+
 #[detour(address = 0x145_34B_870)]
 fn graphics_flip(device: *mut Device) -> u64 {
+    if BLOCK_FLIP.load(std::sync::atomic::Ordering::Relaxed) {
+        return 0;
+    }
+
     if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {
         egui_state.render();
     }
