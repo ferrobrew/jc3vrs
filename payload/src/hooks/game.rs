@@ -25,13 +25,13 @@ fn game_update(game: *const Game) -> bool {
 #[detour(address = 0x143_C74_A90)]
 fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
     unsafe {
-        let spf = Clock::get().unwrap().get_spf(false).min(0.5);
+        let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
 
         GAME_UPDATE_RENDER
             .get()
             .unwrap()
             .call(game, update_contexts);
-        GameState::post_update_render(update_contexts);
-        game.as_mut().unwrap().draw(spf);
+        GameState::PostUpdateRender(update_contexts);
+        game.as_mut().unwrap().Draw(spf);
     }
 }

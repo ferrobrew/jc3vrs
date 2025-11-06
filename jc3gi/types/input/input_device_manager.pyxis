@@ -1,7 +1,7 @@
 #[singleton(0x142_E2B_6F8), size(0x78)]
 pub type InputDeviceManager {
     vftable {
-        pub fn destructor(&mut self);
+        pub fn Destructor(&mut self);
     },
 
     #[address(0xC)]

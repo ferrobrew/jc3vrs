@@ -39,7 +39,7 @@ pub type GraphicsEngine {
 }
 impl GraphicsEngine {
     #[address(0x143_2ED_380)]
-    pub fn wait_for_cpu_to_finish_drawing(&mut self);
+    pub fn WaitForCPUDrawToFinish(&mut self);
 }
 
 #[size(0x70)]

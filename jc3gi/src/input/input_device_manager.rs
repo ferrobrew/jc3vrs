@@ -33,9 +33,9 @@ impl InputDeviceManager {
         self.vftable
             as *const crate::input::input_device_manager::InputDeviceManagerVftable
     }
-    pub unsafe fn destructor(&mut self) {
+    pub unsafe fn Destructor(&mut self) {
         unsafe {
-            let f = (&raw const (*self.vftable()).destructor).read();
+            let f = (&raw const (*self.vftable()).Destructor).read();
             f(self as *mut Self as _)
         }
     }
@@ -52,7 +52,7 @@ impl std::convert::AsMut<InputDeviceManager> for InputDeviceManager {
 }
 #[repr(C, align(8))]
 pub struct InputDeviceManagerVftable {
-    pub destructor: unsafe extern "system" fn(
+    pub Destructor: unsafe extern "system" fn(
         this: *mut crate::input::input_device_manager::InputDeviceManager,
     ),
 }

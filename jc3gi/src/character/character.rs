@@ -31,7 +31,7 @@ impl std::convert::AsMut<AnimatedModel> for AnimatedModel {
 #[repr(C, align(8))]
 pub struct AnimationController {}
 impl AnimationController {
-    pub unsafe fn get_bone_index(&self, hash: u32) -> u32 {
+    pub unsafe fn GetBoneIndex(&self, hash: u32) -> u32 {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self, hash: u32) -> u32 = ::std::mem::transmute(
                 0x1436CB7C0 as usize,
@@ -39,7 +39,7 @@ impl AnimationController {
             f(self as *const Self as _, hash)
         }
     }
-    pub unsafe fn get_bone_matrix(
+    pub unsafe fn GetBoneMatrix(
         &self,
         index: u32,
         matrix: *mut crate::types::math::Matrix4,
@@ -53,7 +53,7 @@ impl AnimationController {
             f(self as *const Self as _, index, matrix)
         }
     }
-    pub unsafe fn get_joint(
+    pub unsafe fn GetJoint(
         &self,
         index: u32,
         joint: *mut crate::character::character::Joint,
@@ -67,7 +67,7 @@ impl AnimationController {
             f(self as *const Self as _, index, joint)
         }
     }
-    pub unsafe fn set_joint(
+    pub unsafe fn SetJoint(
         &mut self,
         index: u32,
         joint: *mut crate::character::character::Joint,
@@ -110,7 +110,7 @@ fn _Character_size_check() {
     unreachable!()
 }
 impl Character {
-    pub unsafe fn get_local_player_character() -> *mut crate::character::character::Character {
+    pub unsafe fn GetLocalPlayerCharacter() -> *mut crate::character::character::Character {
         unsafe {
             let f: unsafe extern "system" fn() -> *mut crate::character::character::Character = ::std::mem::transmute(
                 0x143AD7B70 as usize,
@@ -118,7 +118,7 @@ impl Character {
             f()
         }
     }
-    pub unsafe fn get_head_position(
+    pub unsafe fn GetHeadPosition(
         &self,
         position: *mut crate::types::math::Vector3,
     ) -> *mut crate::types::math::Vector3 {
@@ -132,7 +132,7 @@ impl Character {
             f(self as *const Self as _, position)
         }
     }
-    pub unsafe fn get_safe_index(
+    pub unsafe fn GetSafeIndex(
         &self,
         safe_index: crate::character::character::SafeBoneIndex,
     ) -> u32 {
@@ -144,7 +144,7 @@ impl Character {
             f(self as *const Self as _, safe_index)
         }
     }
-    pub unsafe fn get_safe_bone_matrix(
+    pub unsafe fn GetSafeBoneMatrix(
         &self,
         safe_index: crate::character::character::SafeBoneIndex,
         matrix: *mut crate::types::math::Matrix4,

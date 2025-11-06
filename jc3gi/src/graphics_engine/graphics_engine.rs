@@ -50,7 +50,7 @@ impl GraphicsEngine {
     }
 }
 impl GraphicsEngine {
-    pub unsafe fn wait_for_cpu_to_finish_drawing(&mut self) {
+    pub unsafe fn WaitForCPUDrawToFinish(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
                 0x1432ED380 as usize,

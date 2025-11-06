@@ -26,7 +26,7 @@ fn character_update_prop_effects(character: *mut Character) {
 
         let scale = 0.001;
 
-        let mut indices = vec![character.get_safe_index(SafeBoneIndex::HEAD)];
+        let mut indices = vec![character.GetSafeIndex(SafeBoneIndex::HEAD)];
         indices.extend(
             [
                 // "offset_facialOrienter",
@@ -46,13 +46,13 @@ fn character_update_prop_effects(character: *mut Character) {
                 // "fRightEar",
             ]
             .iter()
-            .map(|s: &&str| animation_controller.get_bone_index(hashlittle(s.as_bytes()) as u32)),
+            .map(|s: &&str| animation_controller.GetBoneIndex(hashlittle(s.as_bytes()) as u32)),
         );
         for index in indices {
             let mut joint = Joint::default();
-            animation_controller.get_joint(index, &mut joint);
+            animation_controller.GetJoint(index, &mut joint);
             joint.m_Scale.data = [scale, scale, scale];
-            animation_controller.set_joint(index, &mut joint);
+            animation_controller.SetJoint(index, &mut joint);
         }
     }
 }

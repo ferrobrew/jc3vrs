@@ -23,7 +23,7 @@ pub(super) fn hook_library() -> HookLibrary {
 #[detour(address = 0x143_2EB_C70)]
 fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
     unsafe {
-        if let Some(local_character) = Character::get_local_player_character().as_mut()
+        if let Some(local_character) = Character::GetLocalPlayerCharacter().as_mut()
             && let Some(camera) = camera.as_mut()
             && let Some(cm) = CameraManager::get()
             && cm.m_ActiveCamera == camera
@@ -112,7 +112,7 @@ fn camera_tree_update_render_contexts(
         .call(tree, camera_control_context);
 
     unsafe {
-        let Some(local_character) = Character::get_local_player_character().as_mut() else {
+        let Some(local_character) = Character::GetLocalPlayerCharacter().as_mut() else {
             return;
         };
         let Some(ccc) = camera_control_context.as_mut() else {
@@ -211,7 +211,7 @@ fn camera_tree_update_render_contexts(
 fn head_matrix(character: &mut Character) -> glam::Mat4 {
     let mut head_matrix = Matrix4::default();
     unsafe {
-        character.get_safe_bone_matrix(SafeBoneIndex::HEAD, &mut head_matrix);
+        character.GetSafeBoneMatrix(SafeBoneIndex::HEAD, &mut head_matrix);
     }
     glam::Mat4::from(head_matrix)
 }
@@ -221,12 +221,12 @@ fn eye_matrices(character: &mut Character) -> (glam::Mat4, glam::Mat4) {
     let mut right_eye_matrix = Matrix4::default();
     unsafe {
         if let Some(ac) = character.m_AnimatedModel.m_AnimationController.as_mut() {
-            ac.get_bone_matrix(
-                ac.get_bone_index(hashlittle(b"fLeftEye") as u32),
+            ac.GetBoneMatrix(
+                ac.GetBoneIndex(hashlittle(b"fLeftEye") as u32),
                 &mut left_eye_matrix,
             );
-            ac.get_bone_matrix(
-                ac.get_bone_index(hashlittle(b"fRightEye") as u32),
+            ac.GetBoneMatrix(
+                ac.GetBoneIndex(hashlittle(b"fRightEye") as u32),
                 &mut right_eye_matrix,
             );
         }

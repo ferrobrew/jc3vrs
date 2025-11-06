@@ -25,7 +25,7 @@ pub type Game {
 }
 impl Game {
     #[address(0x143_C69_C40)]
-    pub fn draw(&self, dt: f32);
+    pub fn Draw(&self, dt: f32);
 }
 
 #[size(0x20), copyable]
@@ -83,5 +83,5 @@ pub enum GameState: u32 {
 }
 impl GameState {
     #[address(0x143_D2F_130)]
-    pub fn post_update_render(update_contexts: *const UpdateContexts);
+    pub fn PostUpdateRender(update_contexts: *const UpdateContexts);
 }

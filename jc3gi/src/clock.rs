@@ -44,7 +44,7 @@ impl Clock {
     }
 }
 impl Clock {
-    pub unsafe fn get_spf(&self, ignore_pause: bool) -> f32 {
+    pub unsafe fn GetSPF(&self, ignore_pause: bool) -> f32 {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *const Self,
@@ -53,7 +53,7 @@ impl Clock {
             f(self as *const Self as _, ignore_pause)
         }
     }
-    pub unsafe fn pause(&mut self, pause: bool) {
+    pub unsafe fn Pause(&mut self, pause: bool) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, pause: bool) = ::std::mem::transmute(
                 0x1432AC7E0 as usize,

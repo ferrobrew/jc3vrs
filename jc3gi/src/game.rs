@@ -41,7 +41,7 @@ impl Game {
     }
 }
 impl Game {
-    pub unsafe fn draw(&self, dt: f32) {
+    pub unsafe fn Draw(&self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self, dt: f32) = ::std::mem::transmute(
                 0x143C69C40 as usize,
@@ -167,9 +167,7 @@ impl GameState {
     }
 }
 impl GameState {
-    pub unsafe fn post_update_render(
-        update_contexts: *const crate::game::UpdateContexts,
-    ) {
+    pub unsafe fn PostUpdateRender(update_contexts: *const crate::game::UpdateContexts) {
         unsafe {
             let f: unsafe extern "system" fn(
                 update_contexts: *const crate::game::UpdateContexts,

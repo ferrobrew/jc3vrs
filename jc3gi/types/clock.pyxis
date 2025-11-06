@@ -26,8 +26,8 @@ pub type Clock {
 }
 impl Clock {
     #[address(0x143_2AC_860)]
-    pub fn get_spf(&self, ignore_pause: bool) -> f32;
+    pub fn GetSPF(&self, ignore_pause: bool) -> f32;
 
     #[address(0x143_2AC_7E0)]
-    pub fn pause(&mut self, pause: bool);
+    pub fn Pause(&mut self, pause: bool);
 }
