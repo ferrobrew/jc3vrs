@@ -1,4 +1,4 @@
-#[singleton(0x142E22E68), size(0x2C0 /* actually 0x2BC, but Pyxis requires an alignment of 8 */)]
+#[singleton(0x142E22E68), min_size(0x2C0)]
 pub type Game {
     #[address(0x10)]
     pub m_CountAccumulator: u64,

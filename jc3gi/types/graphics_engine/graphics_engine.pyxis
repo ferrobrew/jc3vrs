@@ -20,7 +20,7 @@ pub enum ActiveCursor: i32 {
     Zoom
 }
 
-#[singleton(0x142E2B6F0), size(0x1F10 /* actually 0x1F09, but Pyxis requires an alignment of 8 */)]
+#[singleton(0x142E2B6F0), min_size(0x1F10)]
 pub type GraphicsEngine {
     #[address(0x18)]
     pub m_CPUFinishedDrawingEvent: u32,

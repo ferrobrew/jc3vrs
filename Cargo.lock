@@ -517,7 +517,7 @@ checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
 [[package]]
 name = "pyxis"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/pyxis.git#2b1c37b8c6a75d26a3e59cab7deceb2e244f3ad5"
+source = "git+https://github.com/ferrobrew/pyxis.git#2431ae3a21e2ff1f250ad8e36ebd786761e49187"
 dependencies = [
  "anyhow",
  "glob",
