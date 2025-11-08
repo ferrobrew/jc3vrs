@@ -67,33 +67,17 @@ impl std::convert::AsMut<Camera> for Camera {
         self
     }
 }
-#[derive(Copy, Clone, Default)]
-#[repr(C, align(1))]
-pub struct CameraState {
-    /// __int8 m_UseOffCenter : 1;
-    /// __int8 m_ScreenshotSeriesRunning : 1;
-    /// __int8 m_Ortho : 1;
-    /// __int8 m_ComputeView : 1;
-    /// __int8 m_DirtyProjection : 1;
-    /// __int8 m_IsRenderCamera : 1;
-    pub bitfield: u8,
+bitflags::bitflags! {
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] pub struct CameraState
+    : u8 { const m_UseOffCenter = 1usize as _; const m_ScreenshotSeriesRunning = 2usize
+    as _; const m_Ortho = 4usize as _; const m_ComputeView = 8usize as _; const
+    m_DirtyProjection = 16usize as _; const m_IsRenderCamera = 32usize as _; }
 }
 fn _CameraState_size_check() {
     unsafe {
         ::std::mem::transmute::<[u8; 0x1], CameraState>([0u8; 0x1]);
     }
     unreachable!()
-}
-impl CameraState {}
-impl std::convert::AsRef<CameraState> for CameraState {
-    fn as_ref(&self) -> &CameraState {
-        self
-    }
-}
-impl std::convert::AsMut<CameraState> for CameraState {
-    fn as_mut(&mut self) -> &mut CameraState {
-        self
-    }
 }
 #[derive(Copy, Clone, Default)]
 #[repr(C, align(1))]
