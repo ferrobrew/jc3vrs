@@ -126,15 +126,15 @@ impl EguiState {
 
             self.events.clear();
             if let Some(game_input_state) = self.game_input_state.take() {
-                input_device_manager.enabled = game_input_state.input_was_enabled;
+                input_device_manager.m_Enabled = game_input_state.input_was_enabled;
                 graphics_engine.m_ActiveCursor = game_input_state.active_cursor;
             } else {
                 self.game_input_state = Some(GameInputState {
-                    input_was_enabled: input_device_manager.enabled,
+                    input_was_enabled: input_device_manager.m_Enabled,
                     active_cursor: graphics_engine.m_ActiveCursor,
                 });
 
-                input_device_manager.enabled = false;
+                input_device_manager.m_Enabled = false;
             }
         }
     }

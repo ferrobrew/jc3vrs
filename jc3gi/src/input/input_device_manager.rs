@@ -9,7 +9,7 @@
 pub struct InputDeviceManager {
     vftable: *const crate::input::input_device_manager::InputDeviceManagerVftable,
     _field_8: [u8; 4],
-    pub enabled: bool,
+    pub m_Enabled: bool,
     _field_d: [u8; 107],
 }
 fn _InputDeviceManager_size_check() {
