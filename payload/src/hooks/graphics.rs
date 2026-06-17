@@ -17,7 +17,7 @@ pub(super) fn hook_library() -> HookLibrary {
 
 pub static BLOCK_FLIP: AtomicBool = AtomicBool::new(false);
 
-#[detour(address = 0x145_34B_870)]
+#[detour(address = 0x141_95A_820)]
 fn graphics_flip(device: *mut Device) -> u64 {
     if BLOCK_FLIP.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
@@ -29,7 +29,7 @@ fn graphics_flip(device: *mut Device) -> u64 {
     GRAPHICS_FLIP.get().unwrap().call(device)
 }
 
-#[detour(address = 0x143_409_1A0)]
+#[detour(address = 0x140_1C2_350)]
 fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Context) -> u64 {
     let result = RENDER_ENGINE_POST_DRAW
         .get()

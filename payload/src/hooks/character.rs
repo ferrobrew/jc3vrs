@@ -9,9 +9,9 @@ pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new().with_static_binder(&CHARACTER_UPDATE_PROP_EFFECTS_BINDER)
 }
 
-#[detour(address = 0x143_AC2_390)]
-fn character_update_prop_effects(character: *mut Character) {
-    CHARACTER_UPDATE_PROP_EFFECTS.get().unwrap().call(character);
+#[detour(address = 0x140_7C2_380)]
+fn character_update_prop_effects(character: *mut Character, dt: f32) {
+    CHARACTER_UPDATE_PROP_EFFECTS.get().unwrap().call(character, dt);
 
     // Hide the player's head
     unsafe {
