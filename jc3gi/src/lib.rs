@@ -1,4 +1,8 @@
-#![allow(nonstandard_style, clippy::module_inception)]
+#![allow(
+    nonstandard_style,
+    clippy::module_inception,
+    clippy::too_many_arguments
+)]
 pub mod aim;
 pub mod animation;
 pub mod audio;
