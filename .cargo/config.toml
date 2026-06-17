@@ -1,0 +1,15 @@
+# Default to the x86-64 Windows target so rust-analyzer / `cargo check` and
+# autocomplete operate against the platform we actually ship to. Cross-builds
+# go through `cargo xwin build` (see scripts/), which supplies the Windows
+# linker; plain `cargo check` doesn't link, so it works without xwin.
+[build]
+target = "x86_64-pc-windows-msvc"
+
+# Use clang + lld for host build-scripts / proc-macros (provided by shell.nix).
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Native Windows builds (e.g. CI on windows-latest) link with rust's bundled lld.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
