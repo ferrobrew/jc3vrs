@@ -6,6 +6,32 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+pub struct CProjectContext {}
+impl CProjectContext {}
+impl std::convert::AsRef<CProjectContext> for CProjectContext {
+    fn as_ref(&self) -> &CProjectContext {
+        self
+    }
+}
+impl std::convert::AsMut<CProjectContext> for CProjectContext {
+    fn as_mut(&mut self) -> &mut CProjectContext {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct CResourceCache {}
+impl CResourceCache {}
+impl std::convert::AsRef<CResourceCache> for CResourceCache {
+    fn as_ref(&self) -> &CResourceCache {
+        self
+    }
+}
+impl std::convert::AsMut<CResourceCache> for CResourceCache {
+    fn as_mut(&mut self) -> &mut CResourceCache {
+        self
+    }
+}
+#[repr(C, align(8))]
 pub struct Game {
     _field_0: [u8; 16],
     pub m_CountAccumulator: u64,
@@ -44,9 +70,29 @@ impl Game {
     pub unsafe fn Draw(&self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self, dt: f32) = ::std::mem::transmute(
-                0x143C69C40 as usize,
+                0x140952390 as usize,
             );
             f(self as *const Self as _, dt)
+        }
+    }
+    pub unsafe fn Update(&mut self) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) -> bool = ::std::mem::transmute(
+                0x1409604E0 as usize,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub unsafe fn UpdateRender(
+        &mut self,
+        update_contexts: *mut crate::game::UpdateContexts,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                update_contexts: *mut crate::game::UpdateContexts,
+            ) = ::std::mem::transmute(0x14095A4E0 as usize);
+            f(self as *mut Self as _, update_contexts)
         }
     }
 }
@@ -67,8 +113,8 @@ pub struct GameObjectInitContext {
     pub m_DtIgnorePause: f32,
     pub m_RealDt: f32,
     _field_c: [u8; 4],
-    pub m_ResourceCache: *const ::std::ffi::c_void,
-    pub m_ProjectContext: *const ::std::ffi::c_void,
+    pub m_ResourceCache: *const crate::game::CResourceCache,
+    pub m_ProjectContext: *const crate::game::CProjectContext,
 }
 fn _GameObjectInitContext_size_check() {
     unsafe {
@@ -96,7 +142,7 @@ pub struct GameObjectRenderContext {
     pub m_DtIgnorePause: f32,
     pub m_RealDt: f32,
     _field_14: [u8; 4],
-    pub m_ProjectContext: *const ::std::ffi::c_void,
+    pub m_ProjectContext: *const crate::game::CProjectContext,
 }
 fn _GameObjectRenderContext_size_check() {
     unsafe {
@@ -125,7 +171,7 @@ pub struct GameObjectUpdateContext {
     pub m_SkippedDt: f32,
     pub m_Paused: bool,
     _field_15: [u8; 3],
-    pub m_ProjectContext: *const ::std::ffi::c_void,
+    pub m_ProjectContext: *const crate::game::CProjectContext,
 }
 fn _GameObjectUpdateContext_size_check() {
     unsafe {
@@ -171,7 +217,7 @@ impl GameState {
         unsafe {
             let f: unsafe extern "system" fn(
                 update_contexts: *const crate::game::UpdateContexts,
-            ) = ::std::mem::transmute(0x143D2F130 as usize);
+            ) = ::std::mem::transmute(0x140A00E90 as usize);
             f(update_contexts)
         }
     }

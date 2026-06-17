@@ -49,16 +49,49 @@ impl Clock {
             let f: unsafe extern "system" fn(
                 this: *const Self,
                 ignore_pause: bool,
-            ) -> f32 = ::std::mem::transmute(0x1432AC860 as usize);
+            ) -> f32 = ::std::mem::transmute(0x140091C10 as usize);
             f(self as *const Self as _, ignore_pause)
         }
     }
     pub unsafe fn Pause(&mut self, pause: bool) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, pause: bool) = ::std::mem::transmute(
-                0x1432AC7E0 as usize,
+                0x140091BB0 as usize,
             );
             f(self as *mut Self as _, pause)
+        }
+    }
+    pub unsafe fn Update(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                0x140093230 as usize,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub unsafe fn IsPaused(&self) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
+                0x140091BA0 as usize,
+            );
+            f(self as *const Self as _)
+        }
+    }
+    pub unsafe fn GetRealSPF(&self, ignore_pause: bool) -> f32 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                ignore_pause: bool,
+            ) -> f32 = ::std::mem::transmute(0x140091CA0 as usize);
+            f(self as *const Self as _, ignore_pause)
+        }
+    }
+    pub unsafe fn DisableForceToFPS(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                0x140091D00 as usize,
+            );
+            f(self as *mut Self as _)
         }
     }
 }

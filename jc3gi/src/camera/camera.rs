@@ -56,7 +56,16 @@ fn _Camera_size_check() {
     }
     unreachable!()
 }
-impl Camera {}
+impl Camera {
+    pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, dt: f32, dtf: f32) = ::std::mem::transmute(
+                0x1400C3020 as usize,
+            );
+            f(self as *mut Self as _, dt, dtf)
+        }
+    }
+}
 impl std::convert::AsRef<Camera> for Camera {
     fn as_ref(&self) -> &Camera {
         self

@@ -34,7 +34,7 @@ impl AnimationController {
     pub unsafe fn GetBoneIndex(&self, hash: u32) -> u32 {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self, hash: u32) -> u32 = ::std::mem::transmute(
-                0x1436CB7C0 as usize,
+                0x140434E30 as usize,
             );
             f(self as *const Self as _, hash)
         }
@@ -49,7 +49,7 @@ impl AnimationController {
                 this: *const Self,
                 index: u32,
                 matrix: *mut crate::types::math::Matrix4,
-            ) = ::std::mem::transmute(0x1436DAB60 as usize);
+            ) = ::std::mem::transmute(0x14043FE70 as usize);
             f(self as *const Self as _, index, matrix)
         }
     }
@@ -63,7 +63,7 @@ impl AnimationController {
                 this: *const Self,
                 index: u32,
                 joint: *mut crate::character::character::Joint,
-            ) = ::std::mem::transmute(0x1436DAC90 as usize);
+            ) = ::std::mem::transmute(0x14043FF90 as usize);
             f(self as *const Self as _, index, joint)
         }
     }
@@ -77,7 +77,7 @@ impl AnimationController {
                 this: *mut Self,
                 index: u32,
                 joint: *mut crate::character::character::Joint,
-            ) = ::std::mem::transmute(0x1436DACF0 as usize);
+            ) = ::std::mem::transmute(0x14043FFF0 as usize);
             f(self as *mut Self as _, index, joint)
         }
     }
@@ -113,7 +113,7 @@ impl Character {
     pub unsafe fn GetLocalPlayerCharacter() -> *mut crate::character::character::Character {
         unsafe {
             let f: unsafe extern "system" fn() -> *mut crate::character::character::Character = ::std::mem::transmute(
-                0x143AD7B70 as usize,
+                0x1407D5B00 as usize,
             );
             f()
         }
@@ -127,7 +127,7 @@ impl Character {
                 this: *const Self,
                 position: *mut crate::types::math::Vector3,
             ) -> *mut crate::types::math::Vector3 = ::std::mem::transmute(
-                0x143AAE940 as usize,
+                0x1407AF550 as usize,
             );
             f(self as *const Self as _, position)
         }
@@ -140,7 +140,7 @@ impl Character {
             let f: unsafe extern "system" fn(
                 this: *const Self,
                 safe_index: crate::character::character::SafeBoneIndex,
-            ) -> u32 = ::std::mem::transmute(0x143A990A0 as usize);
+            ) -> u32 = ::std::mem::transmute(0x14079AB30 as usize);
             f(self as *const Self as _, safe_index)
         }
     }
@@ -154,8 +154,16 @@ impl Character {
                 this: *const Self,
                 safe_index: crate::character::character::SafeBoneIndex,
                 matrix: *mut crate::types::math::Matrix4,
-            ) = ::std::mem::transmute(0x143A991B0 as usize);
+            ) = ::std::mem::transmute(0x14079AC30 as usize);
             f(self as *const Self as _, safe_index, matrix)
+        }
+    }
+    pub unsafe fn UpdatePropEffects(&mut self, dt: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
+                0x1407C2380 as usize,
+            );
+            f(self as *mut Self as _, dt)
         }
     }
 }

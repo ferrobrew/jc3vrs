@@ -8,7 +8,7 @@
 unsafe fn hashlittle_impl(data: *const u8, len: u64, seed: u32) -> u64 {
     unsafe {
         let f: unsafe extern "system" fn(data: *const u8, len: u64, seed: u32) -> u64 = ::std::mem::transmute(
-            0x144A8CB00 as usize,
+            0x141119880 as usize,
         );
         f(data, len, seed)
     }

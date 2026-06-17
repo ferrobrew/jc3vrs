@@ -23,7 +23,20 @@ impl RenderEngine {
         }
     }
 }
-impl RenderEngine {}
+impl RenderEngine {
+    pub unsafe fn PostDraw(
+        &mut self,
+        context: *const crate::graphics_engine::graphics_engine::HContext_t,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                context: *const crate::graphics_engine::graphics_engine::HContext_t,
+            ) = ::std::mem::transmute(0x1401C2350 as usize);
+            f(self as *mut Self as _, context)
+        }
+    }
+}
 impl std::convert::AsRef<RenderEngine> for RenderEngine {
     fn as_ref(&self) -> &RenderEngine {
         self

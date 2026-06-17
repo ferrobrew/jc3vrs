@@ -28,7 +28,25 @@ impl CameraManager {
         }
     }
 }
-impl CameraManager {}
+impl CameraManager {
+    pub unsafe fn InitTransform(&mut self, mat: *const crate::types::math::Matrix4) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                mat: *const crate::types::math::Matrix4,
+            ) = ::std::mem::transmute(0x14009D390 as usize);
+            f(self as *mut Self as _, mat)
+        }
+    }
+    pub unsafe fn InitFOV(&mut self, fov: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, fov: f32) = ::std::mem::transmute(
+                0x14009D400 as usize,
+            );
+            f(self as *mut Self as _, fov)
+        }
+    }
+}
 impl std::convert::AsRef<CameraManager> for CameraManager {
     fn as_ref(&self) -> &CameraManager {
         self
