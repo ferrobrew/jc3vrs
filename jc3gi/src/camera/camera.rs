@@ -67,6 +67,18 @@ impl Camera {
             f(self as *mut Self as _, dt, dtf)
         }
     }
+    pub const SetupRenderCamera_ADDRESS: usize = 0x1400B3B80;
+    pub unsafe fn SetupRenderCamera(&mut self, jitter: bool) -> *mut ::std::ffi::c_void {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                jitter: bool,
+            ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(
+                Self::SetupRenderCamera_ADDRESS,
+            );
+            f(self as *mut Self as _, jitter)
+        }
+    }
 }
 impl std::convert::AsRef<Camera> for Camera {
     fn as_ref(&self) -> &Camera {
