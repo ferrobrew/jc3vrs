@@ -254,7 +254,7 @@ impl std::convert::AsMut<PostEffectContext> for PostEffectContext {
 #[repr(C, align(8))]
 pub struct PostEffectRenderContext {
     _field_0: [u8; 900],
-    pub m_Flags: u8,
+    pub m_Flags: crate::graphics_engine::post_effects::PostEffectRenderFlags,
     _field_385: [u8; 3],
 }
 fn _PostEffectRenderContext_size_check() {
@@ -273,4 +273,14 @@ impl std::convert::AsMut<PostEffectRenderContext> for PostEffectRenderContext {
     fn as_mut(&mut self) -> &mut PostEffectRenderContext {
         self
     }
+}
+bitflags::bitflags! {
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] pub struct
+    PostEffectRenderFlags : u8 { const m_MotionVectorReprojection = 1usize as _; }
+}
+fn _PostEffectRenderFlags_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x1], PostEffectRenderFlags>([0u8; 0x1]);
+    }
+    unreachable!()
 }
