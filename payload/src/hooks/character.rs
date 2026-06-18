@@ -9,9 +9,12 @@ pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new().with_static_binder(&CHARACTER_UPDATE_PROP_EFFECTS_BINDER)
 }
 
-#[detour(address = 0x140_7C2_380)]
+#[detour(address = jc3gi::character::character::Character::UpdatePropEffects_ADDRESS)]
 fn character_update_prop_effects(character: *mut Character, dt: f32) {
-    CHARACTER_UPDATE_PROP_EFFECTS.get().unwrap().call(character, dt);
+    CHARACTER_UPDATE_PROP_EFFECTS
+        .get()
+        .unwrap()
+        .call(character, dt);
 
     // Hide the player's head
     unsafe {

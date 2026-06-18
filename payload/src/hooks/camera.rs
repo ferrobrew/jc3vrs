@@ -20,7 +20,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&CAMERA_TREE_UPDATE_RENDER_CONTEXTS_BINDER)
 }
 
-#[detour(address = 0x140_0C3_020)]
+#[detour(address = jc3gi::camera::camera::Camera::UpdateRender_ADDRESS)]
 fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
     unsafe {
         if let Some(local_character) = Character::GetLocalPlayerCharacter().as_mut()
@@ -101,7 +101,7 @@ impl CameraSettings {
 }
 pub static CAMERA_SETTINGS: Mutex<CameraSettings> = Mutex::new(CameraSettings::new());
 
-#[detour(address = 0x140_465_AD0)]
+#[detour(address = jc3gi::camera::camera_tree::CameraTree::UpdateRenderContexts_ADDRESS)]
 fn camera_tree_update_render_contexts(
     tree: *mut c_void,
     camera_control_context: *mut CameraControlContext,

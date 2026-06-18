@@ -8,21 +8,21 @@ use re_utilities::hook_library::HookLibrary;
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&GAME_UPDATE_BINDER)
-        // CGame::Update: nop out the `m_UpdateFlags & 4` check (the jz), we will _always_ be UpdateRender-ing.
-        .with_patch(0x140_960_C67, &[0x90].repeat(0x140_960_C69 - 0x140_960_C67))
+        // CGame::Update + 0x787: nop the `m_UpdateFlags & 4` check (the jz), we will _always_ be UpdateRender-ing.
+        .with_patch(Game::Update_ADDRESS + 0x787, &[0x90; 2])
         .with_static_binder(&GAME_UPDATE_RENDER_BINDER)
-        // CGame::Update: nop out everything between UpdateRender and ++this->m_RenderCount;
+        // CGame::Update + 0x7A2: nop everything between UpdateRender and ++this->m_RenderCount;
         // we'll be doing that ourselves!
-        .with_patch(0x140_960_C82, &[0x90].repeat(0x140_960_CBC - 0x140_960_C82))
+        .with_patch(Game::Update_ADDRESS + 0x7A2, &[0x90; 0x3A])
 }
 
-#[detour(address = 0x140_960_4E0)]
+#[detour(address = jc3gi::game::Game::Update_ADDRESS)]
 fn game_update(game: *const Game) -> bool {
     crate::update();
     GAME_UPDATE.get().unwrap().call(game)
 }
 
-#[detour(address = 0x140_95A_4E0)]
+#[detour(address = jc3gi::game::Game::UpdateRender_ADDRESS)]
 fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
     unsafe {
         let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
