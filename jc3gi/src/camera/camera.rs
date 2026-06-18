@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -57,10 +58,11 @@ fn _Camera_size_check() {
     unreachable!()
 }
 impl Camera {
+    pub const UpdateRender_ADDRESS: usize = 0x1400C3020;
     pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32, dtf: f32) = ::std::mem::transmute(
-                0x1400C3020 as usize,
+                Self::UpdateRender_ADDRESS,
             );
             f(self as *mut Self as _, dt, dtf)
         }

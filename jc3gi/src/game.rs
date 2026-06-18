@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -67,22 +68,25 @@ impl Game {
     }
 }
 impl Game {
+    pub const Draw_ADDRESS: usize = 0x140952390;
     pub unsafe fn Draw(&self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self, dt: f32) = ::std::mem::transmute(
-                0x140952390 as usize,
+                Self::Draw_ADDRESS,
             );
             f(self as *const Self as _, dt)
         }
     }
+    pub const Update_ADDRESS: usize = 0x1409604E0;
     pub unsafe fn Update(&mut self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) -> bool = ::std::mem::transmute(
-                0x1409604E0 as usize,
+                Self::Update_ADDRESS,
             );
             f(self as *mut Self as _)
         }
     }
+    pub const UpdateRender_ADDRESS: usize = 0x14095A4E0;
     pub unsafe fn UpdateRender(
         &mut self,
         update_contexts: *mut crate::game::UpdateContexts,
@@ -91,7 +95,7 @@ impl Game {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 update_contexts: *mut crate::game::UpdateContexts,
-            ) = ::std::mem::transmute(0x14095A4E0 as usize);
+            ) = ::std::mem::transmute(Self::UpdateRender_ADDRESS);
             f(self as *mut Self as _, update_contexts)
         }
     }
@@ -213,11 +217,12 @@ impl GameState {
     }
 }
 impl GameState {
+    pub const PostUpdateRender_ADDRESS: usize = 0x140A00E90;
     pub unsafe fn PostUpdateRender(update_contexts: *const crate::game::UpdateContexts) {
         unsafe {
             let f: unsafe extern "system" fn(
                 update_contexts: *const crate::game::UpdateContexts,
-            ) = ::std::mem::transmute(0x140A00E90 as usize);
+            ) = ::std::mem::transmute(Self::PostUpdateRender_ADDRESS);
             f(update_contexts)
         }
     }

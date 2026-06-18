@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -8,6 +9,7 @@
 #[repr(C, align(8))]
 pub struct CameraTree {}
 impl CameraTree {
+    pub const UpdateRenderContexts_ADDRESS: usize = 0x140465AD0;
     pub unsafe fn UpdateRenderContexts(
         &mut self,
         ctx: *mut crate::camera::camera_context::CameraControlContext,
@@ -16,7 +18,7 @@ impl CameraTree {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 ctx: *mut crate::camera::camera_context::CameraControlContext,
-            ) = ::std::mem::transmute(0x140465AD0 as usize);
+            ) = ::std::mem::transmute(Self::UpdateRenderContexts_ADDRESS);
             f(self as *mut Self as _, ctx)
         }
     }

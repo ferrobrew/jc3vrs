@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -8,6 +9,7 @@
 #[repr(C, align(8))]
 pub struct CInputActionMap {}
 impl CInputActionMap {
+    pub const GetActionEffector_ADDRESS: usize = 0x1402F43B0;
     pub unsafe fn GetActionEffector(
         &mut self,
         action_id: i32,
@@ -19,7 +21,7 @@ impl CInputActionMap {
                 action_id: i32,
                 device_index: i32,
             ) -> *mut crate::input::input_action_map::CInputDeviceEffector = ::std::mem::transmute(
-                0x1402F43B0 as usize,
+                Self::GetActionEffector_ADDRESS,
             );
             f(self as *mut Self as _, action_id, device_index)
         }

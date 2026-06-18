@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -39,14 +40,16 @@ impl GameCameraManager {
     }
 }
 impl GameCameraManager {
+    pub const PushRenderContext_ADDRESS: usize = 0x1407ECB00;
     pub unsafe fn PushRenderContext(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
-                0x1407ECB00 as usize,
+                Self::PushRenderContext_ADDRESS,
             );
             f(self as *mut Self as _)
         }
     }
+    pub const UpdateBlackboardValues_ADDRESS: usize = 0x1407FFF90;
     pub unsafe fn UpdateBlackboardValues(
         &mut self,
         pipeline: *const crate::camera::game_camera_manager::CCameraPipeline,
@@ -57,22 +60,24 @@ impl GameCameraManager {
                 this: *mut Self,
                 pipeline: *const crate::camera::game_camera_manager::CCameraPipeline,
                 dt: f32,
-            ) = ::std::mem::transmute(0x1407FFF90 as usize);
+            ) = ::std::mem::transmute(Self::UpdateBlackboardValues_ADDRESS);
             f(self as *mut Self as _, pipeline, dt)
         }
     }
+    pub const IsInCinematicCamera_ADDRESS: usize = 0x14075C850;
     pub unsafe fn IsInCinematicCamera(&self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
-                0x14075C850 as usize,
+                Self::IsInCinematicCamera_ADDRESS,
             );
             f(self as *const Self as _)
         }
     }
+    pub const IsAlternateAimTransformUsed_ADDRESS: usize = 0x14075C820;
     pub unsafe fn IsAlternateAimTransformUsed(&self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
-                0x14075C820 as usize,
+                Self::IsAlternateAimTransformUsed_ADDRESS,
             );
             f(self as *const Self as _)
         }

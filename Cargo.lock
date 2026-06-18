@@ -124,7 +124,7 @@ dependencies = [
 [[package]]
 name = "detours-macro"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#ae0dc6906944d7e6e307fe155d4974f322a7c910"
+source = "git+https://github.com/ferrobrew/re-utilities.git#ce4a9cd712c69ffd1e8e8b0b8495d888ba7b48f0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -549,7 +549,7 @@ checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
 [[package]]
 name = "pyxis"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/pyxis.git#1b0b1a6828577627d95469776ccc1ea3c6924c83"
+source = "git+https://github.com/ferrobrew/pyxis.git#abb76f199ccd1c127d18e961ddcad17a622e95ce"
 dependencies = [
  "ariadne",
  "glob",
@@ -565,7 +565,7 @@ dependencies = [
 [[package]]
 name = "pyxis_macros"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/pyxis.git#1b0b1a6828577627d95469776ccc1ea3c6924c83"
+source = "git+https://github.com/ferrobrew/pyxis.git#abb76f199ccd1c127d18e961ddcad17a622e95ce"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -584,7 +584,7 @@ dependencies = [
 [[package]]
 name = "re-utilities"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#ae0dc6906944d7e6e307fe155d4974f322a7c910"
+source = "git+https://github.com/ferrobrew/re-utilities.git#ce4a9cd712c69ffd1e8e8b0b8495d888ba7b48f0"
 dependencies = [
  "patternscan",
  "retour",
@@ -594,7 +594,7 @@ dependencies = [
 [[package]]
 name = "re-utilities-injector"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#ae0dc6906944d7e6e307fe155d4974f322a7c910"
+source = "git+https://github.com/ferrobrew/re-utilities.git#ce4a9cd712c69ffd1e8e8b0b8495d888ba7b48f0"
 dependencies = [
  "dunce",
  "steamlocate",
@@ -665,7 +665,7 @@ dependencies = [
 [[package]]
 name = "retour"
 version = "0.4.0-alpha.4"
-source = "git+https://github.com/Hpmason/retour-rs.git#903ffc94fbfddbe40fe407ec3aa5b4e33a415137"
+source = "git+https://github.com/Hpmason/retour-rs.git#94be4740ec0c624f61a074f439e6351fefc0e697"
 dependencies = [
  "cfg-if",
  "generic-array",

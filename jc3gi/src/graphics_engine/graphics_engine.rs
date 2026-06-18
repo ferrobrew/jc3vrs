@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -63,38 +64,43 @@ impl GraphicsEngine {
     }
 }
 impl GraphicsEngine {
+    pub const WaitForCPUDrawToFinish_ADDRESS: usize = 0x1400C4690;
     pub unsafe fn WaitForCPUDrawToFinish(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
-                0x1400C4690 as usize,
+                Self::WaitForCPUDrawToFinish_ADDRESS,
             );
             f(self as *mut Self as _)
         }
     }
+    pub const Draw_ADDRESS: usize = 0x1400F4170;
     pub unsafe fn Draw(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
-                0x1400F4170 as usize,
+                Self::Draw_ADDRESS,
             );
             f(self as *mut Self as _, dt)
         }
     }
+    pub const Flip_ADDRESS: usize = 0x1400B89D0;
     pub unsafe fn Flip(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
-                0x1400B89D0 as usize,
+                Self::Flip_ADDRESS,
             );
             f(self as *mut Self as _)
         }
     }
+    pub const DispatchDraw_ADDRESS: usize = 0x1400F3A30;
     pub unsafe fn DispatchDraw(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
-                0x1400F3A30 as usize,
+                Self::DispatchDraw_ADDRESS,
             );
             f(self as *mut Self as _)
         }
     }
+    pub const HandleDrawThreadTask_ADDRESS: usize = 0x1400F1D10;
     pub unsafe fn HandleDrawThreadTask(
         &mut self,
         param: *mut crate::graphics_engine::graphics_engine::DrawThreadTaskParam,
@@ -103,7 +109,7 @@ impl GraphicsEngine {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 param: *mut crate::graphics_engine::graphics_engine::DrawThreadTaskParam,
-            ) -> u32 = ::std::mem::transmute(0x1400F1D10 as usize);
+            ) -> u32 = ::std::mem::transmute(Self::HandleDrawThreadTask_ADDRESS);
             f(self as *mut Self as _, param)
         }
     }
@@ -188,13 +194,14 @@ pub unsafe fn get_graphics_params() -> &'static mut crate::graphics_engine::grap
             as *mut crate::graphics_engine::graphics_engine::GraphicsParams)
     }
 }
+pub const graphics_flip_ADDRESS: usize = 0x14195A820;
 unsafe fn graphics_flip(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
 ) -> i32 {
     unsafe {
         let f: unsafe extern "system" fn(
             device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
-        ) -> i32 = ::std::mem::transmute(0x14195A820 as usize);
+        ) -> i32 = ::std::mem::transmute(graphics_flip_ADDRESS);
         f(device)
     }
 }

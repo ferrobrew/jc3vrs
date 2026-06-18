@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -44,52 +45,58 @@ impl Clock {
     }
 }
 impl Clock {
+    pub const GetSPF_ADDRESS: usize = 0x140091C10;
     pub unsafe fn GetSPF(&self, ignore_pause: bool) -> f32 {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *const Self,
                 ignore_pause: bool,
-            ) -> f32 = ::std::mem::transmute(0x140091C10 as usize);
+            ) -> f32 = ::std::mem::transmute(Self::GetSPF_ADDRESS);
             f(self as *const Self as _, ignore_pause)
         }
     }
+    pub const Pause_ADDRESS: usize = 0x140091BB0;
     pub unsafe fn Pause(&mut self, pause: bool) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, pause: bool) = ::std::mem::transmute(
-                0x140091BB0 as usize,
+                Self::Pause_ADDRESS,
             );
             f(self as *mut Self as _, pause)
         }
     }
+    pub const Update_ADDRESS: usize = 0x140093230;
     pub unsafe fn Update(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
-                0x140093230 as usize,
+                Self::Update_ADDRESS,
             );
             f(self as *mut Self as _)
         }
     }
+    pub const IsPaused_ADDRESS: usize = 0x140091BA0;
     pub unsafe fn IsPaused(&self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
-                0x140091BA0 as usize,
+                Self::IsPaused_ADDRESS,
             );
             f(self as *const Self as _)
         }
     }
+    pub const GetRealSPF_ADDRESS: usize = 0x140091CA0;
     pub unsafe fn GetRealSPF(&self, ignore_pause: bool) -> f32 {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *const Self,
                 ignore_pause: bool,
-            ) -> f32 = ::std::mem::transmute(0x140091CA0 as usize);
+            ) -> f32 = ::std::mem::transmute(Self::GetRealSPF_ADDRESS);
             f(self as *const Self as _, ignore_pause)
         }
     }
+    pub const DisableForceToFPS_ADDRESS: usize = 0x140091D00;
     pub unsafe fn DisableForceToFPS(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
-                0x140091D00 as usize,
+                Self::DisableForceToFPS_ADDRESS,
             );
             f(self as *mut Self as _)
         }

@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -8,6 +9,7 @@
 #[repr(C, align(8))]
 pub struct CUIManager {}
 impl CUIManager {
+    pub const StartRender_ADDRESS: usize = 0x140F1B030;
     pub unsafe fn StartRender(
         &mut self,
         context: *const crate::graphics_engine::graphics_engine::HContext_t,
@@ -16,22 +18,24 @@ impl CUIManager {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 context: *const crate::graphics_engine::graphics_engine::HContext_t,
-            ) = ::std::mem::transmute(0x140F1B030 as usize);
+            ) = ::std::mem::transmute(Self::StartRender_ADDRESS);
             f(self as *mut Self as _, context)
         }
     }
+    pub const Submit_ADDRESS: usize = 0x140F1B0D0;
     pub unsafe fn Submit(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
-                0x140F1B0D0 as usize,
+                Self::Submit_ADDRESS,
             );
             f(self as *mut Self as _)
         }
     }
+    pub const IsUsingStaticBackGround_ADDRESS: usize = 0x140F1B4C0;
     pub unsafe fn IsUsingStaticBackGround(&self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
-                0x140F1B4C0 as usize,
+                Self::IsUsingStaticBackGround_ADDRESS,
             );
             f(self as *const Self as _)
         }

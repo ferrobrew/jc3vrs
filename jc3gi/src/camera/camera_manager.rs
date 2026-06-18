@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -29,19 +30,21 @@ impl CameraManager {
     }
 }
 impl CameraManager {
+    pub const InitTransform_ADDRESS: usize = 0x14009D390;
     pub unsafe fn InitTransform(&mut self, mat: *const crate::types::math::Matrix4) {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 mat: *const crate::types::math::Matrix4,
-            ) = ::std::mem::transmute(0x14009D390 as usize);
+            ) = ::std::mem::transmute(Self::InitTransform_ADDRESS);
             f(self as *mut Self as _, mat)
         }
     }
+    pub const InitFOV_ADDRESS: usize = 0x14009D400;
     pub unsafe fn InitFOV(&mut self, fov: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, fov: f32) = ::std::mem::transmute(
-                0x14009D400 as usize,
+                Self::InitFOV_ADDRESS,
             );
             f(self as *mut Self as _, fov)
         }

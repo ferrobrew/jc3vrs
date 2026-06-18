@@ -1,6 +1,7 @@
 #![allow(
     dead_code,
     non_snake_case,
+    non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast
 )]
@@ -24,6 +25,7 @@ impl RenderEngine {
     }
 }
 impl RenderEngine {
+    pub const PostDraw_ADDRESS: usize = 0x1401C2350;
     pub unsafe fn PostDraw(
         &mut self,
         context: *const crate::graphics_engine::graphics_engine::HContext_t,
@@ -32,7 +34,7 @@ impl RenderEngine {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 context: *const crate::graphics_engine::graphics_engine::HContext_t,
-            ) = ::std::mem::transmute(0x1401C2350 as usize);
+            ) = ::std::mem::transmute(Self::PostDraw_ADDRESS);
             f(self as *mut Self as _, context)
         }
     }
