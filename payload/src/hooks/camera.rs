@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::sync::atomic::Ordering;
 
 use detours_macro::detour;
 use jc3gi::{
@@ -8,6 +9,7 @@ use jc3gi::{
         camera_manager::CameraManager,
     },
     character::character::{Character, SafeBoneIndex},
+    graphics_engine::graphics_engine::GraphicsEngine,
     hash::hashlittle,
     types::math::Matrix4,
 };
@@ -18,6 +20,32 @@ pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&CAMERA_UPDATE_RENDER_BINDER)
         .with_static_binder(&CAMERA_TREE_UPDATE_RENDER_CONTEXTS_BINDER)
+        .with_static_binder(&SETUP_RENDER_CAMERA_BINDER)
+}
+
+/// The scene render camera is an engine-owned copy at `GraphicsEngine + 0x170`, rebuilt each Draw by
+/// `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF` from
+/// `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye, *before*
+/// the rebuild, so the two dispatches diverge. See `docs/rendering.md` section 2.
+#[detour(address = jc3gi::camera::camera::Camera::SetupRenderCamera_ADDRESS)]
+fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
+    if crate::STEREO.load(Ordering::Relaxed) && crate::STEREO_CAMERAS.load(Ordering::Relaxed) {
+        unsafe {
+            let is_render_camera = GraphicsEngine::get()
+                .is_some_and(|ge| (ge as *mut GraphicsEngine as usize) + 0x170 == camera as usize);
+            if is_render_camera && let Some(camera) = camera.as_mut() {
+                let half_ipd = *crate::STEREO_IPD.lock() * 0.5;
+                let offset = if crate::DRAW_INDEX.load(Ordering::Relaxed) == 0 {
+                    half_ipd
+                } else {
+                    -half_ipd
+                };
+                // Lateral shift in view space (row-major view: data[12] is the X translation).
+                camera.m_View.data[12] += offset;
+            }
+        }
+    }
+    SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter)
 }
 
 #[detour(address = jc3gi::camera::camera::Camera::UpdateRender_ADDRESS)]
