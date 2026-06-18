@@ -1,4 +1,5 @@
 pub mod device;
+pub mod draw;
 pub mod graphics_engine;
 pub mod post_effects;
 pub mod render_engine;
