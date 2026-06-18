@@ -23,6 +23,7 @@ fn _ActiveCursor_size_check() {
     unreachable!()
 }
 #[repr(C, align(8))]
+/// CGraphicsEngine::DrawThreadTaskParam
 pub struct DrawThreadTaskParam {}
 impl DrawThreadTaskParam {}
 impl std::convert::AsRef<DrawThreadTaskParam> for DrawThreadTaskParam {
@@ -36,9 +37,13 @@ impl std::convert::AsMut<DrawThreadTaskParam> for DrawThreadTaskParam {
     }
 }
 #[repr(C, align(8))]
+/// One reflection-proxy depth-history slot (the planar / water reflection state machine). Five of
+/// these live on the graphics engine; the lifecycle byte advances once per scene dispatch.
 pub struct EffectInfo {
+    /// Reflection-proxy depth texture (Graphics::HTexture_t handle).
     pub m_DepthTexture: *mut ::std::ffi::c_void,
     pub m_Transform: crate::types::math::Matrix4,
+    /// Lifecycle counter: 0 = free, 2 -> promote to 3, 3 = pick, else += 1.
     pub m_FrameIndex: u8,
     _field_49: [u8; 7],
 }
@@ -68,19 +73,27 @@ pub struct GraphicsEngine {
     _field_12c: [u8; 3460],
     pub m_Device: *mut crate::graphics_engine::device::Device,
     _field_eb8: [u8; 16],
+    /// Deferred-shading render targets ("GBuffer0".."GBuffer3").
     pub m_GBufferTexture: [*mut crate::graphics_engine::texture::Texture; 4],
     _field_ee8: [u8; 184],
+    /// Motion-blur velocity buffer.
     pub m_VelocityBufferTexture: *mut crate::graphics_engine::texture::Texture,
     _field_fa8: [u8; 176],
+    /// Main scene depth ("MainDepthBuffer").
     pub m_MainDepthTexture: *mut crate::graphics_engine::texture::Texture,
     _field_1060: [u8; 8],
+    /// Main scene HDR color ("MainColorBuffer").
     pub m_MainColorBuffer: *mut crate::graphics_engine::texture::Texture,
     _field_1070: [u8; 8],
+    /// Hi-Z / downsampled depth ("DownsampledDepth").
     pub m_DownSampledDepthTexture: *mut crate::graphics_engine::texture::Texture,
     _field_1080: [u8; 32],
+    /// Reflection-proxy depth-history (planar / water reflection state machine), 5 slots.
     pub m_EffectInfo: [crate::graphics_engine::graphics_engine::EffectInfo; 5],
+    /// Final linear back buffer ("BackBufferLinear").
     pub m_BackBufferLinear: *mut crate::graphics_engine::texture::Texture,
     _field_1238: [u8; 144],
+    /// Index of the reflection-proxy slot picked this frame.
     pub m_EffectInfoIndex: u32,
     _field_12cc: [u8; 3140],
 }
@@ -109,6 +122,8 @@ impl GraphicsEngine {
         }
     }
     pub const Draw_ADDRESS: usize = 0x1400F4170;
+    /// Graphics entry point: runs the per-frame prologue (presents the previous frame, advances the
+    /// clock and constant-buffer pools) then dispatches this frame's draw.
     pub unsafe fn Draw(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
@@ -118,6 +133,7 @@ impl GraphicsEngine {
         }
     }
     pub const Flip_ADDRESS: usize = 0x1400B89D0;
+    /// Presents the previous frame's back buffer.
     pub unsafe fn Flip(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -127,6 +143,7 @@ impl GraphicsEngine {
         }
     }
     pub const DispatchDraw_ADDRESS: usize = 0x1400F3A30;
+    /// Queues this frame's render work on the render thread.
     pub unsafe fn DispatchDraw(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -136,6 +153,8 @@ impl GraphicsEngine {
         }
     }
     pub const HandleDrawThreadTask_ADDRESS: usize = 0x1400F1D10;
+    /// Render-thread body: gbuffer, lighting, post-effects and UI. `param` is
+    /// DrawThreadTaskParam* (layout TBD).
     pub unsafe fn HandleDrawThreadTask(
         &mut self,
         param: *mut crate::graphics_engine::graphics_engine::DrawThreadTaskParam,
@@ -198,6 +217,7 @@ impl std::convert::AsMut<GraphicsParams> for GraphicsParams {
     }
 }
 #[repr(C, align(8))]
+/// Graphics::HContext_t (GPU context handle)
 pub struct HContext_t {}
 impl HContext_t {}
 impl std::convert::AsRef<HContext_t> for HContext_t {
@@ -211,6 +231,7 @@ impl std::convert::AsMut<HContext_t> for HContext_t {
     }
 }
 #[repr(C, align(8))]
+/// Graphics::HDevice_t (GPU device handle)
 pub struct HDevice_t {}
 impl HDevice_t {}
 impl std::convert::AsRef<HDevice_t> for HDevice_t {
@@ -230,6 +251,8 @@ pub unsafe fn get_graphics_params() -> &'static mut crate::graphics_engine::grap
     }
 }
 pub const graphics_flip_ADDRESS: usize = 0x14195A820;
+/// Low-level present (Graphics::Flip); returns Graphics::EResult. `device` is
+/// Graphics::HDevice_t* (opaque).
 unsafe fn graphics_flip(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
 ) -> i32 {

@@ -59,6 +59,8 @@ fn _Camera_size_check() {
 }
 impl Camera {
     pub const UpdateRender_ADDRESS: usize = 0x1400C3020;
+    /// Per-frame camera update: snapshots the previous view-projection, Lerps the transform between
+    /// T0 and T1 by `dtf`, and recalculates projection and frustum.
     pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32, dtf: f32) = ::std::mem::transmute(
@@ -68,6 +70,9 @@ impl Camera {
         }
     }
     pub const SetupRenderCamera_ADDRESS: usize = 0x1400B3B80;
+    /// Builds the render-camera matrices once per Draw: applies reverse-Z and TAA jitter to the
+    /// projection, then rebuilds m_ViewProjection / m_ViewProjectionF from m_View. One-shot per
+    /// camera via the m_IsRenderCamera flag (0x20). Returns the last matrix-copy destination.
     pub unsafe fn SetupRenderCamera(&mut self, jitter: bool) -> *mut ::std::ffi::c_void {
         unsafe {
             let f: unsafe extern "system" fn(

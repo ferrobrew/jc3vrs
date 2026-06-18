@@ -40,6 +40,7 @@ impl std::convert::AsMut<CDepthOfFieldEffect> for CDepthOfFieldEffect {
     }
 }
 #[repr(C, align(8))]
+/// Alpha-blended fade quad over the scene.
 pub struct CFadeEffect {}
 impl CFadeEffect {
     pub const Apply_ADDRESS: usize = 0x1400A9570;
@@ -69,6 +70,7 @@ impl std::convert::AsMut<CFadeEffect> for CFadeEffect {
     }
 }
 #[repr(C, align(8))]
+/// Bloom / glare generator (writes its own scratch targets, composited later).
 pub struct CGlareEffect {}
 impl CGlareEffect {
     pub const Apply_ADDRESS: usize = 0x1400AA510;
@@ -141,6 +143,7 @@ impl std::convert::AsMut<CMotionBlurEffect> for CMotionBlurEffect {
     }
 }
 #[repr(C, align(8))]
+/// Red damage vignette. Slot-passthrough (returns the input slot index).
 pub struct CPlayerDamageEffect {}
 impl CPlayerDamageEffect {
     pub const Apply_ADDRESS: usize = 0x1400F76E0;
@@ -187,6 +190,7 @@ impl std::convert::AsMut<CPostEffectsManager> for CPostEffectsManager {
     }
 }
 #[repr(C, align(8))]
+/// Sun halo. PreApply prepares and sets the ready flag (byte at +0x114); Apply composites it.
 pub struct CSunHaloEffect {}
 impl CSunHaloEffect {
     pub const PreApply_ADDRESS: usize = 0x140118450;
@@ -275,8 +279,9 @@ impl std::convert::AsMut<PostEffectRenderContext> for PostEffectRenderContext {
     }
 }
 bitflags::bitflags! {
-    #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] pub struct
-    PostEffectRenderFlags : u8 { const m_MotionVectorReprojection = 1usize as _; }
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] #[doc =
+    " Per-frame render-context flags."] pub struct PostEffectRenderFlags : u8 { const
+    m_MotionVectorReprojection = 1usize as _; }
 }
 fn _PostEffectRenderFlags_size_check() {
     unsafe {

@@ -7,9 +7,12 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// HDR tone-mapping / auto-exposure (eye adaptation).
 pub struct CToneMappingEffect {}
 impl CToneMappingEffect {
     pub const GenerateHistogramForFinalScene_ADDRESS: usize = 0x140119440;
+    /// Builds the auto-exposure histogram for the final scene and writes the current histogram slot
+    /// indices to a6 / a7 (out-params); returns a7.
     pub unsafe fn GenerateHistogramForFinalScene(
         &mut self,
         ctx: *mut ::std::ffi::c_void,
@@ -46,6 +49,7 @@ impl std::convert::AsMut<CToneMappingEffect> for CToneMappingEffect {
     }
 }
 #[repr(C, align(8))]
+/// Per-frame brightness histogram used for eye adaptation.
 pub struct SHistogramGeneration {}
 impl SHistogramGeneration {}
 impl std::convert::AsRef<SHistogramGeneration> for SHistogramGeneration {
@@ -59,6 +63,7 @@ impl std::convert::AsMut<SHistogramGeneration> for SHistogramGeneration {
     }
 }
 #[repr(C, align(8))]
+/// N-frame exposure smoother (a ring-buffer average; advances once per render, with no dt term).
 pub struct SSmoothedExposure {}
 impl SSmoothedExposure {
     pub const Update_ADDRESS: usize = 0x1400F8200;
@@ -82,6 +87,8 @@ impl std::convert::AsMut<SSmoothedExposure> for SSmoothedExposure {
     }
 }
 pub const CalculateMidAndBrightPointForHistogram_ADDRESS: usize = 0x1400F8BF0;
+/// Computes the histogram mid / bright points (the per-frame eye-adaptation lerp). Free function;
+/// `ctx` is Graphics::HContext_t* (opaque), `hist` is the target SHistogramGeneration.
 unsafe fn CalculateMidAndBrightPointForHistogram(
     ctx: *mut ::std::ffi::c_void,
     arg1: f32,

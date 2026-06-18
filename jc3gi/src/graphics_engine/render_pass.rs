@@ -7,9 +7,11 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// The per-frame constant-buffer ring.
 pub struct CConstantBufferPool {}
 impl CConstantBufferPool {
     pub const HandBackBuffers_ADDRESS: usize = 0x1400E04F0;
+    /// Recycles last frame's constant buffers from the in-use stack back to the free pool.
     pub unsafe fn HandBackBuffers(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -30,6 +32,8 @@ impl std::convert::AsMut<CConstantBufferPool> for CConstantBufferPool {
     }
 }
 #[repr(C, align(8))]
+/// Per-frame render setup. SetupRenderFrameData runs once per frame in the graphics prologue:
+/// it toggles the active add-buffer and rebuilds the per-frame render-block-item lists.
 pub struct CRenderPass {}
 impl CRenderPass {
     pub const SetupRenderFrameData_ADDRESS: usize = 0x14048C4E0;
