@@ -197,7 +197,7 @@ The guard is check-and-set: the body runs only when bit `0x20` is clear, and set
 
 `SetupRenderCamera` reads `m_View` (+724/+0x2D4) as an input and never writes it. It does not derive `m_View` from any transform. So whatever `m_View` was in the copied active camera is what the render camera uses. Corollary for VR: a hook that writes the render-cam `m_View` *after* `SetupRenderCamera` has already run (`0x20` set) will leave a stale `m_ViewProjection`/`m_ViewProjectionF`, because the re-call is a no-op and nothing else rebuilds VP on the render cam. You must then rebuild VP yourself (§2.6).
 
-### 2.4 What the scene render actually reads
+### 2.4 What the scene render actually reads (camera-relative)
 
 In `HandleDrawThreadTask`:
 
@@ -206,39 +206,40 @@ In `HandleDrawThreadTask`:
 0x1400F1E76  SetGlobalShaderConstants(engine, engine+1824)
 ```
 
-`SetRenderContextCamera` (`0x140187430`): for the normal (non-shadow) path (flags not 0x40/2/4) it copies the render camera's matrices into the render context — reading `UniformLightCamera+404` (`m_ViewProjectionF`), `+340` (`m_ProjectionF`), `+724` (`m_View`), `+788` (`m_ViewProjection`), etc. So the scene view/VP that drives geometry comes from the render camera's `m_View` / `m_ViewProjectionF`.
+The main scene is rendered **camera-relative** (for large-world float precision). The opaque-geometry transform is
 
-`SetGlobalShaderConstants` (`0x140185740`) at `0x140185E8E`/`0x140185E97`:
-
-```c
-RenderCamera = CCameraManager::GetRenderCamera(unk_142ED0E20);     // = engine+368
-memcpy((char*)this + 6428, (char*)RenderCamera + 404, 0x40);       // global CB <- m_ViewProjectionF
+```
+clip = (objectWorld - CameraPosition) x OffsetViewProjection
 ```
 
-plus it reads the render camera's position rows (`RenderCamera+29/30/31/33/34/35`, i.e. the world-space camera position columns of `m_View`/transform) for the per-view camera-position constants.
+where `OffsetViewProjection` is the view-projection with the view's **translation row zeroed**, and `CameraPosition` is the camera's **world position** supplied separately. The camera translation lives in the per-object subtraction, not in the matrix.
+
+`SetRenderContextCamera` (`0x140187430`, non-shadow path) reads the live render camera (`engine+368`) and fills the render context (`engine+1824`):
+
+- ctx `+0x18` ViewMatrix <- camera `+0x2D4` `m_View` (`0x1401878DD`)
+- ctx `+0x58` ProjectionMatrix <- camera `+0x154` `m_ProjectionF` (`0x14018793C`)
+- ctx `+0x218` **CameraPosition** <- camera `+0x84` = the translation row of `m_TransformF` (the camera world position) (`0x1401879F2`)
+- ctx `+0x224..+0x268` <- the full `m_TransformF` world-transform rows (camera `+0x44..+0x8C`)
+- `CalculateOffsetViewProjectionMatrix` (`0x140136020`) is called twice, current + previous (`0x14018799A`/`0x1401879B4`): it copies `m_View`, **zeros its translation row** (`row3 = {0,0,0,1}`), multiplies by the projection, and writes the translation-free **OffsetViewProjection** into the context. This is the VP opaque geometry actually uses.
+
+`SetGlobalShaderConstants` (`0x140185740`) uploads the **global per-view CB**: `GetRenderCamera` (`0x140185E8E`) then `memcpy(this+6428, RenderCamera+404, 0x40)` (`0x140185E97`) copies the *full*, translation-bearing `m_ViewProjectionF`; the camera-position constants come from `RenderCamera+0x84..0x8C` (= `m_TransformF` translation). This per-view block drives **screen-space / non-geometry** work (post-effects, billboards, the camera-position constant); it is **not** what positions opaque geometry vertices.
+
+**Consequence for VR (the key correction):** on the geometry path, `m_View`'s translation is deleted by the OffsetVP zeroing. A per-eye lateral offset must move the **camera world position** — `m_TransformF`'s translation (`+0x84`), hence `CameraPosition` — not `m_View`'s translation. (Confirmed at runtime: writing only `m_View`'s translation gave two divergent `m_ViewProjectionF`s on the render camera but byte-identical geometry between eyes; only the muzzle flash, which rides the per-view CB, shifted.) See §2.5.
 
 ### 2.5 Per-eye view injection
 
-The per-eye view offset must target the render camera (`engine+368`), not `m_ActiveCamera`. Writing `m_ActiveCamera.m_View` is timing-fragile.
+Because the geometry is camera-relative (§2.4), the per-eye offset must move the camera **world position** (`m_TransformF`'s translation), not `m_View`'s translation (which the OffsetVP zeros). It targets the **render camera** (`engine+368`), not `m_ActiveCamera` — the sim recomputes the active camera's `m_View = Inverse(m_TransformF)` (flag 0x08) and the prologue memcpy copies it verbatim, so any per-eye divergence has to be applied to the render-camera copy between dispatches.
 
-Trace of every writer of `m_ActiveCamera` (`unk_142ED0E20+1472` target) and its `m_View` (+0x2D4):
+**Recipe.** Hook `CCamera::SetupRenderCamera` (`0x1400B3B80`) and act only on the main render camera (`this == GraphicsEngine + 0x170`), or equivalently hook right after the active->render memcpy in `TextureCachePlatformUpdate` (`0x1400C47E2`). Per eye:
 
-1. `PushRenderContext`/`InitTransform` (sim) writes `m_TransformT0 = m_TransformT1`.
-2. `CCamera::UpdateRender` (sim, via `CCameraManager::UpdateRender`) writes `m_View = Inverse(m_TransformF)` **because flag 0x08 is set**, then `m_ViewProjection = m_View x m_Projection`, and the `*F` copies. This is the last sim-side writer of `m_ActiveCamera.m_View`.
-3. `TextureCachePlatformUpdate` (Draw prologue) does NOT write `m_ActiveCamera` — it *reads* it and copies it into the render camera.
+1. Offset `m_TransformF`'s translation (`+0x84`/`+0x88`/`+0x8C`) by +/- IPD/2 along the camera's right axis (the first basis row of `m_TransformF`). This moves `CameraPosition`, so the camera-relative geometry diverges.
+2. Re-derive `m_View = Inverse(m_TransformF)` so the view stays consistent with the moved camera (the OffsetVP's rotation comes from `m_View`; the per-view CB's `m_ViewProjectionF` uses the full `m_View`).
+3. Rebuild `m_ViewProjection` / `m_ViewProjectionF` from `m_View x m_Projection` (§2.6) so the per-view CB matches.
 
-Consequences:
+Pitfalls:
 
-- If you write `m_ActiveCamera.m_View` **before** the sim-path `CCameraManager::UpdateRender` runs, it is overwritten at step 2 (recomputed from `m_TransformF`).
-- If you write `m_ActiveCamera.m_View` **after** step 2 but **before** the Draw prologue memcpy (`0x1400C47D8`), it survives into the render camera (the memcpy copies `m_View` verbatim; `SetupRenderCamera` does not touch `m_View`). So in principle this works — but the window is the narrow gap between `CGameStateRun::UpdateRender` finishing the camera update and `CGame::Draw` calling the prologue, and you must also leave `m_ViewProjection`/`m_ViewProjectionF` consistent (those are read by the render context and global CB, not `m_View` alone).
-
-Because the render context reads `m_ViewProjectionF` (`+404`) for geometry and the global CB also reads `m_ViewProjectionF`, writing `m_View` alone is insufficient even when it survives — you must also write the matching `m_ViewProjection`/`m_ViewProjectionF`. That is exactly what `SetupRenderCamera` would have recomputed *if* it ran, but it only rebuilds VP from `m_View x m_Projection` when its guard bit allows and it always reads `m_View` as input.
-
-Recommended single injection point for a per-eye lateral view offset: hook `CCamera::SetupRenderCamera` (`0x1400B3B80`) — or, equivalently, the moment right after the active->render copy in `TextureCachePlatformUpdate` (`0x1400C47E2`, immediately after the memcpy and before/around the `SetupRenderCamera` call). Apply the eye offset to the render camera's `m_View` (translate the camera-space origin laterally by +/- IPD/2, i.e. pre-multiply `m_View` by a translation), then ensure `m_ViewProjection = m_View x m_Projection` and copy to `m_ViewProjectionF` (let `SetupRenderCamera` do the multiply, or force it by clearing the guard bit `0x20` before the call). This is the single place where the view becomes per-frame-stable and is the actual source the scene reads, so the two eyes will genuinely diverge.
-
-The cleaner gameplay-correct alternative (PLAN §6.2) is to inject the *pose* upstream at `PushRenderContext`/`InitTransform` so `m_TransformF` and hence `m_View` are computed correctly by the engine — but that produces the same pose for both eyes within one Draw. For true per-eye divergence during a double dispatch you must offset the render camera between dispatches (since the render camera is the single struct both `SetRenderContextCamera` and `SetGlobalShaderConstants` read), and keep its `m_View` + `m_ViewProjection*` mutually consistent.
-
-Because `SetupRenderCamera` rebuilds VP every frame on the render copy (§2.3), a hook placed *before* it — writing `m_View`/`m_Projection` on `engine+368` right after the memcpy at `0x1400C47E2`, then letting the subsequent `SetupRenderCamera` run — gets the VP rebuilt by the engine. A hook placed *after* `SetupRenderCamera` must rebuild VP itself (§2.6).
+- Offsetting only `m_View`'s translation does nothing to geometry — the OffsetVP zeros it (§2.4). It shifts only the per-view CB (post / camera-position constant), which is the muzzle-flash-moves-but-world-doesn't symptom.
+- Offsetting only `m_TransformF` without re-deriving `m_View` desyncs `CameraPosition` from the OffsetVP rotation and the per-view CB.
 
 ### 2.6 Matrix convention + the VP-rebuild recipe (`CMatrix4f::Multiply4x4` `0x140034530`)
 
@@ -397,7 +398,7 @@ The TAA jitter offset comes from a 2-phase table `flt_142305360` (4 floats) inde
 
 ## 6. Quick injection cheat-sheet (VR)
 
-- **Per-eye view divergence:** offset the render camera (`engine+368`, == `*(unk_142ED0E20+1480)`) `m_View` (+0x2D4) and/or `m_Projection` (+0x294). **Cleanest hook: right after the active->render memcpy in `TextureCachePlatformUpdate` (`0x1400C47E2`), BEFORE the `SetupRenderCamera` call** — write a standard (non-reverse-Z) off-axis projection + lateral `m_View`, then let `SetupRenderCamera` rebuild VP + apply reverse-Z/jitter once. If you instead hook *after* `SetupRenderCamera`, supply an already-reverse-Z'd projection and rebuild VP/`*F` yourself (§2.6). Writing `m_ActiveCamera.m_View` alone is fragile (recomputed in the sim path; only `m_View`, not VP, is honored).
+- **Per-eye view divergence (camera-relative — see §2.4/§2.5):** the geometry is camera-relative, so offset the render camera's **`m_TransformF` translation (`+0x84`)** along the camera right axis — NOT `m_View`'s translation, which the OffsetVP zeros — then re-derive `m_View = Inverse(m_TransformF)` and rebuild `m_ViewProjection`/`m_ViewProjectionF` (§2.6). Hook `SetupRenderCamera` (`0x1400B3B80`) on the main render camera (`this == engine+0x170`), or right after the active->render memcpy (`0x1400C47E2`). For a per-eye off-axis *projection*, write a standard (non-reverse-Z) `m_Projection` before `SetupRenderCamera` so it reverse-Z's once (§2.7). Writing only `m_View`'s translation moves the per-view CB (post / muzzle flash) but not the world.
 - **Per-eye pose (gameplay-correct):** hook `PushRenderContext` (`0x1407ECB00`) to write the head pose into the control contexts; the engine then derives a consistent `m_View`. Combine with the render-cam offset for true stereo.
 - **Once-per-frame state to protect when double-dispatching:** clock (gate), EffectInfo slot bytes (snapshot/restore), eye-1 `m_Dt=0`, screenshot countdown (gate eye 0), end-draw callbacks (gate eye 1). Shadow parity is shared (benign).
 
@@ -461,10 +462,10 @@ A second dispatch renders the full scene with no re-population. The per-pass dra
 
 Run only the **dispatch body** twice per real frame (NOT the whole `CGraphicsEngine::Draw` — see §5.7), keeping the single sim-path prologue (frame counter, jitter phase, CB ring, clock, draw-list swap).
 
-**SET (per eye), at the hook right after the active->render memcpy (`0x1400C47E2`), before `SetupRenderCamera`:**
-- Render camera `engine+368` `m_View` (+0x2D4): lateral IPD/2 offset (pre-multiply by eye translation).
-- Render camera `m_Projection` (+0x294): per-eye **standard (non-reverse-Z) off-axis** projection.
-- Then let the in-line `SetupRenderCamera` run — it rebuilds `m_ViewProjection`/`*F`, applies reverse-Z + jitter once. (If you hook *after* `SetupRenderCamera` instead: supply an already-reverse-Z'd projection and rebuild VP + `m_ProjectionF`/`m_ViewProjectionF` yourself per §2.6.)
+**SET (per eye), on the render camera `engine+368` — hook `SetupRenderCamera` (`0x1400B3B80`, `this == engine+0x170`) or right after the active->render memcpy (`0x1400C47E2`). The scene is camera-relative (§2.4), so:**
+- `m_TransformF` translation (`+0x84`/`+0x88`/`+0x8C`): lateral IPD/2 offset along the camera right axis (the camera *world position* — this is what camera-relative geometry subtracts). Do NOT just offset `m_View`'s translation; the OffsetVP zeros it.
+- Re-derive `m_View = Inverse(m_TransformF)`, then rebuild `m_ViewProjection`/`m_ViewProjectionF` from `m_View x m_Projection` (§2.6) so the per-view CB matches.
+- Per-eye off-axis *projection* (optional): write a standard (non-reverse-Z) `m_Projection` (+0x294) before `SetupRenderCamera` so it reverse-Z's + jitters once (§2.7).
 - After the dispatch: `WaitForCPUDrawToFinish`, then `CopyResource(eyeN_tex, m_BackBufferLinear)` under `m_Context->m_Mutex` (+0x8028) (§12).
 
 **SNAPSHOT / RESTORE around the eye pair (so once-per-dispatch state doesn't double-step):**
@@ -495,3 +496,4 @@ Run only the **dispatch body** twice per real frame (NOT the whole `CGraphicsEng
 3. **`unk_142E5B664` / `unk_142E5B670` consumers** (the `%3` ring values): not traced; presumed triple-buffered per-frame resources. Advanced once/frame in the prologue, so benign for double-dispatch.
 4. **TAA history RT binding + EffectInfo VP-history struct offset** (§5.7): the camera-side snapshot chain is verified; the downstream history RT names were not traced.
 5. **Reflection-proxy RT formats / `VfxDepthCopy_%d` count**: names confirmed, formats not.
+6. **Camera-relative per-object combine site (§2.4)**: the mechanism is established from `SetRenderContextCamera` storing a translation-free OffsetVP (`CalculateOffsetViewProjectionMatrix` `0x140136020`) alongside a separate `CameraPosition` (ctx `+0x218` from `m_TransformF+0x84`) — there is no other reason to keep both. The literal per-object `world.row3 -= CameraPosition` multiply in the model render block was not line-verified (a claimed address was a misattribution); not needed for the camera-side fix.
