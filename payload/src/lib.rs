@@ -552,6 +552,9 @@ pub struct CameraSnapshot {
     pub width: i32,
     pub height: i32,
     pub projection: [f32; 16],
+    pub view: [f32; 16],
+    pub view_proj_f: [f32; 16],
+    pub transform: [f32; 16],
 }
 impl CameraSnapshot {
     const fn empty() -> Self {
@@ -569,6 +572,9 @@ impl CameraSnapshot {
             width: 0,
             height: 0,
             projection: [0.0; 16],
+            view: [0.0; 16],
+            view_proj_f: [0.0; 16],
+            transform: [0.0; 16],
         }
     }
 }
@@ -601,6 +607,9 @@ pub fn capture_render_camera(index: usize) {
             width: cam.m_Width,
             height: cam.m_Height,
             projection: cam.m_Projection.data,
+            view: cam.m_View.data,
+            view_proj_f: cam.m_ViewProjectionF.data,
+            transform: cam.m_TransformF.data,
         };
         if let Some(slot) = CAMERA_SNAPSHOTS.lock().get_mut(index) {
             *slot = snap;
@@ -885,24 +894,58 @@ fn show_camera_snapshot(
     ui.label(format!("near={:.3}  far={:.1}", snap.near, snap.far));
     ui.label(format!("size={}x{}", snap.width, snap.height));
 
-    egui::Grid::new(format!("proj_{label}"))
-        .striped(true)
-        .show(ui, |ui| {
-            for r in 0..4 {
-                for c in 0..4 {
-                    let i = r * 4 + c;
-                    let v = snap.projection[i];
-                    let differs = other.valid && (v - other.projection[i]).abs() > 1e-5;
-                    let text = format!("{v:+.3}");
-                    if differs {
-                        ui.colored_label(egui::Color32::YELLOW, text);
-                    } else {
-                        ui.label(text);
-                    }
+    let other_proj = other.valid.then_some(&other.projection);
+    let other_view = other.valid.then_some(&other.view);
+    let other_vpf = other.valid.then_some(&other.view_proj_f);
+    matrix_grid(
+        ui,
+        &format!("proj_{label}"),
+        "m_Projection:",
+        &snap.projection,
+        other_proj,
+    );
+    matrix_grid(
+        ui,
+        &format!("view_{label}"),
+        "m_View:",
+        &snap.view,
+        other_view,
+    );
+    matrix_grid(
+        ui,
+        &format!("vpf_{label}"),
+        "m_ViewProjectionF:",
+        &snap.view_proj_f,
+        other_vpf,
+    );
+    let other_tf = other.valid.then_some(&other.transform);
+    matrix_grid(
+        ui,
+        &format!("tf_{label}"),
+        "m_TransformF:",
+        &snap.transform,
+        other_tf,
+    );
+}
+
+fn matrix_grid(ui: &mut egui::Ui, id: &str, label: &str, m: &[f32; 16], other: Option<&[f32; 16]>) {
+    ui.label(label);
+    egui::Grid::new(id).striped(true).show(ui, |ui| {
+        for r in 0..4 {
+            for c in 0..4 {
+                let i = r * 4 + c;
+                let v = m[i];
+                let differs = other.is_some_and(|o| (v - o[i]).abs() > 1e-5);
+                let text = format!("{v:+.3}");
+                if differs {
+                    ui.colored_label(egui::Color32::YELLOW, text);
+                } else {
+                    ui.label(text);
                 }
-                ui.end_row();
             }
-        });
+            ui.end_row();
+        }
+    });
 }
 
 fn egui_debug_camera(ui: &mut egui::Ui) {
