@@ -10,7 +10,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use detours_macro::detour;
-use jc3gi::graphics_engine::post_effects::PostEffectContext;
+use jc3gi::graphics_engine::post_effects::{PostEffectContext, PostEffectRenderFlags};
 use re_utilities::hook_library::HookLibrary;
 
 /// Skip the *whole* MotionBlur pass. It is not the composite (DoF is), and it reprojects (flicker),
@@ -110,7 +110,8 @@ fn dof_apply(
         let rc = unsafe { pec.as_mut().and_then(|p| p.m_RenderContext.as_mut()) };
         if let Some(rc) = rc {
             let saved = rc.m_Flags;
-            rc.m_Flags = saved & !1;
+            rc.m_Flags
+                .remove(PostEffectRenderFlags::m_MotionVectorReprojection);
             let result = DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input);
             rc.m_Flags = saved;
             result
