@@ -50,6 +50,21 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&GENERATE_HISTOGRAM_BINDER)
 }
 
+/// Read a stage's slot result texture (`CTX[slot+83]`, where `CTX` is the manager arg) and capture
+/// it for the current eye into the debug overlay's per-stage preview.
+fn capture_post_result(stage: usize, mgr: *mut c_void, slot: u32) {
+    if mgr.is_null() {
+        return;
+    }
+    let eye = crate::DRAW_INDEX.load(Ordering::Relaxed);
+    unsafe {
+        let result = (mgr as *const *mut jc3gi::graphics_engine::texture::Texture)
+            .add(slot as usize + 83)
+            .read();
+        crate::capture_post_stage(stage, eye, result);
+    }
+}
+
 #[detour(address = jc3gi::graphics_engine::post_effects::CMotionBlurEffect::Apply_ADDRESS)]
 #[allow(clippy::too_many_arguments)]
 fn motion_blur_apply(
@@ -62,16 +77,19 @@ fn motion_blur_apply(
     flag0: bool,
     flag1: bool,
 ) -> u32 {
-    if SKIP_MOTION_BLUR.load(Ordering::Relaxed) {
-        return input;
-    }
-    // `flag0` (a7) gates the reconstruction-filter motion blur (`if g_EnableMotionBlur && !a7`).
-    // Forcing it true skips that reprojection blur -- the flicker -- but keeps the composite draw.
-    let flag0 = flag0 || SKIP_MOTION_BLUR_RECON.load(Ordering::Relaxed);
-    MOTION_BLUR_APPLY
-        .get()
-        .unwrap()
-        .call(this, ctx, pec, mgr, input, blur, flag0, flag1)
+    let slot = if SKIP_MOTION_BLUR.load(Ordering::Relaxed) {
+        input
+    } else {
+        // `flag0` (a7) gates the reconstruction-filter motion blur (`if g_EnableMotionBlur && !a7`).
+        // Forcing it true skips that reprojection blur -- the flicker -- but keeps the composite draw.
+        let flag0 = flag0 || SKIP_MOTION_BLUR_RECON.load(Ordering::Relaxed);
+        MOTION_BLUR_APPLY
+            .get()
+            .unwrap()
+            .call(this, ctx, pec, mgr, input, blur, flag0, flag1)
+    };
+    capture_post_result(crate::POST_STAGE_MB, mgr, slot);
+    slot
 }
 
 #[detour(address = jc3gi::graphics_engine::post_effects::CDepthOfFieldEffect::Apply_ADDRESS)]
@@ -85,21 +103,25 @@ fn dof_apply(
     if SKIP_DOF.load(Ordering::Relaxed) {
         return input;
     }
-    if DOF_NO_REPROJECT.load(Ordering::Relaxed) {
+    let slot = if DOF_NO_REPROJECT.load(Ordering::Relaxed) {
         // DoF's motion-vector reprojection (the flicker) is gated by bit 0 of the render context's
         // flags, inside its full composite/grade branch. Clear just that bit for the call so DoF
         // still grades the scene but skips the reprojection, then restore.
-        unsafe {
-            if let Some(rc) = pec.as_mut().and_then(|p| p.m_RenderContext.as_mut()) {
-                let saved = rc.m_Flags;
-                rc.m_Flags = saved & !1;
-                let result = DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input);
-                rc.m_Flags = saved;
-                return result;
-            }
+        let rc = unsafe { pec.as_mut().and_then(|p| p.m_RenderContext.as_mut()) };
+        if let Some(rc) = rc {
+            let saved = rc.m_Flags;
+            rc.m_Flags = saved & !1;
+            let result = DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input);
+            rc.m_Flags = saved;
+            result
+        } else {
+            DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input)
         }
-    }
-    DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input)
+    } else {
+        DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input)
+    };
+    capture_post_result(crate::POST_STAGE_DOF, mgr, slot);
+    slot
 }
 
 // CFadeEffect::Apply -- alpha-blended fade quad. Skip = no-op (the u64 return is discarded).

@@ -16,7 +16,11 @@ use windows::Win32::{
         },
         Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
     },
-    System::{LibraryLoader::DisableThreadLibraryCalls, SystemServices::DLL_PROCESS_ATTACH},
+    System::{
+        LibraryLoader::DisableThreadLibraryCalls,
+        SystemServices::DLL_PROCESS_ATTACH,
+        Threading::{EnterCriticalSection, LeaveCriticalSection},
+    },
     UI::Input::KeyboardAndMouse::{VK_F5, VK_F6},
 };
 
@@ -221,6 +225,23 @@ pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
     }
 }
 
+/// Labels for the post-effect stages captured per eye, in chain order.
+const POST_STAGE_LABELS: [&str; 2] = ["after DoF", "after MB"];
+/// Post-stage indices (must match POST_STAGE_LABELS); used by the stage detours.
+pub const POST_STAGE_DOF: usize = 0;
+pub const POST_STAGE_MB: usize = 1;
+
+/// A per-eye snapshot of one post-effect stage's result texture. The debug texture + SRV are
+/// created on the render thread (where the stage runs); the egui id is registered lazily on the UI
+/// thread.
+#[derive(Default)]
+struct StageCapture {
+    created_desc: Option<(u32, u32, i32)>,
+    texture: Option<ID3D11Texture2D>,
+    srv: Option<ID3D11ShaderResourceView>,
+    egui_id: Option<egui::TextureId>,
+}
+
 struct EguiDebugRenderState {
     /// Final back-buffer capture per Draw (eye): index 0 and index 1.
     target_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
@@ -230,6 +251,8 @@ struct EguiDebugRenderState {
     target_size: Option<(u32, u32)>,
     /// (w, h, dxgi format) the MainColor captures were built for; recreate on change.
     main_color_desc: Option<(u32, u32, i32)>,
+    /// Per-(stage, eye) captures of intermediate post-effect results: index `stage * 2 + eye`.
+    post_stage_captures: Vec<StageCapture>,
     /// Cache of engine SRV pointer -> egui texture id, for the live render-target thumbnails.
     srv_thumbnails: Vec<(usize, egui::TextureId)>,
 }
@@ -240,7 +263,82 @@ impl EguiDebugRenderState {
             main_color_textures: [None, None],
             target_size: None,
             main_color_desc: None,
+            post_stage_captures: Vec::new(),
             srv_thumbnails: Vec::new(),
+        }
+    }
+
+    /// Copy a post-effect stage's result texture into a per-(stage, eye) debug RT (render thread).
+    fn capture_post_stage(
+        &mut self,
+        stage: usize,
+        eye: usize,
+        device: &jc3gi::graphics_engine::device::Device,
+        context: &jc3gi::graphics_engine::device::Context,
+        result: &jc3gi::graphics_engine::texture::Texture,
+    ) {
+        let idx = stage * 2 + eye;
+        while self.post_stage_captures.len() <= idx {
+            self.post_stage_captures.push(StageCapture::default());
+        }
+        let desc = (
+            result.m_Width as u32,
+            result.m_Height as u32,
+            result.m_Format as i32,
+        );
+        let cap = &mut self.post_stage_captures[idx];
+        unsafe {
+            if cap.created_desc != Some(desc) {
+                cap.texture = None;
+                cap.srv = None;
+                cap.egui_id = None;
+                cap.created_desc = None;
+                let mut texture: Option<ID3D11Texture2D> = None;
+                if device
+                    .m_Device
+                    .CreateTexture2D(
+                        &D3D11_TEXTURE2D_DESC {
+                            Width: desc.0,
+                            Height: desc.1,
+                            MipLevels: 1,
+                            ArraySize: 1,
+                            Format: DXGI_FORMAT(desc.2),
+                            SampleDesc: DXGI_SAMPLE_DESC {
+                                Count: 1,
+                                Quality: 0,
+                            },
+                            Usage: D3D11_USAGE_DEFAULT,
+                            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as _,
+                            CPUAccessFlags: 0,
+                            MiscFlags: 0,
+                        },
+                        None,
+                        Some(&mut texture),
+                    )
+                    .is_err()
+                {
+                    return;
+                }
+                let Some(texture) = texture else {
+                    return;
+                };
+                let mut srv: Option<ID3D11ShaderResourceView> = None;
+                if device
+                    .m_Device
+                    .CreateShaderResourceView(&texture, None, Some(&mut srv))
+                    .is_err()
+                {
+                    return;
+                }
+                cap.srv = srv;
+                cap.texture = Some(texture);
+                cap.created_desc = Some(desc);
+            }
+            if let Some(dst) = &cap.texture {
+                EnterCriticalSection(context.m_Mutex);
+                context.m_Context.CopyResource(dst, &result.m_Texture);
+                LeaveCriticalSection(context.m_Mutex);
+            }
         }
     }
 
@@ -389,6 +487,11 @@ impl EguiDebugRenderState {
         for (_, texture_id) in self.srv_thumbnails.drain(..) {
             renderer.unregister_user_texture(texture_id);
         }
+        for cap in self.post_stage_captures.drain(..) {
+            if let Some(id) = cap.egui_id {
+                renderer.unregister_user_texture(id);
+            }
+        }
     }
 }
 static EGUI_DEBUG_RENDER_STATE: Mutex<EguiDebugRenderState> =
@@ -396,6 +499,35 @@ static EGUI_DEBUG_RENDER_STATE: Mutex<EguiDebugRenderState> =
 
 /// Preview thumbnail width (px) in the Render tab; user-controllable via a slider.
 static PREVIEW_WIDTH: Mutex<f32> = Mutex::new(176.0);
+
+/// Capture a post-effect stage's result texture for the given eye -- called from the stage's detour
+/// on the render thread, after the stage runs. `result` is the stage's slot result texture.
+///
+/// # Safety
+/// `result` must be a valid engine `Texture` pointer (or null) from the post-effect slot array.
+pub unsafe fn capture_post_stage(
+    stage: usize,
+    eye: usize,
+    result: *mut jc3gi::graphics_engine::texture::Texture,
+) {
+    unsafe {
+        let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
+            return;
+        };
+        let Some(device) = ge.m_Device.as_ref() else {
+            return;
+        };
+        let Some(context) = device.m_Context.as_ref() else {
+            return;
+        };
+        let Some(result) = result.as_ref() else {
+            return;
+        };
+        EGUI_DEBUG_RENDER_STATE
+            .lock()
+            .capture_post_stage(stage, eye, device, context, result);
+    }
+}
 
 /// Snapshot of the render camera's projection state, captured after each eye's Draw so the two
 /// eyes can be compared in the debug UI (to isolate the eye-1 projection corruption).
@@ -600,25 +732,52 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
             }
             .unwrap_or(0.5625);
             let size = egui::vec2(preview_width, preview_width * aspect);
-            ui.label("Per-eye pipeline (rows = eyes, columns = stages):");
+            // Register any post-stage SRVs that were created on the render thread.
+            for cap in &mut state.post_stage_captures {
+                if cap.egui_id.is_none()
+                    && let Some(srv) = &cap.srv
+                {
+                    cap.egui_id = Some(renderer.register_user_texture(srv.clone()));
+                }
+            }
+
+            // Build the columns in pipeline order: Scene -> after DoF -> after MB -> Final.
+            let columns: Vec<(&str, [Option<egui::TextureId>; 2])> = {
+                let post_id = |stage: usize, eye: usize| -> Option<egui::TextureId> {
+                    state
+                        .post_stage_captures
+                        .get(stage * 2 + eye)
+                        .and_then(|c| c.egui_id)
+                };
+                let mc_id = |eye: usize| state.main_color_textures[eye].as_ref().map(|(_, id)| *id);
+                let bb_id = |eye: usize| state.target_textures[eye].as_ref().map(|(_, id)| *id);
+                vec![
+                    ("Scene", [mc_id(0), mc_id(1)]),
+                    (POST_STAGE_LABELS[0], [post_id(0, 0), post_id(0, 1)]),
+                    (POST_STAGE_LABELS[1], [post_id(1, 0), post_id(1, 1)]),
+                    ("Final", [bb_id(0), bb_id(1)]),
+                ]
+            };
+
+            ui.label("Per-eye pipeline (rows = eyes, columns = stages, left to right):");
             for eye in 0..2 {
+                ui.label(format!("Eye {eye}"));
                 ui.horizontal(|ui| {
-                    for (slot, name) in [
-                        (&state.main_color_textures[eye], "Scene (MainColor)"),
-                        (&state.target_textures[eye], "Final (BackBuffer)"),
-                    ] {
+                    for (name, ids) in &columns {
                         ui.vertical(|ui| {
-                            match slot {
-                                Some((_, id)) => {
+                            match ids[eye] {
+                                Some(id) => {
                                     ui.add(egui::Image::new(egui::ImageSource::Texture(
-                                        egui::load::SizedTexture { id: *id, size },
+                                        egui::load::SizedTexture { id, size },
                                     )));
                                 }
                                 None => {
                                     ui.add_sized(size, egui::Label::new("(no capture)"));
                                 }
                             }
-                            ui.label(format!("eye {eye}  -  {name}"));
+                            if eye == 1 {
+                                ui.label(*name);
+                            }
                         });
                     }
                 });
