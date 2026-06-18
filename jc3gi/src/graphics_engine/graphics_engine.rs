@@ -244,10 +244,43 @@ impl std::convert::AsMut<HDevice_t> for HDevice_t {
         self
     }
 }
+#[derive(Copy, Clone)]
+#[repr(C, align(4))]
+/// Per-real-frame counters advanced once in the CGraphicsEngine::Draw prologue. m_FrameIndex (set
+/// from m_Counter, which post-increments) drives the TAA jitter phase and shadow parity (& 1);
+/// m_RingIndex is the %3 constant-buffer ring (m_FrameIndex % 3).
+pub struct RenderFrameCounters {
+    pub m_Counter: u32,
+    pub m_FrameIndex: u32,
+    pub m_RingIndex: u32,
+}
+fn _RenderFrameCounters_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xC], RenderFrameCounters>([0u8; 0xC]);
+    }
+    unreachable!()
+}
+impl RenderFrameCounters {}
+impl std::convert::AsRef<RenderFrameCounters> for RenderFrameCounters {
+    fn as_ref(&self) -> &RenderFrameCounters {
+        self
+    }
+}
+impl std::convert::AsMut<RenderFrameCounters> for RenderFrameCounters {
+    fn as_mut(&mut self) -> &mut RenderFrameCounters {
+        self
+    }
+}
 pub unsafe fn get_graphics_params() -> &'static mut crate::graphics_engine::graphics_engine::GraphicsParams {
     unsafe {
         &mut *(0x142D3A850
             as *mut crate::graphics_engine::graphics_engine::GraphicsParams)
+    }
+}
+pub unsafe fn get_render_frame_counters() -> &'static mut crate::graphics_engine::graphics_engine::RenderFrameCounters {
+    unsafe {
+        &mut *(0x142D3A6AC
+            as *mut crate::graphics_engine::graphics_engine::RenderFrameCounters)
     }
 }
 pub const graphics_flip_ADDRESS: usize = 0x14195A820;
