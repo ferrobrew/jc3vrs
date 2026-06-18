@@ -1,4 +1,7 @@
 pub mod device;
 pub mod graphics_engine;
+pub mod post_effects;
 pub mod render_engine;
+pub mod render_pass;
 pub mod texture;
+pub mod tone_mapping;

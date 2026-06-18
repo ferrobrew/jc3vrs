@@ -36,6 +36,30 @@ impl std::convert::AsMut<DrawThreadTaskParam> for DrawThreadTaskParam {
     }
 }
 #[repr(C, align(8))]
+pub struct EffectInfo {
+    pub m_DepthTexture: *mut ::std::ffi::c_void,
+    pub m_Transform: crate::types::math::Matrix4,
+    pub m_FrameIndex: u8,
+    _field_49: [u8; 7],
+}
+fn _EffectInfo_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x50], EffectInfo>([0u8; 0x50]);
+    }
+    unreachable!()
+}
+impl EffectInfo {}
+impl std::convert::AsRef<EffectInfo> for EffectInfo {
+    fn as_ref(&self) -> &EffectInfo {
+        self
+    }
+}
+impl std::convert::AsMut<EffectInfo> for EffectInfo {
+    fn as_mut(&mut self) -> &mut EffectInfo {
+        self
+    }
+}
+#[repr(C, align(8))]
 pub struct GraphicsEngine {
     _field_0: [u8; 24],
     pub m_CPUFinishedDrawingEvent: u32,
@@ -43,11 +67,22 @@ pub struct GraphicsEngine {
     pub m_ActiveCursor: crate::graphics_engine::graphics_engine::ActiveCursor,
     _field_12c: [u8; 3460],
     pub m_Device: *mut crate::graphics_engine::device::Device,
-    _field_eb8: [u8; 432],
+    _field_eb8: [u8; 16],
+    pub m_GBufferTexture: [*mut crate::graphics_engine::texture::Texture; 4],
+    _field_ee8: [u8; 184],
+    pub m_VelocityBufferTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_fa8: [u8; 176],
+    pub m_MainDepthTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_1060: [u8; 8],
     pub m_MainColorBuffer: *mut crate::graphics_engine::texture::Texture,
-    _field_1070: [u8; 448],
+    _field_1070: [u8; 8],
+    pub m_DownSampledDepthTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_1080: [u8; 32],
+    pub m_EffectInfo: [crate::graphics_engine::graphics_engine::EffectInfo; 5],
     pub m_BackBufferLinear: *mut crate::graphics_engine::texture::Texture,
-    _field_1238: [u8; 3288],
+    _field_1238: [u8; 144],
+    pub m_EffectInfoIndex: u32,
+    _field_12cc: [u8; 3140],
 }
 fn _GraphicsEngine_size_check() {
     unsafe {
