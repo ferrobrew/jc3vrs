@@ -8,7 +8,33 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 pub struct CToneMappingEffect {}
-impl CToneMappingEffect {}
+impl CToneMappingEffect {
+    pub const GenerateHistogramForFinalScene_ADDRESS: usize = 0x140119440;
+    pub unsafe fn GenerateHistogramForFinalScene(
+        &mut self,
+        ctx: *mut ::std::ffi::c_void,
+        a3: *mut ::std::ffi::c_void,
+        a4: *mut ::std::ffi::c_void,
+        a5: i32,
+        a6: *mut u32,
+        a7: *mut u32,
+    ) -> *mut u32 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut ::std::ffi::c_void,
+                a3: *mut ::std::ffi::c_void,
+                a4: *mut ::std::ffi::c_void,
+                a5: i32,
+                a6: *mut u32,
+                a7: *mut u32,
+            ) -> *mut u32 = ::std::mem::transmute(
+                Self::GenerateHistogramForFinalScene_ADDRESS,
+            );
+            f(self as *mut Self as _, ctx, a3, a4, a5, a6, a7)
+        }
+    }
+}
 impl std::convert::AsRef<CToneMappingEffect> for CToneMappingEffect {
     fn as_ref(&self) -> &CToneMappingEffect {
         self

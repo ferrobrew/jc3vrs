@@ -40,6 +40,68 @@ impl std::convert::AsMut<CDepthOfFieldEffect> for CDepthOfFieldEffect {
     }
 }
 #[repr(C, align(8))]
+pub struct CFadeEffect {}
+impl CFadeEffect {
+    pub const Apply_ADDRESS: usize = 0x1400A9570;
+    pub unsafe fn Apply(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        a3: *mut ::std::ffi::c_void,
+    ) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+                a3: *mut ::std::ffi::c_void,
+            ) -> u64 = ::std::mem::transmute(Self::Apply_ADDRESS);
+            f(self as *mut Self as _, ctx, a3)
+        }
+    }
+}
+impl std::convert::AsRef<CFadeEffect> for CFadeEffect {
+    fn as_ref(&self) -> &CFadeEffect {
+        self
+    }
+}
+impl std::convert::AsMut<CFadeEffect> for CFadeEffect {
+    fn as_mut(&mut self) -> &mut CFadeEffect {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct CGlareEffect {}
+impl CGlareEffect {
+    pub const Apply_ADDRESS: usize = 0x1400AA510;
+    pub unsafe fn Apply(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
+        a4: *mut ::std::ffi::c_void,
+        a5: *mut ::std::ffi::c_void,
+    ) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+                pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
+                a4: *mut ::std::ffi::c_void,
+                a5: *mut ::std::ffi::c_void,
+            ) -> u64 = ::std::mem::transmute(Self::Apply_ADDRESS);
+            f(self as *mut Self as _, ctx, pec, a4, a5)
+        }
+    }
+}
+impl std::convert::AsRef<CGlareEffect> for CGlareEffect {
+    fn as_ref(&self) -> &CGlareEffect {
+        self
+    }
+}
+impl std::convert::AsMut<CGlareEffect> for CGlareEffect {
+    fn as_mut(&mut self) -> &mut CGlareEffect {
+        self
+    }
+}
+#[repr(C, align(8))]
 pub struct CMotionBlurEffect {}
 impl CMotionBlurEffect {
     pub const Apply_ADDRESS: usize = 0x1400C8E20;
@@ -79,6 +141,39 @@ impl std::convert::AsMut<CMotionBlurEffect> for CMotionBlurEffect {
     }
 }
 #[repr(C, align(8))]
+pub struct CPlayerDamageEffect {}
+impl CPlayerDamageEffect {
+    pub const Apply_ADDRESS: usize = 0x1400F76E0;
+    pub unsafe fn Apply(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
+        a4: *mut ::std::ffi::c_void,
+        input: u32,
+    ) -> u32 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+                pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
+                a4: *mut ::std::ffi::c_void,
+                input: u32,
+            ) -> u32 = ::std::mem::transmute(Self::Apply_ADDRESS);
+            f(self as *mut Self as _, ctx, pec, a4, input)
+        }
+    }
+}
+impl std::convert::AsRef<CPlayerDamageEffect> for CPlayerDamageEffect {
+    fn as_ref(&self) -> &CPlayerDamageEffect {
+        self
+    }
+}
+impl std::convert::AsMut<CPlayerDamageEffect> for CPlayerDamageEffect {
+    fn as_mut(&mut self) -> &mut CPlayerDamageEffect {
+        self
+    }
+}
+#[repr(C, align(8))]
 pub struct CPostEffectsManager {}
 impl CPostEffectsManager {}
 impl std::convert::AsRef<CPostEffectsManager> for CPostEffectsManager {
@@ -88,6 +183,50 @@ impl std::convert::AsRef<CPostEffectsManager> for CPostEffectsManager {
 }
 impl std::convert::AsMut<CPostEffectsManager> for CPostEffectsManager {
     fn as_mut(&mut self) -> &mut CPostEffectsManager {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct CSunHaloEffect {}
+impl CSunHaloEffect {
+    pub const PreApply_ADDRESS: usize = 0x140118450;
+    pub unsafe fn PreApply(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        a3: *mut ::std::ffi::c_void,
+        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+    ) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+                a3: *mut ::std::ffi::c_void,
+                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+            ) -> u64 = ::std::mem::transmute(Self::PreApply_ADDRESS);
+            f(self as *mut Self as _, ctx, a3, mgr)
+        }
+    }
+    pub const Apply_ADDRESS: usize = 0x1400F8030;
+    pub unsafe fn Apply(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    ) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            ) -> u64 = ::std::mem::transmute(Self::Apply_ADDRESS);
+            f(self as *mut Self as _, ctx)
+        }
+    }
+}
+impl std::convert::AsRef<CSunHaloEffect> for CSunHaloEffect {
+    fn as_ref(&self) -> &CSunHaloEffect {
+        self
+    }
+}
+impl std::convert::AsMut<CSunHaloEffect> for CSunHaloEffect {
+    fn as_mut(&mut self) -> &mut CSunHaloEffect {
         self
     }
 }
