@@ -226,6 +226,10 @@ struct EguiDebugRenderState {
     target_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
     /// HDR scene (MainColor, pre-post) capture per eye -- the first column of the pipeline rows.
     main_color_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
+    /// (w, h) the back-buffer captures were built for; recreate them when the back buffer resizes.
+    target_size: Option<(u32, u32)>,
+    /// (w, h, dxgi format) the MainColor captures were built for; recreate on change.
+    main_color_desc: Option<(u32, u32, i32)>,
     /// Cache of engine SRV pointer -> egui texture id, for the live render-target thumbnails.
     srv_thumbnails: Vec<(usize, egui::TextureId)>,
 }
@@ -234,6 +238,8 @@ impl EguiDebugRenderState {
         Self {
             target_textures: [None, None],
             main_color_textures: [None, None],
+            target_size: None,
+            main_color_desc: None,
             srv_thumbnails: Vec::new(),
         }
     }
@@ -254,11 +260,6 @@ impl EguiDebugRenderState {
     }
 
     fn prepare_if_necessary(&mut self, renderer: &mut egui_directx11::Renderer) {
-        if self.target_textures.iter().all(Option::is_some)
-            && self.main_color_textures.iter().all(Option::is_some)
-        {
-            return;
-        }
         unsafe {
             let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
                 return;
@@ -267,31 +268,47 @@ impl EguiDebugRenderState {
                 return;
             };
 
+            // Final back buffer (R8G8B8A8), recreated when its size changes.
             if let Some(back_buffer) = device.m_BackBuffer.as_ref() {
-                let (width, height) = (back_buffer.m_Width as u32, back_buffer.m_Height as u32);
-                for slot in &mut self.target_textures {
-                    if slot.is_none() {
+                let size = (back_buffer.m_Width as u32, back_buffer.m_Height as u32);
+                if self.target_size != Some(size)
+                    || self.target_textures.iter().any(Option::is_none)
+                {
+                    for slot in &mut self.target_textures {
+                        if let Some((_, id)) = slot.take() {
+                            renderer.unregister_user_texture(id);
+                        }
                         *slot = Self::create_target(
                             device,
                             renderer,
-                            width,
-                            height,
+                            size.0,
+                            size.1,
                             DXGI_FORMAT_R8G8B8A8_UNORM,
                         );
                     }
+                    self.target_size = Some(size);
                 }
             }
 
+            // HDR scene (MainColor), matching its own format, recreated on size/format change.
             if let Some(mc) = ge.m_MainColorBuffer.as_ref() {
-                let (width, height, format) = (
-                    mc.m_Width as u32,
-                    mc.m_Height as u32,
-                    DXGI_FORMAT(mc.m_Format as i32),
-                );
-                for slot in &mut self.main_color_textures {
-                    if slot.is_none() {
-                        *slot = Self::create_target(device, renderer, width, height, format);
+                let desc = (mc.m_Width as u32, mc.m_Height as u32, mc.m_Format as i32);
+                if self.main_color_desc != Some(desc)
+                    || self.main_color_textures.iter().any(Option::is_none)
+                {
+                    for slot in &mut self.main_color_textures {
+                        if let Some((_, id)) = slot.take() {
+                            renderer.unregister_user_texture(id);
+                        }
+                        *slot = Self::create_target(
+                            device,
+                            renderer,
+                            desc.0,
+                            desc.1,
+                            DXGI_FORMAT(desc.2),
+                        );
                     }
+                    self.main_color_desc = Some(desc);
                 }
             }
         }
@@ -545,6 +562,21 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
                 "DoF: plain composite, no reprojection (keeps picture)",
             );
             gate_checkbox(ui, &SKIP_DOF, "Skip DepthOfField::Apply (washes out!)");
+        });
+
+        ui.collapsing("Post-FX stages (skip to bisect)", |ui| {
+            use hooks::post_effects::{
+                SKIP_FADE, SKIP_GLARE, SKIP_HISTOGRAM, SKIP_PLAYER_DAMAGE, SKIP_SUN_HALO,
+            };
+            gate_checkbox(
+                ui,
+                &SKIP_HISTOGRAM,
+                "Exposure histogram (stalls auto-exposure)",
+            );
+            gate_checkbox(ui, &SKIP_GLARE, "Glare / bloom");
+            gate_checkbox(ui, &SKIP_FADE, "Fade");
+            gate_checkbox(ui, &SKIP_SUN_HALO, "Sun halo");
+            gate_checkbox(ui, &SKIP_PLAYER_DAMAGE, "Player-damage vignette");
         });
     }
 

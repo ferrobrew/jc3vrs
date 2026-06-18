@@ -26,10 +26,28 @@ pub static SKIP_DOF: AtomicBool = AtomicBool::new(false);
 /// keeps DoF's full composite/grade branch but skips the screen-space reprojection that flickers.
 pub static DOF_NO_REPROJECT: AtomicBool = AtomicBool::new(true);
 
+// Per-stage skip toggles (bisection aids; default off = run normally).
+/// Skip the fade quad.
+pub static SKIP_FADE: AtomicBool = AtomicBool::new(false);
+/// Skip the glare / bloom generator.
+pub static SKIP_GLARE: AtomicBool = AtomicBool::new(false);
+/// Skip the player-damage vignette.
+pub static SKIP_PLAYER_DAMAGE: AtomicBool = AtomicBool::new(false);
+/// Skip the sun-halo (PreApply + Apply).
+pub static SKIP_SUN_HALO: AtomicBool = AtomicBool::new(false);
+/// Skip the auto-exposure histogram (stalls adaptation; darkening bisection aid).
+pub static SKIP_HISTOGRAM: AtomicBool = AtomicBool::new(false);
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&MOTION_BLUR_APPLY_BINDER)
         .with_static_binder(&DOF_APPLY_BINDER)
+        .with_static_binder(&FADE_APPLY_BINDER)
+        .with_static_binder(&GLARE_APPLY_BINDER)
+        .with_static_binder(&PLAYER_DAMAGE_APPLY_BINDER)
+        .with_static_binder(&SUN_HALO_PRE_APPLY_BINDER)
+        .with_static_binder(&SUN_HALO_APPLY_BINDER)
+        .with_static_binder(&GENERATE_HISTOGRAM_BINDER)
 }
 
 #[detour(address = jc3gi::graphics_engine::post_effects::CMotionBlurEffect::Apply_ADDRESS)]
@@ -82,4 +100,101 @@ fn dof_apply(
         }
     }
     DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input)
+}
+
+// CFadeEffect::Apply -- alpha-blended fade quad. Skip = no-op (the u64 return is discarded).
+#[detour(address = jc3gi::graphics_engine::post_effects::CFadeEffect::Apply_ADDRESS)]
+fn fade_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void) -> u64 {
+    if SKIP_FADE.load(Ordering::Relaxed) {
+        return 0;
+    }
+    FADE_APPLY.get().unwrap().call(this, a2, a3)
+}
+
+// CGlareEffect::Apply -- bloom/glare generator. Skip = no bloom.
+#[detour(address = jc3gi::graphics_engine::post_effects::CGlareEffect::Apply_ADDRESS)]
+fn glare_apply(
+    this: *mut c_void,
+    a2: *mut c_void,
+    a3: *mut c_void,
+    a4: *mut c_void,
+    a5: *mut c_void,
+) -> u64 {
+    if SKIP_GLARE.load(Ordering::Relaxed) {
+        return 0;
+    }
+    GLARE_APPLY.get().unwrap().call(this, a2, a3, a4, a5)
+}
+
+// CPlayerDamageEffect::Apply -- red damage vignette. Slot-passthrough; skip = return input slot.
+#[detour(address = jc3gi::graphics_engine::post_effects::CPlayerDamageEffect::Apply_ADDRESS)]
+fn player_damage_apply(
+    this: *mut c_void,
+    a2: *mut c_void,
+    a3: *mut c_void,
+    a4: *mut c_void,
+    input: u32,
+) -> u32 {
+    if SKIP_PLAYER_DAMAGE.load(Ordering::Relaxed) {
+        return input;
+    }
+    PLAYER_DAMAGE_APPLY
+        .get()
+        .unwrap()
+        .call(this, a2, a3, a4, input)
+}
+
+// CSunHaloEffect::PreApply -- prepares the halo. Skip = clear the ready flag (this+0x114) so the
+// paired Apply early-outs, then no-op.
+#[detour(address = jc3gi::graphics_engine::post_effects::CSunHaloEffect::PreApply_ADDRESS)]
+fn sun_halo_pre_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void, a4: *mut c_void) -> u64 {
+    if SKIP_SUN_HALO.load(Ordering::Relaxed) {
+        unsafe {
+            *(this as *mut u8).add(0x114) = 0;
+        }
+        return 0;
+    }
+    SUN_HALO_PRE_APPLY.get().unwrap().call(this, a2, a3, a4)
+}
+
+// CSunHaloEffect::Apply -- composites the halo additively. Skip = no-op.
+#[detour(address = jc3gi::graphics_engine::post_effects::CSunHaloEffect::Apply_ADDRESS)]
+fn sun_halo_apply(this: *mut c_void, a2: *mut c_void) -> u64 {
+    if SKIP_SUN_HALO.load(Ordering::Relaxed) {
+        return 0;
+    }
+    SUN_HALO_APPLY.get().unwrap().call(this, a2)
+}
+
+// CToneMappingEffect::GenerateHistogramForFinalScene -- auto-exposure histogram. Skipping stalls
+// adaptation, but preserve the out-param contract (this+764/765 = current slot indices) so callers
+// don't read garbage. A bisection aid for the stereo darkening.
+#[detour(
+    address = jc3gi::graphics_engine::tone_mapping::CToneMappingEffect::GenerateHistogramForFinalScene_ADDRESS
+)]
+fn generate_histogram(
+    this: *mut c_void,
+    a2: *mut c_void,
+    a3: *mut c_void,
+    a4: *mut c_void,
+    a5: i32,
+    a6: *mut u32,
+    a7: *mut u32,
+) -> *mut u32 {
+    if SKIP_HISTOGRAM.load(Ordering::Relaxed) {
+        unsafe {
+            let base = this as *const u32;
+            if !a6.is_null() {
+                *a6 = *base.add(764);
+            }
+            if !a7.is_null() {
+                *a7 = *base.add(765);
+            }
+        }
+        return a7;
+    }
+    GENERATE_HISTOGRAM
+        .get()
+        .unwrap()
+        .call(this, a2, a3, a4, a5, a6, a7)
 }
