@@ -2,7 +2,7 @@ use std::{
     ffi::c_void,
     sync::{
         OnceLock,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
     },
 };
 
@@ -49,6 +49,136 @@ pub static DRAW_INDEX: AtomicUsize = AtomicUsize::new(0);
 pub static STEREO_CAMERAS: AtomicBool = AtomicBool::new(true);
 /// Inter-pupillary distance (metres) for the stereo camera offset; large for the visual test.
 pub static STEREO_IPD: Mutex<f32> = Mutex::new(2.0);
+/// Which eye reaches the screen in stereo double-Draw: false = eye 1 (default), true = eye 0. Lets
+/// each eye's render be compared live, bypassing the (flaky) per-eye capture.
+pub static PRESENT_EYE_0: AtomicBool = AtomicBool::new(false);
+
+/// Render-call trace: when > 0, pipeline hooks append a JSON record per call to TRACE_LOG;
+/// decremented once per real frame and dumped as NDJSON when it reaches 0. Driven by the "Dump
+/// render trace" button.
+pub static TRACE_FRAMES: AtomicI32 = AtomicI32::new(0);
+static TRACE_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Absolute path of the most recent trace dump, shown in the UI so it's findable.
+static LAST_TRACE_PATH: Mutex<Option<String>> = Mutex::new(None);
+
+/// Per-eye geometry draw-call counters: reset at each eye's `draw_begin`, read at `draw_end`. Bumped
+/// by the detours on the engine's universal draw wrappers (`Graphics::Draw`/`DrawIndexed`).
+pub static DRAW_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub static DRAW_INDEXED_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+/// One render-trace record, serialized to NDJSON; the `ev` tag names the event. Pipeline-hook
+/// variants omit `eye` -- it's injected by [`trace_eye`]; the frame/eye markers carry it directly.
+#[derive(serde::Serialize)]
+#[serde(tag = "ev")]
+pub enum TraceEvent {
+    #[serde(rename = "frame_begin")]
+    FrameBegin {
+        stereo: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        present_eye: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        restore_counters: Option<bool>,
+    },
+    #[serde(rename = "draw_begin")]
+    DrawBegin { eye: usize },
+    #[serde(rename = "draw_end")]
+    DrawEnd {
+        eye: usize,
+        draw: usize,
+        draw_indexed: usize,
+    },
+    #[serde(rename = "SetupRenderCamera")]
+    SetupRenderCamera,
+    #[serde(rename = "SetupRenderFrameData")]
+    SetupRenderFrameData { gated: bool },
+    #[serde(rename = "HandBackBuffers")]
+    HandBackBuffers { gated: bool },
+    #[serde(rename = "SmoothedExposureUpdate")]
+    SmoothedExposureUpdate { gated: bool, exposure: f32 },
+    #[serde(rename = "CalcHistogramMidBright")]
+    CalcHistogramMidBright { gated: bool },
+    #[serde(rename = "GenerateHistogram")]
+    GenerateHistogram { skip: bool },
+    #[serde(rename = "DoF::Apply")]
+    DofApply { input: u32, skip: bool },
+    #[serde(rename = "MotionBlur::Apply")]
+    MotionBlurApply { input: u32, skip: bool },
+    #[serde(rename = "Glare::Apply")]
+    GlareApply { skip: bool },
+    #[serde(rename = "Fade::Apply")]
+    FadeApply { skip: bool },
+    #[serde(rename = "PlayerDamage::Apply")]
+    PlayerDamageApply { input: u32, skip: bool },
+    #[serde(rename = "SunHalo::PreApply")]
+    SunHaloPreApply { skip: bool },
+    #[serde(rename = "SunHalo::Apply")]
+    SunHaloApply { skip: bool },
+    #[serde(rename = "PostDraw")]
+    PostDraw,
+    #[serde(rename = "Flip")]
+    Flip { blocked: bool },
+    // Buffer-flow events (raw pointers as u64 so render-setup / texture instances can be compared
+    // across eyes -- same pointer = same target, different pointer = a swapped instance).
+    #[serde(rename = "SetRenderSetup")]
+    SetRenderSetup { setup: u64 },
+    #[serde(rename = "Clear")]
+    Clear { color: [f32; 4] },
+    #[serde(rename = "CopySurfaceToTexture")]
+    CopySurfaceToTexture { dst: u64, src: u64 },
+    #[serde(rename = "ResolveSurface")]
+    ResolveSurface,
+}
+
+/// Append one trace record (frame/eye markers, which carry their own `eye` field), while active.
+pub fn trace(event: TraceEvent) {
+    if TRACE_FRAMES.load(Ordering::Relaxed) > 0
+        && let Ok(s) = serde_json::to_string(&event)
+    {
+        TRACE_LOG.lock().push(s);
+    }
+}
+
+/// Append one trace record from inside a per-dispatch pipeline hook, injecting the current eye.
+pub fn trace_eye(event: TraceEvent) {
+    if TRACE_FRAMES.load(Ordering::Relaxed) > 0
+        && let Ok(serde_json::Value::Object(mut map)) = serde_json::to_value(&event)
+    {
+        map.insert("eye".to_string(), DRAW_INDEX.load(Ordering::Relaxed).into());
+        TRACE_LOG
+            .lock()
+            .push(serde_json::Value::Object(map).to_string());
+    }
+}
+
+/// Begin a render-call trace covering the next `frames` real frames.
+pub fn trace_start(frames: i32) {
+    TRACE_LOG.lock().clear();
+    TRACE_FRAMES.store(frames, Ordering::Relaxed);
+    tracing::info!("Render trace started ({frames} frames)");
+}
+
+/// Called once per real frame by the Draw driver; decrements the trace counter and, when the run
+/// finishes, writes the collected trace as NDJSON next to the injected DLL (same place as
+/// `jc3vrs.log`), recording the absolute path for the UI.
+pub fn trace_end_frame() {
+    if TRACE_FRAMES.load(Ordering::Relaxed) <= 0 {
+        return;
+    }
+    if TRACE_FRAMES.fetch_sub(1, Ordering::Relaxed) - 1 <= 0 {
+        let log = TRACE_LOG.lock();
+        let path = module::get_path()
+            .and_then(|p| p.parent().map(|dir| dir.join("jc3vrs_render_trace.ndjson")))
+            .unwrap_or_else(|| std::path::PathBuf::from("jc3vrs_render_trace.ndjson"));
+        match std::fs::write(&path, log.join("\n")) {
+            Ok(()) => {
+                let shown = path.display().to_string();
+                tracing::info!("Render trace dumped: {} records -> {}", log.len(), shown);
+                *LAST_TRACE_PATH.lock() = Some(shown);
+            }
+            Err(e) => tracing::error!("Failed to write render trace: {e}"),
+        }
+    }
+}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -535,6 +665,34 @@ pub unsafe fn capture_post_stage(
     }
 }
 
+/// Capture the HDR scene buffer (MainColor) for `eye` at the start of the post chain (the exposure
+/// histogram pass), before the chain reads and recycles it. Unlike a fixed grab at PostDraw, this
+/// follows whatever instance the pipeline is currently using, so the "Scene" preview shows what this
+/// dispatch actually rendered rather than a stale/recycled buffer.
+pub fn capture_main_color(eye: usize) {
+    unsafe {
+        let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
+            return;
+        };
+        let Some(device) = ge.m_Device.as_ref() else {
+            return;
+        };
+        let Some(context) = device.m_Context.as_ref() else {
+            return;
+        };
+        let Some(src) = ge.m_MainColorBuffer.as_ref() else {
+            return;
+        };
+        let lock = EGUI_DEBUG_RENDER_STATE.lock();
+        let Some(dst) = lock.main_color_texture(eye) else {
+            return;
+        };
+        EnterCriticalSection(context.m_Mutex);
+        context.m_Context.CopyResource(dst, &src.m_Texture);
+        LeaveCriticalSection(context.m_Mutex);
+    }
+}
+
 /// Snapshot of the render camera's projection state, captured after each eye's Draw so the two
 /// eyes can be compared in the debug UI (to isolate the eye-1 projection corruption).
 #[derive(Copy, Clone)]
@@ -681,7 +839,20 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
             {
                 STEREO_CAMERAS.store(sc, Ordering::Relaxed);
             }
-            ui.add(egui::Slider::new(&mut *STEREO_IPD.lock(), 0.0..=5.0).text("IPD (m)"));
+            ui.add(egui::Slider::new(&mut *STEREO_IPD.lock(), 0.0..=100.0).text("IPD (m)"));
+        }
+
+        {
+            let calls = hooks::camera::SETUP_RC_CALLS.load(Ordering::Relaxed);
+            let hits = hooks::camera::SETUP_RC_HITS.load(Ordering::Relaxed);
+            let expected = unsafe {
+                jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
+                    .map(|ge| ge as *mut _ as usize + 0x170)
+                    .unwrap_or(0)
+            };
+            ui.label(format!(
+                "SetupRC: calls={calls} hits={hits}  expected render-cam={expected:#x}"
+            ));
         }
 
         gate_checkbox(
@@ -689,6 +860,24 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
             &hooks::game::RESTORE_FRAME_COUNTERS,
             "Restore frame counters between eyes (fixes jitter/parity flicker)",
         );
+        gate_checkbox(
+            ui,
+            &PRESENT_EYE_0,
+            "Present eye 0 (else eye 1) -- flip to compare each eye live",
+        );
+        ui.horizontal(|ui| {
+            if ui.button("Dump render trace (4 frames)").clicked() {
+                trace_start(4);
+            }
+            let remaining = TRACE_FRAMES.load(Ordering::Relaxed);
+            if remaining > 0 {
+                ui.label(format!("tracing... {remaining} frames left"));
+            } else if LAST_TRACE_PATH.lock().is_some() {
+                ui.label("dumped");
+            } else {
+                ui.label("(writes next to the DLL)");
+            }
+        });
 
         ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
             use hooks::stereo::{

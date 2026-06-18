@@ -6,6 +6,7 @@ use re_utilities::{ThreadSuspender, hook_library::HookLibraries};
 pub mod camera;
 pub mod character;
 pub mod clock;
+pub mod draw_count;
 pub mod game;
 pub mod graphics;
 pub mod post_effects;
@@ -27,6 +28,7 @@ pub(super) fn install() {
             game::hook_library(),
             clock::hook_library(),
             stereo::hook_library(),
+            draw_count::hook_library(),
             post_effects::hook_library(),
             camera::hook_library(),
             graphics::hook_library(),

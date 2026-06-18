@@ -12,6 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
 
+use crate::TraceEvent;
+
 /// Skip the auto-exposure update on eye 1 (frame-counted; would double-adapt). Default on.
 pub static GATE_EXPOSURE: AtomicBool = AtomicBool::new(true);
 /// Skip `SetupRenderFrameData` (RBI list swap/zero) on eye 1. Default off -- eye 1 needs its swap.
@@ -42,7 +44,9 @@ pub(super) fn hook_library() -> HookLibrary {
 // (the central "wedge"). Off by default.
 #[detour(address = jc3gi::graphics_engine::render_pass::CRenderPass::SetupRenderFrameData_ADDRESS)]
 fn setup_render_frame_data() {
-    if gate(&GATE_SETUP_RENDER_FRAME_DATA) {
+    let gated = gate(&GATE_SETUP_RENDER_FRAME_DATA);
+    crate::trace_eye(TraceEvent::SetupRenderFrameData { gated });
+    if gated {
         return;
     }
     SETUP_RENDER_FRAME_DATA.get().unwrap().call();
@@ -52,7 +56,9 @@ fn setup_render_frame_data() {
 // pool. Suppressing it on eye 1 starves the second render of constant buffers. Off by default.
 #[detour(address = jc3gi::graphics_engine::render_pass::CConstantBufferPool::HandBackBuffers_ADDRESS)]
 fn hand_back_buffers(this: *mut c_void) {
-    if gate(&GATE_HAND_BACK_BUFFERS) {
+    let gated = gate(&GATE_HAND_BACK_BUFFERS);
+    crate::trace_eye(TraceEvent::HandBackBuffers { gated });
+    if gated {
         return;
     }
     HAND_BACK_BUFFERS.get().unwrap().call(this);
@@ -63,7 +69,9 @@ fn hand_back_buffers(this: *mut c_void) {
 // first eye's exposure (which is what you want anyway -- no binocular rivalry).
 #[detour(address = jc3gi::graphics_engine::tone_mapping::SSmoothedExposure::Update_ADDRESS)]
 fn smoothed_exposure_update(this: *mut c_void, exposure: f32) {
-    if gate(&GATE_EXPOSURE) {
+    let gated = gate(&GATE_EXPOSURE);
+    crate::trace_eye(TraceEvent::SmoothedExposureUpdate { gated, exposure });
+    if gated {
         return;
     }
     SMOOTHED_EXPOSURE_UPDATE.get().unwrap().call(this, exposure);
@@ -73,7 +81,9 @@ fn smoothed_exposure_update(this: *mut c_void, exposure: f32) {
 // Same treatment: only advance for the first eye.
 #[detour(address = jc3gi::graphics_engine::tone_mapping::CalculateMidAndBrightPointForHistogram_ADDRESS)]
 fn calc_histogram_mid_bright(ctx: *mut c_void, arg1: f32, arg2: i32, arg3: f32, hist: *mut c_void) {
-    if gate(&GATE_EXPOSURE) {
+    let gated = gate(&GATE_EXPOSURE);
+    crate::trace_eye(TraceEvent::CalcHistogramMidBright { gated });
+    if gated {
         return;
     }
     CALC_HISTOGRAM_MID_BRIGHT

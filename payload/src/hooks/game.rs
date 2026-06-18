@@ -10,6 +10,8 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
+use crate::TraceEvent;
+
 use super::graphics::BLOCK_FLIP;
 
 /// Snapshot the per-frame render counters before eye 0 and restore them before eye 1, so eye 1's
@@ -63,14 +65,30 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
             // The per-eye camera offset is injected on the render camera in the SetupRenderCamera
             // hook (see hooks::camera and docs/rendering.md section 2); here we just drive the two
-            // dispatches and tag each with its eye index via DRAW_INDEX.
+            // dispatches and tag each with its eye index via DRAW_INDEX. PRESENT_EYE_0 picks which
+            // eye reaches the screen (the other's flip is blocked), so each eye can be compared live.
+            let present_eye = usize::from(!crate::PRESENT_EYE_0.load(Ordering::Relaxed));
+            crate::trace(TraceEvent::FrameBegin {
+                stereo: true,
+                present_eye: Some(present_eye),
+                restore_counters: Some(RESTORE_FRAME_COUNTERS.load(Ordering::Relaxed)),
+            });
+
+            crate::DRAW_CALLS.store(0, Ordering::Relaxed);
+            crate::DRAW_INDEXED_CALLS.store(0, Ordering::Relaxed);
+            crate::trace(TraceEvent::DrawBegin { eye: 0 });
             crate::DRAW_INDEX.store(0, Ordering::Relaxed);
-            BLOCK_FLIP.store(true, Ordering::Relaxed);
+            BLOCK_FLIP.store(present_eye != 0, Ordering::Relaxed);
             game.Draw(spf);
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
             }
             crate::capture_render_camera(0);
+            crate::trace(TraceEvent::DrawEnd {
+                eye: 0,
+                draw: crate::DRAW_CALLS.load(Ordering::Relaxed),
+                draw_indexed: crate::DRAW_INDEXED_CALLS.load(Ordering::Relaxed),
+            });
 
             if let Some(state) = &effect_info {
                 restore_effect_info(state);
@@ -79,19 +97,34 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 restore_frame_counters(counters);
             }
 
+            crate::DRAW_CALLS.store(0, Ordering::Relaxed);
+            crate::DRAW_INDEXED_CALLS.store(0, Ordering::Relaxed);
+            crate::trace(TraceEvent::DrawBegin { eye: 1 });
             crate::DRAW_INDEX.store(1, Ordering::Relaxed);
-            BLOCK_FLIP.store(false, Ordering::Relaxed);
+            BLOCK_FLIP.store(present_eye != 1, Ordering::Relaxed);
             game.Draw(spf);
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
             }
             crate::capture_render_camera(1);
+            crate::trace(TraceEvent::DrawEnd {
+                eye: 1,
+                draw: crate::DRAW_CALLS.load(Ordering::Relaxed),
+                draw_indexed: crate::DRAW_INDEXED_CALLS.load(Ordering::Relaxed),
+            });
+            crate::trace_end_frame();
 
             crate::DRAW_INDEX.store(0, Ordering::Relaxed);
         } else {
+            crate::trace(TraceEvent::FrameBegin {
+                stereo: false,
+                present_eye: None,
+                restore_counters: None,
+            });
             crate::DRAW_INDEX.store(0, Ordering::Relaxed);
             game.Draw(spf);
             crate::capture_render_camera(0);
+            crate::trace_end_frame();
         }
     }
 }

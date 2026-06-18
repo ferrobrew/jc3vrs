@@ -13,6 +13,8 @@ use detours_macro::detour;
 use jc3gi::graphics_engine::post_effects::{PostEffectContext, PostEffectRenderFlags};
 use re_utilities::hook_library::HookLibrary;
 
+use crate::TraceEvent;
+
 /// Skip the *whole* MotionBlur pass. It is not the composite (DoF is), and it reprojects (flicker),
 /// so skip it. Default on.
 pub static SKIP_MOTION_BLUR: AtomicBool = AtomicBool::new(true);
@@ -77,6 +79,10 @@ fn motion_blur_apply(
     flag0: bool,
     flag1: bool,
 ) -> u32 {
+    crate::trace_eye(TraceEvent::MotionBlurApply {
+        input,
+        skip: SKIP_MOTION_BLUR.load(Ordering::Relaxed),
+    });
     let slot = if SKIP_MOTION_BLUR.load(Ordering::Relaxed) {
         input
     } else {
@@ -100,6 +106,10 @@ fn dof_apply(
     mgr: *mut c_void,
     input: u32,
 ) -> u32 {
+    crate::trace_eye(TraceEvent::DofApply {
+        input,
+        skip: SKIP_DOF.load(Ordering::Relaxed),
+    });
     if SKIP_DOF.load(Ordering::Relaxed) {
         return input;
     }
@@ -128,6 +138,9 @@ fn dof_apply(
 // CFadeEffect::Apply -- alpha-blended fade quad. Skip = no-op (the u64 return is discarded).
 #[detour(address = jc3gi::graphics_engine::post_effects::CFadeEffect::Apply_ADDRESS)]
 fn fade_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void) -> u64 {
+    crate::trace_eye(TraceEvent::FadeApply {
+        skip: SKIP_FADE.load(Ordering::Relaxed),
+    });
     if SKIP_FADE.load(Ordering::Relaxed) {
         return 0;
     }
@@ -143,6 +156,9 @@ fn glare_apply(
     a4: *mut c_void,
     a5: *mut c_void,
 ) -> u64 {
+    crate::trace_eye(TraceEvent::GlareApply {
+        skip: SKIP_GLARE.load(Ordering::Relaxed),
+    });
     if SKIP_GLARE.load(Ordering::Relaxed) {
         return 0;
     }
@@ -158,6 +174,10 @@ fn player_damage_apply(
     a4: *mut c_void,
     input: u32,
 ) -> u32 {
+    crate::trace_eye(TraceEvent::PlayerDamageApply {
+        input,
+        skip: SKIP_PLAYER_DAMAGE.load(Ordering::Relaxed),
+    });
     if SKIP_PLAYER_DAMAGE.load(Ordering::Relaxed) {
         return input;
     }
@@ -171,6 +191,9 @@ fn player_damage_apply(
 // paired Apply early-outs, then no-op.
 #[detour(address = jc3gi::graphics_engine::post_effects::CSunHaloEffect::PreApply_ADDRESS)]
 fn sun_halo_pre_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void, a4: *mut c_void) -> u64 {
+    crate::trace_eye(TraceEvent::SunHaloPreApply {
+        skip: SKIP_SUN_HALO.load(Ordering::Relaxed),
+    });
     if SKIP_SUN_HALO.load(Ordering::Relaxed) {
         unsafe {
             *(this as *mut u8).add(0x114) = 0;
@@ -183,6 +206,9 @@ fn sun_halo_pre_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void, a4: *
 // CSunHaloEffect::Apply -- composites the halo additively. Skip = no-op.
 #[detour(address = jc3gi::graphics_engine::post_effects::CSunHaloEffect::Apply_ADDRESS)]
 fn sun_halo_apply(this: *mut c_void, a2: *mut c_void) -> u64 {
+    crate::trace_eye(TraceEvent::SunHaloApply {
+        skip: SKIP_SUN_HALO.load(Ordering::Relaxed),
+    });
     if SKIP_SUN_HALO.load(Ordering::Relaxed) {
         return 0;
     }
@@ -204,6 +230,14 @@ fn generate_histogram(
     a6: *mut u32,
     a7: *mut u32,
 ) -> *mut u32 {
+    crate::trace_eye(TraceEvent::GenerateHistogram {
+        skip: SKIP_HISTOGRAM.load(Ordering::Relaxed),
+    });
+    // The histogram reads the final HDR scene (MainColor) for auto-exposure, so this is the first
+    // point in the post chain where MainColor still holds this dispatch's clean scene -- grab it for
+    // the per-eye "Scene" preview before the chain recycles it.
+    crate::capture_main_color(crate::DRAW_INDEX.load(Ordering::Relaxed));
+
     if SKIP_HISTOGRAM.load(Ordering::Relaxed) {
         unsafe {
             let base = this as *const u32;

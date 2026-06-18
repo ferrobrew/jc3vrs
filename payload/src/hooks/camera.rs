@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use detours_macro::detour;
 use jc3gi::{
@@ -27,25 +27,52 @@ pub(super) fn hook_library() -> HookLibrary {
 /// `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF` from
 /// `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye, *before*
 /// the rebuild, so the two dispatches diverge. See `docs/rendering.md` section 2.
+// Diagnostics: how many times SetupRenderCamera was hooked, and how many of those matched the main
+// render camera (engine + 0x170). Surfaced in the debug UI to confirm the hook fires + the guard.
+pub static SETUP_RC_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub static SETUP_RC_HITS: AtomicUsize = AtomicUsize::new(0);
+
 #[detour(address = jc3gi::camera::camera::Camera::SetupRenderCamera_ADDRESS)]
 fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
-    if crate::STEREO.load(Ordering::Relaxed) && crate::STEREO_CAMERAS.load(Ordering::Relaxed) {
+    SETUP_RC_CALLS.fetch_add(1, Ordering::Relaxed);
+    let is_render_camera = unsafe {
+        GraphicsEngine::get()
+            .is_some_and(|ge| (ge as *mut GraphicsEngine as usize) + 0x170 == camera as usize)
+    };
+    if is_render_camera {
+        SETUP_RC_HITS.fetch_add(1, Ordering::Relaxed);
+        crate::trace_eye(crate::TraceEvent::SetupRenderCamera);
+    }
+
+    let result = SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter);
+
+    // Per-eye camera offset, purely so the two eyes' captures are visually distinguishable: an
+    // identical eye-1 capture can't be told apart from a stale/shared buffer. Shift the camera world
+    // position (m_TransformF translation) along its right axis (first basis row) by +/- half the IPD.
+    if is_render_camera
+        && crate::STEREO.load(Ordering::Relaxed)
+        && crate::STEREO_CAMERAS.load(Ordering::Relaxed)
+    {
         unsafe {
-            let is_render_camera = GraphicsEngine::get()
-                .is_some_and(|ge| (ge as *mut GraphicsEngine as usize) + 0x170 == camera as usize);
-            if is_render_camera && let Some(camera) = camera.as_mut() {
+            if let Some(camera) = camera.as_mut() {
+                let eye1 = crate::DRAW_INDEX.load(Ordering::Relaxed) == 1;
                 let half_ipd = *crate::STEREO_IPD.lock() * 0.5;
-                let offset = if crate::DRAW_INDEX.load(Ordering::Relaxed) == 0 {
-                    half_ipd
-                } else {
-                    -half_ipd
-                };
-                // Lateral shift in view space (row-major view: data[12] is the X translation).
-                camera.m_View.data[12] += offset;
+                let offset = if eye1 { -half_ipd } else { half_ipd };
+                camera.m_TransformF.data[12] += offset * camera.m_TransformF.data[0];
+                camera.m_TransformF.data[13] += offset * camera.m_TransformF.data[1];
+                camera.m_TransformF.data[14] += offset * camera.m_TransformF.data[2];
+                // The lateral offset above did NOT visibly move the presented geometry, so to make
+                // eye 1's capture unmistakably its own, also zoom eye 1's projection -- a lever we
+                // have confirmed reaches the opaque geometry (via the OffsetVP).
+                if eye1 {
+                    camera.m_ProjectionF.data[0] *= 0.6;
+                    camera.m_ProjectionF.data[5] *= 0.6;
+                }
             }
         }
     }
-    SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter)
+
+    result
 }
 
 #[detour(address = jc3gi::camera::camera::Camera::UpdateRender_ADDRESS)]

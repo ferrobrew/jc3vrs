@@ -9,6 +9,8 @@ use jc3gi::graphics_engine::{
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::System::Threading::{EnterCriticalSection, LeaveCriticalSection};
 
+use crate::TraceEvent;
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&GRAPHICS_FLIP_BINDER)
@@ -19,7 +21,9 @@ pub static BLOCK_FLIP: AtomicBool = AtomicBool::new(false);
 
 #[detour(address = jc3gi::graphics_engine::graphics_engine::graphics_flip_ADDRESS)]
 fn graphics_flip(device: *mut Device) -> u64 {
-    if BLOCK_FLIP.load(std::sync::atomic::Ordering::Relaxed) {
+    let blocked = BLOCK_FLIP.load(std::sync::atomic::Ordering::Relaxed);
+    crate::trace_eye(TraceEvent::Flip { blocked });
+    if blocked {
         return 0;
     }
 
@@ -35,6 +39,7 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
         .get()
         .unwrap()
         .call(render_engine, context);
+    crate::trace_eye(TraceEvent::PostDraw);
 
     unsafe {
         let Some(context) = context.as_mut() else {
@@ -50,17 +55,11 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
 
         EnterCriticalSection(context.m_Mutex);
 
-        // Final back buffer for this eye.
+        // Final back buffer for this eye. (The HDR scene / MainColor is captured earlier, at the
+        // start of the post chain, before it gets read and recycled -- see capture_main_color.)
         if let (Some(dst), Some(src)) = (
             lock.texture(index),
             graphics_engine.m_BackBufferLinear.as_ref(),
-        ) {
-            context.m_Context.CopyResource(dst, &src.m_Texture);
-        }
-        // HDR scene (MainColor, pre-post) for this eye.
-        if let (Some(dst), Some(src)) = (
-            lock.main_color_texture(index),
-            graphics_engine.m_MainColorBuffer.as_ref(),
         ) {
             context.m_Context.CopyResource(dst, &src.m_Texture);
         }
