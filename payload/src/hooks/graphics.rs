@@ -45,21 +45,25 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             return result;
         };
 
-        let Some(backbuffer_linear) = graphics_engine.m_BackBufferLinear.as_ref() else {
-            return result;
-        };
-
         let lock = crate::EGUI_DEBUG_RENDER_STATE.lock();
         let index = crate::DRAW_INDEX.load(std::sync::atomic::Ordering::Relaxed);
-        let Some(texture) = lock.texture(index) else {
-            return result;
-        };
 
         EnterCriticalSection(context.m_Mutex);
 
-        context
-            .m_Context
-            .CopyResource(texture, &backbuffer_linear.m_Texture);
+        // Final back buffer for this eye.
+        if let (Some(dst), Some(src)) = (
+            lock.texture(index),
+            graphics_engine.m_BackBufferLinear.as_ref(),
+        ) {
+            context.m_Context.CopyResource(dst, &src.m_Texture);
+        }
+        // HDR scene (MainColor, pre-post) for this eye.
+        if let (Some(dst), Some(src)) = (
+            lock.main_color_texture(index),
+            graphics_engine.m_MainColorBuffer.as_ref(),
+        ) {
+            context.m_Context.CopyResource(dst, &src.m_Texture);
+        }
 
         LeaveCriticalSection(context.m_Mutex);
     }

@@ -14,7 +14,7 @@ use windows::Win32::{
             D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
             ID3D11ShaderResourceView, ID3D11Texture2D,
         },
-        Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
+        Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
     },
     System::{LibraryLoader::DisableThreadLibraryCalls, SystemServices::DLL_PROCESS_ATTACH},
     UI::Input::KeyboardAndMouse::{VK_F5, VK_F6},
@@ -222,8 +222,10 @@ pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
 }
 
 struct EguiDebugRenderState {
-    /// One capture target per Draw (eye): index 0 and index 1.
+    /// Final back-buffer capture per Draw (eye): index 0 and index 1.
     target_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
+    /// HDR scene (MainColor, pre-post) capture per eye -- the first column of the pipeline rows.
+    main_color_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
     /// Cache of engine SRV pointer -> egui texture id, for the live render-target thumbnails.
     srv_thumbnails: Vec<(usize, egui::TextureId)>,
 }
@@ -231,6 +233,7 @@ impl EguiDebugRenderState {
     const fn new() -> Self {
         Self {
             target_textures: [None, None],
+            main_color_textures: [None, None],
             srv_thumbnails: Vec::new(),
         }
     }
@@ -251,7 +254,9 @@ impl EguiDebugRenderState {
     }
 
     fn prepare_if_necessary(&mut self, renderer: &mut egui_directx11::Renderer) {
-        if self.target_textures.iter().all(Option::is_some) {
+        if self.target_textures.iter().all(Option::is_some)
+            && self.main_color_textures.iter().all(Option::is_some)
+        {
             return;
         }
         unsafe {
@@ -261,14 +266,32 @@ impl EguiDebugRenderState {
             let Some(device) = ge.m_Device.as_mut() else {
                 return;
             };
-            let Some(back_buffer) = device.m_BackBuffer.as_ref() else {
-                return;
-            };
-            let (width, height) = (back_buffer.m_Width as u32, back_buffer.m_Height as u32);
 
-            for slot in &mut self.target_textures {
-                if slot.is_none() {
-                    *slot = Self::create_target(device, renderer, width, height);
+            if let Some(back_buffer) = device.m_BackBuffer.as_ref() {
+                let (width, height) = (back_buffer.m_Width as u32, back_buffer.m_Height as u32);
+                for slot in &mut self.target_textures {
+                    if slot.is_none() {
+                        *slot = Self::create_target(
+                            device,
+                            renderer,
+                            width,
+                            height,
+                            DXGI_FORMAT_R8G8B8A8_UNORM,
+                        );
+                    }
+                }
+            }
+
+            if let Some(mc) = ge.m_MainColorBuffer.as_ref() {
+                let (width, height, format) = (
+                    mc.m_Width as u32,
+                    mc.m_Height as u32,
+                    DXGI_FORMAT(mc.m_Format as i32),
+                );
+                for slot in &mut self.main_color_textures {
+                    if slot.is_none() {
+                        *slot = Self::create_target(device, renderer, width, height, format);
+                    }
                 }
             }
         }
@@ -279,6 +302,7 @@ impl EguiDebugRenderState {
         renderer: &mut egui_directx11::Renderer,
         width: u32,
         height: u32,
+        format: DXGI_FORMAT,
     ) -> Option<(ID3D11Texture2D, egui::TextureId)> {
         // TODO: recreate on resize
         unsafe {
@@ -289,7 +313,7 @@ impl EguiDebugRenderState {
                     Height: height,
                     MipLevels: 1,
                     ArraySize: 1,
-                    Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                    Format: format,
                     SampleDesc: DXGI_SAMPLE_DESC {
                         Count: 1,
                         Quality: 0,
@@ -328,8 +352,19 @@ impl EguiDebugRenderState {
             .map(|(texture, _)| texture)
     }
 
+    pub fn main_color_texture(&self, index: usize) -> Option<&ID3D11Texture2D> {
+        self.main_color_textures
+            .get(index)?
+            .as_ref()
+            .map(|(texture, _)| texture)
+    }
+
     fn uninstall(&mut self, renderer: &mut egui_directx11::Renderer) {
-        for slot in &mut self.target_textures {
+        for slot in self
+            .target_textures
+            .iter_mut()
+            .chain(self.main_color_textures.iter_mut())
+        {
             if let Some((_, texture_id)) = slot.take() {
                 renderer.unregister_user_texture(texture_id);
             }
@@ -341,6 +376,9 @@ impl EguiDebugRenderState {
 }
 static EGUI_DEBUG_RENDER_STATE: Mutex<EguiDebugRenderState> =
     Mutex::new(EguiDebugRenderState::new());
+
+/// Preview thumbnail width (px) in the Render tab; user-controllable via a slider.
+static PREVIEW_WIDTH: Mutex<f32> = Mutex::new(176.0);
 
 /// Snapshot of the render camera's projection state, captured after each eye's Draw so the two
 /// eyes can be compared in the debug UI (to isolate the eye-1 projection corruption).
@@ -428,13 +466,17 @@ fn show_target_thumbnail(
     renderer: &mut egui_directx11::Renderer,
     label: &str,
     texture: *mut jc3gi::graphics_engine::texture::Texture,
-    size: egui::Vec2,
+    width: f32,
 ) {
     unsafe {
         let Some(tex) = texture.as_ref() else {
             ui.label(format!("{label}: null"));
             return;
         };
+        let size = egui::vec2(
+            width,
+            width * tex.m_Height as f32 / (tex.m_Width.max(1) as f32),
+        );
         let srv_raw = tex.m_SRV.as_raw() as usize;
         ui.vertical(|ui| {
             if srv_raw == 0 {
@@ -506,62 +548,85 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
         });
     }
 
+    let preview_width = {
+        let mut w = PREVIEW_WIDTH.lock();
+        ui.add(egui::Slider::new(&mut *w, 48.0..=512.0).text("Preview size (px)"));
+        *w
+    };
+
     let mut state = EGUI_DEBUG_RENDER_STATE.lock();
     state.prepare_if_necessary(renderer);
 
-    if let Some((width, height)) = unsafe {
-        jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
-            .and_then(|ge| ge.m_MainColorBuffer.as_mut())
-            .map(|mcb| (mcb.m_Width as usize, mcb.m_Height as usize))
-    } {
-        let size = egui::vec2(width as f32, height as f32) / 10.0;
-        ui.horizontal(|ui| {
-            for (_, texture_id) in state.target_textures.iter().flatten() {
-                ui.add(egui::Image::new(egui::ImageSource::Texture(
-                    egui::load::SizedTexture {
-                        id: *texture_id,
-                        size,
-                    },
-                )));
+    egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            // Per-eye pipeline rows: each row is one eye, columns are pipeline stages.
+            let aspect = unsafe {
+                jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
+                    .and_then(|ge| ge.m_MainColorBuffer.as_mut())
+                    .map(|mcb| mcb.m_Height as f32 / (mcb.m_Width.max(1) as f32))
             }
+            .unwrap_or(0.5625);
+            let size = egui::vec2(preview_width, preview_width * aspect);
+            ui.label("Per-eye pipeline (rows = eyes, columns = stages):");
+            for eye in 0..2 {
+                ui.horizontal(|ui| {
+                    for (slot, name) in [
+                        (&state.main_color_textures[eye], "Scene (MainColor)"),
+                        (&state.target_textures[eye], "Final (BackBuffer)"),
+                    ] {
+                        ui.vertical(|ui| {
+                            match slot {
+                                Some((_, id)) => {
+                                    ui.add(egui::Image::new(egui::ImageSource::Texture(
+                                        egui::load::SizedTexture { id: *id, size },
+                                    )));
+                                }
+                                None => {
+                                    ui.add_sized(size, egui::Label::new("(no capture)"));
+                                }
+                            }
+                            ui.label(format!("eye {eye}  -  {name}"));
+                        });
+                    }
+                });
+            }
+
+            ui.separator();
+            ui.label("Render targets (live; eye 1 is the last-rendered pass):");
+            let targets: Vec<(&str, *mut jc3gi::graphics_engine::texture::Texture)> = unsafe {
+                match jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() {
+                    Some(ge) => vec![
+                        ("MainColor", ge.m_MainColorBuffer),
+                        ("MainDepth", ge.m_MainDepthTexture),
+                        ("DownsampledDepth", ge.m_DownSampledDepthTexture),
+                        ("GBuffer0", ge.m_GBufferTexture[0]),
+                        ("GBuffer1", ge.m_GBufferTexture[1]),
+                        ("GBuffer2", ge.m_GBufferTexture[2]),
+                        ("GBuffer3", ge.m_GBufferTexture[3]),
+                        ("Velocity", ge.m_VelocityBufferTexture),
+                        ("BackBufferLinear", ge.m_BackBufferLinear),
+                    ],
+                    None => vec![],
+                }
+            };
+            ui.horizontal_wrapped(|ui| {
+                for (label, texture) in targets {
+                    show_target_thumbnail(ui, &mut state, renderer, label, texture, preview_width);
+                }
+            });
+
+            ui.separator();
+            ui.label("Per-eye render camera (captured after each Draw; differences in yellow):");
+            let (s0, s1) = {
+                let g = CAMERA_SNAPSHOTS.lock();
+                (g[0], g[1])
+            };
+            ui.columns(2, |cols| {
+                show_camera_snapshot(&mut cols[0], "Eye 0", &s0, &s1);
+                show_camera_snapshot(&mut cols[1], "Eye 1", &s1, &s0);
+            });
         });
-    }
-
-    ui.separator();
-    ui.label("Render targets (live; eye 1 is the last-rendered pass):");
-    let targets: Vec<(&str, *mut jc3gi::graphics_engine::texture::Texture)> = unsafe {
-        match jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() {
-            Some(ge) => vec![
-                ("MainColor", ge.m_MainColorBuffer),
-                ("MainDepth", ge.m_MainDepthTexture),
-                ("DownsampledDepth", ge.m_DownSampledDepthTexture),
-                ("GBuffer0", ge.m_GBufferTexture[0]),
-                ("GBuffer1", ge.m_GBufferTexture[1]),
-                ("GBuffer2", ge.m_GBufferTexture[2]),
-                ("GBuffer3", ge.m_GBufferTexture[3]),
-                ("Velocity", ge.m_VelocityBufferTexture),
-                ("BackBufferLinear", ge.m_BackBufferLinear),
-            ],
-            None => vec![],
-        }
-    };
-    let thumb = egui::vec2(176.0, 99.0);
-    ui.horizontal_wrapped(|ui| {
-        for (label, texture) in targets {
-            show_target_thumbnail(ui, &mut state, renderer, label, texture, thumb);
-        }
-    });
-
-    ui.separator();
-    ui.label("Per-eye render camera (captured after each Draw; differences in yellow):");
-    let (s0, s1) = {
-        let g = CAMERA_SNAPSHOTS.lock();
-        (g[0], g[1])
-    };
-    ui.columns(2, |cols| {
-        show_camera_snapshot(&mut cols[0], "Eye 0", &s0, &s1);
-        show_camera_snapshot(&mut cols[1], "Eye 1", &s1, &s0);
-    });
 }
 
 fn show_camera_snapshot(
