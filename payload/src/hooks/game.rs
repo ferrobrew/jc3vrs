@@ -1,14 +1,22 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use detours_macro::detour;
 use jc3gi::{
     clock::Clock,
     game::{Game, GameState, UpdateContexts},
-    graphics_engine::graphics_engine::GraphicsEngine,
+    graphics_engine::graphics_engine::{
+        GraphicsEngine, RenderFrameCounters, get_render_frame_counters,
+    },
 };
 use re_utilities::hook_library::HookLibrary;
 
 use super::graphics::BLOCK_FLIP;
+
+/// Snapshot the per-frame render counters before eye 0 and restore them before eye 1, so eye 1's
+/// prologue re-derives the same TAA jitter phase / shadow parity / CB ring as eye 0. Without this,
+/// running the whole `CGraphicsEngine::Draw` twice double-steps the counters and the eyes get
+/// opposite jitter -> flicker.
+pub static RESTORE_FRAME_COUNTERS: AtomicBool = AtomicBool::new(true);
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -47,6 +55,11 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             // so both dispatches make the same per-slot decisions -- the state then advances once
             // per real frame instead of once per dispatch, otherwise water reflections flicker.
             let effect_info = snapshot_effect_info();
+            // Snapshot the prologue frame counters so we can rewind them before eye 1, keeping both
+            // eyes on the same jitter phase / shadow parity / CB ring (see RESTORE_FRAME_COUNTERS).
+            let frame_counters = RESTORE_FRAME_COUNTERS
+                .load(Ordering::Relaxed)
+                .then(snapshot_frame_counters);
 
             // The per-eye camera offset is injected on the render camera in the SetupRenderCamera
             // hook (see hooks::camera and docs/rendering.md section 2); here we just drive the two
@@ -61,6 +74,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
             if let Some(state) = &effect_info {
                 restore_effect_info(state);
+            }
+            if let Some(counters) = frame_counters {
+                restore_frame_counters(counters);
             }
 
             crate::DRAW_INDEX.store(1, Ordering::Relaxed);
@@ -110,5 +126,15 @@ fn restore_effect_info(state: &EffectInfoState) {
             slot.m_FrameIndex = *src;
         }
         ge.m_EffectInfoIndex = state.index;
+    }
+}
+
+fn snapshot_frame_counters() -> RenderFrameCounters {
+    unsafe { *get_render_frame_counters() }
+}
+
+fn restore_frame_counters(saved: RenderFrameCounters) {
+    unsafe {
+        *get_render_frame_counters() = saved;
     }
 }

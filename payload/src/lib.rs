@@ -675,6 +675,12 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
             ui.add(egui::Slider::new(&mut *STEREO_IPD.lock(), 0.0..=5.0).text("IPD (m)"));
         }
 
+        gate_checkbox(
+            ui,
+            &hooks::game::RESTORE_FRAME_COUNTERS,
+            "Restore frame counters between eyes (fixes jitter/parity flicker)",
+        );
+
         ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
             use hooks::stereo::{
                 GATE_EXPOSURE, GATE_HAND_BACK_BUFFERS, GATE_SETUP_RENDER_FRAME_DATA,
