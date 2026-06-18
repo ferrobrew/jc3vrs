@@ -2,9 +2,11 @@ use std::sync::atomic::Ordering;
 
 use detours_macro::detour;
 use jc3gi::{
+    camera::camera_manager::CameraManager,
     clock::Clock,
     game::{Game, GameState, UpdateContexts},
     graphics_engine::graphics_engine::GraphicsEngine,
+    types::math::Matrix4,
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -48,6 +50,19 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             // per real frame instead of once per dispatch, otherwise water reflections flicker.
             let effect_info = snapshot_effect_info();
 
+            // Giant-IPD stereo test: offset the active camera per eye so the two dispatches render
+            // from different positions. The engine re-copies m_ActiveCamera and re-derives all view
+            // matrices each Draw, so shifting the source transform is the clean injection point.
+            let view_save = if crate::STEREO_CAMERAS.load(Ordering::Relaxed) {
+                active_camera_view()
+            } else {
+                None
+            };
+            let half_ipd = *crate::STEREO_IPD.lock() * 0.5;
+
+            if let Some(v) = view_save {
+                set_active_camera_view(offset_view(v, half_ipd));
+            }
             crate::DRAW_INDEX.store(0, Ordering::Relaxed);
             BLOCK_FLIP.store(true, Ordering::Relaxed);
             game.Draw(spf);
@@ -60,6 +75,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 restore_effect_info(state);
             }
 
+            if let Some(v) = view_save {
+                set_active_camera_view(offset_view(v, -half_ipd));
+            }
             crate::DRAW_INDEX.store(1, Ordering::Relaxed);
             BLOCK_FLIP.store(false, Ordering::Relaxed);
             game.Draw(spf);
@@ -68,6 +86,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             }
             crate::capture_render_camera(1);
 
+            if let Some(v) = view_save {
+                set_active_camera_view(v);
+            }
             crate::DRAW_INDEX.store(0, Ordering::Relaxed);
         } else {
             crate::DRAW_INDEX.store(0, Ordering::Relaxed);
@@ -107,5 +128,28 @@ fn restore_effect_info(state: &EffectInfoState) {
             slot.m_FrameIndex = *src;
         }
         ge.m_EffectInfoIndex = state.index;
+    }
+}
+
+/// Offset a view matrix laterally by `offset` metres. The view-space X translation (data[12]) is a
+/// lateral camera shift along the camera's right axis.
+fn offset_view(mut view: Matrix4, offset: f32) -> Matrix4 {
+    view.data[12] += offset;
+    view
+}
+
+/// Read the active (gameplay) camera's view matrix.
+fn active_camera_view() -> Option<Matrix4> {
+    unsafe { Some(CameraManager::get()?.m_ActiveCamera.as_ref()?.m_View) }
+}
+
+/// Write the active camera's view matrix. The next `CGame::Draw` copies the active camera and
+/// `SetupRenderCamera` rebuilds m_ViewProjection (and the shader-facing m_ViewProjectionF) from this
+/// view -- so this offsets the rendered eye. (m_View is *not* re-derived from the transform here.)
+fn set_active_camera_view(view: Matrix4) {
+    unsafe {
+        if let Some(cam) = CameraManager::get().and_then(|cm| cm.m_ActiveCamera.as_mut()) {
+            cam.m_View = view;
+        }
     }
 }

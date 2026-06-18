@@ -44,6 +44,12 @@ pub static STEREO: AtomicBool = AtomicBool::new(false);
 /// `game.Draw`, read by the post-draw capture to route the back buffer into the matching RT.
 pub static DRAW_INDEX: AtomicUsize = AtomicUsize::new(0);
 
+/// Giant-IPD stereo camera test: offset the active camera per eye so the two renders are visually
+/// distinct, confirming two independent draws. Toggle via the Render tab.
+pub static STEREO_CAMERAS: AtomicBool = AtomicBool::new(true);
+/// Inter-pupillary distance (metres) for the stereo camera offset; large for the visual test.
+pub static STEREO_IPD: Mutex<f32> = Mutex::new(2.0);
+
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 pub extern "system" fn DllMain(module: HMODULE, reason: u32, _unk: *mut c_void) -> bool {
@@ -655,6 +661,18 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
             .changed()
         {
             STEREO.store(stereo, Ordering::Relaxed);
+        }
+
+        {
+            let mut sc = STEREO_CAMERAS.load(Ordering::Relaxed);
+            if ui
+                .checkbox(&mut sc, "Stereo cameras (per-eye IPD offset)")
+                .on_hover_text("Offset the active camera per eye so the two draws diverge")
+                .changed()
+            {
+                STEREO_CAMERAS.store(sc, Ordering::Relaxed);
+            }
+            ui.add(egui::Slider::new(&mut *STEREO_IPD.lock(), 0.0..=5.0).text("IPD (m)"));
         }
 
         ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
