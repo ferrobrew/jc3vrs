@@ -1,4 +1,10 @@
-use std::{ffi::c_void, sync::OnceLock};
+use std::{
+    ffi::c_void,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
 
 use parking_lot::Mutex;
 use windows::Win32::{
@@ -14,6 +20,8 @@ use windows::Win32::{
     UI::Input::KeyboardAndMouse::{VK_F5, VK_F6},
 };
 
+use windows::core::Interface;
+
 use crate::egui_impl::EguiState;
 
 pub mod egui_impl;
@@ -22,6 +30,15 @@ pub mod util;
 
 mod hooks;
 mod logging;
+
+/// When enabled, the manual Draw driver issues a second `game.Draw` per real frame (the stereo
+/// "second eye"), and the `CClock::Update` detour gates the clock to once per real frame so the
+/// SPF smoother isn't polluted (avoids slow-mo). Toggle via the Render tab.
+pub static STEREO: AtomicBool = AtomicBool::new(false);
+
+/// Which Draw (eye) the manual driver is currently dispatching: 0 or 1. Set before each
+/// `game.Draw`, read by the post-draw capture to route the back buffer into the matching RT.
+pub static DRAW_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -205,39 +222,71 @@ pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
 }
 
 struct EguiDebugRenderState {
-    target_texture: Option<(ID3D11Texture2D, egui::TextureId)>,
+    /// One capture target per Draw (eye): index 0 and index 1.
+    target_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
+    /// Cache of engine SRV pointer -> egui texture id, for the live render-target thumbnails.
+    srv_thumbnails: Vec<(usize, egui::TextureId)>,
 }
 impl EguiDebugRenderState {
     const fn new() -> Self {
         Self {
-            target_texture: None,
+            target_textures: [None, None],
+            srv_thumbnails: Vec::new(),
         }
     }
 
+    /// Get (registering+caching on first use) an egui texture id for an engine SRV.
+    fn thumbnail_id(
+        &mut self,
+        renderer: &mut egui_directx11::Renderer,
+        srv_raw: usize,
+        srv: &ID3D11ShaderResourceView,
+    ) -> egui::TextureId {
+        if let Some((_, id)) = self.srv_thumbnails.iter().find(|(p, _)| *p == srv_raw) {
+            return *id;
+        }
+        let id = renderer.register_user_texture(srv.clone());
+        self.srv_thumbnails.push((srv_raw, id));
+        id
+    }
+
     fn prepare_if_necessary(&mut self, renderer: &mut egui_directx11::Renderer) {
-        if self.target_texture.is_some() {
+        if self.target_textures.iter().all(Option::is_some) {
             return;
         }
         unsafe {
             let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
                 return;
             };
-
             let Some(device) = ge.m_Device.as_mut() else {
                 return;
             };
-
             let Some(back_buffer) = device.m_BackBuffer.as_ref() else {
                 return;
             };
+            let (width, height) = (back_buffer.m_Width as u32, back_buffer.m_Height as u32);
 
+            for slot in &mut self.target_textures {
+                if slot.is_none() {
+                    *slot = Self::create_target(device, renderer, width, height);
+                }
+            }
+        }
+    }
+
+    fn create_target(
+        device: &jc3gi::graphics_engine::device::Device,
+        renderer: &mut egui_directx11::Renderer,
+        width: u32,
+        height: u32,
+    ) -> Option<(ID3D11Texture2D, egui::TextureId)> {
+        // TODO: recreate on resize
+        unsafe {
             let mut texture: Option<ID3D11Texture2D> = None;
-            // TODO: recreate on resize
-            // TODO: figure out why this lcoks up / crashes over time
             if let Err(e) = device.m_Device.CreateTexture2D(
                 &D3D11_TEXTURE2D_DESC {
-                    Width: back_buffer.m_Width as u32,
-                    Height: back_buffer.m_Height as u32,
+                    Width: width,
+                    Height: height,
                     MipLevels: 1,
                     ArraySize: 1,
                     Format: DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -254,12 +303,9 @@ impl EguiDebugRenderState {
                 Some(&mut texture),
             ) {
                 tracing::error!("Failed to create texture: {e:?}");
-                return;
+                return None;
             }
-            let Some(texture) = texture else {
-                tracing::error!("Failed to create texture");
-                return;
-            };
+            let texture = texture?;
 
             let mut srv: Option<ID3D11ShaderResourceView> = None;
             if let Err(e) = device
@@ -267,23 +313,28 @@ impl EguiDebugRenderState {
                 .CreateShaderResourceView(&texture, None, Some(&mut srv))
             {
                 tracing::error!("Failed to create shader resource view: {e:?}");
-                return;
+                return None;
             }
-            let Some(srv) = srv else {
-                tracing::error!("Failed to create shader resource view");
-                return;
-            };
+            let srv = srv?;
 
-            self.target_texture = Some((texture, renderer.register_user_texture(srv)));
+            Some((texture, renderer.register_user_texture(srv)))
         }
     }
 
-    pub fn texture(&self) -> Option<&ID3D11Texture2D> {
-        self.target_texture.as_ref().map(|(texture, _)| texture)
+    pub fn texture(&self, index: usize) -> Option<&ID3D11Texture2D> {
+        self.target_textures
+            .get(index)?
+            .as_ref()
+            .map(|(texture, _)| texture)
     }
 
     fn uninstall(&mut self, renderer: &mut egui_directx11::Renderer) {
-        if let Some((_, texture_id)) = self.target_texture.take() {
+        for slot in &mut self.target_textures {
+            if let Some((_, texture_id)) = slot.take() {
+                renderer.unregister_user_texture(texture_id);
+            }
+        }
+        for (_, texture_id) in self.srv_thumbnails.drain(..) {
             renderer.unregister_user_texture(texture_id);
         }
     }
@@ -291,25 +342,287 @@ impl EguiDebugRenderState {
 static EGUI_DEBUG_RENDER_STATE: Mutex<EguiDebugRenderState> =
     Mutex::new(EguiDebugRenderState::new());
 
+/// Snapshot of the render camera's projection state, captured after each eye's Draw so the two
+/// eyes can be compared in the debug UI (to isolate the eye-1 projection corruption).
+#[derive(Copy, Clone)]
+pub struct CameraSnapshot {
+    pub valid: bool,
+    pub camera_ptr: usize,
+    pub state_bits: u8,
+    pub offcenter_tiles: i32,
+    pub offcenter_tile_x: i32,
+    pub offcenter_tile_y: i32,
+    pub fov: f32,
+    pub near: f32,
+    pub far: f32,
+    pub aspect: f32,
+    pub width: i32,
+    pub height: i32,
+    pub projection: [f32; 16],
+}
+impl CameraSnapshot {
+    const fn empty() -> Self {
+        Self {
+            valid: false,
+            camera_ptr: 0,
+            state_bits: 0,
+            offcenter_tiles: 0,
+            offcenter_tile_x: 0,
+            offcenter_tile_y: 0,
+            fov: 0.0,
+            near: 0.0,
+            far: 0.0,
+            aspect: 0.0,
+            width: 0,
+            height: 0,
+            projection: [0.0; 16],
+        }
+    }
+}
+
+/// Per-eye render-camera snapshots (index 0 / 1), filled by [`capture_render_camera`].
+pub static CAMERA_SNAPSHOTS: Mutex<[CameraSnapshot; 2]> =
+    Mutex::new([CameraSnapshot::empty(), CameraSnapshot::empty()]);
+
+/// Snapshot `CameraManager::m_RenderCamera` into slot `index`. Call after the eye's Draw has been
+/// drained, so the captured projection is the one that eye actually rendered with.
+pub fn capture_render_camera(index: usize) {
+    unsafe {
+        let Some(cm) = jc3gi::camera::camera_manager::CameraManager::get() else {
+            return;
+        };
+        let Some(cam) = cm.m_RenderCamera.as_ref() else {
+            return;
+        };
+        let snap = CameraSnapshot {
+            valid: true,
+            camera_ptr: cm.m_RenderCamera as usize,
+            state_bits: cam.m_StateBitfield.bits(),
+            offcenter_tiles: cam.m_OffCenterTiles,
+            offcenter_tile_x: cam.m_OffCenterTileX,
+            offcenter_tile_y: cam.m_OffCenterTileY,
+            fov: cam.m_FOV,
+            near: cam.m_Near,
+            far: cam.m_Far,
+            aspect: cam.m_AspectRatio,
+            width: cam.m_Width,
+            height: cam.m_Height,
+            projection: cam.m_Projection.data,
+        };
+        if let Some(slot) = CAMERA_SNAPSHOTS.lock().get_mut(index) {
+            *slot = snap;
+        }
+    }
+}
+
+fn gate_checkbox(ui: &mut egui::Ui, flag: &std::sync::atomic::AtomicBool, label: &str) {
+    let mut v = flag.load(Ordering::Relaxed);
+    if ui.checkbox(&mut v, label).changed() {
+        flag.store(v, Ordering::Relaxed);
+    }
+}
+
+fn show_target_thumbnail(
+    ui: &mut egui::Ui,
+    state: &mut EguiDebugRenderState,
+    renderer: &mut egui_directx11::Renderer,
+    label: &str,
+    texture: *mut jc3gi::graphics_engine::texture::Texture,
+    size: egui::Vec2,
+) {
+    unsafe {
+        let Some(tex) = texture.as_ref() else {
+            ui.label(format!("{label}: null"));
+            return;
+        };
+        let srv_raw = tex.m_SRV.as_raw() as usize;
+        ui.vertical(|ui| {
+            if srv_raw == 0 {
+                ui.label(format!("{label}: no SRV"));
+            } else {
+                let id = state.thumbnail_id(renderer, srv_raw, &tex.m_SRV);
+                ui.add(egui::Image::new(egui::ImageSource::Texture(
+                    egui::load::SizedTexture { id, size },
+                )));
+            }
+            ui.label(format!(
+                "{} {}x{} f{}",
+                label, tex.m_Width, tex.m_Height, tex.m_Format
+            ));
+        });
+    }
+}
+
 fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
+    {
+        let mut stereo = STEREO.load(Ordering::Relaxed);
+        if ui
+            .checkbox(&mut stereo, "Stereo (double-Draw)")
+            .on_hover_text(
+                "Issue a second game.Draw per frame; CClock::Update is gated to once/frame",
+            )
+            .changed()
+        {
+            STEREO.store(stereo, Ordering::Relaxed);
+        }
+
+        ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
+            use hooks::stereo::{
+                GATE_EXPOSURE, GATE_HAND_BACK_BUFFERS, GATE_SETUP_RENDER_FRAME_DATA,
+            };
+            gate_checkbox(
+                ui,
+                &GATE_EXPOSURE,
+                "Auto-exposure (SmoothedExposure + Histogram)",
+            );
+            gate_checkbox(
+                ui,
+                &GATE_SETUP_RENDER_FRAME_DATA,
+                "SetupRenderFrameData (RBI list swap)",
+            );
+            gate_checkbox(
+                ui,
+                &GATE_HAND_BACK_BUFFERS,
+                "HandBackBuffers (constant-buffer recycle)",
+            );
+        });
+
+        ui.collapsing("Post-FX (reprojection passes, both eyes)", |ui| {
+            use hooks::post_effects::{
+                DOF_NO_REPROJECT, SKIP_DOF, SKIP_MOTION_BLUR, SKIP_MOTION_BLUR_RECON,
+            };
+            gate_checkbox(ui, &SKIP_MOTION_BLUR, "Skip MotionBlur::Apply (whole pass)");
+            gate_checkbox(
+                ui,
+                &SKIP_MOTION_BLUR_RECON,
+                "Skip MotionBlur recon (if pass not skipped)",
+            );
+            gate_checkbox(
+                ui,
+                &DOF_NO_REPROJECT,
+                "DoF: plain composite, no reprojection (keeps picture)",
+            );
+            gate_checkbox(ui, &SKIP_DOF, "Skip DepthOfField::Apply (washes out!)");
+        });
+    }
+
     let mut state = EGUI_DEBUG_RENDER_STATE.lock();
     state.prepare_if_necessary(renderer);
 
-    if let Some((_, texture_id)) = state.target_texture
-        && let Some((width, height)) = unsafe {
-            jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
-                .and_then(|ge| ge.m_MainColorBuffer.as_mut())
-                .map(|mcb| (mcb.m_Width as usize, mcb.m_Height as usize))
-        }
-    {
-        let size = egui::vec2(width as f32, height as f32);
-        ui.add(egui::Image::new(egui::ImageSource::Texture(
-            egui::load::SizedTexture {
-                id: texture_id,
-                size: size / 4.0,
-            },
-        )));
+    if let Some((width, height)) = unsafe {
+        jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
+            .and_then(|ge| ge.m_MainColorBuffer.as_mut())
+            .map(|mcb| (mcb.m_Width as usize, mcb.m_Height as usize))
+    } {
+        let size = egui::vec2(width as f32, height as f32) / 10.0;
+        ui.horizontal(|ui| {
+            for (_, texture_id) in state.target_textures.iter().flatten() {
+                ui.add(egui::Image::new(egui::ImageSource::Texture(
+                    egui::load::SizedTexture {
+                        id: *texture_id,
+                        size,
+                    },
+                )));
+            }
+        });
     }
+
+    ui.separator();
+    ui.label("Render targets (live; eye 1 is the last-rendered pass):");
+    let targets: Vec<(&str, *mut jc3gi::graphics_engine::texture::Texture)> = unsafe {
+        match jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() {
+            Some(ge) => vec![
+                ("MainColor", ge.m_MainColorBuffer),
+                ("MainDepth", ge.m_MainDepthTexture),
+                ("DownsampledDepth", ge.m_DownSampledDepthTexture),
+                ("GBuffer0", ge.m_GBufferTexture[0]),
+                ("GBuffer1", ge.m_GBufferTexture[1]),
+                ("GBuffer2", ge.m_GBufferTexture[2]),
+                ("GBuffer3", ge.m_GBufferTexture[3]),
+                ("Velocity", ge.m_VelocityBufferTexture),
+                ("BackBufferLinear", ge.m_BackBufferLinear),
+            ],
+            None => vec![],
+        }
+    };
+    let thumb = egui::vec2(176.0, 99.0);
+    ui.horizontal_wrapped(|ui| {
+        for (label, texture) in targets {
+            show_target_thumbnail(ui, &mut state, renderer, label, texture, thumb);
+        }
+    });
+
+    ui.separator();
+    ui.label("Per-eye render camera (captured after each Draw; differences in yellow):");
+    let (s0, s1) = {
+        let g = CAMERA_SNAPSHOTS.lock();
+        (g[0], g[1])
+    };
+    ui.columns(2, |cols| {
+        show_camera_snapshot(&mut cols[0], "Eye 0", &s0, &s1);
+        show_camera_snapshot(&mut cols[1], "Eye 1", &s1, &s0);
+    });
+}
+
+fn show_camera_snapshot(
+    ui: &mut egui::Ui,
+    label: &str,
+    snap: &CameraSnapshot,
+    other: &CameraSnapshot,
+) {
+    ui.label(egui::RichText::new(label).strong());
+    if !snap.valid {
+        ui.label("(no capture)");
+        return;
+    }
+    ui.label(format!("cam ptr: {:#x}", snap.camera_ptr));
+
+    const FLAG_NAMES: [(u8, &str); 6] = [
+        (0x01, "OffCenter"),
+        (0x02, "ScreenshotSeries"),
+        (0x04, "Ortho"),
+        (0x08, "ComputeView"),
+        (0x10, "DirtyProj"),
+        (0x20, "IsRenderCam"),
+    ];
+    let active: Vec<&str> = FLAG_NAMES
+        .iter()
+        .filter(|(b, _)| snap.state_bits & b != 0)
+        .map(|(_, n)| *n)
+        .collect();
+    let flag_text = format!("flags {:#04x}: {}", snap.state_bits, active.join(" | "));
+    if other.valid && snap.state_bits != other.state_bits {
+        ui.colored_label(egui::Color32::YELLOW, flag_text);
+    } else {
+        ui.label(flag_text);
+    }
+
+    ui.label(format!(
+        "offcenter: tiles={} x={} y={}",
+        snap.offcenter_tiles, snap.offcenter_tile_x, snap.offcenter_tile_y
+    ));
+    ui.label(format!("fov={:.4}  aspect={:.4}", snap.fov, snap.aspect));
+    ui.label(format!("near={:.3}  far={:.1}", snap.near, snap.far));
+    ui.label(format!("size={}x{}", snap.width, snap.height));
+
+    egui::Grid::new(format!("proj_{label}"))
+        .striped(true)
+        .show(ui, |ui| {
+            for r in 0..4 {
+                for c in 0..4 {
+                    let i = r * 4 + c;
+                    let v = snap.projection[i];
+                    let differs = other.valid && (v - other.projection[i]).abs() > 1e-5;
+                    let text = format!("{v:+.3}");
+                    if differs {
+                        ui.colored_label(egui::Color32::YELLOW, text);
+                    } else {
+                        ui.label(text);
+                    }
+                }
+                ui.end_row();
+            }
+        });
 }
 
 fn egui_debug_camera(ui: &mut egui::Ui) {

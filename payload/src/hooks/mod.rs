@@ -5,8 +5,11 @@ use re_utilities::{ThreadSuspender, hook_library::HookLibraries};
 
 pub mod camera;
 pub mod character;
+pub mod clock;
 pub mod game;
 pub mod graphics;
+pub mod post_effects;
+pub mod stereo;
 pub mod wndproc;
 
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
@@ -22,6 +25,9 @@ pub(super) fn install() {
     let hook_libraries = ThreadSuspender::for_block(|| {
         Ok(HookLibraries::new([
             game::hook_library(),
+            clock::hook_library(),
+            stereo::hook_library(),
+            post_effects::hook_library(),
             camera::hook_library(),
             graphics::hook_library(),
             wndproc::hook_library(),

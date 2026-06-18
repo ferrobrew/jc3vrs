@@ -50,7 +50,8 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
         };
 
         let lock = crate::EGUI_DEBUG_RENDER_STATE.lock();
-        let Some(texture) = lock.texture() else {
+        let index = crate::DRAW_INDEX.load(std::sync::atomic::Ordering::Relaxed);
+        let Some(texture) = lock.texture(index) else {
             return result;
         };
 
