@@ -32,6 +32,7 @@ pub mod egui_impl;
 pub mod module;
 pub mod util;
 
+mod crash;
 mod hooks;
 mod logging;
 
@@ -225,6 +226,7 @@ fn initialize_startup() {
 
     logging::install();
     tracing::info!("JC3VRS startup");
+    crash::install();
     hooks::install();
 }
 
