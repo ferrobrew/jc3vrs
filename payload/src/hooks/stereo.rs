@@ -2,9 +2,11 @@
 //! though we render the scene twice (once per eye). See PLAN.md sections 5.2/5.3.
 //!
 //! Each gate is toggleable at runtime (debug UI) so the working combination can be found in-game.
-//! Defaults follow the render-list investigation: gate auto-exposure (a legitimate per-eye
-//! concern), but let SetupRenderFrameData / HandBackBuffers run on eye 1 -- they own the per-pass
-//! render-block-item double-buffer swap and the constant-buffer recycle, which eye 1 needs too.
+//! Defaults follow the render-list investigation: gate auto-exposure (a legitimate per-eye concern)
+//! and the per-frame render-list rotation (`RotateRenderFrameData` -- the real add/draw double-buffer
+//! flip; skipping it on eye 1 keeps eye 1 on eye 0's populated, non-destructively-drawn lists, which
+//! is the core stereo-geometry fix). `SetupRenderFrameData` (the per-batch list *build*, not the
+//! swap) and `HandBackBuffers` (constant-buffer recycle) run on both eyes.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +18,13 @@ use crate::TraceEvent;
 
 /// Skip the auto-exposure update on eye 1 (frame-counted; would double-adapt). Default on.
 pub static GATE_EXPOSURE: AtomicBool = AtomicBool::new(true);
-/// Skip `SetupRenderFrameData` (RBI list swap/zero) on eye 1. Default off -- eye 1 needs its swap.
+/// Skip the per-frame render-list rotation (`RotateRenderFrameData`) on eye 1, so eye 1 reuses eye
+/// 0's populated draw lists instead of flipping to the just-emptied buffer. Default on -- this is the
+/// core stereo geometry fix (eye 1 was drawing zero render blocks without it).
+pub static GATE_ROTATE_RENDER_FRAME_DATA: AtomicBool = AtomicBool::new(true);
+/// Skip `SetupRenderFrameData` (the per-batch RBI list *build*) on eye 1. Default off. NOTE: this is
+/// the list build, not the swap (that is `RotateRenderFrameData`); it runs during the sim, so gating
+/// it would starve both eyes' lists. Kept only for experimentation.
 pub static GATE_SETUP_RENDER_FRAME_DATA: AtomicBool = AtomicBool::new(false);
 /// Skip `HandBackBuffers` (constant-buffer recycle) on eye 1. Default off.
 pub static GATE_HAND_BACK_BUFFERS: AtomicBool = AtomicBool::new(false);
@@ -33,15 +41,33 @@ fn gate(flag: &AtomicBool) -> bool {
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
+        .with_static_binder(&ROTATE_RENDER_FRAME_DATA_BINDER)
         .with_static_binder(&SETUP_RENDER_FRAME_DATA_BINDER)
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
         .with_static_binder(&SMOOTHED_EXPOSURE_UPDATE_BINDER)
         .with_static_binder(&CALC_HISTOGRAM_MID_BRIGHT_BINDER)
 }
 
-// CRenderPass::SetupRenderFrameData -- swaps each pass's add/draw render-block-item lists and zeroes
-// the new add-list. Eye 1 needs this too; gating it leaves eye 1 drawing a partial, un-swapped list
-// (the central "wedge"). Off by default.
+// RotateRenderFrameData -- the per-frame render-block-item list rotation, run in each
+// CGraphicsEngine::Draw prologue. It toggles the global add/draw parity and, for every render pass,
+// re-points m_CurrentAddList/m_CurrentDrawList to the new buffer and zeroes the new add-list (then
+// flushes the overflow list). Run twice (once per eye), eye 1's rotation flips the draw list back to
+// the buffer eye 0 just zeroed -- so eye 1 draws zero render blocks. Skipping it on eye 1 keeps eye 1
+// on eye 0's populated draw lists; DoDraw is non-destructive, so the render blocks redraw
+// identically. On by default -- this is the core stereo-geometry fix.
+#[detour(address = jc3gi::graphics_engine::render_pass::RotateRenderFrameData_ADDRESS)]
+fn rotate_render_frame_data() {
+    let gated = gate(&GATE_ROTATE_RENDER_FRAME_DATA);
+    crate::trace_eye(TraceEvent::RotateRenderFrameData { gated });
+    if gated {
+        return;
+    }
+    ROTATE_RENDER_FRAME_DATA.get().unwrap().call();
+}
+
+// CRenderPass::SetupRenderFrameData -- the per-batch list *build*: appends `count` render-block-items
+// to the active add-list. Runs on worker threads during the sim, not during our Draw calls, so the
+// eye-1 gate never actually fires; it is NOT the add/draw swap (see rotate_render_frame_data above).
 #[detour(address = jc3gi::graphics_engine::render_pass::CRenderPass::SetupRenderFrameData_ADDRESS)]
 fn setup_render_frame_data(a1: *mut c_void, count: i32, a3: *mut c_void, items: *mut c_void) {
     let gated = gate(&GATE_SETUP_RENDER_FRAME_DATA);

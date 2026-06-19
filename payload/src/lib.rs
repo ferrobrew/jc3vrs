@@ -93,6 +93,8 @@ pub enum TraceEvent {
     },
     #[serde(rename = "SetupRenderCamera")]
     SetupRenderCamera,
+    #[serde(rename = "RotateRenderFrameData")]
+    RotateRenderFrameData { gated: bool },
     #[serde(rename = "SetupRenderFrameData")]
     SetupRenderFrameData { gated: bool },
     #[serde(rename = "HandBackBuffers")]
@@ -892,8 +894,14 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
 
         ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
             use hooks::stereo::{
-                GATE_EXPOSURE, GATE_HAND_BACK_BUFFERS, GATE_SETUP_RENDER_FRAME_DATA,
+                GATE_EXPOSURE, GATE_HAND_BACK_BUFFERS, GATE_ROTATE_RENDER_FRAME_DATA,
+                GATE_SETUP_RENDER_FRAME_DATA,
             };
+            gate_checkbox(
+                ui,
+                &GATE_ROTATE_RENDER_FRAME_DATA,
+                "RotateRenderFrameData (RBI list flip -- the geometry fix)",
+            );
             gate_checkbox(
                 ui,
                 &GATE_EXPOSURE,
@@ -902,7 +910,7 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
             gate_checkbox(
                 ui,
                 &GATE_SETUP_RENDER_FRAME_DATA,
-                "SetupRenderFrameData (RBI list swap)",
+                "SetupRenderFrameData (per-batch list build, not the swap)",
             );
             gate_checkbox(
                 ui,
