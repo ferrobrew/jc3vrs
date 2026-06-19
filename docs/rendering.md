@@ -441,14 +441,22 @@ The TAA jitter offset comes from a 2-phase table `flt_142305360` (4 floats) inde
 
 ## 11. Render-block / draw-list lifecycle across dispatches
 
-A second dispatch renders the full scene with no re-population. The per-pass draw lists are populated and swapped once per frame in the sim path (in `CGraphicsEngine::Draw`, before `DispatchDraw`); the dispatch-side draw walk only reads them — it never consumes, pops, or clears them. Calling the render path twice replays the identical blocks.
+The per-pass draw is **non-destructive**, but the per-frame list **rotation runs inside `CGraphicsEngine::Draw`'s prologue** — so running the whole `CGraphicsEngine::Draw` twice (as the mod does) rotates the lists twice and the second eye draws an **empty** buffer. This was the long-standing "eye 1 has no scene geometry" bug (measured: eye 0 = 194 indexed draws, eye 1 = 0; eye 1 still issues its ~53 fullscreen/non-RBI draws + 8 compute dispatches, which is why it isn't pure black).
 
-- **Pass array:** `renderEngine + 32*pass + 128` is `CRenderEngine::m_RenderPasses[]`, a fixed array of 157 `CRenderPass*` objects created at init (not per-frame block vectors). The per-frame render-block instances live inside each `CRenderPass`'s double-buffered `m_Lists[2]` (`CRBILists`).
-- **Population (sim path, once/frame):** sim systems push blocks via `CRBILists::Add` (`0x140158560`) into the pass's `m_CurrentAddList` (callers are `*PostUpdate` / terrain / billboard / forest / instance fragments). Once per frame `CGraphicsEngine::Draw` calls `CRenderPass::SetupRenderFrameData` (`0x14020AD80`) -> `ToggleRenderpassLists` (`0x14020ACE0`) -> for all 157 passes `CRenderPass::SaveRenderFrameData` (`0x1401FCAB0`): `m_CurrentDrawList = &m_Lists[other buffer]` (last frame's adds), `m_CurrentAddList = &m_Lists[current]`, and **zeroes only the *add* list's count**. This double-buffer swap is in the sim path **before `DispatchDraw`**, not inside `HandleDrawThreadTask`.
-- **Drawing does NOT consume:** `DrawRenderPassRange` (`0x140186600`) / `PreDraw` (`0x140186760`) iterate the vectors calling `pass->Draw()`, writing only transient context — no pop, no count reset. `CRenderPass::Draw` (`0x1401FCB70`) reads `m_CurrentDrawList->m_NumElements` and iterates without clearing. The draw list survives untouched for a 2nd dispatch.
-- **`EraseAllDeletedRenderBlocks` (`0x1401A4ED0`, called `0x1400F23C3`):** operates on a *separate* deletion list (`engine+5200`, under `m_DeletionMutex`), destroying only blocks gameplay/streaming queued for deletion. It does NOT touch any pass draw list; the 2nd call finds the list already emptied → no-op. Does not break eye 2.
-- **Sort task (`m_SortTaskProxy`):** each dispatch creates a fresh sort proxy (`0x1400F1EC3`), kicks a worker that sorts each pass's `m_CurrentDrawList` in place, and the dispatch spinwaits on it before `EndDraw` (`0x1400F22A0`). Sorting an already-sorted stable list is idempotent → safe across two dispatches. The proxy churn (alloc + re-sort + spinwait) is per-dispatch overhead (cheap to skip on eye 1 if desired, not required for correctness). Because the sort mutates the shared list, the two dispatches must stay serialized — they already are (single render thread, per-dispatch spinwait).
-- Scene geometry is intact for both eyes. The mod needs **no** re-population / snapshot / restore for geometry; just run the dispatch body twice with per-eye camera + RT state. The only per-eye guarding needed is the once-per-dispatch side effects in §5.
+- **Pass array:** `renderEngine + 32*category + 128` is the fixed array of 157 `CRenderPass*` (created at init), iterated by `DrawRenderPassRange` (`0x140186600`) over pass categories (gbuffer 0x2F-0x55, scene 0x56-0x96, ...). Each `CRenderPass` owns a double-buffered `m_Lists[2]` (two `CRBILists`, 0x10 each) followed by `m_CurrentAddList` (`+0x28`) / `m_CurrentDrawList` (`+0x30`).
+- **`CRBILists` layout (from `CRBILists::Add` `0x14011C070`):** `+0x0` `m_List` (array of 0x20-byte entries), `+0x8` `m_ListSize` (u16 capacity), `+0xC` `m_NumElements` (volatile u32; `Add` does `InterlockedExchangeAdd(this+0xC,1)`). On overflow (`count >= cap`) `Add` spills to a global overflow list (count at `0x142ED0FA0`, 0x18-byte entries at `0x142ED0FB0`, cap 1024).
+- **Population (sim, once/frame):** sim systems append blocks into `m_CurrentAddList` via `CRBILists::Add`, dispatched as worker jobs. `CRenderPass::SetupRenderFrameData` (`0x14048C4E0`) is one such per-batch *build* appender — it does **not** swap (the prior "swap" labelling of this function here and in the mod was wrong; it appends `count` items and derefs `a3+0x8038`).
+- **Rotation / swap (in EVERY `CGraphicsEngine::Draw` prologue):** `CGraphicsEngine::Draw` (`0x1400F4170`) calls the list-rotation driver `0x1401A3000` at site `0x1400F4340` (mislabeled `CKeep1000Frames::CKeep1000Frames`). It: (1) toggles a global 1-bit parity `dword_142ED7680` (`parity = (parity-1)&1`); (2) loops all 157 passes (`0x1401A2F60`, mislabeled `std::map::operator[]`) calling each pass's `CRenderPass::SaveRenderFrameData` (`0x140194480`, vtable slot 3): `m_CurrentAddList = &m_Lists[parity]`, `m_CurrentDrawList = &m_Lists[(parity-1)&1]`, and **zeroes the new add-list's `m_NumElements`**; (3) flushes the overflow global back into the lists and resets its count. (Earlier drafts of this section cited `ToggleRenderpassLists`/`SaveRenderFrameData@0x1401FCAB0`/`0x14020A*` — those names/addresses do **not** exist in this build; they were hallucinated. The real per-pass swap symbol is `CRenderPass::SaveRenderFrameData` @ `0x140194480`.)
+- **Drawing does NOT consume:** `CRenderPass::DoDraw` (`0x1401AC7A0`, vtable slot 2) loads `m_CurrentDrawList` (`*(pass+0x30)`), draws `min(m_ListSize, m_NumElements)` blocks via a local cursor, and **never writes `m_NumElements`**. A buffer can be redrawn any number of times.
+- **Why eye 1 is empty (running the whole `Draw` twice):** eye 0's rotation points every `m_CurrentDrawList` at the sim-populated buffer → 194 draws. Eye 1's rotation toggles parity *back*, re-points `m_CurrentDrawList` to the buffer eye 0's rotation had just zeroed **and zeroes eye 0's buffer in turn** → 0 draws. The geometry is not consumed by drawing; it is wiped by the *second* rotation.
+- **`EraseAllDeletedRenderBlocks` (`0x1401A4ED0`, called `0x1400F23C3`):** a *separate* deletion list; does not touch pass draw lists. Benign across dispatches.
+- **Sort task (`m_SortTaskProxy`):** each dispatch creates a fresh sort proxy (`0x1400F1EC3`) that sorts each `m_CurrentDrawList` in place; the dispatch spinwaits before `EndDraw`. Sorting an already-sorted stable list is idempotent → safe across two dispatches (serialized by the single render thread).
+
+**Two correct fixes:**
+1. **Gate the rotation on eye 1** — what the mod does (`GATE_ROTATE_RENDER_FRAME_DATA`, default on): detour `0x1401A3000` and skip it on the second dispatch. Eye 1 keeps eye 0's `m_CurrentDrawList` + counts and redraws the identical 194 blocks; also avoids double-toggling the parity and double-flushing the overflow.
+2. **Run only the dispatch body twice** (`DispatchDraw`/`HandleDrawThreadTask`) under a single `CGraphicsEngine::Draw` prologue — the rotation then runs once and both dispatches read the same populated buffer. More invasive; the mod instead runs the whole `Draw` twice and gates the per-dispatch side effects.
+
+Either way, **no geometry snapshot/restore is needed** — the draw is non-destructive; you only have to stop the *second rotation* from wiping the lists.
 
 ## 12. Per-eye output routing
 
@@ -460,7 +468,7 @@ A second dispatch renders the full scene with no re-population. The per-pass dra
 
 ## 13. To dispatch one correct stereo eye — checklist
 
-Run only the **dispatch body** twice per real frame (NOT the whole `CGraphicsEngine::Draw` — see §5.7), keeping the single sim-path prologue (frame counter, jitter phase, CB ring, clock, draw-list swap).
+Two viable structures (§11): **(A)** run the whole `CGraphicsEngine::Draw` (`0x1400F4170`) twice and gate/snapshot the per-frame + per-dispatch side effects (what the mod does), or **(B)** run only the **dispatch body** twice under a single prologue. The lists below assume **(A)**; under **(B)** the prologue items (frame counter, jitter phase, CB ring, clock, **list rotation**) run once and need no gating.
 
 **SET (per eye), on the render camera `engine+368` — hook `SetupRenderCamera` (`0x1400B3B80`, `this == engine+0x170`) or right after the active->render memcpy (`0x1400C47E2`). The scene is camera-relative (§2.4), so:**
 - `m_TransformF` translation (`+0x84`/`+0x88`/`+0x8C`): lateral IPD/2 offset along the camera right axis (the camera *world position* — this is what camera-relative geometry subtracts). Do NOT just offset `m_View`'s translation; the OffsetVP zeros it.
@@ -474,6 +482,7 @@ Run only the **dispatch body** twice per real frame (NOT the whole `CGraphicsEng
 - (Optional) restore the sort proxy state to skip the eye-1 re-sort (perf only, §11).
 
 **GATE to a single eye:**
+- **Render-list rotation `RotateRenderFrameData` (`0x1401A3000`, in the `Draw` prologue) -> skip on eye 1** — else eye 1's rotation flips every `m_CurrentDrawList` to the buffer eye 0 just zeroed and draws no scene geometry (§11). This is the core geometry fix under structure (A); not needed under (B).
 - Draw-done `SetEvent`/`engine+20=1` (`0x1400F24A1`) -> **eye 1 (last) only** (§5.6).
 - Screenshot countdown `engine+136` -> eye 0 only (§5.5).
 - End-draw `sig::Signal` one-shot callbacks (`0x1400F22C2`) -> eye 1 only (§5.5).
@@ -481,7 +490,7 @@ Run only the **dispatch body** twice per real frame (NOT the whole `CGraphicsEng
 - Eye-1 render-context `m_Dt = 0` so dt accumulators (fade/exposure/heat-haze) don't double-step (§5.2).
 
 **LEAVE ALONE (do not touch / shared is fine):**
-- Draw-list buckets — intact and identical for both eyes; no re-population (§11).
+- Draw-list *contents* — non-destructively drawn, so no re-population/snapshot needed (§11). But the per-frame *rotation* must be gated on eye 1 under structure (A) — see GATE above; only leave it alone under (B).
 - Shadow parity (`dword_142D3A6B0&1`) — shared slot, benign (§5.3).
 - `CClock::Update` — runs once in the sim prologue; do not call per dispatch (§5.4).
 - Frame counter / jitter phase / `%3` CB ring — advanced once in the prologue; keep both eyes on the same values (§5.7).
