@@ -65,3 +65,19 @@ impl std::convert::AsMut<CRenderPass> for CRenderPass {
         self
     }
 }
+pub const RotateRenderFrameData_ADDRESS: usize = 0x1401A3000;
+/// The per-frame render-block-item list rotation, run once in each `CGraphicsEngine::Draw`
+/// (0x1400F4170) prologue (its call site at 0x1400F4340 is mislabeled `CKeep1000Frames` in this
+/// binary's symbols). Toggles the global add/draw parity at `0x142ED7680`, then for every render
+/// pass swaps `m_CurrentAddList`/`m_CurrentDrawList` to the new parity (via `CRenderPass`'s vtable
+/// slot 3) and zeroes the new add-list's element count, and finally flushes the render-block-item
+/// overflow list. Static (no `this`); reads the render engine + parity from globals. This -- not the
+/// per-batch `SetupRenderFrameData` build above -- is the actual draw-list swap.
+pub unsafe fn RotateRenderFrameData() {
+    unsafe {
+        let f: unsafe extern "system" fn() = ::std::mem::transmute(
+            RotateRenderFrameData_ADDRESS,
+        );
+        f()
+    }
+}
