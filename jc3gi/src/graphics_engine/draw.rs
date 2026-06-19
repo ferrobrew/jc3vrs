@@ -46,6 +46,138 @@ pub unsafe fn Draw(
         f(ctx, prim, arg2, arg3)
     }
 }
+pub const DrawInstanced_ADDRESS: usize = 0x141962F10;
+/// Instanced draw (`Graphics::DrawInstanced`).
+pub unsafe fn DrawInstanced(
+    a1: *mut ::std::ffi::c_void,
+    a2: *mut ::std::ffi::c_void,
+    a3: *mut ::std::ffi::c_void,
+    a4: *mut ::std::ffi::c_void,
+    a5: *mut ::std::ffi::c_void,
+    a6: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            a1: *mut ::std::ffi::c_void,
+            a2: *mut ::std::ffi::c_void,
+            a3: *mut ::std::ffi::c_void,
+            a4: *mut ::std::ffi::c_void,
+            a5: *mut ::std::ffi::c_void,
+            a6: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(DrawInstanced_ADDRESS);
+        f(a1, a2, a3, a4, a5, a6)
+    }
+}
+pub const DrawIndexedInstanced_ADDRESS: usize = 0x141962E80;
+/// Indexed instanced draw (`Graphics::DrawIndexedInstanced`).
+pub unsafe fn DrawIndexedInstanced(
+    a1: *mut ::std::ffi::c_void,
+    a2: *mut ::std::ffi::c_void,
+    a3: *mut ::std::ffi::c_void,
+    a4: *mut ::std::ffi::c_void,
+    a5: *mut ::std::ffi::c_void,
+    a6: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            a1: *mut ::std::ffi::c_void,
+            a2: *mut ::std::ffi::c_void,
+            a3: *mut ::std::ffi::c_void,
+            a4: *mut ::std::ffi::c_void,
+            a5: *mut ::std::ffi::c_void,
+            a6: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(DrawIndexedInstanced_ADDRESS);
+        f(a1, a2, a3, a4, a5, a6)
+    }
+}
+pub const DrawInstancedIndirect_ADDRESS: usize = 0x141962CC0;
+/// GPU-driven instanced draw (`Graphics::DrawInstancedIndirect`).
+pub unsafe fn DrawInstancedIndirect(
+    a1: *mut ::std::ffi::c_void,
+    a2: *mut ::std::ffi::c_void,
+    a3: *mut ::std::ffi::c_void,
+    a4: *mut ::std::ffi::c_void,
+    a5: *mut ::std::ffi::c_void,
+    a6: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            a1: *mut ::std::ffi::c_void,
+            a2: *mut ::std::ffi::c_void,
+            a3: *mut ::std::ffi::c_void,
+            a4: *mut ::std::ffi::c_void,
+            a5: *mut ::std::ffi::c_void,
+            a6: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(DrawInstancedIndirect_ADDRESS);
+        f(a1, a2, a3, a4, a5, a6)
+    }
+}
+pub const DrawIndexedInstancedIndirect_ADDRESS: usize = 0x141963080;
+/// GPU-driven indexed instanced draw (`Graphics::DrawIndexedInstancedIndirect`).
+pub unsafe fn DrawIndexedInstancedIndirect(
+    a1: *mut ::std::ffi::c_void,
+    a2: *mut ::std::ffi::c_void,
+    a3: *mut ::std::ffi::c_void,
+    a4: *mut ::std::ffi::c_void,
+    a5: *mut ::std::ffi::c_void,
+    a6: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            a1: *mut ::std::ffi::c_void,
+            a2: *mut ::std::ffi::c_void,
+            a3: *mut ::std::ffi::c_void,
+            a4: *mut ::std::ffi::c_void,
+            a5: *mut ::std::ffi::c_void,
+            a6: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(DrawIndexedInstancedIndirect_ADDRESS);
+        f(a1, a2, a3, a4, a5, a6)
+    }
+}
+pub const Dispatch_ADDRESS: usize = 0x141962AD0;
+/// Compute dispatch (`Graphics::Dispatch`).
+pub unsafe fn Dispatch(
+    a1: *mut ::std::ffi::c_void,
+    a2: *mut ::std::ffi::c_void,
+    a3: *mut ::std::ffi::c_void,
+    a4: *mut ::std::ffi::c_void,
+    a5: *mut ::std::ffi::c_void,
+    a6: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            a1: *mut ::std::ffi::c_void,
+            a2: *mut ::std::ffi::c_void,
+            a3: *mut ::std::ffi::c_void,
+            a4: *mut ::std::ffi::c_void,
+            a5: *mut ::std::ffi::c_void,
+            a6: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(Dispatch_ADDRESS);
+        f(a1, a2, a3, a4, a5, a6)
+    }
+}
+pub const DispatchIndirect_ADDRESS: usize = 0x141962B60;
+/// GPU-driven compute dispatch (`Graphics::DispatchIndirect`).
+pub unsafe fn DispatchIndirect(
+    a1: *mut ::std::ffi::c_void,
+    a2: *mut ::std::ffi::c_void,
+    a3: *mut ::std::ffi::c_void,
+    a4: *mut ::std::ffi::c_void,
+    a5: *mut ::std::ffi::c_void,
+    a6: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            a1: *mut ::std::ffi::c_void,
+            a2: *mut ::std::ffi::c_void,
+            a3: *mut ::std::ffi::c_void,
+            a4: *mut ::std::ffi::c_void,
+            a5: *mut ::std::ffi::c_void,
+            a6: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(DispatchIndirect_ADDRESS);
+        f(a1, a2, a3, a4, a5, a6)
+    }
+}
 pub const SetRenderSetup_ADDRESS: usize = 0x141966D20;
 /// Bind a render setup -- the render-target configuration a pass draws into.
 pub unsafe fn SetRenderSetup(
