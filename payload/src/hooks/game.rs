@@ -76,6 +76,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
             crate::DRAW_CALLS.store(0, Ordering::Relaxed);
             crate::DRAW_INDEXED_CALLS.store(0, Ordering::Relaxed);
+            crate::DISPATCH_CALLS.store(0, Ordering::Relaxed);
             crate::trace(TraceEvent::DrawBegin { eye: 0 });
             crate::DRAW_INDEX.store(0, Ordering::Relaxed);
             BLOCK_FLIP.store(present_eye != 0, Ordering::Relaxed);
@@ -88,6 +89,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 eye: 0,
                 draw: crate::DRAW_CALLS.load(Ordering::Relaxed),
                 draw_indexed: crate::DRAW_INDEXED_CALLS.load(Ordering::Relaxed),
+                dispatch: crate::DISPATCH_CALLS.load(Ordering::Relaxed),
             });
 
             if let Some(state) = &effect_info {
@@ -99,6 +101,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
             crate::DRAW_CALLS.store(0, Ordering::Relaxed);
             crate::DRAW_INDEXED_CALLS.store(0, Ordering::Relaxed);
+            crate::DISPATCH_CALLS.store(0, Ordering::Relaxed);
             crate::trace(TraceEvent::DrawBegin { eye: 1 });
             crate::DRAW_INDEX.store(1, Ordering::Relaxed);
             BLOCK_FLIP.store(present_eye != 1, Ordering::Relaxed);
@@ -111,6 +114,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 eye: 1,
                 draw: crate::DRAW_CALLS.load(Ordering::Relaxed),
                 draw_indexed: crate::DRAW_INDEXED_CALLS.load(Ordering::Relaxed),
+                dispatch: crate::DISPATCH_CALLS.load(Ordering::Relaxed),
             });
             crate::trace_end_frame();
 

@@ -62,10 +62,12 @@ static TRACE_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Absolute path of the most recent trace dump, shown in the UI so it's findable.
 static LAST_TRACE_PATH: Mutex<Option<String>> = Mutex::new(None);
 
-/// Per-eye geometry draw-call counters: reset at each eye's `draw_begin`, read at `draw_end`. Bumped
-/// by the detours on the engine's universal draw wrappers (`Graphics::Draw`/`DrawIndexed`).
+/// Per-eye GPU-command counters: reset at each eye's `draw_begin`, read at `draw_end`. Bumped by the
+/// detours on the engine's draw wrappers (the draw counters) and `Dispatch`/`DispatchIndirect` (the
+/// dispatch counter).
 pub static DRAW_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static DRAW_INDEXED_CALLS: AtomicUsize = AtomicUsize::new(0);
+pub static DISPATCH_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// One render-trace record, serialized to NDJSON; the `ev` tag names the event. Pipeline-hook
 /// variants omit `eye` -- it's injected by [`trace_eye`]; the frame/eye markers carry it directly.
@@ -87,6 +89,7 @@ pub enum TraceEvent {
         eye: usize,
         draw: usize,
         draw_indexed: usize,
+        dispatch: usize,
     },
     #[serde(rename = "SetupRenderCamera")]
     SetupRenderCamera,
@@ -121,7 +124,13 @@ pub enum TraceEvent {
     // Buffer-flow events (raw pointers as u64 so render-setup / texture instances can be compared
     // across eyes -- same pointer = same target, different pointer = a swapped instance).
     #[serde(rename = "SetRenderSetup")]
-    SetRenderSetup { setup: u64 },
+    SetRenderSetup {
+        setup: u64,
+        /// Draws/dispatches issued into the *previous* target since the last bind (this thread).
+        draws: usize,
+        indexed: usize,
+        dispatch: usize,
+    },
     #[serde(rename = "Clear")]
     Clear { color: [f32; 4] },
     #[serde(rename = "CopySurfaceToTexture")]
