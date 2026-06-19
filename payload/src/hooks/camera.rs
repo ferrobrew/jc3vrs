@@ -46,9 +46,9 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
 
     let result = SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter);
 
-    // Per-eye camera offset, purely so the two eyes' captures are visually distinguishable: an
-    // identical eye-1 capture can't be told apart from a stale/shared buffer. Shift the camera world
-    // position (m_TransformF translation) along its right axis (first basis row) by +/- half the IPD.
+    // Per-eye parallax: shift the camera world position (m_TransformF translation == camera+0x84,
+    // the CameraPosition the camera-relative scene render subtracts) along its right axis by +/-
+    // half the IPD. Same projection both eyes -- a per-eye zoom would make the pair unfusable.
     if is_render_camera
         && crate::STEREO.load(Ordering::Relaxed)
         && crate::STEREO_CAMERAS.load(Ordering::Relaxed)
@@ -61,13 +61,6 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 camera.m_TransformF.data[12] += offset * camera.m_TransformF.data[0];
                 camera.m_TransformF.data[13] += offset * camera.m_TransformF.data[1];
                 camera.m_TransformF.data[14] += offset * camera.m_TransformF.data[2];
-                // The lateral offset above did NOT visibly move the presented geometry, so to make
-                // eye 1's capture unmistakably its own, also zoom eye 1's projection -- a lever we
-                // have confirmed reaches the opaque geometry (via the OffsetVP).
-                if eye1 {
-                    camera.m_ProjectionF.data[0] *= 0.6;
-                    camera.m_ProjectionF.data[5] *= 0.6;
-                }
             }
         }
     }
