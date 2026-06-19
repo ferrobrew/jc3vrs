@@ -43,13 +43,16 @@ pub(super) fn hook_library() -> HookLibrary {
 // the new add-list. Eye 1 needs this too; gating it leaves eye 1 drawing a partial, un-swapped list
 // (the central "wedge"). Off by default.
 #[detour(address = jc3gi::graphics_engine::render_pass::CRenderPass::SetupRenderFrameData_ADDRESS)]
-fn setup_render_frame_data() {
+fn setup_render_frame_data(a1: *mut c_void, count: i32, a3: *mut c_void, items: *mut c_void) {
     let gated = gate(&GATE_SETUP_RENDER_FRAME_DATA);
     crate::trace_eye(TraceEvent::SetupRenderFrameData { gated });
     if gated {
         return;
     }
-    SETUP_RENDER_FRAME_DATA.get().unwrap().call();
+    SETUP_RENDER_FRAME_DATA
+        .get()
+        .unwrap()
+        .call(a1, count, a3, items);
 }
 
 // CConstantBufferPool::HandBackBuffers -- recycles last frame's constant buffers back to the free
