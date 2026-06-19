@@ -32,17 +32,26 @@ impl std::convert::AsMut<CConstantBufferPool> for CConstantBufferPool {
     }
 }
 #[repr(C, align(8))]
-/// Per-frame render setup. SetupRenderFrameData runs once per frame in the graphics prologue:
-/// it toggles the active add-buffer and rebuilds the per-frame render-block-item lists.
 pub struct CRenderPass {}
 impl CRenderPass {
     pub const SetupRenderFrameData_ADDRESS: usize = 0x14048C4E0;
-    pub unsafe fn SetupRenderFrameData() {
+    /// Appends `count` render-block-items (`items`) to the active CRBILists draw/add lists (`a3`
+    /// holds the lists). Static (no `this`). Called per batch, including from CPU fragment worker
+    /// threads -- not once per frame. The argument list matters: it dereferences `a3 + 0x8038`.
+    pub unsafe fn SetupRenderFrameData(
+        a1: *mut ::std::ffi::c_void,
+        count: i32,
+        a3: *mut ::std::ffi::c_void,
+        items: *mut ::std::ffi::c_void,
+    ) {
         unsafe {
-            let f: unsafe extern "system" fn() = ::std::mem::transmute(
-                Self::SetupRenderFrameData_ADDRESS,
-            );
-            f()
+            let f: unsafe extern "system" fn(
+                a1: *mut ::std::ffi::c_void,
+                count: i32,
+                a3: *mut ::std::ffi::c_void,
+                items: *mut ::std::ffi::c_void,
+            ) = ::std::mem::transmute(Self::SetupRenderFrameData_ADDRESS);
+            f(a1, count, a3, items)
         }
     }
 }
