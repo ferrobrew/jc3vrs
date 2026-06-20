@@ -4,8 +4,10 @@
 //! fatal exception is *raised* -- before any handler unwinds. This covers the case where the game
 //! catches a fault itself and turns it into a clean exit: Wine prints no backtrace and the window
 //! just vanishes, but the record still lands in `jc3vrs.log` (its writer is an unbuffered `File`, so
-//! the line is flushed to the kernel before the process dies). Each address is resolved to its
-//! containing module + offset (`module+0xoff`) so it maps straight to that module's symbols.
+//! the line is flushed to the kernel before the process dies). A panic hook does the same for Rust
+//! panics, which don't raise an SEH exception and so are invisible to the VEH handler. Each address
+//! is resolved to its containing module + offset (`module+0xoff`), which works under Wine where
+//! `std::backtrace` usually can't symbolize.
 
 use windows::Win32::{
     Foundation::HMODULE,
@@ -36,6 +38,12 @@ const FATAL_CODES: &[u32] = &[
 
 pub fn install() {
     unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
+    // Rust panics unwind/abort instead of raising an SEH exception, so the VEH handler above never
+    // sees them. Log the message + a module-resolved backtrace ourselves before the process dies.
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!("rust panic: {info}");
+        unsafe { log_backtrace() };
+    }));
     tracing::info!("Crash handler installed");
 }
 
@@ -70,6 +78,32 @@ unsafe fn resolve(addr: usize) -> Option<(String, usize)> {
     }
 }
 
+/// Log one frame as `module+offset` where it resolves, otherwise the raw address.
+unsafe fn log_frame(at: &str, addr: usize) {
+    unsafe {
+        match resolve(addr) {
+            Some((module, offset)) => tracing::error!(
+                at = %at,
+                module = %module,
+                offset = %format_args!("{offset:#X}"),
+                addr = %format_args!("{addr:#018X}"),
+            ),
+            None => tracing::error!(at = %at, addr = %format_args!("{addr:#018X}")),
+        }
+    }
+}
+
+/// Capture the current call stack and log each frame, resolved to module+offset.
+unsafe fn log_backtrace() {
+    unsafe {
+        let mut raw = [std::ptr::null_mut::<std::ffi::c_void>(); 48];
+        let n = RtlCaptureStackBackTrace(0, &mut raw, None) as usize;
+        for (i, f) in raw[..n.min(raw.len())].iter().enumerate() {
+            log_frame(&format!("bt[{i:02}]"), *f as usize);
+        }
+    }
+}
+
 unsafe fn log_record(rec: &EXCEPTION_RECORD) {
     unsafe {
         let code = rec.ExceptionCode.0 as u32;
@@ -92,26 +126,8 @@ unsafe fn log_record(rec: &EXCEPTION_RECORD) {
             "fatal exception"
         );
 
-        // The faulting instruction, then each captured frame -- resolved to module+offset where we
-        // can, otherwise just the raw address.
-        let mut raw = [std::ptr::null_mut::<std::ffi::c_void>(); 48];
-        let n = RtlCaptureStackBackTrace(0, &mut raw, None) as usize;
-        let frames = std::iter::once(("fault".to_string(), rec.ExceptionAddress as usize)).chain(
-            raw[..n.min(raw.len())]
-                .iter()
-                .enumerate()
-                .map(|(i, f)| (format!("bt[{i:02}]"), *f as usize)),
-        );
-        for (at, addr) in frames {
-            match resolve(addr) {
-                Some((module, offset)) => tracing::error!(
-                    at = %at,
-                    module = %module,
-                    offset = %format_args!("{offset:#X}"),
-                    addr = %format_args!("{addr:#018X}"),
-                ),
-                None => tracing::error!(at = %at, addr = %format_args!("{addr:#018X}")),
-            }
-        }
+        // The faulting instruction, then the captured stack.
+        log_frame("fault", rec.ExceptionAddress as usize);
+        log_backtrace();
     }
 }
