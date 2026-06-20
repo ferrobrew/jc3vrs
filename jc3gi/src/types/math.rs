@@ -39,7 +39,26 @@ fn _Matrix4_size_check() {
     }
     unreachable!()
 }
-impl Matrix4 {}
+impl Matrix4 {
+    pub const Multiply4x4_ADDRESS: usize = 0x140034530;
+    /// `CMatrix4f::Multiply4x4` -- the engine's 4x4 matrix product, writing the product of `a` and
+    /// `b` into `result`. Used e.g. to build a view-projection from a view and a projection matrix.
+    /// Static (no `this`).
+    pub unsafe fn Multiply4x4(
+        a: *const crate::types::math::Matrix4,
+        b: *const crate::types::math::Matrix4,
+        result: *mut crate::types::math::Matrix4,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                a: *const crate::types::math::Matrix4,
+                b: *const crate::types::math::Matrix4,
+                result: *mut crate::types::math::Matrix4,
+            ) = ::std::mem::transmute(Self::Multiply4x4_ADDRESS);
+            f(a, b, result)
+        }
+    }
+}
 impl std::convert::AsRef<Matrix4> for Matrix4 {
     fn as_ref(&self) -> &Matrix4 {
         self
