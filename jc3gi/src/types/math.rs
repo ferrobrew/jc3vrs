@@ -202,6 +202,54 @@ impl Matrix4 {
         self.data.as_mut_ptr()
     }
 }
+impl std::ops::Mul for Matrix4 {
+    type Output = Matrix4;
+    fn mul(self, rhs: Matrix4) -> Matrix4 {
+        Matrix4::from(glam::Mat4::from(rhs) * glam::Mat4::from(self))
+    }
+}
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod matrix4_mul_tests {
+    use super::*;
+    fn translation(x: f32, y: f32, z: f32) -> Matrix4 {
+        let mut m = Matrix4 {
+            data: [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+            ],
+        };
+        m.data[12] = x;
+        m.data[13] = y;
+        m.data[14] = z;
+        m
+    }
+    #[test]
+    fn mul_matches_engine_convention() {
+        let id = translation(0.0, 0.0, 0.0);
+        let a = translation(1.0, 2.0, 3.0);
+        assert_eq!((id * a).data, a.data);
+        assert_eq!((a * id).data, a.data);
+        let ab = a * translation(10.0, 20.0, 30.0);
+        assert!((ab.data[12] - 11.0).abs() < 1e-5);
+        assert!((ab.data[13] - 22.0).abs() < 1e-5);
+        assert!((ab.data[14] - 33.0).abs() < 1e-5);
+    }
+}
 impl From<glam::Vec2> for Vector2 {
     fn from(v: glam::Vec2) -> Self {
         Self { data: [v.x, v.y] }
