@@ -7,6 +7,52 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// Anti-aliasing resolve. `m_Mode`: 1/4 = FXAA, 2 = SMAA 1x, 3 = SMAA T2X. Mode 3 adds a temporal
+/// reprojection against a previous-frame history texture.
+pub struct CAntiAliasingEffect {
+    _field_0: [u8; 768],
+    pub m_Mode: i32,
+    _field_304: [u8; 4],
+}
+fn _CAntiAliasingEffect_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x308], CAntiAliasingEffect>([0u8; 0x308]);
+    }
+    unreachable!()
+}
+impl CAntiAliasingEffect {
+    pub const Apply_ADDRESS: usize = 0x1400BC9A0;
+    /// `slot` is the in/out post-effect result-slot index.
+    pub unsafe fn Apply(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
+        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+        slot: *mut u32,
+    ) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+                pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
+                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+                slot: *mut u32,
+            ) -> u64 = ::std::mem::transmute(Self::Apply_ADDRESS);
+            f(self as *mut Self as _, ctx, pec, mgr, slot)
+        }
+    }
+}
+impl std::convert::AsRef<CAntiAliasingEffect> for CAntiAliasingEffect {
+    fn as_ref(&self) -> &CAntiAliasingEffect {
+        self
+    }
+}
+impl std::convert::AsMut<CAntiAliasingEffect> for CAntiAliasingEffect {
+    fn as_mut(&mut self) -> &mut CAntiAliasingEffect {
+        self
+    }
+}
+#[repr(C, align(8))]
 pub struct CDepthOfFieldEffect {}
 impl CDepthOfFieldEffect {
     pub const Apply_ADDRESS: usize = 0x1400C7890;
