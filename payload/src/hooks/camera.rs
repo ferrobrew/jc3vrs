@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
 use detours_macro::detour;
 use jc3gi::{
@@ -27,20 +27,13 @@ pub(super) fn hook_library() -> HookLibrary {
 /// `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF` from
 /// `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye, *before*
 /// the rebuild, so the two dispatches diverge. See `docs/rendering.md` section 2.
-// Diagnostics: how many times SetupRenderCamera was hooked, and how many of those matched the main
-// render camera (engine + 0x170). Surfaced in the debug UI to confirm the hook fires + the guard.
-pub static SETUP_RC_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub static SETUP_RC_HITS: AtomicUsize = AtomicUsize::new(0);
-
 #[detour(address = jc3gi::camera::camera::Camera::SetupRenderCamera_ADDRESS)]
 fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
-    SETUP_RC_CALLS.fetch_add(1, Ordering::Relaxed);
     let is_render_camera = unsafe {
         GraphicsEngine::get()
             .is_some_and(|ge| (ge as *mut GraphicsEngine as usize) + 0x170 == camera as usize)
     };
     if is_render_camera {
-        SETUP_RC_HITS.fetch_add(1, Ordering::Relaxed);
         crate::trace_eye(crate::TraceEvent::SetupRenderCamera);
     }
 

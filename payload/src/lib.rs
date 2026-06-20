@@ -859,19 +859,6 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
             ui.add(egui::Slider::new(&mut *STEREO_IPD.lock(), 0.0..=100.0).text("IPD (m)"));
         }
 
-        {
-            let calls = hooks::camera::SETUP_RC_CALLS.load(Ordering::Relaxed);
-            let hits = hooks::camera::SETUP_RC_HITS.load(Ordering::Relaxed);
-            let expected = unsafe {
-                jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
-                    .map(|ge| ge as *mut _ as usize + 0x170)
-                    .unwrap_or(0)
-            };
-            ui.label(format!(
-                "SetupRC: calls={calls} hits={hits}  expected render-cam={expected:#x}"
-            ));
-        }
-
         gate_checkbox(
             ui,
             &hooks::game::RESTORE_FRAME_COUNTERS,
@@ -959,7 +946,7 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
 
     let preview_width = {
         let mut w = PREVIEW_WIDTH.lock();
-        ui.add(egui::Slider::new(&mut *w, 48.0..=512.0).text("Preview size (px)"));
+        ui.add(egui::Slider::new(&mut *w, 48.0..=4096.0).text("Preview size (px)"));
         *w
     };
 
@@ -1025,6 +1012,7 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
                         [0usize, 1]
                     };
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
                         for eye in order {
                             match final_ids[eye] {
                                 Some(id) => {
