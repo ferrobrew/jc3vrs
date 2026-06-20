@@ -241,11 +241,9 @@ Pitfalls:
 - Offsetting only `m_View`'s translation does nothing to geometry — the OffsetVP zeros it (§2.4). It shifts only the per-view CB (post / camera-position constant), which is the muzzle-flash-moves-but-world-doesn't symptom.
 - Offsetting only `m_TransformF` without re-deriving `m_View` desyncs `CameraPosition` from the OffsetVP rotation and the per-view CB.
 
-### 2.6 Matrix convention + the VP-rebuild recipe (`CMatrix4f::Multiply4x4` `0x140034530`)
+### 2.6 The VP-rebuild recipe
 
-`Multiply4x4(a1, a2, a3)` — signature `(const Matrix *a1 /*left*/, Matrix *a2 /*right*/, Matrix *a3 /*dest*/)`. It loads each row of `a1`, broadcasts its 4 components, and dots against the rows of `a2`, writing `a3[i] = Σ_k a1[i][k] * a2[k]`. This is row-major, row-vector: `a3 = a1 * a2`, and a point transforms as a row vector `clip = p_row · M`. The dest is the third/last argument.
-
-`SetupRenderCamera` calls `Multiply4x4(&m_View, &m_Projection, &m_ViewProjection)` ⇒ `m_ViewProjection = m_View * m_Projection`, and clip-space `= p · View · Projection`. `CCamera::UpdateRender` uses the identical order. So to rebuild a render camera after writing a custom `m_View` and/or `m_Projection`:
+The engine's `Matrix4` (`CMatrix4f`) is D3D-style — row-major, row-vector (`clip = p · M`) — and `Multiply4x4(a, b, dest)` writes `dest = a · b`; the full convention (basis-in-rows, the glam bridge) is documented on the `Matrix4` def. `SetupRenderCamera` calls `Multiply4x4(m_View, m_Projection, m_ViewProjection)` ⇒ `m_ViewProjection = m_View · m_Projection`, `clip = p · View · Projection`, and `CCamera::UpdateRender` uses the identical order. So to rebuild a render camera after writing a custom `m_View` and/or `m_Projection`:
 
 ```c
 CCamera *cam = engine + 368;                                  // == *(unk_142ED0E20 + 1480)
