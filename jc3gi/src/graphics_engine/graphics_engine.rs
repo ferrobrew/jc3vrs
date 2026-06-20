@@ -167,6 +167,25 @@ impl GraphicsEngine {
             f(self as *mut Self as _, param)
         }
     }
+    pub const TextureCachePlatformUpdate_ADDRESS: usize = 0x1400C46D0;
+    /// Draw-prologue step. Copies m_ActiveCamera into the engine-owned render-camera slot
+    /// (this + 0x170), runs CCamera::SetupRenderCamera on it, publishes it as CameraManager's
+    /// m_RenderCamera, then runs the per-frame texture-cache update under the context lock. `ctx`
+    /// is Graphics::HContext_t* (opaque).
+    pub unsafe fn TextureCachePlatformUpdate(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        dt: f32,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+                dt: f32,
+            ) = ::std::mem::transmute(Self::TextureCachePlatformUpdate_ADDRESS);
+            f(self as *mut Self as _, ctx, dt)
+        }
+    }
 }
 impl std::convert::AsRef<GraphicsEngine> for GraphicsEngine {
     fn as_ref(&self) -> &GraphicsEngine {
@@ -241,6 +260,50 @@ impl std::convert::AsRef<HDevice_t> for HDevice_t {
 }
 impl std::convert::AsMut<HDevice_t> for HDevice_t {
     fn as_mut(&mut self) -> &mut HDevice_t {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// Graphics::HRenderSetup_t (a render-target configuration a pass draws into).
+pub struct HRenderSetup_t {}
+impl HRenderSetup_t {}
+impl std::convert::AsRef<HRenderSetup_t> for HRenderSetup_t {
+    fn as_ref(&self) -> &HRenderSetup_t {
+        self
+    }
+}
+impl std::convert::AsMut<HRenderSetup_t> for HRenderSetup_t {
+    fn as_mut(&mut self) -> &mut HRenderSetup_t {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// Graphics::HTexture_t (GPU texture handle).
+pub struct HTexture_t {}
+impl HTexture_t {}
+impl std::convert::AsRef<HTexture_t> for HTexture_t {
+    fn as_ref(&self) -> &HTexture_t {
+        self
+    }
+}
+impl std::convert::AsMut<HTexture_t> for HTexture_t {
+    fn as_mut(&mut self) -> &mut HTexture_t {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The per-view render context the render passes read: camera matrices (view, projection, the
+/// translation-free offset view-projection and the separate camera world position), shadow data and
+/// per-frame flags. Filled each dispatch by CRenderPass::SetRenderContextCamera.
+pub struct RenderContext {}
+impl RenderContext {}
+impl std::convert::AsRef<RenderContext> for RenderContext {
+    fn as_ref(&self) -> &RenderContext {
+        self
+    }
+}
+impl std::convert::AsMut<RenderContext> for RenderContext {
+    fn as_mut(&mut self) -> &mut RenderContext {
         self
     }
 }

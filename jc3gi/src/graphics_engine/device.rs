@@ -65,3 +65,20 @@ impl std::convert::AsMut<Device> for Device {
         self
     }
 }
+pub const GetMasterContext_ADDRESS: usize = 0x1419550D0;
+/// Returns the master context (the wrapper around the D3D11 immediate context). `device` is
+/// Graphics::HDevice_t* (opaque, unused).
+pub unsafe fn GetMasterContext(
+    this: *mut ::std::ffi::c_void,
+    device: *mut ::std::ffi::c_void,
+) -> *mut crate::graphics_engine::device::Context {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            this: *mut ::std::ffi::c_void,
+            device: *mut ::std::ffi::c_void,
+        ) -> *mut crate::graphics_engine::device::Context = ::std::mem::transmute(
+            GetMasterContext_ADDRESS,
+        );
+        f(this, device)
+    }
+}

@@ -37,6 +37,25 @@ impl CToneMappingEffect {
             f(self as *mut Self as _, ctx, a3, a4, a5, a6, a7)
         }
     }
+    pub const DrawHistogramWindow_ADDRESS: usize = 0x1401198F0;
+    /// The HDR->LDR tonemap composite: applies the current exposure (from the histogram) to convert
+    /// the HDR MainColor into the LDR target.
+    pub unsafe fn DrawHistogramWindow(
+        &self,
+        ctx: *mut ::std::ffi::c_void,
+        pec: *mut ::std::ffi::c_void,
+        mgr: *mut ::std::ffi::c_void,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                ctx: *mut ::std::ffi::c_void,
+                pec: *mut ::std::ffi::c_void,
+                mgr: *mut ::std::ffi::c_void,
+            ) = ::std::mem::transmute(Self::DrawHistogramWindow_ADDRESS);
+            f(self as *const Self as _, ctx, pec, mgr)
+        }
+    }
 }
 impl std::convert::AsRef<CToneMappingEffect> for CToneMappingEffect {
     fn as_ref(&self) -> &CToneMappingEffect {

@@ -82,6 +82,18 @@ impl GameCameraManager {
             f(self as *const Self as _)
         }
     }
+    pub const UpdateRender_ADDRESS: usize = 0x1407F4560;
+    pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32, blend: f32) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                dt: f32,
+                dtf: f32,
+                blend: f32,
+            ) -> u64 = ::std::mem::transmute(Self::UpdateRender_ADDRESS);
+            f(self as *mut Self as _, dt, dtf, blend)
+        }
+    }
 }
 impl std::convert::AsRef<GameCameraManager> for GameCameraManager {
     fn as_ref(&self) -> &GameCameraManager {

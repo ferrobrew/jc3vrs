@@ -53,7 +53,7 @@ On the camera-on-the-head question we take Boneworks' stance with one staged ref
 
 ## RE notes (release i64)
 
-The camera hook writes position only — the translation columns of `m_TransformF` — plus a hardcoded ~90° FOV; rotation is never written. Before writing rotation, clear the coordinate-frame gate (the §15.7 experiment in `docs/vr-runtime.md`, blocker 3). Vehicles take a different path: `PushRenderContext` (`0x1407ECB00`, verified) has an `IsInDrivingVehicleState` branch that routes the transform differently (a raw matrix, bypassing the jitter freeze), so vehicle head-look behaves differently from on-foot — confirm the cockpit head-bone position is sane (not clipped to seat or world origin) by logging `m_CameraTransform` translation against character world position in a vehicle.
+The camera hook writes position only — the translation columns of `m_TransformF` — plus a hardcoded ~90° FOV; rotation is never written. Before writing rotation, clear the coordinate-frame gate (the §15.7 experiment in `docs/vr-runtime.md`, blocker 3). Vehicles take a different path: `GameCameraManager::PushRenderContext` has an `IsInDrivingVehicleState` branch that routes the transform differently (a raw matrix, bypassing the jitter freeze), so vehicle head-look behaves differently from on-foot — confirm the cockpit head-bone position is sane (not clipped to seat or world origin) by logging `m_CameraTransform` translation against character world position in a vehicle.
 
 ## Options to expose
 

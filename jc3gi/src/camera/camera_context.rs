@@ -151,3 +151,16 @@ for CameraEnvironmentPresetWeights {
         self
     }
 }
+#[repr(C, align(8))]
+pub struct CameraPipelineContext {}
+impl CameraPipelineContext {}
+impl std::convert::AsRef<CameraPipelineContext> for CameraPipelineContext {
+    fn as_ref(&self) -> &CameraPipelineContext {
+        self
+    }
+}
+impl std::convert::AsMut<CameraPipelineContext> for CameraPipelineContext {
+    fn as_mut(&mut self) -> &mut CameraPipelineContext {
+        self
+    }
+}

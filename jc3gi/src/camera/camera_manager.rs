@@ -49,6 +49,29 @@ impl CameraManager {
             f(self as *mut Self as _, fov)
         }
     }
+    pub const GetRenderCamera_ADDRESS: usize = 0x14009D380;
+    /// Returns m_RenderCamera (the camera the render thread reads).
+    pub unsafe fn GetRenderCamera(&self) -> *const crate::camera::camera::Camera {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+            ) -> *const crate::camera::camera::Camera = ::std::mem::transmute(
+                Self::GetRenderCamera_ADDRESS,
+            );
+            f(self as *const Self as _)
+        }
+    }
+    pub const UpdateRender_ADDRESS: usize = 0x1400D4000;
+    /// Sim-path per-frame update: iterates every camera in the manager's list and calls
+    /// Camera::UpdateRender on each. This is where m_ActiveCamera's m_View is produced for the frame.
+    pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, dt: f32, dtf: f32) = ::std::mem::transmute(
+                Self::UpdateRender_ADDRESS,
+            );
+            f(self as *mut Self as _, dt, dtf)
+        }
+    }
 }
 impl std::convert::AsRef<CameraManager> for CameraManager {
     fn as_ref(&self) -> &CameraManager {

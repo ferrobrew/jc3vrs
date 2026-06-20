@@ -84,6 +84,30 @@ impl Camera {
             f(self as *mut Self as _, jitter)
         }
     }
+    pub const SetComputeView_ADDRESS: usize = 0x14009BDB0;
+    /// Sets (or clears) the m_ComputeView flag bit (0x08). When set, UpdateRender re-derives
+    /// m_View as Inverse(m_TransformF) each frame instead of reading a supplied view matrix.
+    pub unsafe fn SetComputeView(&mut self, enable: bool) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, enable: bool) = ::std::mem::transmute(
+                Self::SetComputeView_ADDRESS,
+            );
+            f(self as *mut Self as _, enable)
+        }
+    }
+    pub const RecalcProjection_ADDRESS: usize = 0x1400B24F0;
+    /// Rebuilds m_Projection from the FOV / near / far / aspect parameters (PerspectiveFov,
+    /// PerspectiveOffCenter or Ortho per the m_UseOffCenter / m_Ortho flags), clears
+    /// m_DirtyProjection, and applies the reverse-Z remap (z' = w - z) only when m_IsRenderCamera
+    /// (0x20) is set.
+    pub unsafe fn RecalcProjection(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::RecalcProjection_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
 }
 impl std::convert::AsRef<Camera> for Camera {
     fn as_ref(&self) -> &Camera {
