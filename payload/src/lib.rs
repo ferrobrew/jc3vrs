@@ -49,7 +49,7 @@ pub static DRAW_INDEX: AtomicUsize = AtomicUsize::new(0);
 /// each eye renders its own viewpoint. Toggle via the Render tab.
 pub static STEREO_CAMERAS: AtomicBool = AtomicBool::new(true);
 /// Inter-pupillary distance (metres) for the per-eye camera offset.
-pub static STEREO_IPD: Mutex<f32> = Mutex::new(2.0);
+pub static STEREO_IPD: Mutex<f32> = Mutex::new(0.068);
 /// Force SMAA T2X (AA mode 3) down to SMAA 1x while rendering in stereo. T2X's temporal resolve
 /// blends a mono, per-dispatch-shared history -> a cross-eye ghost; 1x carries no history. The
 /// matching TAA jitter is also dropped (no resolve to consume it). Default on.

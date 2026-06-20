@@ -18,11 +18,11 @@ use re_utilities::hook_library::HookLibrary;
 use crate::TraceEvent;
 
 /// Skip the *whole* MotionBlur pass. It is not the composite (DoF is), and it reprojects (flicker),
-/// so skip it. Default on.
-pub static SKIP_MOTION_BLUR: AtomicBool = AtomicBool::new(true);
+/// so skip it.
+pub static SKIP_MOTION_BLUR: AtomicBool = AtomicBool::new(false);
 /// Force `a7=true` so `ApplyReconstructionFilterMotionBlur` is skipped while MotionBlur's first
-/// draw still runs (only relevant if the whole pass isn't skipped). Default on.
-pub static SKIP_MOTION_BLUR_RECON: AtomicBool = AtomicBool::new(true);
+/// draw still runs (only relevant if the whole pass isn't skipped).
+pub static SKIP_MOTION_BLUR_RECON: AtomicBool = AtomicBool::new(false);
 /// Skip the *whole* DepthOfField pass. WARNING: DoF does the scene composite -- skipping it washes
 /// the image out. Default off; use `DOF_NO_REPROJECT` instead.
 pub static SKIP_DOF: AtomicBool = AtomicBool::new(false);
