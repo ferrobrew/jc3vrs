@@ -7,6 +7,7 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 pub const SetListenerTransform_ADDRESS: usize = 0x140D2AFF0;
+/// Sets the 3D audio listener pose and velocity. Free function.
 unsafe fn SetListenerTransform(
     mat: *const crate::types::math::Matrix4,
     velocity: *const crate::types::math::Vector3,

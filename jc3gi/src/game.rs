@@ -7,32 +7,6 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-pub struct CProjectContext {}
-impl CProjectContext {}
-impl std::convert::AsRef<CProjectContext> for CProjectContext {
-    fn as_ref(&self) -> &CProjectContext {
-        self
-    }
-}
-impl std::convert::AsMut<CProjectContext> for CProjectContext {
-    fn as_mut(&mut self) -> &mut CProjectContext {
-        self
-    }
-}
-#[repr(C, align(8))]
-pub struct CResourceCache {}
-impl CResourceCache {}
-impl std::convert::AsRef<CResourceCache> for CResourceCache {
-    fn as_ref(&self) -> &CResourceCache {
-        self
-    }
-}
-impl std::convert::AsMut<CResourceCache> for CResourceCache {
-    fn as_mut(&mut self) -> &mut CResourceCache {
-        self
-    }
-}
-#[repr(C, align(8))]
 pub struct Game {
     _field_0: [u8; 16],
     pub m_CountAccumulator: u64,
@@ -78,6 +52,7 @@ impl Game {
         }
     }
     pub const Update_ADDRESS: usize = 0x1409604E0;
+    /// Top-level per-frame update (advances the sim and drives rendering). Returns false on exit.
     pub unsafe fn Update(&mut self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) -> bool = ::std::mem::transmute(
@@ -87,6 +62,7 @@ impl Game {
         }
     }
     pub const UpdateRender_ADDRESS: usize = 0x14095A4E0;
+    /// Builds the per-frame update contexts and drives rendering.
     pub unsafe fn UpdateRender(
         &mut self,
         update_contexts: *mut crate::game::UpdateContexts,
@@ -117,8 +93,8 @@ pub struct GameObjectInitContext {
     pub m_DtIgnorePause: f32,
     pub m_RealDt: f32,
     _field_c: [u8; 4],
-    pub m_ResourceCache: *const crate::game::CResourceCache,
-    pub m_ProjectContext: *const crate::game::CProjectContext,
+    pub m_ResourceCache: *const crate::game::ResourceCache,
+    pub m_ProjectContext: *const crate::game::ProjectContext,
 }
 fn _GameObjectInitContext_size_check() {
     unsafe {
@@ -146,7 +122,7 @@ pub struct GameObjectRenderContext {
     pub m_DtIgnorePause: f32,
     pub m_RealDt: f32,
     _field_14: [u8; 4],
-    pub m_ProjectContext: *const crate::game::CProjectContext,
+    pub m_ProjectContext: *const crate::game::ProjectContext,
 }
 fn _GameObjectRenderContext_size_check() {
     unsafe {
@@ -175,7 +151,7 @@ pub struct GameObjectUpdateContext {
     pub m_SkippedDt: f32,
     pub m_Paused: bool,
     _field_15: [u8; 3],
-    pub m_ProjectContext: *const crate::game::CProjectContext,
+    pub m_ProjectContext: *const crate::game::ProjectContext,
 }
 fn _GameObjectUpdateContext_size_check() {
     unsafe {
@@ -225,6 +201,32 @@ impl GameState {
             ) = ::std::mem::transmute(Self::PostUpdateRender_ADDRESS);
             f(update_contexts)
         }
+    }
+}
+#[repr(C, align(8))]
+pub struct ProjectContext {}
+impl ProjectContext {}
+impl std::convert::AsRef<ProjectContext> for ProjectContext {
+    fn as_ref(&self) -> &ProjectContext {
+        self
+    }
+}
+impl std::convert::AsMut<ProjectContext> for ProjectContext {
+    fn as_mut(&mut self) -> &mut ProjectContext {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct ResourceCache {}
+impl ResourceCache {}
+impl std::convert::AsRef<ResourceCache> for ResourceCache {
+    fn as_ref(&self) -> &ResourceCache {
+        self
+    }
+}
+impl std::convert::AsMut<ResourceCache> for ResourceCache {
+    fn as_mut(&mut self) -> &mut ResourceCache {
+        self
     }
 }
 #[derive(Copy, Clone)]

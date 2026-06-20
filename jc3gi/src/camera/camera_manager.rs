@@ -31,6 +31,8 @@ impl CameraManager {
 }
 impl CameraManager {
     pub const InitTransform_ADDRESS: usize = 0x14009D390;
+    /// Sets the active camera's transform, writing both T0 and T1 to `mat` (so the subsequent
+    /// interpolation is constant).
     pub unsafe fn InitTransform(&mut self, mat: *const crate::types::math::Matrix4) {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -41,6 +43,7 @@ impl CameraManager {
         }
     }
     pub const InitFOV_ADDRESS: usize = 0x14009D400;
+    /// Sets the active camera's field of view (both T0 and T1).
     pub unsafe fn InitFOV(&mut self, fov: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, fov: f32) = ::std::mem::transmute(

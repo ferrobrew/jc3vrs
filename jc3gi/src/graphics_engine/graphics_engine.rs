@@ -294,7 +294,7 @@ impl std::convert::AsMut<HTexture_t> for HTexture_t {
 #[repr(C, align(8))]
 /// The per-view render context the render passes read: camera matrices (view, projection, the
 /// translation-free offset view-projection and the separate camera world position), shadow data and
-/// per-frame flags. Filled each dispatch by CRenderPass::SetRenderContextCamera.
+/// per-frame flags. Filled each dispatch by RenderPass::SetRenderContextCamera.
 pub struct RenderContext {}
 impl RenderContext {}
 impl std::convert::AsRef<RenderContext> for RenderContext {

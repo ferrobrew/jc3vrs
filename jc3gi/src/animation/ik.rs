@@ -7,9 +7,13 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-pub struct CHumanIK {}
-impl CHumanIK {
+/// Autodesk HumanIK wrapper.
+pub struct HumanIK {}
+impl HumanIK {
     pub const AddEffectorTargetPosition_ADDRESS: usize = 0x140408860;
+    /// Pushes an IK effector target (character-local space). Prototype verified against the debug
+    /// PDB. solve_step / pass_info are 4-byte enums (HumanIK::HIKSolveStep / HIKPassInfo), passed
+    /// as i32.
     pub unsafe fn AddEffectorTargetPosition(
         &mut self,
         effector: i32,
@@ -47,17 +51,18 @@ impl CHumanIK {
         }
     }
 }
-impl std::convert::AsRef<CHumanIK> for CHumanIK {
-    fn as_ref(&self) -> &CHumanIK {
+impl std::convert::AsRef<HumanIK> for HumanIK {
+    fn as_ref(&self) -> &HumanIK {
         self
     }
 }
-impl std::convert::AsMut<CHumanIK> for CHumanIK {
-    fn as_mut(&mut self) -> &mut CHumanIK {
+impl std::convert::AsMut<HumanIK> for HumanIK {
+    fn as_mut(&mut self) -> &mut HumanIK {
         self
     }
 }
 pub const NHandIKTask_Update_ADDRESS: usize = 0x140816430;
+/// Per-frame hand-IK driver (sources its targets from weapon grip positions). Free function.
 unsafe fn NHandIKTask_Update(
     ctx: *mut crate::state::SStateContext,
     p1: *mut ::std::ffi::c_void,

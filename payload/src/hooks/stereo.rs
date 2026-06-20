@@ -65,10 +65,10 @@ fn rotate_render_frame_data() {
     ROTATE_RENDER_FRAME_DATA.get().unwrap().call();
 }
 
-// CRenderPass::SetupRenderFrameData -- the per-batch list *build*: appends `count` render-block-items
+// RenderPass::SetupRenderFrameData -- the per-batch list *build*: appends `count` render-block-items
 // to the active add-list. Runs on worker threads during the sim, not during our Draw calls, so the
 // eye-1 gate never actually fires; it is NOT the add/draw swap (see rotate_render_frame_data above).
-#[detour(address = jc3gi::graphics_engine::render_pass::CRenderPass::SetupRenderFrameData_ADDRESS)]
+#[detour(address = jc3gi::graphics_engine::render_pass::RenderPass::SetupRenderFrameData_ADDRESS)]
 fn setup_render_frame_data(a1: *mut c_void, count: i32, a3: *mut c_void, items: *mut c_void) {
     let gated = gate(&GATE_SETUP_RENDER_FRAME_DATA);
     crate::trace_eye(TraceEvent::SetupRenderFrameData { gated });
@@ -81,9 +81,9 @@ fn setup_render_frame_data(a1: *mut c_void, count: i32, a3: *mut c_void, items: 
         .call(a1, count, a3, items);
 }
 
-// CConstantBufferPool::HandBackBuffers -- recycles last frame's constant buffers back to the free
+// ConstantBufferPool::HandBackBuffers -- recycles last frame's constant buffers back to the free
 // pool. Suppressing it on eye 1 starves the second render of constant buffers. Off by default.
-#[detour(address = jc3gi::graphics_engine::render_pass::CConstantBufferPool::HandBackBuffers_ADDRESS)]
+#[detour(address = jc3gi::graphics_engine::render_pass::ConstantBufferPool::HandBackBuffers_ADDRESS)]
 fn hand_back_buffers(this: *mut c_void) {
     let gated = gate(&GATE_HAND_BACK_BUFFERS);
     crate::trace_eye(TraceEvent::HandBackBuffers { gated });
@@ -93,7 +93,7 @@ fn hand_back_buffers(this: *mut c_void) {
     HAND_BACK_BUFFERS.get().unwrap().call(this);
 }
 
-// CToneMappingEffect::SSmoothedExposure::Update -- N-frame exposure smoother (no dt term, so it
+// ToneMappingEffect::SSmoothedExposure::Update -- N-frame exposure smoother (no dt term, so it
 // double-adapts when the scene renders twice per frame). Skip on eye 1; both eyes then share the
 // first eye's exposure (which is what you want anyway -- no binocular rivalry).
 #[detour(address = jc3gi::graphics_engine::tone_mapping::SSmoothedExposure::Update_ADDRESS)]

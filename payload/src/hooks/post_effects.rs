@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use detours_macro::detour;
 use jc3gi::graphics_engine::post_effects::{
-    CAntiAliasingEffect, PostEffectContext, PostEffectRenderFlags,
+    AntiAliasingEffect, PostEffectContext, PostEffectRenderFlags,
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -55,13 +55,13 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&ANTI_ALIASING_APPLY_BINDER)
 }
 
-// CAntiAliasingEffect::Apply -- drop SMAA T2X (mode 3) to SMAA 1x (mode 2) for the pass when forcing
+// AntiAliasingEffect::Apply -- drop SMAA T2X (mode 3) to SMAA 1x (mode 2) for the pass when forcing
 // 1x in stereo. T2X's temporal resolve blends a previous-frame history that is a single buffer shared
 // (ping-ponged) across the two eye dispatches, so each eye blends the other -> a cross-eye ghost. 1x
 // carries no history. Restore the real mode afterwards so the engine's own state stays intact.
-#[detour(address = jc3gi::graphics_engine::post_effects::CAntiAliasingEffect::Apply_ADDRESS)]
+#[detour(address = jc3gi::graphics_engine::post_effects::AntiAliasingEffect::Apply_ADDRESS)]
 fn anti_aliasing_apply(
-    this: *mut CAntiAliasingEffect,
+    this: *mut AntiAliasingEffect,
     ctx: *mut c_void,
     pec: *mut c_void,
     mgr: *mut c_void,
@@ -103,7 +103,7 @@ fn capture_post_result(stage: usize, mgr: *mut c_void, slot: u32) {
     }
 }
 
-#[detour(address = jc3gi::graphics_engine::post_effects::CMotionBlurEffect::Apply_ADDRESS)]
+#[detour(address = jc3gi::graphics_engine::post_effects::MotionBlurEffect::Apply_ADDRESS)]
 #[allow(clippy::too_many_arguments)]
 fn motion_blur_apply(
     this: *mut c_void,
@@ -134,7 +134,7 @@ fn motion_blur_apply(
     slot
 }
 
-#[detour(address = jc3gi::graphics_engine::post_effects::CDepthOfFieldEffect::Apply_ADDRESS)]
+#[detour(address = jc3gi::graphics_engine::post_effects::DepthOfFieldEffect::Apply_ADDRESS)]
 fn dof_apply(
     this: *mut c_void,
     ctx: *mut c_void,
@@ -171,8 +171,8 @@ fn dof_apply(
     slot
 }
 
-// CFadeEffect::Apply -- alpha-blended fade quad. Skip = no-op (the u64 return is discarded).
-#[detour(address = jc3gi::graphics_engine::post_effects::CFadeEffect::Apply_ADDRESS)]
+// FadeEffect::Apply -- alpha-blended fade quad. Skip = no-op (the u64 return is discarded).
+#[detour(address = jc3gi::graphics_engine::post_effects::FadeEffect::Apply_ADDRESS)]
 fn fade_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void) -> u64 {
     crate::trace_eye(TraceEvent::FadeApply {
         skip: SKIP_FADE.load(Ordering::Relaxed),
@@ -183,8 +183,8 @@ fn fade_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void) -> u64 {
     FADE_APPLY.get().unwrap().call(this, a2, a3)
 }
 
-// CGlareEffect::Apply -- bloom/glare generator. Skip = no bloom.
-#[detour(address = jc3gi::graphics_engine::post_effects::CGlareEffect::Apply_ADDRESS)]
+// GlareEffect::Apply -- bloom/glare generator. Skip = no bloom.
+#[detour(address = jc3gi::graphics_engine::post_effects::GlareEffect::Apply_ADDRESS)]
 fn glare_apply(
     this: *mut c_void,
     a2: *mut c_void,
@@ -201,8 +201,8 @@ fn glare_apply(
     GLARE_APPLY.get().unwrap().call(this, a2, a3, a4, a5)
 }
 
-// CPlayerDamageEffect::Apply -- red damage vignette. Slot-passthrough; skip = return input slot.
-#[detour(address = jc3gi::graphics_engine::post_effects::CPlayerDamageEffect::Apply_ADDRESS)]
+// PlayerDamageEffect::Apply -- red damage vignette. Slot-passthrough; skip = return input slot.
+#[detour(address = jc3gi::graphics_engine::post_effects::PlayerDamageEffect::Apply_ADDRESS)]
 fn player_damage_apply(
     this: *mut c_void,
     a2: *mut c_void,
@@ -223,9 +223,9 @@ fn player_damage_apply(
         .call(this, a2, a3, a4, input)
 }
 
-// CSunHaloEffect::PreApply -- prepares the halo. Skip = clear the ready flag (this+0x114) so the
+// SunHaloEffect::PreApply -- prepares the halo. Skip = clear the ready flag (this+0x114) so the
 // paired Apply early-outs, then no-op.
-#[detour(address = jc3gi::graphics_engine::post_effects::CSunHaloEffect::PreApply_ADDRESS)]
+#[detour(address = jc3gi::graphics_engine::post_effects::SunHaloEffect::PreApply_ADDRESS)]
 fn sun_halo_pre_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void, a4: *mut c_void) -> u64 {
     crate::trace_eye(TraceEvent::SunHaloPreApply {
         skip: SKIP_SUN_HALO.load(Ordering::Relaxed),
@@ -239,8 +239,8 @@ fn sun_halo_pre_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void, a4: *
     SUN_HALO_PRE_APPLY.get().unwrap().call(this, a2, a3, a4)
 }
 
-// CSunHaloEffect::Apply -- composites the halo additively. Skip = no-op.
-#[detour(address = jc3gi::graphics_engine::post_effects::CSunHaloEffect::Apply_ADDRESS)]
+// SunHaloEffect::Apply -- composites the halo additively. Skip = no-op.
+#[detour(address = jc3gi::graphics_engine::post_effects::SunHaloEffect::Apply_ADDRESS)]
 fn sun_halo_apply(this: *mut c_void, a2: *mut c_void) -> u64 {
     crate::trace_eye(TraceEvent::SunHaloApply {
         skip: SKIP_SUN_HALO.load(Ordering::Relaxed),
@@ -251,11 +251,11 @@ fn sun_halo_apply(this: *mut c_void, a2: *mut c_void) -> u64 {
     SUN_HALO_APPLY.get().unwrap().call(this, a2)
 }
 
-// CToneMappingEffect::GenerateHistogramForFinalScene -- auto-exposure histogram. Skipping stalls
+// ToneMappingEffect::GenerateHistogramForFinalScene -- auto-exposure histogram. Skipping stalls
 // adaptation, but preserve the out-param contract (this+764/765 = current slot indices) so callers
 // don't read garbage. A bisection aid for the stereo darkening.
 #[detour(
-    address = jc3gi::graphics_engine::tone_mapping::CToneMappingEffect::GenerateHistogramForFinalScene_ADDRESS
+    address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::GenerateHistogramForFinalScene_ADDRESS
 )]
 fn generate_histogram(
     this: *mut c_void,

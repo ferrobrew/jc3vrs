@@ -7,9 +7,47 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// Per-frame brightness histogram used for eye adaptation.
+pub struct SHistogramGeneration {}
+impl SHistogramGeneration {}
+impl std::convert::AsRef<SHistogramGeneration> for SHistogramGeneration {
+    fn as_ref(&self) -> &SHistogramGeneration {
+        self
+    }
+}
+impl std::convert::AsMut<SHistogramGeneration> for SHistogramGeneration {
+    fn as_mut(&mut self) -> &mut SHistogramGeneration {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// N-frame exposure smoother (a ring-buffer average; advances once per render, with no dt term).
+pub struct SSmoothedExposure {}
+impl SSmoothedExposure {
+    pub const Update_ADDRESS: usize = 0x1400F8200;
+    pub unsafe fn Update(&mut self, exposure: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, exposure: f32) = ::std::mem::transmute(
+                Self::Update_ADDRESS,
+            );
+            f(self as *mut Self as _, exposure)
+        }
+    }
+}
+impl std::convert::AsRef<SSmoothedExposure> for SSmoothedExposure {
+    fn as_ref(&self) -> &SSmoothedExposure {
+        self
+    }
+}
+impl std::convert::AsMut<SSmoothedExposure> for SSmoothedExposure {
+    fn as_mut(&mut self) -> &mut SSmoothedExposure {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// HDR tone-mapping / auto-exposure (eye adaptation).
-pub struct CToneMappingEffect {}
-impl CToneMappingEffect {
+pub struct ToneMappingEffect {}
+impl ToneMappingEffect {
     pub const GenerateHistogramForFinalScene_ADDRESS: usize = 0x140119440;
     /// Builds the auto-exposure histogram for the final scene and writes the current histogram slot
     /// indices to a6 / a7 (out-params); returns a7.
@@ -57,51 +95,13 @@ impl CToneMappingEffect {
         }
     }
 }
-impl std::convert::AsRef<CToneMappingEffect> for CToneMappingEffect {
-    fn as_ref(&self) -> &CToneMappingEffect {
+impl std::convert::AsRef<ToneMappingEffect> for ToneMappingEffect {
+    fn as_ref(&self) -> &ToneMappingEffect {
         self
     }
 }
-impl std::convert::AsMut<CToneMappingEffect> for CToneMappingEffect {
-    fn as_mut(&mut self) -> &mut CToneMappingEffect {
-        self
-    }
-}
-#[repr(C, align(8))]
-/// Per-frame brightness histogram used for eye adaptation.
-pub struct SHistogramGeneration {}
-impl SHistogramGeneration {}
-impl std::convert::AsRef<SHistogramGeneration> for SHistogramGeneration {
-    fn as_ref(&self) -> &SHistogramGeneration {
-        self
-    }
-}
-impl std::convert::AsMut<SHistogramGeneration> for SHistogramGeneration {
-    fn as_mut(&mut self) -> &mut SHistogramGeneration {
-        self
-    }
-}
-#[repr(C, align(8))]
-/// N-frame exposure smoother (a ring-buffer average; advances once per render, with no dt term).
-pub struct SSmoothedExposure {}
-impl SSmoothedExposure {
-    pub const Update_ADDRESS: usize = 0x1400F8200;
-    pub unsafe fn Update(&mut self, exposure: f32) {
-        unsafe {
-            let f: unsafe extern "system" fn(this: *mut Self, exposure: f32) = ::std::mem::transmute(
-                Self::Update_ADDRESS,
-            );
-            f(self as *mut Self as _, exposure)
-        }
-    }
-}
-impl std::convert::AsRef<SSmoothedExposure> for SSmoothedExposure {
-    fn as_ref(&self) -> &SSmoothedExposure {
-        self
-    }
-}
-impl std::convert::AsMut<SSmoothedExposure> for SSmoothedExposure {
-    fn as_mut(&mut self) -> &mut SSmoothedExposure {
+impl std::convert::AsMut<ToneMappingEffect> for ToneMappingEffect {
+    fn as_mut(&mut self) -> &mut ToneMappingEffect {
         self
     }
 }

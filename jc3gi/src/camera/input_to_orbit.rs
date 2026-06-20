@@ -7,6 +7,7 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// The camera arm/boom; the look delta rotates it.
 pub struct BoomTransform {}
 impl BoomTransform {
     pub const DeltaTransform_ADDRESS: usize = 0x14043D180;

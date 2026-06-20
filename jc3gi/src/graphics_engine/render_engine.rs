@@ -26,6 +26,7 @@ impl RenderEngine {
 }
 impl RenderEngine {
     pub const PostDraw_ADDRESS: usize = 0x1401C2350;
+    /// Late render-pass step (finalizes / copies render targets under the context mutex).
     pub unsafe fn PostDraw(
         &mut self,
         context: *const crate::graphics_engine::graphics_engine::HContext_t,
@@ -40,7 +41,7 @@ impl RenderEngine {
     }
     pub const DrawRenderPassRange_ADDRESS: usize = 0x140186600;
     /// Draws every render block in the half-open pass-index range [first, last): for each pass it
-    /// walks the fixed CRenderPass* array at this + 32*pass + 128 and vtable-dispatches each block.
+    /// walks the fixed RenderPass* array at this + 32*pass + 128 and vtable-dispatches each block.
     /// GBuffer is 0x2F..0x55, the lighting/scene block 0x56..0x96, post-effects 0x96..0x97.
     pub unsafe fn DrawRenderPassRange(
         &mut self,
@@ -96,7 +97,7 @@ impl RenderEngine {
     }
     pub const DrawPosteffects_ADDRESS: usize = 0x140186910;
     /// Post-effects pass: DrawRenderPassRange(0x96, 0x97) (the RP_POSTEFFECTS pass, whose block is
-    /// CRenderBlockPostEffects::Draw).
+    /// RenderBlockPostEffects::Draw).
     pub unsafe fn DrawPosteffects(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
@@ -128,7 +129,7 @@ impl RenderEngine {
         }
     }
     pub const ApplyJitterTransform_ADDRESS: usize = 0x140173AA0;
-    /// Per-frame TAA jitter: forwards to CPostEffectsManager::ApplySubsampleJitter, which
+    /// Per-frame TAA jitter: forwards to PostEffectsManager::ApplySubsampleJitter, which
     /// post-multiplies a sub-pixel clip-space translation onto `proj` only when AA mode == 3.
     pub unsafe fn ApplyJitterTransform(
         &mut self,

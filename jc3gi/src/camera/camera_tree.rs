@@ -7,6 +7,8 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// Root of the camera pipeline tree: flattens and weights the pipelines and runs their render
+/// modifiers, populating the render contexts each frame.
 pub struct CameraTree {}
 impl CameraTree {
     pub const UpdateRenderContexts_ADDRESS: usize = 0x140465AD0;

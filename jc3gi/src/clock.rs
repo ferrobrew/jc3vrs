@@ -65,6 +65,8 @@ impl Clock {
         }
     }
     pub const Update_ADDRESS: usize = 0x140093230;
+    /// Per-frame tick: measures the QueryPerformanceCounter delta and updates m_SPF (an exponential
+    /// moving average), m_RealSPF, m_FPS, and m_GameTimeMicro.
     pub unsafe fn Update(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(

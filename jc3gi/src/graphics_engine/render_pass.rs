@@ -8,8 +8,8 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 /// The per-frame constant-buffer ring.
-pub struct CConstantBufferPool {}
-impl CConstantBufferPool {
+pub struct ConstantBufferPool {}
+impl ConstantBufferPool {
     pub const HandBackBuffers_ADDRESS: usize = 0x1400E04F0;
     /// Recycles last frame's constant buffers from the in-use stack back to the free pool.
     pub unsafe fn HandBackBuffers(&mut self) {
@@ -21,13 +21,13 @@ impl CConstantBufferPool {
         }
     }
 }
-impl std::convert::AsRef<CConstantBufferPool> for CConstantBufferPool {
-    fn as_ref(&self) -> &CConstantBufferPool {
+impl std::convert::AsRef<ConstantBufferPool> for ConstantBufferPool {
+    fn as_ref(&self) -> &ConstantBufferPool {
         self
     }
 }
-impl std::convert::AsMut<CConstantBufferPool> for CConstantBufferPool {
-    fn as_mut(&mut self) -> &mut CConstantBufferPool {
+impl std::convert::AsMut<ConstantBufferPool> for ConstantBufferPool {
+    fn as_mut(&mut self) -> &mut ConstantBufferPool {
         self
     }
 }
@@ -36,7 +36,7 @@ impl std::convert::AsMut<CConstantBufferPool> for CConstantBufferPool {
 /// (InterlockedExchangeAdd on m_NumElements); on overflow (m_NumElements >= m_ListSize) it spills
 /// into the global overflow list. DoDraw reads min(m_ListSize, m_NumElements) entries and never
 /// writes m_NumElements, so a populated list can be redrawn any number of times.
-pub struct CRBILists {
+pub struct RBILists {
     /// Array of 0x20-byte entries.
     pub m_List: *mut ::std::ffi::c_void,
     /// Capacity.
@@ -45,13 +45,13 @@ pub struct CRBILists {
     /// Live element count (volatile).
     pub m_NumElements: u32,
 }
-fn _CRBILists_size_check() {
+fn _RBILists_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x10], CRBILists>([0u8; 0x10]);
+        ::std::mem::transmute::<[u8; 0x10], RBILists>([0u8; 0x10]);
     }
     unreachable!()
 }
-impl CRBILists {
+impl RBILists {
     pub const Add_ADDRESS: usize = 0x14011C070;
     /// Appends one render-block-item; spills to the global overflow list on capacity overflow.
     pub unsafe fn Add(
@@ -71,21 +71,21 @@ impl CRBILists {
         }
     }
 }
-impl std::convert::AsRef<CRBILists> for CRBILists {
-    fn as_ref(&self) -> &CRBILists {
+impl std::convert::AsRef<RBILists> for RBILists {
+    fn as_ref(&self) -> &RBILists {
         self
     }
 }
-impl std::convert::AsMut<CRBILists> for CRBILists {
-    fn as_mut(&mut self) -> &mut CRBILists {
+impl std::convert::AsMut<RBILists> for RBILists {
+    fn as_mut(&mut self) -> &mut RBILists {
         self
     }
 }
 #[repr(C, align(8))]
-pub struct CRenderPass {}
-impl CRenderPass {
+pub struct RenderPass {}
+impl RenderPass {
     pub const SetupRenderFrameData_ADDRESS: usize = 0x14048C4E0;
-    /// Appends `count` render-block-items (`items`) to the active CRBILists draw/add lists (`a3`
+    /// Appends `count` render-block-items (`items`) to the active RBILists draw/add lists (`a3`
     /// holds the lists). Static (no `this`). Called per batch, including from CPU fragment worker
     /// threads -- not once per frame. The argument list matters: it dereferences `a3 + 0x8038`.
     pub unsafe fn SetupRenderFrameData(
@@ -152,13 +152,13 @@ impl CRenderPass {
         }
     }
 }
-impl std::convert::AsRef<CRenderPass> for CRenderPass {
-    fn as_ref(&self) -> &CRenderPass {
+impl std::convert::AsRef<RenderPass> for RenderPass {
+    fn as_ref(&self) -> &RenderPass {
         self
     }
 }
-impl std::convert::AsMut<CRenderPass> for CRenderPass {
-    fn as_mut(&mut self) -> &mut CRenderPass {
+impl std::convert::AsMut<RenderPass> for RenderPass {
+    fn as_mut(&mut self) -> &mut RenderPass {
         self
     }
 }
@@ -188,7 +188,7 @@ pub const RotateRenderFrameData_ADDRESS: usize = 0x1401A3000;
 /// The per-frame render-block-item list rotation, run once in each `CGraphicsEngine::Draw`
 /// (0x1400F4170) prologue (its call site at 0x1400F4340 is mislabeled `CKeep1000Frames` in this
 /// binary's symbols). Toggles the global add/draw parity at `0x142ED7680`, then for every render
-/// pass swaps `m_CurrentAddList`/`m_CurrentDrawList` to the new parity (via `CRenderPass`'s vtable
+/// pass swaps `m_CurrentAddList`/`m_CurrentDrawList` to the new parity (via `RenderPass`'s vtable
 /// slot 3) and zeroes the new add-list's element count, and finally flushes the render-block-item
 /// overflow list. Static (no `this`); reads the render engine + parity from globals. This -- not the
 /// per-batch `SetupRenderFrameData` build above -- is the actual draw-list swap.

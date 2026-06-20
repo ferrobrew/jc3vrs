@@ -168,6 +168,7 @@ impl Character {
         }
     }
     pub const UpdatePropEffects_ADDRESS: usize = 0x1407C2380;
+    /// Per-frame update of the character's attached prop visual effects. `dt` is the frame delta.
     pub unsafe fn UpdatePropEffects(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(

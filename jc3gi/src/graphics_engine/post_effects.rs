@@ -9,25 +9,25 @@
 #[repr(C, align(8))]
 /// Anti-aliasing resolve. `m_Mode`: 1/4 = FXAA, 2 = SMAA 1x, 3 = SMAA T2X. Mode 3 adds a temporal
 /// reprojection against a previous-frame history texture.
-pub struct CAntiAliasingEffect {
+pub struct AntiAliasingEffect {
     _field_0: [u8; 768],
     pub m_Mode: i32,
     _field_304: [u8; 4],
 }
-fn _CAntiAliasingEffect_size_check() {
+fn _AntiAliasingEffect_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x308], CAntiAliasingEffect>([0u8; 0x308]);
+        ::std::mem::transmute::<[u8; 0x308], AntiAliasingEffect>([0u8; 0x308]);
     }
     unreachable!()
 }
-impl CAntiAliasingEffect {
+impl AntiAliasingEffect {
     pub const Apply_ADDRESS: usize = 0x1400BC9A0;
     /// `slot` is the in/out post-effect result-slot index.
     pub unsafe fn Apply(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
         pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+        mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
         slot: *mut u32,
     ) -> u64 {
         unsafe {
@@ -35,7 +35,7 @@ impl CAntiAliasingEffect {
                 this: *mut Self,
                 ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
                 pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+                mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
                 slot: *mut u32,
             ) -> u64 = ::std::mem::transmute(Self::Apply_ADDRESS);
             f(self as *mut Self as _, ctx, pec, mgr, slot)
@@ -65,14 +65,14 @@ impl CAntiAliasingEffect {
     /// render setups) sized `width` x `height`.
     pub unsafe fn CreateRenderTargetResources(
         &mut self,
-        mgr: *const crate::graphics_engine::post_effects::CPostEffectsManager,
+        mgr: *const crate::graphics_engine::post_effects::PostEffectsManager,
         width: i32,
         height: i32,
     ) {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
-                mgr: *const crate::graphics_engine::post_effects::CPostEffectsManager,
+                mgr: *const crate::graphics_engine::post_effects::PostEffectsManager,
                 width: i32,
                 height: i32,
             ) = ::std::mem::transmute(Self::CreateRenderTargetResources_ADDRESS);
@@ -80,89 +80,89 @@ impl CAntiAliasingEffect {
         }
     }
 }
-impl std::convert::AsRef<CAntiAliasingEffect> for CAntiAliasingEffect {
-    fn as_ref(&self) -> &CAntiAliasingEffect {
+impl std::convert::AsRef<AntiAliasingEffect> for AntiAliasingEffect {
+    fn as_ref(&self) -> &AntiAliasingEffect {
         self
     }
 }
-impl std::convert::AsMut<CAntiAliasingEffect> for CAntiAliasingEffect {
-    fn as_mut(&mut self) -> &mut CAntiAliasingEffect {
+impl std::convert::AsMut<AntiAliasingEffect> for AntiAliasingEffect {
+    fn as_mut(&mut self) -> &mut AntiAliasingEffect {
         self
     }
 }
 #[repr(C, align(8))]
 /// Gaussian blur (the non-bokeh blur path).
-pub struct CBlurEffect {}
-impl CBlurEffect {
+pub struct BlurEffect {}
+impl BlurEffect {
     pub const Apply_ADDRESS: usize = 0x1400BCB10;
     pub unsafe fn Apply(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
         pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+        mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
     ) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
                 pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+                mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
             ) -> bool = ::std::mem::transmute(Self::Apply_ADDRESS);
             f(self as *mut Self as _, ctx, pec, mgr)
         }
     }
 }
-impl std::convert::AsRef<CBlurEffect> for CBlurEffect {
-    fn as_ref(&self) -> &CBlurEffect {
+impl std::convert::AsRef<BlurEffect> for BlurEffect {
+    fn as_ref(&self) -> &BlurEffect {
         self
     }
 }
-impl std::convert::AsMut<CBlurEffect> for CBlurEffect {
-    fn as_mut(&mut self) -> &mut CBlurEffect {
+impl std::convert::AsMut<BlurEffect> for BlurEffect {
+    fn as_mut(&mut self) -> &mut BlurEffect {
         self
     }
 }
 #[repr(C, align(8))]
-/// Bokeh blur (the IsBokehActive path; runs after CDownScale2x2PackFocus).
-pub struct CBlurEffectBokeh {}
-impl CBlurEffectBokeh {
+/// Bokeh blur (the IsBokehActive path; runs after DownScale2x2PackFocus).
+pub struct BlurEffectBokeh {}
+impl BlurEffectBokeh {
     pub const Apply_ADDRESS: usize = 0x1400A7870;
     pub unsafe fn Apply(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
         pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+        mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
     ) {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
                 pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+                mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
             ) = ::std::mem::transmute(Self::Apply_ADDRESS);
             f(self as *mut Self as _, ctx, pec, mgr)
         }
     }
 }
-impl std::convert::AsRef<CBlurEffectBokeh> for CBlurEffectBokeh {
-    fn as_ref(&self) -> &CBlurEffectBokeh {
+impl std::convert::AsRef<BlurEffectBokeh> for BlurEffectBokeh {
+    fn as_ref(&self) -> &BlurEffectBokeh {
         self
     }
 }
-impl std::convert::AsMut<CBlurEffectBokeh> for CBlurEffectBokeh {
-    fn as_mut(&mut self) -> &mut CBlurEffectBokeh {
+impl std::convert::AsMut<BlurEffectBokeh> for BlurEffectBokeh {
+    fn as_mut(&mut self) -> &mut BlurEffectBokeh {
         self
     }
 }
 #[repr(C, align(8))]
-pub struct CDepthOfFieldEffect {}
-impl CDepthOfFieldEffect {
+pub struct DepthOfFieldEffect {}
+impl DepthOfFieldEffect {
     pub const Apply_ADDRESS: usize = 0x1400C7890;
     pub unsafe fn Apply(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
         pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+        mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
         input: u32,
     ) -> u32 {
         unsafe {
@@ -170,59 +170,59 @@ impl CDepthOfFieldEffect {
                 this: *mut Self,
                 ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
                 pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+                mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
                 input: u32,
             ) -> u32 = ::std::mem::transmute(Self::Apply_ADDRESS);
             f(self as *mut Self as _, ctx, pec, mgr, input)
         }
     }
 }
-impl std::convert::AsRef<CDepthOfFieldEffect> for CDepthOfFieldEffect {
-    fn as_ref(&self) -> &CDepthOfFieldEffect {
+impl std::convert::AsRef<DepthOfFieldEffect> for DepthOfFieldEffect {
+    fn as_ref(&self) -> &DepthOfFieldEffect {
         self
     }
 }
-impl std::convert::AsMut<CDepthOfFieldEffect> for CDepthOfFieldEffect {
-    fn as_mut(&mut self) -> &mut CDepthOfFieldEffect {
+impl std::convert::AsMut<DepthOfFieldEffect> for DepthOfFieldEffect {
+    fn as_mut(&mut self) -> &mut DepthOfFieldEffect {
         self
     }
 }
 #[repr(C, align(8))]
 /// Bokeh depth-of-field downscale prepass (2x2 pack + focus).
-pub struct CDownScale2x2PackFocus {}
-impl CDownScale2x2PackFocus {
+pub struct DownScale2x2PackFocus {}
+impl DownScale2x2PackFocus {
     pub const Apply_ADDRESS: usize = 0x1400C82E0;
     pub unsafe fn Apply(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
         pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+        mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
     ) {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
                 pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+                mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
             ) = ::std::mem::transmute(Self::Apply_ADDRESS);
             f(self as *mut Self as _, ctx, pec, mgr)
         }
     }
 }
-impl std::convert::AsRef<CDownScale2x2PackFocus> for CDownScale2x2PackFocus {
-    fn as_ref(&self) -> &CDownScale2x2PackFocus {
+impl std::convert::AsRef<DownScale2x2PackFocus> for DownScale2x2PackFocus {
+    fn as_ref(&self) -> &DownScale2x2PackFocus {
         self
     }
 }
-impl std::convert::AsMut<CDownScale2x2PackFocus> for CDownScale2x2PackFocus {
-    fn as_mut(&mut self) -> &mut CDownScale2x2PackFocus {
+impl std::convert::AsMut<DownScale2x2PackFocus> for DownScale2x2PackFocus {
+    fn as_mut(&mut self) -> &mut DownScale2x2PackFocus {
         self
     }
 }
 #[repr(C, align(8))]
 /// Alpha-blended fade quad over the scene.
-pub struct CFadeEffect {}
-impl CFadeEffect {
+pub struct FadeEffect {}
+impl FadeEffect {
     pub const Apply_ADDRESS: usize = 0x1400A9570;
     pub unsafe fn Apply(
         &mut self,
@@ -239,20 +239,20 @@ impl CFadeEffect {
         }
     }
 }
-impl std::convert::AsRef<CFadeEffect> for CFadeEffect {
-    fn as_ref(&self) -> &CFadeEffect {
+impl std::convert::AsRef<FadeEffect> for FadeEffect {
+    fn as_ref(&self) -> &FadeEffect {
         self
     }
 }
-impl std::convert::AsMut<CFadeEffect> for CFadeEffect {
-    fn as_mut(&mut self) -> &mut CFadeEffect {
+impl std::convert::AsMut<FadeEffect> for FadeEffect {
+    fn as_mut(&mut self) -> &mut FadeEffect {
         self
     }
 }
 #[repr(C, align(8))]
 /// Bloom / glare generator (writes its own scratch targets, composited later).
-pub struct CGlareEffect {}
-impl CGlareEffect {
+pub struct GlareEffect {}
+impl GlareEffect {
     pub const Apply_ADDRESS: usize = 0x1400AA510;
     pub unsafe fn Apply(
         &mut self,
@@ -273,25 +273,25 @@ impl CGlareEffect {
         }
     }
 }
-impl std::convert::AsRef<CGlareEffect> for CGlareEffect {
-    fn as_ref(&self) -> &CGlareEffect {
+impl std::convert::AsRef<GlareEffect> for GlareEffect {
+    fn as_ref(&self) -> &GlareEffect {
         self
     }
 }
-impl std::convert::AsMut<CGlareEffect> for CGlareEffect {
-    fn as_mut(&mut self) -> &mut CGlareEffect {
+impl std::convert::AsMut<GlareEffect> for GlareEffect {
+    fn as_mut(&mut self) -> &mut GlareEffect {
         self
     }
 }
 #[repr(C, align(8))]
-pub struct CMotionBlurEffect {}
-impl CMotionBlurEffect {
+pub struct MotionBlurEffect {}
+impl MotionBlurEffect {
     pub const Apply_ADDRESS: usize = 0x1400C8E20;
     pub unsafe fn Apply(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
         pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+        mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
         input: u32,
         blur: f32,
         flag0: bool,
@@ -302,7 +302,7 @@ impl CMotionBlurEffect {
                 this: *mut Self,
                 ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
                 pec: *mut crate::graphics_engine::post_effects::PostEffectContext,
-                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+                mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
                 input: u32,
                 blur: f32,
                 flag0: bool,
@@ -312,20 +312,20 @@ impl CMotionBlurEffect {
         }
     }
 }
-impl std::convert::AsRef<CMotionBlurEffect> for CMotionBlurEffect {
-    fn as_ref(&self) -> &CMotionBlurEffect {
+impl std::convert::AsRef<MotionBlurEffect> for MotionBlurEffect {
+    fn as_ref(&self) -> &MotionBlurEffect {
         self
     }
 }
-impl std::convert::AsMut<CMotionBlurEffect> for CMotionBlurEffect {
-    fn as_mut(&mut self) -> &mut CMotionBlurEffect {
+impl std::convert::AsMut<MotionBlurEffect> for MotionBlurEffect {
+    fn as_mut(&mut self) -> &mut MotionBlurEffect {
         self
     }
 }
 #[repr(C, align(8))]
 /// Red damage vignette. Slot-passthrough (returns the input slot index).
-pub struct CPlayerDamageEffect {}
-impl CPlayerDamageEffect {
+pub struct PlayerDamageEffect {}
+impl PlayerDamageEffect {
     pub const Apply_ADDRESS: usize = 0x1400F76E0;
     pub unsafe fn Apply(
         &mut self,
@@ -346,19 +346,74 @@ impl CPlayerDamageEffect {
         }
     }
 }
-impl std::convert::AsRef<CPlayerDamageEffect> for CPlayerDamageEffect {
-    fn as_ref(&self) -> &CPlayerDamageEffect {
+impl std::convert::AsRef<PlayerDamageEffect> for PlayerDamageEffect {
+    fn as_ref(&self) -> &PlayerDamageEffect {
         self
     }
 }
-impl std::convert::AsMut<CPlayerDamageEffect> for CPlayerDamageEffect {
-    fn as_mut(&mut self) -> &mut CPlayerDamageEffect {
+impl std::convert::AsMut<PlayerDamageEffect> for PlayerDamageEffect {
+    fn as_mut(&mut self) -> &mut PlayerDamageEffect {
         self
     }
 }
 #[repr(C, align(8))]
-pub struct CPostEffectsManager {}
-impl CPostEffectsManager {
+pub struct PostEffectContext {
+    pub m_RenderContext: *mut crate::graphics_engine::post_effects::PostEffectRenderContext,
+}
+fn _PostEffectContext_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x8], PostEffectContext>([0u8; 0x8]);
+    }
+    unreachable!()
+}
+impl PostEffectContext {}
+impl std::convert::AsRef<PostEffectContext> for PostEffectContext {
+    fn as_ref(&self) -> &PostEffectContext {
+        self
+    }
+}
+impl std::convert::AsMut<PostEffectContext> for PostEffectContext {
+    fn as_mut(&mut self) -> &mut PostEffectContext {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct PostEffectRenderContext {
+    _field_0: [u8; 900],
+    pub m_Flags: crate::graphics_engine::post_effects::PostEffectRenderFlags,
+    _field_385: [u8; 3],
+}
+fn _PostEffectRenderContext_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x388], PostEffectRenderContext>([0u8; 0x388]);
+    }
+    unreachable!()
+}
+impl PostEffectRenderContext {}
+impl std::convert::AsRef<PostEffectRenderContext> for PostEffectRenderContext {
+    fn as_ref(&self) -> &PostEffectRenderContext {
+        self
+    }
+}
+impl std::convert::AsMut<PostEffectRenderContext> for PostEffectRenderContext {
+    fn as_mut(&mut self) -> &mut PostEffectRenderContext {
+        self
+    }
+}
+bitflags::bitflags! {
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] #[doc =
+    " Per-frame render-context flags."] pub struct PostEffectRenderFlags : u8 { const
+    m_MotionVectorReprojection = 1usize as _; }
+}
+fn _PostEffectRenderFlags_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x1], PostEffectRenderFlags>([0u8; 0x1]);
+    }
+    unreachable!()
+}
+#[repr(C, align(8))]
+pub struct PostEffectsManager {}
+impl PostEffectsManager {
     pub const ApplyWorldFilters_ADDRESS: usize = 0x14014BFE0;
     /// Wires up and enqueues the world post-effect block, then runs the world fade accumulator
     /// (ApplyWorldFadeFilter). `dt` flows only into that accumulator; the texture arguments are
@@ -454,13 +509,13 @@ impl CPostEffectsManager {
         }
     }
 }
-impl std::convert::AsRef<CPostEffectsManager> for CPostEffectsManager {
-    fn as_ref(&self) -> &CPostEffectsManager {
+impl std::convert::AsRef<PostEffectsManager> for PostEffectsManager {
+    fn as_ref(&self) -> &PostEffectsManager {
         self
     }
 }
-impl std::convert::AsMut<CPostEffectsManager> for CPostEffectsManager {
-    fn as_mut(&mut self) -> &mut CPostEffectsManager {
+impl std::convert::AsMut<PostEffectsManager> for PostEffectsManager {
+    fn as_mut(&mut self) -> &mut PostEffectsManager {
         self
     }
 }
@@ -471,8 +526,8 @@ impl std::convert::AsMut<CPostEffectsManager> for CPostEffectsManager {
 /// halo + additive blend, and the final fade. It threads a single result-texture slot index through
 /// the slot-returning effects (DoF / motion blur / damage / AA), hopping between the three
 /// fullscreen temp textures. `ctx` is RenderContext*; `info` is a CRBIInfo*.
-pub struct CRenderBlockPostEffects {}
-impl CRenderBlockPostEffects {
+pub struct RenderBlockPostEffects {}
+impl RenderBlockPostEffects {
     pub const Draw_ADDRESS: usize = 0x14016A260;
     pub unsafe fn Draw(
         &mut self,
@@ -489,33 +544,33 @@ impl CRenderBlockPostEffects {
         }
     }
 }
-impl std::convert::AsRef<CRenderBlockPostEffects> for CRenderBlockPostEffects {
-    fn as_ref(&self) -> &CRenderBlockPostEffects {
+impl std::convert::AsRef<RenderBlockPostEffects> for RenderBlockPostEffects {
+    fn as_ref(&self) -> &RenderBlockPostEffects {
         self
     }
 }
-impl std::convert::AsMut<CRenderBlockPostEffects> for CRenderBlockPostEffects {
-    fn as_mut(&mut self) -> &mut CRenderBlockPostEffects {
+impl std::convert::AsMut<RenderBlockPostEffects> for RenderBlockPostEffects {
+    fn as_mut(&mut self) -> &mut RenderBlockPostEffects {
         self
     }
 }
 #[repr(C, align(8))]
 /// Sun halo. PreApply prepares and sets the ready flag (byte at +0x114); Apply composites it.
-pub struct CSunHaloEffect {}
-impl CSunHaloEffect {
+pub struct SunHaloEffect {}
+impl SunHaloEffect {
     pub const PreApply_ADDRESS: usize = 0x140118450;
     pub unsafe fn PreApply(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
         a3: *mut ::std::ffi::c_void,
-        mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+        mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
     ) -> u64 {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
                 a3: *mut ::std::ffi::c_void,
-                mgr: *mut crate::graphics_engine::post_effects::CPostEffectsManager,
+                mgr: *mut crate::graphics_engine::post_effects::PostEffectsManager,
             ) -> u64 = ::std::mem::transmute(Self::PreApply_ADDRESS);
             f(self as *mut Self as _, ctx, a3, mgr)
         }
@@ -534,68 +589,13 @@ impl CSunHaloEffect {
         }
     }
 }
-impl std::convert::AsRef<CSunHaloEffect> for CSunHaloEffect {
-    fn as_ref(&self) -> &CSunHaloEffect {
+impl std::convert::AsRef<SunHaloEffect> for SunHaloEffect {
+    fn as_ref(&self) -> &SunHaloEffect {
         self
     }
 }
-impl std::convert::AsMut<CSunHaloEffect> for CSunHaloEffect {
-    fn as_mut(&mut self) -> &mut CSunHaloEffect {
+impl std::convert::AsMut<SunHaloEffect> for SunHaloEffect {
+    fn as_mut(&mut self) -> &mut SunHaloEffect {
         self
     }
-}
-#[repr(C, align(8))]
-pub struct PostEffectContext {
-    pub m_RenderContext: *mut crate::graphics_engine::post_effects::PostEffectRenderContext,
-}
-fn _PostEffectContext_size_check() {
-    unsafe {
-        ::std::mem::transmute::<[u8; 0x8], PostEffectContext>([0u8; 0x8]);
-    }
-    unreachable!()
-}
-impl PostEffectContext {}
-impl std::convert::AsRef<PostEffectContext> for PostEffectContext {
-    fn as_ref(&self) -> &PostEffectContext {
-        self
-    }
-}
-impl std::convert::AsMut<PostEffectContext> for PostEffectContext {
-    fn as_mut(&mut self) -> &mut PostEffectContext {
-        self
-    }
-}
-#[repr(C, align(8))]
-pub struct PostEffectRenderContext {
-    _field_0: [u8; 900],
-    pub m_Flags: crate::graphics_engine::post_effects::PostEffectRenderFlags,
-    _field_385: [u8; 3],
-}
-fn _PostEffectRenderContext_size_check() {
-    unsafe {
-        ::std::mem::transmute::<[u8; 0x388], PostEffectRenderContext>([0u8; 0x388]);
-    }
-    unreachable!()
-}
-impl PostEffectRenderContext {}
-impl std::convert::AsRef<PostEffectRenderContext> for PostEffectRenderContext {
-    fn as_ref(&self) -> &PostEffectRenderContext {
-        self
-    }
-}
-impl std::convert::AsMut<PostEffectRenderContext> for PostEffectRenderContext {
-    fn as_mut(&mut self) -> &mut PostEffectRenderContext {
-        self
-    }
-}
-bitflags::bitflags! {
-    #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] #[doc =
-    " Per-frame render-context flags."] pub struct PostEffectRenderFlags : u8 { const
-    m_MotionVectorReprojection = 1usize as _; }
-}
-fn _PostEffectRenderFlags_size_check() {
-    unsafe {
-        ::std::mem::transmute::<[u8; 0x1], PostEffectRenderFlags>([0u8; 0x1]);
-    }
-    unreachable!()
 }

@@ -7,7 +7,9 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-pub struct CUIManager {
+/// Scaleform-backed UI manager (the concrete class behind IUIManager; a single instance). It renders
+/// the HUD into the engine surface; InitPlatformRT rebinds its render target.
+pub struct UIManager {
     _field_0: [u8; 5008],
     /// The Scaleform RenderBuffer the UI HAL renders into (set up by InitPlatformRT).
     pub m_RenderBuffer: *mut ::std::ffi::c_void,
@@ -17,13 +19,13 @@ pub struct CUIManager {
     pub m_ViewHeight: f32,
     _field_148c: [u8; 4],
 }
-fn _CUIManager_size_check() {
+fn _UIManager_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x1490], CUIManager>([0u8; 0x1490]);
+        ::std::mem::transmute::<[u8; 0x1490], UIManager>([0u8; 0x1490]);
     }
     unreachable!()
 }
-impl CUIManager {
+impl UIManager {
     pub unsafe fn get() -> Option<&'static mut Self> {
         unsafe {
             let ptr: *mut Self = *(5417317920usize as *mut *mut Self);
@@ -31,7 +33,7 @@ impl CUIManager {
         }
     }
 }
-impl CUIManager {
+impl UIManager {
     pub const InitPlatformRT_ADDRESS: usize = 0x140F696E0;
     /// Bind the UI render target: build a Scaleform RenderTargetData (m_RenderBuffer) from the
     /// engine surface's RTV/DSV (GetRTVFromSurface / GetDSVFromSurface) via RenderTargetData::UpdateData.
@@ -205,21 +207,21 @@ impl CUIManager {
         }
     }
 }
-impl std::convert::AsRef<CUIManager> for CUIManager {
-    fn as_ref(&self) -> &CUIManager {
+impl std::convert::AsRef<UIManager> for UIManager {
+    fn as_ref(&self) -> &UIManager {
         self
     }
 }
-impl std::convert::AsMut<CUIManager> for CUIManager {
-    fn as_mut(&mut self) -> &mut CUIManager {
+impl std::convert::AsMut<UIManager> for UIManager {
+    fn as_mut(&mut self) -> &mut UIManager {
         self
     }
 }
 pub const GetIUIManager_ADDRESS: usize = 0x1400995A0;
-/// Returns the single CUIManager instance (the concrete class behind IUIManager).
-pub unsafe fn GetIUIManager() -> *mut crate::ui::ui_manager::CUIManager {
+/// Returns the single UIManager instance (the concrete class behind IUIManager).
+pub unsafe fn GetIUIManager() -> *mut crate::ui::ui_manager::UIManager {
     unsafe {
-        let f: unsafe extern "system" fn() -> *mut crate::ui::ui_manager::CUIManager = ::std::mem::transmute(
+        let f: unsafe extern "system" fn() -> *mut crate::ui::ui_manager::UIManager = ::std::mem::transmute(
             GetIUIManager_ADDRESS,
         );
         f()
