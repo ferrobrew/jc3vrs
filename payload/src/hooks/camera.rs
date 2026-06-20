@@ -61,6 +61,20 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 camera.m_TransformF.data[12] += offset * camera.m_TransformF.data[0];
                 camera.m_TransformF.data[13] += offset * camera.m_TransformF.data[1];
                 camera.m_TransformF.data[14] += offset * camera.m_TransformF.data[2];
+
+                // Also offset the view so the parallax reaches full-m_ViewProjection shaders
+                // (transparents/sky/water), not just the camera-relative opaque path. m_View ==
+                // inverse(m_TransformF), so the +offset*right shift of the camera world position is a
+                // -offset shift of the view translation-X (data[12]). SetupRenderCamera has already
+                // applied reverse-Z + jitter to the projections, so rebuild m_ViewProjection /
+                // m_ViewProjectionF from them with the engine's own Multiply4x4 (the same call it
+                // uses), sidestepping any matrix-convention guesswork.
+                camera.m_View.data[12] -= offset;
+                let view = &camera.m_View as *const Matrix4;
+                let proj = &camera.m_Projection as *const Matrix4;
+                let proj_f = &camera.m_ProjectionF as *const Matrix4;
+                Matrix4::Multiply4x4(view, proj, &mut camera.m_ViewProjection);
+                Matrix4::Multiply4x4(view, proj_f, &mut camera.m_ViewProjectionF);
             }
         }
     }
