@@ -39,7 +39,7 @@ mod logging;
 /// When enabled, the manual Draw driver issues a second `game.Draw` per real frame (the stereo
 /// "second eye"), and the `CClock::Update` detour gates the clock to once per real frame so the
 /// SPF smoother isn't polluted (avoids slow-mo). Toggle via the Render tab.
-pub static STEREO: AtomicBool = AtomicBool::new(false);
+pub static STEREO: AtomicBool = AtomicBool::new(true);
 
 /// Which Draw (eye) the manual driver is currently dispatching: 0 or 1. Set before each
 /// `game.Draw`, read by the post-draw capture to route the back buffer into the matching RT.
@@ -50,6 +50,10 @@ pub static DRAW_INDEX: AtomicUsize = AtomicUsize::new(0);
 pub static STEREO_CAMERAS: AtomicBool = AtomicBool::new(true);
 /// Inter-pupillary distance (metres) for the per-eye camera offset.
 pub static STEREO_IPD: Mutex<f32> = Mutex::new(2.0);
+/// Force SMAA T2X (AA mode 3) down to SMAA 1x while rendering in stereo. T2X's temporal resolve
+/// blends a mono, per-dispatch-shared history -> a cross-eye ghost; 1x carries no history. The
+/// matching TAA jitter is also dropped (no resolve to consume it). Default on.
+pub static FORCE_SMAA_1X: AtomicBool = AtomicBool::new(true);
 /// Which eye reaches the screen in stereo double-Draw: false = eye 1 (default), true = eye 0. Lets
 /// each eye's render be compared live, bypassing the (flaky) per-eye capture.
 pub static PRESENT_EYE_0: AtomicBool = AtomicBool::new(false);
@@ -857,6 +861,11 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
                 STEREO_CAMERAS.store(sc, Ordering::Relaxed);
             }
             ui.add(egui::Slider::new(&mut *STEREO_IPD.lock(), 0.0..=100.0).text("IPD (m)"));
+            gate_checkbox(
+                ui,
+                &FORCE_SMAA_1X,
+                "Force SMAA 1x in stereo (T2X ghosts across eyes)",
+            );
         }
 
         gate_checkbox(

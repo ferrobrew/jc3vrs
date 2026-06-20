@@ -10,7 +10,9 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use detours_macro::detour;
-use jc3gi::graphics_engine::post_effects::{PostEffectContext, PostEffectRenderFlags};
+use jc3gi::graphics_engine::post_effects::{
+    CAntiAliasingEffect, PostEffectContext, PostEffectRenderFlags,
+};
 use re_utilities::hook_library::HookLibrary;
 
 use crate::TraceEvent;
@@ -50,6 +52,40 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&SUN_HALO_PRE_APPLY_BINDER)
         .with_static_binder(&SUN_HALO_APPLY_BINDER)
         .with_static_binder(&GENERATE_HISTOGRAM_BINDER)
+        .with_static_binder(&ANTI_ALIASING_APPLY_BINDER)
+}
+
+// CAntiAliasingEffect::Apply -- drop SMAA T2X (mode 3) to SMAA 1x (mode 2) for the pass when forcing
+// 1x in stereo. T2X's temporal resolve blends a previous-frame history that is a single buffer shared
+// (ping-ponged) across the two eye dispatches, so each eye blends the other -> a cross-eye ghost. 1x
+// carries no history. Restore the real mode afterwards so the engine's own state stays intact.
+#[detour(address = jc3gi::graphics_engine::post_effects::CAntiAliasingEffect::Apply_ADDRESS)]
+fn anti_aliasing_apply(
+    this: *mut CAntiAliasingEffect,
+    ctx: *mut c_void,
+    pec: *mut c_void,
+    mgr: *mut c_void,
+    slot: *mut u32,
+) -> u64 {
+    let restore = unsafe {
+        if crate::STEREO.load(Ordering::Relaxed)
+            && crate::FORCE_SMAA_1X.load(Ordering::Relaxed)
+            && (*this).m_Mode == 3
+        {
+            (*this).m_Mode = 2;
+            true
+        } else {
+            false
+        }
+    };
+    let r = ANTI_ALIASING_APPLY
+        .get()
+        .unwrap()
+        .call(this, ctx, pec, mgr, slot);
+    if restore {
+        unsafe { (*this).m_Mode = 3 };
+    }
+    r
 }
 
 /// Read a stage's slot result texture (`CTX[slot+83]`, where `CTX` is the manager arg) and capture

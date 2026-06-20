@@ -37,6 +37,10 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         crate::trace_eye(crate::TraceEvent::SetupRenderCamera);
     }
 
+    // Forcing SMAA 1x in stereo drops the temporal resolve, so the TAA sub-pixel jitter has nothing
+    // to consume it (it would just shimmer) -- drop the jitter too.
+    let jitter = jitter
+        && !(crate::STEREO.load(Ordering::Relaxed) && crate::FORCE_SMAA_1X.load(Ordering::Relaxed));
     let result = SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter);
 
     // Per-eye parallax: shift the camera world position (m_TransformF translation == camera+0x84,
