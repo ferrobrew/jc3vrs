@@ -9,9 +9,7 @@
 //! register/stack slot) rather than decode them -- they're only counted, never inspected. The
 //! buffer-flow wrappers (`Clear`/`CopySurfaceToTexture`/`ResolveSurface`) fire rarely enough to trace.
 
-use std::cell::Cell;
-use std::ffi::c_void;
-use std::sync::atomic::Ordering;
+use std::{cell::Cell, ffi::c_void, sync::atomic::Ordering};
 
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;

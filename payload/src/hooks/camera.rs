@@ -14,8 +14,10 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
-use crate::trace::{TraceEvent, TraceState};
+use crate::{
+    config::Config,
+    trace::{TraceEvent, TraceState},
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()

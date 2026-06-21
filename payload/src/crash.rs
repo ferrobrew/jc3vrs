@@ -9,20 +9,23 @@
 //! is resolved to its containing module + offset (`module+0xoff`), which works under Wine where
 //! `std::backtrace` usually can't symbolize.
 
-use windows::Win32::{
-    Foundation::HMODULE,
-    System::{
-        Diagnostics::Debug::{
-            AddVectoredExceptionHandler, EXCEPTION_POINTERS, EXCEPTION_RECORD,
-            RtlCaptureStackBackTrace,
-        },
-        LibraryLoader::{
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            GetModuleFileNameW, GetModuleHandleExW,
+use windows::{
+    Win32::{
+        Foundation::HMODULE,
+        System::{
+            Diagnostics::Debug::{
+                AddVectoredExceptionHandler, EXCEPTION_POINTERS, EXCEPTION_RECORD,
+                RtlCaptureStackBackTrace,
+            },
+            LibraryLoader::{
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW,
+                GetModuleHandleExW,
+            },
         },
     },
+    core::PCWSTR,
 };
-use windows::core::PCWSTR;
 
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 

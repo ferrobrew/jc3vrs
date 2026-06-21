@@ -10,8 +10,10 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::stereo::STEREO_STATE;
-use crate::trace::{TraceEvent, TraceState};
+use crate::{
+    stereo::STEREO_STATE,
+    trace::{TraceEvent, TraceState},
+};
 
 use super::graphics::BLOCK_FLIP;
 
