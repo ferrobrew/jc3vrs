@@ -9,7 +9,7 @@ use jc3gi::graphics_engine::{
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::System::Threading::{EnterCriticalSection, LeaveCriticalSection};
 
-use crate::trace::{TraceEvent, TraceState};
+use crate::debug::trace::{TraceEvent, TraceState};
 
 pub(super) fn extend(library: HookLibrary) -> HookLibrary {
     library
@@ -50,7 +50,7 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             return result;
         };
 
-        let lock = crate::EGUI_DEBUG_RENDER_STATE.lock();
+        let lock = crate::ui::render::EGUI_DEBUG_RENDER_STATE.lock();
         let index = crate::stereo::draw_index();
 
         EnterCriticalSection(context.m_Mutex);

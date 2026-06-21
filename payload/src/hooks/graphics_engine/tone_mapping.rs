@@ -16,8 +16,8 @@ use re_utilities::hook_library::HookLibrary;
 
 use crate::{
     config::Config,
+    debug::trace::{TraceEvent, TraceState},
     stereo::{draw_index, is_second_eye},
-    trace::{TraceEvent, TraceState},
 };
 
 pub(super) fn extend(library: HookLibrary) -> HookLibrary {
@@ -84,7 +84,7 @@ fn tonemapping_update(
     if force_exposure {
         tme.m_CurrentExposure = forced_value;
     }
-    if crate::trace::tracing_active() {
+    if crate::debug::trace::tracing_active() {
         let target_num = unsafe { ctx.as_ref() }
             .map(|c| c.m_AutoExposureKey)
             .unwrap_or_default();
@@ -139,7 +139,7 @@ fn generate_histogram(
     // The histogram reads the final HDR scene (MainColor) for auto-exposure, so this is the first
     // point in the post chain where MainColor still holds this dispatch's clean scene -- grab it for
     // the per-eye "Scene" preview before the chain recycles it.
-    crate::capture_main_color(draw_index());
+    crate::ui::render::capture_main_color(draw_index());
 
     if skip {
         unsafe {

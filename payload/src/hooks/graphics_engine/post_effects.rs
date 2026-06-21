@@ -18,8 +18,8 @@ use re_utilities::hook_library::HookLibrary;
 
 use crate::{
     config::Config,
+    debug::trace::{TraceEvent, TraceState},
     stereo::{self, draw_index, is_second_eye},
-    trace::{TraceEvent, TraceState},
 };
 
 pub(super) fn extend(library: HookLibrary) -> HookLibrary {
@@ -113,7 +113,7 @@ fn capture_post_result(stage: usize, mgr: *mut c_void, slot: u32) {
         let result = (mgr as *const *mut jc3gi::graphics_engine::texture::Texture)
             .add(slot as usize + 83)
             .read();
-        crate::capture_post_stage(stage, eye, result);
+        crate::ui::render::capture_post_stage(stage, eye, result);
     }
 }
 
@@ -146,7 +146,7 @@ fn motion_blur_apply(
             .unwrap()
             .call(this, ctx, pec, mgr, input, blur, flag0, flag1)
     };
-    capture_post_result(crate::POST_STAGE_MB, mgr, slot);
+    capture_post_result(crate::ui::render::POST_STAGE_MB, mgr, slot);
     slot
 }
 
@@ -185,7 +185,7 @@ fn dof_apply(
     } else {
         DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input)
     };
-    capture_post_result(crate::POST_STAGE_DOF, mgr, slot);
+    capture_post_result(crate::ui::render::POST_STAGE_DOF, mgr, slot);
     slot
 }
 

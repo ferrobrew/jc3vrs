@@ -11,8 +11,8 @@ use jc3gi::{
 use re_utilities::hook_library::HookLibrary;
 
 use crate::{
+    debug::trace::{TraceEvent, TraceState},
     stereo::STEREO_STATE,
-    trace::{TraceEvent, TraceState},
 };
 
 use super::graphics_engine::graphics_engine::BLOCK_FLIP;
@@ -92,7 +92,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
             }
-            crate::capture_render_camera(0);
+            crate::debug::camera::capture_render_camera(0);
             TraceState::record(TraceEvent::DrawEnd {
                 eye: 0,
                 draw: crate::DRAW_CALLS.load(Ordering::Relaxed),
@@ -117,7 +117,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
             }
-            crate::capture_render_camera(1);
+            crate::debug::camera::capture_render_camera(1);
             TraceState::record(TraceEvent::DrawEnd {
                 eye: 1,
                 draw: crate::DRAW_CALLS.load(Ordering::Relaxed),
@@ -135,7 +135,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             });
             STEREO_STATE.lock().draw_index = 0;
             game.Draw(spf);
-            crate::capture_render_camera(0);
+            crate::debug::camera::capture_render_camera(0);
             TraceState::end_frame();
         }
     }

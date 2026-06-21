@@ -15,8 +15,8 @@ use re_utilities::hook_library::HookLibrary;
 
 use crate::{
     config::Config,
+    debug::trace::{TraceEvent, TraceState},
     stereo::is_second_eye,
-    trace::{TraceEvent, TraceState},
 };
 
 pub(super) fn extend(library: HookLibrary) -> HookLibrary {

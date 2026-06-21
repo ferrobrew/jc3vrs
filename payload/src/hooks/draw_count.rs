@@ -14,7 +14,7 @@ use std::{cell::Cell, ffi::c_void, sync::atomic::Ordering};
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
 
-use crate::trace::{TraceEvent, TraceState};
+use crate::debug::trace::{TraceEvent, TraceState};
 
 // Per-pass tallies: bumped alongside the global per-eye counters, then read + reset on each
 // SetRenderSetup, so the count attached to a bind is "draws issued since the previous bind on this

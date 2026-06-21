@@ -16,7 +16,7 @@ use re_utilities::hook_library::HookLibrary;
 
 use crate::{
     config::Config,
-    trace::{TraceEvent, TraceState},
+    debug::trace::{TraceEvent, TraceState},
 };
 
 pub(super) fn hook_library() -> HookLibrary {
