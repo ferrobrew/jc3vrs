@@ -1,7 +1,7 @@
 //! Render-call tracing subsystem: collects per-call NDJSON records over a fixed number of frames and
 //! dumps them next to the injected DLL, with a self-describing manifest as the first record.
 
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 
 use parking_lot::Mutex;
 
@@ -40,6 +40,41 @@ pub struct TraceRecord {
 }
 static TRACE_STATE: Mutex<TraceState> = Mutex::new(TraceState::new());
 
+/// GPU draw-call counts for one eye's Draw. The live global counter lives in `hooks::draw_count`;
+/// this same type is the [`TraceEvent::DrawEnd`] field, with serde de/serializing the atomics as
+/// their plain values.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct DrawCounts {
+    pub draw: AtomicUsize,
+    pub draw_indexed: AtomicUsize,
+    pub dispatch: AtomicUsize,
+}
+impl DrawCounts {
+    pub const fn new() -> Self {
+        Self {
+            draw: AtomicUsize::new(0),
+            draw_indexed: AtomicUsize::new(0),
+            dispatch: AtomicUsize::new(0),
+        }
+    }
+
+    /// Reset all three to zero (at each eye's `draw_begin`).
+    pub fn clear(&self) {
+        self.draw.store(0, Ordering::Relaxed);
+        self.draw_indexed.store(0, Ordering::Relaxed);
+        self.dispatch.store(0, Ordering::Relaxed);
+    }
+
+    /// A frozen copy of the current values for the `draw_end` event (the live `static` can't move).
+    pub fn snapshot(&self) -> Self {
+        Self {
+            draw: AtomicUsize::new(self.draw.load(Ordering::Relaxed)),
+            draw_indexed: AtomicUsize::new(self.draw_indexed.load(Ordering::Relaxed)),
+            dispatch: AtomicUsize::new(self.dispatch.load(Ordering::Relaxed)),
+        }
+    }
+}
+
 /// One render event, serialized inside a [`TraceRecord`] (which stamps timing / frame / eye). The
 /// `ev` tag names the event. Frame/driver markers that carry their own `eye` field set it explicitly.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -65,12 +100,7 @@ pub enum TraceEvent {
     #[serde(rename = "draw_begin")]
     DrawBegin { eye: usize },
     #[serde(rename = "draw_end")]
-    DrawEnd {
-        eye: usize,
-        draw: usize,
-        draw_indexed: usize,
-        dispatch: usize,
-    },
+    DrawEnd { eye: usize, counts: DrawCounts },
     #[serde(rename = "SetupRenderCamera")]
     SetupRenderCamera,
     #[serde(rename = "RotateRenderFrameData")]

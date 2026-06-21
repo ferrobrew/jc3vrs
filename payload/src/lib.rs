@@ -1,7 +1,4 @@
-use std::{
-    ffi::c_void,
-    sync::{OnceLock, atomic::AtomicUsize},
-};
+use std::{ffi::c_void, sync::OnceLock};
 
 use windows::Win32::{
     Foundation::HMODULE,
@@ -22,13 +19,6 @@ mod debug;
 mod hooks;
 mod logging;
 mod stereo;
-
-/// Per-eye GPU-command counters: reset at each eye's `draw_begin`, read at `draw_end`. Bumped by the
-/// detours on the engine's draw wrappers (the draw counters) and `Dispatch`/`DispatchIndirect` (the
-/// dispatch counter).
-pub static DRAW_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub static DRAW_INDEXED_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub static DISPATCH_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]

@@ -82,9 +82,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 restore_counters: Some(restore_counters),
             });
 
-            crate::DRAW_CALLS.store(0, Ordering::Relaxed);
-            crate::DRAW_INDEXED_CALLS.store(0, Ordering::Relaxed);
-            crate::DISPATCH_CALLS.store(0, Ordering::Relaxed);
+            super::draw_count::DRAW_COUNTS.clear();
             TraceState::record(TraceEvent::DrawBegin { eye: 0 });
             STEREO_STATE.lock().draw_index = 0;
             BLOCK_FLIP.store(present_eye != 0, Ordering::Relaxed);
@@ -95,9 +93,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             crate::debug::camera::capture_render_camera(0);
             TraceState::record(TraceEvent::DrawEnd {
                 eye: 0,
-                draw: crate::DRAW_CALLS.load(Ordering::Relaxed),
-                draw_indexed: crate::DRAW_INDEXED_CALLS.load(Ordering::Relaxed),
-                dispatch: crate::DISPATCH_CALLS.load(Ordering::Relaxed),
+                counts: super::draw_count::DRAW_COUNTS.snapshot(),
             });
 
             if let Some(state) = &effect_info {
@@ -107,9 +103,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 restore_frame_counters(counters);
             }
 
-            crate::DRAW_CALLS.store(0, Ordering::Relaxed);
-            crate::DRAW_INDEXED_CALLS.store(0, Ordering::Relaxed);
-            crate::DISPATCH_CALLS.store(0, Ordering::Relaxed);
+            super::draw_count::DRAW_COUNTS.clear();
             TraceState::record(TraceEvent::DrawBegin { eye: 1 });
             STEREO_STATE.lock().draw_index = 1;
             BLOCK_FLIP.store(present_eye != 1, Ordering::Relaxed);
@@ -120,9 +114,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             crate::debug::camera::capture_render_camera(1);
             TraceState::record(TraceEvent::DrawEnd {
                 eye: 1,
-                draw: crate::DRAW_CALLS.load(Ordering::Relaxed),
-                draw_indexed: crate::DRAW_INDEXED_CALLS.load(Ordering::Relaxed),
-                dispatch: crate::DISPATCH_CALLS.load(Ordering::Relaxed),
+                counts: super::draw_count::DRAW_COUNTS.snapshot(),
             });
             TraceState::end_frame();
 

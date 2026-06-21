@@ -2,7 +2,7 @@
 //!
 //! The draw entry points (`Draw`/`DrawIndexed` and the instanced/indirect variants) and compute
 //! `Dispatch`/`DispatchIndirect` fire too often to trace individually, so we *count* them: a global
-//! per-eye total (`DRAW_CALLS` / `DRAW_INDEXED_CALLS` / `DISPATCH_CALLS`, reported in `draw_end`) plus
+//! per-eye total ([`DRAW_COUNTS`], a `DrawCounts` reported in `draw_end`) plus
 //! a thread-local per-pass tally that rides along on each `SetRenderSetup` event. The instanced /
 //! indirect / dispatch wrappers have unreliable demangled prototypes, so their detours forward a
 //! generous set of opaque pointer-sized args transparently (preserving the full 64-bit of every
@@ -14,7 +14,7 @@ use std::{cell::Cell, ffi::c_void, sync::atomic::Ordering};
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
 
-use crate::debug::trace::{TraceEvent, TraceState};
+use crate::debug::trace::{DrawCounts, TraceEvent, TraceState};
 
 // Per-pass tallies: bumped alongside the global per-eye counters, then read + reset on each
 // SetRenderSetup, so the count attached to a bind is "draws issued since the previous bind on this
@@ -25,18 +25,22 @@ thread_local! {
     static PASS_DISPATCH: Cell<usize> = const { Cell::new(0) };
 }
 
+/// The live per-eye draw-call counters: worker threads bump these per draw; the Draw driver clears
+/// them at `draw_begin` and snapshots them into the `draw_end` event.
+pub(crate) static DRAW_COUNTS: DrawCounts = DrawCounts::new();
+
 fn bump_draw() {
-    crate::DRAW_CALLS.fetch_add(1, Ordering::Relaxed);
+    DRAW_COUNTS.draw.fetch_add(1, Ordering::Relaxed);
     PASS_DRAW.with(|c| c.set(c.get() + 1));
 }
 
 fn bump_indexed() {
-    crate::DRAW_INDEXED_CALLS.fetch_add(1, Ordering::Relaxed);
+    DRAW_COUNTS.draw_indexed.fetch_add(1, Ordering::Relaxed);
     PASS_INDEXED.with(|c| c.set(c.get() + 1));
 }
 
 fn bump_dispatch() {
-    crate::DISPATCH_CALLS.fetch_add(1, Ordering::Relaxed);
+    DRAW_COUNTS.dispatch.fetch_add(1, Ordering::Relaxed);
     PASS_DISPATCH.with(|c| c.set(c.get() + 1));
 }
 
