@@ -1,21 +1,6 @@
 use tracing_subscriber::{Layer as _, layer::SubscriberExt as _, util::SubscriberInitExt as _};
-use windows::Win32::System::Console::{
-    AllocConsole, ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, FreeConsole,
-    GetStdHandle, STD_OUTPUT_HANDLE, SetConsoleMode,
-};
 
 pub(super) fn install() {
-    unsafe {
-        AllocConsole().ok();
-        if let Ok(handle) = GetStdHandle(STD_OUTPUT_HANDLE) {
-            SetConsoleMode(
-                handle,
-                ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_PROCESSED_OUTPUT,
-            )
-            .ok();
-        }
-    }
-
     let env_filter = tracing_subscriber::EnvFilter::from_default_env()
         .add_directive(tracing_subscriber::filter::LevelFilter::INFO.into());
 
@@ -41,8 +26,4 @@ pub(super) fn install() {
         .init();
 }
 
-pub(super) fn uninstall() {
-    unsafe {
-        FreeConsole().ok();
-    }
-}
+pub(super) fn uninstall() {}
