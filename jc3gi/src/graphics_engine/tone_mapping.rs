@@ -66,7 +66,14 @@ pub struct ToneMappingEffect {
     _field_0: [u8; 8],
     /// The exposure histogram: CalculateMidAndBrightPointForHistogram fills it, Update reads it.
     pub m_Histogram: crate::graphics_engine::tone_mapping::SHistogramGeneration,
-    _field_2a0: [u8; 728],
+    /// Ping-pong selector for the exposure-weighted histogram metering, flipped each frame by Update.
+    pub m_HistogramPingPong: u32,
+    _field_2a4: [u8; 4],
+    /// A second histogram, processed by Update's second CalculateMidAndBrightPointForHistogram call.
+    /// Its m_HistogramMidPoint is the divisor of the auto-exposure target (target = key / midpoint),
+    /// so this -- not m_Histogram -- is what the converged m_CurrentExposure actually tracks.
+    pub m_Histogram2: crate::graphics_engine::tone_mapping::SHistogramGeneration,
+    _field_540: [u8; 56],
     /// The active histogram bucket count.
     pub m_NumBuckets: u32,
     _field_57c: [u8; 1652],
@@ -113,13 +120,16 @@ impl ToneMappingEffect {
         }
     }
     pub const DrawHistogramWindow_ADDRESS: usize = 0x1401198F0;
-    /// The HDR->LDR tonemap composite: applies the current exposure (from the histogram) to convert
-    /// the HDR MainColor into the LDR target.
+    /// Meters the second, NON-exposure-weighted scene-luminance histogram (m_Histogram2) -- it calls
+    /// PopulateHistogram with a fixed exposure of 1.0, so it measures raw scene brightness, which is
+    /// the value Update divides the auto-exposure target by. Runs once per dispatch in the post chain,
+    /// like GenerateHistogramForFinalScene (which meters the exposure-weighted m_Histogram).
     pub unsafe fn DrawHistogramWindow(
         &self,
         ctx: *mut ::std::ffi::c_void,
         pec: *mut ::std::ffi::c_void,
         mgr: *mut ::std::ffi::c_void,
+        index: u32,
     ) {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -127,19 +137,28 @@ impl ToneMappingEffect {
                 ctx: *mut ::std::ffi::c_void,
                 pec: *mut ::std::ffi::c_void,
                 mgr: *mut ::std::ffi::c_void,
+                index: u32,
             ) = ::std::mem::transmute(Self::DrawHistogramWindow_ADDRESS);
-            f(self as *const Self as _, ctx, pec, mgr)
+            f(self as *const Self as _, ctx, pec, mgr, index)
         }
     }
     pub const Update_ADDRESS: usize = 0x140119560;
-    /// The per-frame eye-adaptation step: reads the histogram bright-point and writes the new
-    /// m_CurrentExposure. Runs once per real frame (from the post-effects manager's render update).
-    pub unsafe fn Update(&mut self) {
+    /// The per-frame eye-adaptation step: runs CalculateMidAndBrightPointForHistogram over both
+    /// histograms, then writes the new m_CurrentExposure (target = ctx.m_AutoExposureKey /
+    /// m_Histogram2 midpoint, clamped, then adapted). Runs once per real frame from
+    /// CPostEffectsManager::UpdateRender.
+    pub unsafe fn Update(
+        &mut self,
+        manager: *mut ::std::ffi::c_void,
+        ctx: *mut crate::graphics_engine::post_effects::PostEffectContext,
+    ) {
         unsafe {
-            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
-                Self::Update_ADDRESS,
-            );
-            f(self as *mut Self as _)
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                manager: *mut ::std::ffi::c_void,
+                ctx: *mut crate::graphics_engine::post_effects::PostEffectContext,
+            ) = ::std::mem::transmute(Self::Update_ADDRESS);
+            f(self as *mut Self as _, manager, ctx)
         }
     }
 }

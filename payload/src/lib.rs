@@ -66,6 +66,8 @@ pub static TRACE_FRAMES: AtomicI32 = AtomicI32::new(0);
 static TRACE_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Absolute path of the most recent trace dump, shown in the UI so it's findable.
 static LAST_TRACE_PATH: Mutex<Option<String>> = Mutex::new(None);
+/// UTC stamp of the in-progress trace, set at `trace_start`; used for the filename and the manifest.
+static TRACE_STAMP: Mutex<String> = Mutex::new(String::new());
 
 /// Per-eye GPU-command counters: reset at each eye's `draw_begin`, read at `draw_end`. Bumped by the
 /// detours on the engine's draw wrappers (the draw counters) and `Dispatch`/`DispatchIndirect` (the
@@ -79,6 +81,32 @@ pub static DISPATCH_CALLS: AtomicUsize = AtomicUsize::new(0);
 #[derive(serde::Serialize)]
 #[serde(tag = "ev")]
 pub enum TraceEvent {
+    /// First record of every trace: a snapshot of the active runtime toggles, so a capture is
+    /// self-describing (which gates / skips / the exposure pin were on) without external notes.
+    #[serde(rename = "manifest")]
+    Manifest {
+        /// Local capture time (YYYYMMDD-HHMMSS), matching the trace filename.
+        timestamp: String,
+        stereo: bool,
+        stereo_cameras: bool,
+        stereo_ipd: f32,
+        force_smaa_1x: bool,
+        force_exposure: bool,
+        forced_exposure: f32,
+        gate_exposure: bool,
+        gate_rotate_render_frame_data: bool,
+        gate_eye1_dt: bool,
+        gate_setup_render_frame_data: bool,
+        gate_hand_back_buffers: bool,
+        skip_histogram: bool,
+        skip_motion_blur: bool,
+        skip_dof: bool,
+        dof_no_reproject: bool,
+        skip_fade: bool,
+        skip_glare: bool,
+        skip_player_damage: bool,
+        skip_sun_halo: bool,
+    },
     #[serde(rename = "frame_begin")]
     FrameBegin {
         stereo: bool,
@@ -123,11 +151,45 @@ pub enum TraceEvent {
         mid_point: f32,
         /// Number of buckets actually summed (m_NumBuckets); 0 if it couldn't be read.
         num_buckets: u32,
-        /// Current auto-exposure value read back from the ToneMappingEffect (this+3056).
+        /// Current auto-exposure value read back from the ToneMappingEffect (this+3056). With the
+        /// exposure pin (FORCE_EXPOSURE) active this is the pinned value, so the buckets below are
+        /// metered at a fixed exposure -- the decoupled comparison.
         current_exposure: f32,
+        /// Whether the exposure pin was active for this capture. The metering is exposure-weighted, so
+        /// only with the pin on (constant exposure) does a `buckets`/`bright_point` difference between
+        /// eyes or modes isolate the scene (render path) from the exposure loop.
+        forced: bool,
+        /// Live per-bucket occlusion counts (m_NumPixelsInBuckets[..num_buckets]) -- the full metered
+        /// luminance distribution. At a pinned exposure: a shape shift toward lower buckets = a dimmer
+        /// scene (render); the same shape merely scaled = the exposure loop.
+        buckets: Vec<u32>,
+    },
+    /// Per-frame exposure internals, read from inside `ToneMappingEffect::Update` (the canonical
+    /// exposure write, with the live effect in hand). `divisor` is `m_Histogram2`'s mid-point -- the
+    /// value the converged exposure actually tracks (`target = target_num / divisor`). The stereo
+    /// darkening should show up here as `divisor` (hence `target`/`exposure`) differing from
+    /// non-stereo, isolating whether it's the second histogram's metering or its ping-pong readback.
+    #[serde(rename = "ExposureInternals")]
+    ExposureInternals {
+        exposure: f32,
+        target_num: f32,
+        divisor: f32,
+        target: f32,
+        hist1_bright: f32,
+        hist1_mid: f32,
+        hist1_buckets: Vec<u32>,
+        hist2_bright: f32,
+        hist2_mid: f32,
+        hist2_buckets: Vec<u32>,
+        num_buckets: u32,
+        /// The metering ping-pong selector (`this[168]`), to spot a buffer-swap mismatch under stereo.
+        pingpong: u32,
+        forced: bool,
     },
     #[serde(rename = "GenerateHistogram")]
     GenerateHistogram { skip: bool },
+    #[serde(rename = "DrawHistogramWindow")]
+    DrawHistogramWindow { skip: bool },
     #[serde(rename = "ApplyWorldFilters")]
     ApplyWorldFilters { gated: bool },
     #[serde(rename = "ApplyGlobalFilters")]
@@ -194,9 +256,54 @@ pub fn trace_eye(event: TraceEvent) {
     }
 }
 
+/// Current local time formatted as `YYYYMMDD-HHMMSS` (via jiff), to make each trace filename unique
+/// so captures don't overwrite each other.
+fn trace_stamp() -> String {
+    jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string()
+}
+
+/// Snapshot the active runtime toggles into a [`TraceEvent::Manifest`] (the first record of a trace).
+fn build_manifest(timestamp: String) -> TraceEvent {
+    use hooks::post_effects as pe;
+    use hooks::stereo as st;
+    let r = Ordering::Relaxed;
+    TraceEvent::Manifest {
+        timestamp,
+        stereo: STEREO.load(r),
+        stereo_cameras: STEREO_CAMERAS.load(r),
+        stereo_ipd: *STEREO_IPD.lock(),
+        force_smaa_1x: FORCE_SMAA_1X.load(r),
+        force_exposure: st::FORCE_EXPOSURE.load(r),
+        forced_exposure: *st::FORCED_EXPOSURE.lock(),
+        gate_exposure: st::GATE_EXPOSURE.load(r),
+        gate_rotate_render_frame_data: st::GATE_ROTATE_RENDER_FRAME_DATA.load(r),
+        gate_eye1_dt: st::GATE_EYE1_DT.load(r),
+        gate_setup_render_frame_data: st::GATE_SETUP_RENDER_FRAME_DATA.load(r),
+        gate_hand_back_buffers: st::GATE_HAND_BACK_BUFFERS.load(r),
+        skip_histogram: pe::SKIP_HISTOGRAM.load(r),
+        skip_motion_blur: pe::SKIP_MOTION_BLUR.load(r),
+        skip_dof: pe::SKIP_DOF.load(r),
+        dof_no_reproject: pe::DOF_NO_REPROJECT.load(r),
+        skip_fade: pe::SKIP_FADE.load(r),
+        skip_glare: pe::SKIP_GLARE.load(r),
+        skip_player_damage: pe::SKIP_PLAYER_DAMAGE.load(r),
+        skip_sun_halo: pe::SKIP_SUN_HALO.load(r),
+    }
+}
+
 /// Begin a render-call trace covering the next `frames` real frames.
 pub fn trace_start(frames: i32) {
-    TRACE_LOG.lock().clear();
+    let stamp = trace_stamp();
+    *TRACE_STAMP.lock() = stamp.clone();
+    // Push the manifest while TRACE_FRAMES is still 0 (holding the log lock) so it is always the first
+    // record -- otherwise render-thread hooks that observe the armed counter can race ahead of it.
+    {
+        let mut log = TRACE_LOG.lock();
+        log.clear();
+        if let Ok(s) = serde_json::to_string(&build_manifest(stamp)) {
+            log.push(s);
+        }
+    }
     TRACE_FRAMES.store(frames, Ordering::Relaxed);
     tracing::info!("Render trace started ({frames} frames)");
 }
@@ -210,9 +317,15 @@ pub fn trace_end_frame() {
     }
     if TRACE_FRAMES.fetch_sub(1, Ordering::Relaxed) - 1 <= 0 {
         let log = TRACE_LOG.lock();
+        let stamp = TRACE_STAMP.lock().clone();
+        let name = if stamp.is_empty() {
+            "jc3vrs_render_trace.ndjson".to_string()
+        } else {
+            format!("jc3vrs_render_trace_{stamp}.ndjson")
+        };
         let path = module::get_path()
-            .and_then(|p| p.parent().map(|dir| dir.join("jc3vrs_render_trace.ndjson")))
-            .unwrap_or_else(|| std::path::PathBuf::from("jc3vrs_render_trace.ndjson"));
+            .and_then(|p| p.parent().map(|dir| dir.join(&name)))
+            .unwrap_or_else(|| std::path::PathBuf::from(&name));
         match std::fs::write(&path, log.join("\n")) {
             Ok(()) => {
                 let shown = path.display().to_string();
@@ -958,6 +1071,29 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
                 ui,
                 &GATE_HAND_BACK_BUFFERS,
                 "HandBackBuffers (constant-buffer recycle)",
+            );
+        });
+
+        ui.collapsing("Exposure A/B (pin m_CurrentExposure)", |ui| {
+            use hooks::stereo::{FORCE_EXPOSURE, FORCED_EXPOSURE};
+            gate_checkbox(
+                ui,
+                &FORCE_EXPOSURE,
+                "Force exposure (pin after the engine's Update)",
+            );
+            let mut v = *FORCED_EXPOSURE.lock();
+            if ui
+                .add(
+                    egui::Slider::new(&mut v, 0.0..=0.5)
+                        .text("Forced exposure (~0.11 = non-stereo daylight)"),
+                )
+                .changed()
+            {
+                *FORCED_EXPOSURE.lock() = v;
+            }
+            ui.label(
+                "A/B: enable in both stereo and non-stereo at the same value. Same brightness => the \
+                 darkening was the exposure loop; stereo still darker => a render path.",
             );
         });
 

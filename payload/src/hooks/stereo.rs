@@ -12,7 +12,9 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use detours_macro::detour;
+use jc3gi::graphics_engine::post_effects::PostEffectContext;
 use jc3gi::graphics_engine::tone_mapping::{SHistogramGeneration, ToneMappingEffect};
+use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 
 use crate::TraceEvent;
@@ -34,6 +36,15 @@ pub static GATE_HAND_BACK_BUFFERS: AtomicBool = AtomicBool::new(false);
 /// (otherwise fades run at ~2x and the sun/haze shimmer runs fast). Default on.
 pub static GATE_EYE1_DT: AtomicBool = AtomicBool::new(true);
 
+/// A/B / stopgap: pin `ToneMappingEffect::m_CurrentExposure` to `FORCED_EXPOSURE` right after the
+/// engine's per-frame `Update` writes it (see `tonemapping_update`) -- the canonical exposure write,
+/// so it overrides the auto-exposure feedback loop for the whole frame. Pin both modes to the same
+/// value: if stereo then matches non-stereo brightness the darkening was the loop; if stereo is still
+/// darker at the same pin it is a render path independent of exposure. Default off.
+pub static FORCE_EXPOSURE: AtomicBool = AtomicBool::new(false);
+/// The value `FORCE_EXPOSURE` pins `m_CurrentExposure` to (the non-stereo daylight value was ~0.11).
+pub static FORCED_EXPOSURE: Mutex<f32> = Mutex::new(0.11);
+
 /// True while the manual Draw driver is rendering the *second* eye.
 fn is_second_eye() -> bool {
     crate::STEREO.load(Ordering::Relaxed) && crate::DRAW_INDEX.load(Ordering::Relaxed) == 1
@@ -53,6 +64,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&CALC_HISTOGRAM_MID_BRIGHT_BINDER)
         .with_static_binder(&APPLY_WORLD_FILTERS_BINDER)
         .with_static_binder(&APPLY_GLOBAL_FILTERS_BINDER)
+        .with_static_binder(&TONEMAPPING_UPDATE_BINDER)
 }
 
 // RotateRenderFrameData -- the per-frame render-block-item list rotation, run in each
@@ -113,10 +125,9 @@ fn smoothed_exposure_update(this: *mut c_void, exposure: f32) {
     SMOOTHED_EXPOSURE_UPDATE.get().unwrap().call(this, exposure);
 }
 
-// CalculateMidAndBrightPointForHistogram -- the per-frame eye-adaptation lerp (also frame-counted).
-// Same treatment: only advance for the first eye. When tracing, read the histogram back afterwards
-// (via the named SHistogramGeneration / ToneMappingEffect fields -- offsets live in the pyxis-def)
-// to localize the stereo darkening: more pixels counted vs brighter pixels.
+// CalculateMidAndBrightPointForHistogram -- the per-frame histogram percentile computation; Update
+// calls it once per histogram. The exposure readback now happens in the Update detour (which holds
+// the ToneMappingEffect directly and can read both histograms), so this only keeps the (inert) gate.
 #[detour(address = jc3gi::graphics_engine::tone_mapping::CalculateMidAndBrightPointForHistogram_ADDRESS)]
 fn calc_histogram_mid_bright(
     ctx: *mut c_void,
@@ -134,41 +145,6 @@ fn calc_histogram_mid_bright(
         .get()
         .unwrap()
         .call(ctx, arg1, arg2, arg3, hist);
-
-    if crate::tracing_active() && !hist.is_null() {
-        // SAFETY: `hist` is the live SHistogramGeneration the engine just populated; it is the
-        // `m_Histogram` field of the enclosing ToneMappingEffect (so the tonemap is at
-        // `hist - offset_of(m_Histogram)`). Both are read-only here.
-        let event = unsafe {
-            let h = &*hist;
-            let tme = &*hist
-                .cast::<u8>()
-                .sub(std::mem::offset_of!(ToneMappingEffect, m_Histogram))
-                .cast::<ToneMappingEffect>();
-            let num_buckets = tme.m_NumBuckets;
-            let n = (num_buckets as usize).min(h.m_NumPixelsInBuckets.len());
-            let mut total_pixels: u64 = 0;
-            let mut weighted: u64 = 0;
-            for (i, &count) in h.m_NumPixelsInBuckets[..n].iter().enumerate() {
-                total_pixels += count as u64;
-                weighted += count as u64 * i as u64;
-            }
-            let centroid = if total_pixels > 0 {
-                weighted as f32 / total_pixels as f32
-            } else {
-                0.0
-            };
-            TraceEvent::HistogramReadback {
-                total_pixels,
-                centroid,
-                bright_point: h.m_HistogramBrightPoint,
-                mid_point: h.m_HistogramMidPoint,
-                num_buckets,
-                current_exposure: tme.m_CurrentExposure,
-            }
-        };
-        crate::trace_eye(event);
-    }
 }
 
 // PostEffectsManager::ApplyWorldFilters -- enqueues the world post block and steps the world-fade
@@ -204,4 +180,51 @@ fn apply_global_filters(this: *mut c_void, dt: f32, ctx: *mut c_void) {
     crate::trace_eye(TraceEvent::ApplyGlobalFilters { gated });
     let dt = if gated { 0.0 } else { dt };
     APPLY_GLOBAL_FILTERS.get().unwrap().call(this, dt, ctx);
+}
+
+// ToneMappingEffect::Update -- the per-frame exposure step (CPostEffectsManager::UpdateRender -> here).
+// With the real 3-arg signature this is the canonical place to (a) pin m_CurrentExposure for the A/B,
+// and (b) read the exposure internals. The target divisor is m_Histogram2's mid-point -- what the
+// converged exposure tracks, NOT m_Histogram. The whole exposure path is once-per-frame, so there is
+// no per-eye gating to do here.
+#[detour(address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::Update_ADDRESS)]
+fn tonemapping_update(
+    this: *mut ToneMappingEffect,
+    manager: *mut c_void,
+    ctx: *mut PostEffectContext,
+) {
+    TONEMAPPING_UPDATE.get().unwrap().call(this, manager, ctx);
+    let Some(tme) = (unsafe { this.as_mut() }) else {
+        return;
+    };
+    if FORCE_EXPOSURE.load(Ordering::Relaxed) {
+        tme.m_CurrentExposure = *FORCED_EXPOSURE.lock();
+    }
+    if crate::tracing_active() {
+        let target_num = unsafe { ctx.as_ref() }
+            .map(|c| c.m_AutoExposureKey)
+            .unwrap_or_default();
+        let pingpong = tme.m_HistogramPingPong;
+        let divisor = tme.m_Histogram2.m_HistogramMidPoint;
+        let n = (tme.m_NumBuckets as usize).min(tme.m_Histogram.m_NumPixelsInBuckets.len());
+        crate::trace_eye(TraceEvent::ExposureInternals {
+            exposure: tme.m_CurrentExposure,
+            target_num,
+            divisor,
+            target: if divisor != 0.0 {
+                target_num / divisor
+            } else {
+                0.0
+            },
+            hist1_bright: tme.m_Histogram.m_HistogramBrightPoint,
+            hist1_mid: tme.m_Histogram.m_HistogramMidPoint,
+            hist1_buckets: tme.m_Histogram.m_NumPixelsInBuckets[..n].to_vec(),
+            hist2_bright: tme.m_Histogram2.m_HistogramBrightPoint,
+            hist2_mid: tme.m_Histogram2.m_HistogramMidPoint,
+            hist2_buckets: tme.m_Histogram2.m_NumPixelsInBuckets[..n].to_vec(),
+            num_buckets: tme.m_NumBuckets,
+            pingpong,
+            forced: FORCE_EXPOSURE.load(Ordering::Relaxed),
+        });
+    }
 }

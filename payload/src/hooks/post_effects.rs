@@ -52,6 +52,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&SUN_HALO_PRE_APPLY_BINDER)
         .with_static_binder(&SUN_HALO_APPLY_BINDER)
         .with_static_binder(&GENERATE_HISTOGRAM_BINDER)
+        .with_static_binder(&DRAW_HISTOGRAM_WINDOW_BINDER)
         .with_static_binder(&ANTI_ALIASING_APPLY_BINDER)
 }
 
@@ -295,4 +296,33 @@ fn generate_histogram(
         .get()
         .unwrap()
         .call(this, a2, a3, a4, a5, a6, a7)
+}
+
+// ToneMappingEffect::DrawHistogramWindow -- despite the name, this meters the *second*, un-exposure-
+// weighted histogram (m_Histogram2): the raw scene brightness that Update divides the auto-exposure
+// target by. Like GenerateHistogramForFinalScene it runs once per dispatch, but only that first meter
+// was gated -- so in stereo m_Histogram2 was metered on both eyes, its occlusion-query ring inflated
+// and corrupted, and the exposure divided by a too-large brightness => the frame went dark. Gate it to
+// eye 0 (under GATE_EXPOSURE), symmetric with generate_histogram, so it meters once per real frame.
+#[detour(
+    address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::DrawHistogramWindow_ADDRESS
+)]
+fn draw_histogram_window(
+    this: *mut c_void,
+    ctx: *mut c_void,
+    pec: *mut c_void,
+    mgr: *mut c_void,
+    index: u32,
+) {
+    let eye1_gated = crate::STEREO.load(Ordering::Relaxed)
+        && crate::DRAW_INDEX.load(Ordering::Relaxed) == 1
+        && super::stereo::GATE_EXPOSURE.load(Ordering::Relaxed);
+    crate::trace_eye(TraceEvent::DrawHistogramWindow { skip: eye1_gated });
+    if eye1_gated {
+        return;
+    }
+    DRAW_HISTOGRAM_WINDOW
+        .get()
+        .unwrap()
+        .call(this, ctx, pec, mgr, index);
 }

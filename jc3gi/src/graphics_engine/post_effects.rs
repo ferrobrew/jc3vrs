@@ -375,10 +375,14 @@ impl std::convert::AsMut<PlayerDamageEffect> for PlayerDamageEffect {
 #[repr(C, align(8))]
 pub struct PostEffectContext {
     pub m_RenderContext: *mut crate::graphics_engine::post_effects::PostEffectRenderContext,
+    _field_8: [u8; 148],
+    /// The auto-exposure target numerator ("key"): ToneMappingEffect::Update sets the exposure target
+    /// to this divided by the raw-brightness histogram mid-point.
+    pub m_AutoExposureKey: f32,
 }
 fn _PostEffectContext_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x8], PostEffectContext>([0u8; 0x8]);
+        ::std::mem::transmute::<[u8; 0xA0], PostEffectContext>([0u8; 0xA0]);
     }
     unreachable!()
 }
