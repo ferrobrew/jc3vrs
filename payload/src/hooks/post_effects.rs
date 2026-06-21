@@ -266,15 +266,20 @@ fn generate_histogram(
     a6: *mut u32,
     a7: *mut u32,
 ) -> *mut u32 {
-    crate::trace_eye(TraceEvent::GenerateHistogram {
-        skip: SKIP_HISTOGRAM.load(Ordering::Relaxed),
-    });
+    // Gate the histogram *population* on eye 1 when stereo, symmetric to the exposure-*adaptation*
+    // gate (stereo::GATE_EXPOSURE). Both eyes otherwise write the GPU luminance buckets, so the gated
+    // per-frame exposure Update reads a histogram populated by both dispatches and settles too dark.
+    let eye1_gated = crate::STEREO.load(Ordering::Relaxed)
+        && crate::DRAW_INDEX.load(Ordering::Relaxed) == 1
+        && super::stereo::GATE_EXPOSURE.load(Ordering::Relaxed);
+    let skip = SKIP_HISTOGRAM.load(Ordering::Relaxed) || eye1_gated;
+    crate::trace_eye(TraceEvent::GenerateHistogram { skip });
     // The histogram reads the final HDR scene (MainColor) for auto-exposure, so this is the first
     // point in the post chain where MainColor still holds this dispatch's clean scene -- grab it for
     // the per-eye "Scene" preview before the chain recycles it.
     crate::capture_main_color(crate::DRAW_INDEX.load(Ordering::Relaxed));
 
-    if SKIP_HISTOGRAM.load(Ordering::Relaxed) {
+    if skip {
         unsafe {
             let base = this as *const u32;
             if !a6.is_null() {
