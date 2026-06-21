@@ -6,11 +6,34 @@
     clippy::unnecessary_cast
 )]
 #![cfg_attr(any(), rustfmt::skip)]
+#[repr(i32)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
+/// Primitive topology passed to the draw wrappers (Graphics::EPrimitiveType). Patchlists 0x21-0x24
+/// are tessellation control-point counts.
+pub enum PrimitiveType {
+    PRIMTYPE_POINTLIST = 1isize as _,
+    PRIMTYPE_LINES = 2isize as _,
+    PRIMTYPE_LINE_STRIP = 3isize as _,
+    PRIMTYPE_TRIANGLES = 4isize as _,
+    PRIMTYPE_TRIANGLE_STRIP = 5isize as _,
+    PRIMTYPE_LINE_LOOP = 6isize as _,
+    PRIMTYPE_TRIANGLE_FAN = 7isize as _,
+    PRIMTYPE_PATCHLIST_1 = 33isize as _,
+    PRIMTYPE_PATCHLIST_2 = 34isize as _,
+    PRIMTYPE_PATCHLIST_3 = 35isize as _,
+    PRIMTYPE_PATCHLIST_4 = 36isize as _,
+}
+fn _PrimitiveType_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x4], PrimitiveType>([0u8; 0x4]);
+    }
+    unreachable!()
+}
 pub const DrawIndexed_ADDRESS: usize = 0x141967720;
 /// Indexed draw (`Graphics::DrawIndexed`).
 pub unsafe fn DrawIndexed(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
-    prim: i32,
+    prim: crate::graphics_engine::draw::PrimitiveType,
     arg2: i32,
     arg3: i32,
     vbuf: *mut ::std::ffi::c_void,
@@ -19,7 +42,7 @@ pub unsafe fn DrawIndexed(
     unsafe {
         let f: unsafe extern "system" fn(
             ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
-            prim: i32,
+            prim: crate::graphics_engine::draw::PrimitiveType,
             arg2: i32,
             arg3: i32,
             vbuf: *mut ::std::ffi::c_void,
@@ -32,14 +55,14 @@ pub const Draw_ADDRESS: usize = 0x141967680;
 /// Non-indexed draw (`Graphics::Draw`).
 pub unsafe fn Draw(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
-    prim: i32,
+    prim: crate::graphics_engine::draw::PrimitiveType,
     arg2: i32,
     arg3: i32,
 ) {
     unsafe {
         let f: unsafe extern "system" fn(
             ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
-            prim: i32,
+            prim: crate::graphics_engine::draw::PrimitiveType,
             arg2: i32,
             arg3: i32,
         ) = ::std::mem::transmute(Draw_ADDRESS);
@@ -242,5 +265,29 @@ pub unsafe fn ResolveSurface(
             params: *mut ::std::ffi::c_void,
         ) = ::std::mem::transmute(ResolveSurface_ADDRESS);
         f(ctx, params)
+    }
+}
+pub const GetRTVFromSurface_ADDRESS: usize = 0x141956240;
+/// Returns the surface's render-target view (`*(surface + 0x18)`).
+pub unsafe fn GetRTVFromSurface(
+    surface: *mut ::std::ffi::c_void,
+) -> *mut ::std::ffi::c_void {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            surface: *mut ::std::ffi::c_void,
+        ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(GetRTVFromSurface_ADDRESS);
+        f(surface)
+    }
+}
+pub const GetDSVFromSurface_ADDRESS: usize = 0x141956250;
+/// Returns the surface's depth-stencil view (`*(surface + 0x20)`).
+pub unsafe fn GetDSVFromSurface(
+    surface: *mut ::std::ffi::c_void,
+) -> *mut ::std::ffi::c_void {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            surface: *mut ::std::ffi::c_void,
+        ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(GetDSVFromSurface_ADDRESS);
+        f(surface)
     }
 }

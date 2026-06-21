@@ -34,6 +34,28 @@ impl InputDeviceManager {
         self.vftable
             as *const crate::input::input_device_manager::InputDeviceManagerVftable
     }
+    pub const Update_ADDRESS: usize = 0x1402F20C0;
+    /// Per-frame device poll: reads all devices and refreshes their effector states. Runs
+    /// UpdateForceClicks afterwards. Effector writes injected before this are overwritten by the
+    /// poll; inject after it instead.
+    pub unsafe fn Update(&mut self, dt: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
+                Self::Update_ADDRESS,
+            );
+            f(self as *mut Self as _, dt)
+        }
+    }
+    pub const UpdateForceClicks_ADDRESS: usize = 0x1402F2050;
+    /// Applies the m_ForceClick flags latched on effectors so an injected click survives the poll.
+    pub unsafe fn UpdateForceClicks(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::UpdateForceClicks_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
     pub unsafe fn Destructor(&mut self) {
         unsafe {
             let f = (&raw const (*self.vftable()).Destructor).read();

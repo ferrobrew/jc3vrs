@@ -7,6 +7,67 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// Scaleform render-target binding. The UI's m_RenderBuffer points at one of these; UpdateData
+/// swaps the views it holds (RTV @ +0x20, DSV @ +0x28, depth buffer @ +0x08), refcounting them.
+/// Pointing it at an offscreen RTV redirects where the UI HAL renders. Not tied to startup, so the
+/// rebind can happen at any time.
+pub struct RenderTargetData {}
+impl RenderTargetData {
+    pub const UpdateData_ADDRESS: usize = 0x141DE0CF0;
+    /// Binds the views into this RenderTargetData (RTV @ +0x20, DSV @ +0x28, depth @ +0x08),
+    /// releasing the old ones and AddRef-ing the new. `self` is the inner RenderTargetData at
+    /// `*(render_buffer + 0x20)`.
+    pub unsafe fn UpdateData(
+        &mut self,
+        rtv: *mut ::std::ffi::c_void,
+        depth: *mut ::std::ffi::c_void,
+        dsv: *mut ::std::ffi::c_void,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                rtv: *mut ::std::ffi::c_void,
+                depth: *mut ::std::ffi::c_void,
+                dsv: *mut ::std::ffi::c_void,
+            ) = ::std::mem::transmute(Self::UpdateData_ADDRESS);
+            f(self as *mut Self as _, rtv, depth, dsv)
+        }
+    }
+}
+impl std::convert::AsRef<RenderTargetData> for RenderTargetData {
+    fn as_ref(&self) -> &RenderTargetData {
+        self
+    }
+}
+impl std::convert::AsMut<RenderTargetData> for RenderTargetData {
+    fn as_mut(&mut self) -> &mut RenderTargetData {
+        self
+    }
+}
+#[repr(u32)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
+/// Screen-position code returned by the UI world-to-screen / marker placement: 0 = on-screen, 1-8 =
+/// off-screen clamped edge/corner, 9 = off-screen in front (no clamp), 10 = off-screen behind.
+pub enum ScreenPos {
+    SCREEN_POS_ONSCREEN = 0isize as _,
+    SCREEN_POS_OFFSCREEN_LEFT = 1isize as _,
+    SCREEN_POS_OFFSCREEN_RIGHT = 2isize as _,
+    SCREEN_POS_OFFSCREEN_TOP = 3isize as _,
+    SCREEN_POS_OFFSCREEN_BOTTOM = 4isize as _,
+    SCREEN_POS_OFFSCREEN_TOP_LEFT = 5isize as _,
+    SCREEN_POS_OFFSCREEN_TOP_RIGHT = 6isize as _,
+    SCREEN_POS_OFFSCREEN_BOTTOM_LEFT = 7isize as _,
+    SCREEN_POS_OFFSCREEN_BOTTOM_RIGHT = 8isize as _,
+    SCREEN_POS_OFFSCREEN_NO_CLAMP_IN_FRONT_CAMERA = 9isize as _,
+    SCREEN_POS_OFFSCREEN_NO_CLAMP_BEHIND_CAMERA = 10isize as _,
+}
+fn _ScreenPos_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x4], ScreenPos>([0u8; 0x4]);
+    }
+    unreachable!()
+}
+#[repr(C, align(8))]
 /// Scaleform-backed UI manager (the concrete class behind IUIManager; a single instance). It renders
 /// the HUD into the engine surface; InitPlatformRT rebinds its render target.
 pub struct UIManager {
@@ -47,6 +108,17 @@ impl UIManager {
             f(self as *mut Self as _, a2)
         }
     }
+    pub const RestoreAfterReset_ADDRESS: usize = 0x140FA9C70;
+    /// Re-runs InitPlatformRT after a device/resolution reset (`a2` is the new width; the dimensions
+    /// otherwise track the engine surface).
+    pub unsafe fn RestoreAfterReset(&mut self, a2: i32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, a2: i32) = ::std::mem::transmute(
+                Self::RestoreAfterReset_ADDRESS,
+            );
+            f(self as *mut Self as _, a2)
+        }
+    }
     pub const Convert3DCoords_ADDRESS: usize = 0x140F69A70;
     /// World-to-screen: project `world` through `vp`, divide by w, aspect-correct, and map NDC to
     /// pixels (m_ViewWidth/Height). Returns false when the point is behind the camera.
@@ -79,7 +151,7 @@ impl UIManager {
         a5: f32,
         out_x: *mut f32,
         out_y: *mut f32,
-        out_pos: *mut u32,
+        out_pos: *mut crate::ui::ui_manager::ScreenPos,
         margin: f32,
         a10: bool,
         offset: crate::types::math::Vector2,
@@ -93,7 +165,7 @@ impl UIManager {
                 a5: f32,
                 out_x: *mut f32,
                 out_y: *mut f32,
-                out_pos: *mut u32,
+                out_pos: *mut crate::ui::ui_manager::ScreenPos,
                 margin: f32,
                 a10: bool,
                 offset: crate::types::math::Vector2,
@@ -119,7 +191,7 @@ impl UIManager {
     pub unsafe fn ClampToScreen(
         x: *mut f32,
         y: *mut f32,
-        pos: *mut u32,
+        pos: *mut crate::ui::ui_manager::ScreenPos,
         min_x: f32,
         max_x: f32,
         min_y: f32,
@@ -129,7 +201,7 @@ impl UIManager {
             let f: unsafe extern "system" fn(
                 x: *mut f32,
                 y: *mut f32,
-                pos: *mut u32,
+                pos: *mut crate::ui::ui_manager::ScreenPos,
                 min_x: f32,
                 max_x: f32,
                 min_y: f32,

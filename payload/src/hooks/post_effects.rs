@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use detours_macro::detour;
 use jc3gi::graphics_engine::post_effects::{
-    AntiAliasingEffect, PostEffectContext, PostEffectRenderFlags,
+    AAMode, AntiAliasingEffect, PostEffectContext, PostEffectRenderFlags,
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -70,9 +70,9 @@ fn anti_aliasing_apply(
     let restore = unsafe {
         if crate::STEREO.load(Ordering::Relaxed)
             && crate::FORCE_SMAA_1X.load(Ordering::Relaxed)
-            && (*this).m_Mode == 3
+            && (*this).m_Mode == AAMode::AA_SMAA_T2X
         {
-            (*this).m_Mode = 2;
+            (*this).m_Mode = AAMode::AA_SMAA;
             true
         } else {
             false
@@ -83,7 +83,7 @@ fn anti_aliasing_apply(
         .unwrap()
         .call(this, ctx, pec, mgr, slot);
     if restore {
-        unsafe { (*this).m_Mode = 3 };
+        unsafe { (*this).m_Mode = AAMode::AA_SMAA_T2X };
     }
     r
 }

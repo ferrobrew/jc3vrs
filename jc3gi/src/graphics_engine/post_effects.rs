@@ -6,12 +6,28 @@
     clippy::unnecessary_cast
 )]
 #![cfg_attr(any(), rustfmt::skip)]
+#[repr(i32)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
+/// Anti-aliasing resolve mode (AntiAliasingEffect::m_Mode).
+pub enum AAMode {
+    AA_NONE = 0isize as _,
+    AA_FXAA_COMPUTE = 1isize as _,
+    AA_SMAA = 2isize as _,
+    AA_SMAA_T2X = 3isize as _,
+    AA_FXAA = 4isize as _,
+}
+fn _AAMode_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x4], AAMode>([0u8; 0x4]);
+    }
+    unreachable!()
+}
 #[repr(C, align(8))]
 /// Anti-aliasing resolve. `m_Mode`: 1/4 = FXAA, 2 = SMAA 1x, 3 = SMAA T2X. Mode 3 adds a temporal
 /// reprojection against a previous-frame history texture.
 pub struct AntiAliasingEffect {
     _field_0: [u8; 768],
-    pub m_Mode: i32,
+    pub m_Mode: crate::graphics_engine::post_effects::AAMode,
     _field_304: [u8; 4],
 }
 fn _AntiAliasingEffect_size_check() {

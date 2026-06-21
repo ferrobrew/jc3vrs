@@ -70,7 +70,8 @@ pub struct ToneMappingEffect {
     /// The active histogram bucket count.
     pub m_NumBuckets: u32,
     _field_57c: [u8; 1652],
-    /// The current clamped/smoothed auto-exposure multiplier.
+    /// The current clamped/smoothed auto-exposure multiplier. Written by Update once per frame and
+    /// read back into the next frame's GenerateHistogramForFinalScene metering (the feedback loop).
     pub m_CurrentExposure: f32,
     _field_bf4: [u8; 4],
 }
@@ -83,7 +84,10 @@ fn _ToneMappingEffect_size_check() {
 impl ToneMappingEffect {
     pub const GenerateHistogramForFinalScene_ADDRESS: usize = 0x140119440;
     /// Builds the auto-exposure histogram for the final scene and writes the current histogram slot
-    /// indices to a6 / a7 (out-params); returns a7.
+    /// indices to a6 / a7 (out-params); returns a7. Meters luminance through a
+    /// "LuminanceToDepthWithExposure" shader fed the previous frame's m_CurrentExposure as a
+    /// constant, so metering is exposure-weighted -- the histogram feeds back into the exposure that
+    /// weights the next frame's metering (via CalculateMidAndBrightPointForHistogram and Update).
     pub unsafe fn GenerateHistogramForFinalScene(
         &mut self,
         ctx: *mut ::std::ffi::c_void,
@@ -125,6 +129,17 @@ impl ToneMappingEffect {
                 mgr: *mut ::std::ffi::c_void,
             ) = ::std::mem::transmute(Self::DrawHistogramWindow_ADDRESS);
             f(self as *const Self as _, ctx, pec, mgr)
+        }
+    }
+    pub const Update_ADDRESS: usize = 0x140119560;
+    /// The per-frame eye-adaptation step: reads the histogram bright-point and writes the new
+    /// m_CurrentExposure. Runs once per real frame (from the post-effects manager's render update).
+    pub unsafe fn Update(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::Update_ADDRESS,
+            );
+            f(self as *mut Self as _)
         }
     }
 }

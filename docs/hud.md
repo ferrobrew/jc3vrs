@@ -12,7 +12,9 @@ We are doing the in-scene quad first. The point right now is to dial in distance
 
 The `CUIManager` singleton (the Scaleform GFx UI manager) renders into the engine's back buffer by default. `CUIManager::InitPlatformRT` is where it binds its render target: it builds a Scaleform render buffer (`m_RenderBuffer`), pulls the RTV and DSV from the engine surface (`GetRTVFromSurface` / `GetDSVFromSurface`), and binds them via `RenderTargetData::UpdateData`. It runs once at startup and again on every device or resolution reset (`InitializeSystem` / `RestoreAfterReset`).
 
-Hook `InitPlatformRT` and substitute our own `ID3D11RenderTargetView`, created over our HUD texture, for the value `GetRTVFromSurface` returns; let `UpdateData` bind it as before. The HUD then renders into our texture instead of the back buffer. Re-apply on resolution change (it's called from `RestoreAfterReset`), and size the texture to the dimensions passed in its `a2`. `CUIManager::RenderOffScreenTextures` already renders Scaleform to offscreen textures for in-world screens, so retargeting the main HUD is well within the engine's existing capability.
+The redirect recipe is to call `RenderTargetData::UpdateData` ourselves: create our own offscreen HUD texture and an `ID3D11RenderTargetView` over it, then call `UpdateData(m_RenderBuffer's inner RenderTargetData, myRTV, nullptr, myDSV)` to swap the UI's bound RTV/DSV to our texture. `UpdateData` refcounts the views it swaps (releases the old, AddRefs the new), so it's safe to call standalone. Because it isn't tied to startup, **the rebind works at any time** — a late-injected mod just calls it once after creating its texture, with no dependency on `InitPlatformRT` firing again. That is also the answer to the "what if injection happens after `InitPlatformRT` already ran" question: don't hook `InitPlatformRT`, just call `UpdateData` directly. (If you'd rather go through the engine, `CUIManager::RestoreAfterReset` re-runs `InitPlatformRT`; its `a2` is the width and the dims otherwise track the surface.)
+
+Once the HUD renders into our offscreen RTV instead of the engine's working surface, it's **automatically excluded from the scene composite** — `HandleDrawThreadTask`'s `CopySurfaceToTexture` resolves the working surface to the presentable, and the HUD no longer being on that surface means no separate composite-suppression patch is needed (rendering §12). We then sample our texture as a 3D quad ourselves. `CUIManager::RenderOffScreenTextures` is *not* the tool here — it's for registered in-world movie screens, not the HUD.
 
 ## Comfort: lazy follow
 
@@ -33,7 +35,7 @@ The engine makes this directly doable because its world-to-screen takes the VP a
 
 ## Order of work
 
-1. Redirect the HUD into a texture via the `InitPlatformRT` hook; confirm it still renders correctly off-screen.
+1. Redirect the HUD into a texture by calling `RenderTargetData::UpdateData` to swap the UI's RTV to our offscreen texture; confirm it still renders correctly off-screen and is excluded from the scene composite.
 2. Draw it as a fixed in-scene quad per eye in the stereo render; get it visible in the side-by-side preview.
 3. Add the lazy-follow + the sliders; tune distance, size, and the halflives on the desktop.
 4. Split markers out: feed the per-eye VP to the `Get2DInfo` / `Convert3DCoords` callsites and present them direction-locked.
@@ -41,4 +43,4 @@ The engine makes this directly doable because its world-to-screen takes the VP a
 
 ## To verify before implementing
 
-`Get2DInfo` and its gameplay callsites' VP sources are from the research agent, not yet personally line-traced; `Convert3DCoords` and `InitPlatformRT` are confirmed live in the release i64. The `CUIManager` field offsets (`m_RenderBuffer`, `m_ViewWidth` / `m_ViewHeight`) are read from the decompiled math and solid as offsets; the field names are inference.
+`Get2DInfo` and its gameplay callsites' VP sources are from the research agent, not yet personally line-traced; `Convert3DCoords`, `InitPlatformRT` and the `RenderTargetData::UpdateData` redirect path are confirmed live in the release i64. The `CUIManager` field offsets (`m_RenderBuffer`, `m_ViewWidth` / `m_ViewHeight`) are read from the decompiled math and solid as offsets; the field names are inference.
