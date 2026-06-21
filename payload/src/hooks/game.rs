@@ -15,7 +15,7 @@ use crate::{
     trace::{TraceEvent, TraceState},
 };
 
-use super::graphics::BLOCK_FLIP;
+use super::graphics_engine::graphics_engine::BLOCK_FLIP;
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()

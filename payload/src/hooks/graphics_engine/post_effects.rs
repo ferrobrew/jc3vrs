@@ -1,10 +1,12 @@
-//! Detours that skip the fullscreen reprojection post-effects (motion blur, depth of field).
+//! Detours on the post-effects chain.
 //!
-//! Both passes do a screen-space reprojection whose per-frame-once state is only valid for one
-//! camera, so a second (stereo) render can paint a sub-region. They run regardless of the camera's
-//! blur weights (which only gate the recon/radial blur strength), so skip the whole pass. Default
-//! on: VR wants both off anyway, and it's a clean A/B for the eye-1 "wedge". Each `Apply` returns
-//! its source slot index, so returning `input` is a clean pass-through.
+//! Two concerns share this file. First, the fullscreen reprojection passes (motion blur, depth of
+//! field) do a screen-space reprojection whose per-frame-once state is only valid for one camera, so
+//! a second (stereo) render can paint a sub-region -- skip the whole pass (default on: VR wants both
+//! off anyway, and it's a clean A/B for the eye-1 "wedge"). Each `Apply` returns its source slot
+//! index, so returning `input` is a clean pass-through. Second, the manager-level filter enqueues
+//! (`ApplyWorldFilters` / `ApplyGlobalFilters`) step dt-driven accumulators that must only advance
+//! once per real frame, so their `dt` is zeroed on eye 1.
 
 use std::ffi::c_void;
 
@@ -14,12 +16,16 @@ use jc3gi::graphics_engine::post_effects::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
-use crate::stereo::{self, draw_index, is_second_eye};
-use crate::trace::{TraceEvent, TraceState};
+use crate::{
+    config::Config,
+    stereo::{self, draw_index, is_second_eye},
+    trace::{TraceEvent, TraceState},
+};
 
-pub(super) fn hook_library() -> HookLibrary {
-    HookLibrary::new()
+pub(super) fn extend(library: HookLibrary) -> HookLibrary {
+    library
+        .with_static_binder(&APPLY_WORLD_FILTERS_BINDER)
+        .with_static_binder(&APPLY_GLOBAL_FILTERS_BINDER)
         .with_static_binder(&MOTION_BLUR_APPLY_BINDER)
         .with_static_binder(&DOF_APPLY_BINDER)
         .with_static_binder(&FADE_APPLY_BINDER)
@@ -27,9 +33,42 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&PLAYER_DAMAGE_APPLY_BINDER)
         .with_static_binder(&SUN_HALO_PRE_APPLY_BINDER)
         .with_static_binder(&SUN_HALO_APPLY_BINDER)
-        .with_static_binder(&GENERATE_HISTOGRAM_BINDER)
-        .with_static_binder(&DRAW_HISTOGRAM_WINDOW_BINDER)
         .with_static_binder(&ANTI_ALIASING_APPLY_BINDER)
+}
+
+// PostEffectsManager::ApplyWorldFilters -- enqueues the world post block and steps the world-fade
+// accumulator (ApplyWorldFadeFilter) by `dt`. Zero `dt` on eye 1 so the fade advances once per real
+// frame, not twice.
+#[detour(address = jc3gi::graphics_engine::post_effects::PostEffectsManager::ApplyWorldFilters_ADDRESS)]
+#[allow(clippy::too_many_arguments)]
+fn apply_world_filters(
+    this: *mut c_void,
+    dt: f32,
+    setup: *mut c_void,
+    a4: *mut c_void,
+    a5: *mut c_void,
+    a6: *mut c_void,
+    a7: *mut c_void,
+    a8: *mut c_void,
+) {
+    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_eye1_dt);
+    TraceState::record_eye(TraceEvent::ApplyWorldFilters { gated });
+    let dt = if gated { 0.0 } else { dt };
+    APPLY_WORLD_FILTERS
+        .get()
+        .unwrap()
+        .call(this, dt, setup, a4, a5, a6, a7, a8);
+}
+
+// PostEffectsManager::ApplyGlobalFilters -- enqueues the global post block and steps its dt-driven
+// accumulators (screen-fade alpha, sun-direction / heat-haze). Zero `dt` on eye 1 for the same
+// once-per-real-frame reason.
+#[detour(address = jc3gi::graphics_engine::post_effects::PostEffectsManager::ApplyGlobalFilters_ADDRESS)]
+fn apply_global_filters(this: *mut c_void, dt: f32, ctx: *mut c_void) {
+    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_eye1_dt);
+    TraceState::record_eye(TraceEvent::ApplyGlobalFilters { gated });
+    let dt = if gated { 0.0 } else { dt };
+    APPLY_GLOBAL_FILTERS.get().unwrap().call(this, dt, ctx);
 }
 
 // AntiAliasingEffect::Apply -- drop SMAA T2X (mode 3) to SMAA 1x (mode 2) for the pass when forcing
@@ -222,77 +261,4 @@ fn sun_halo_apply(this: *mut c_void, a2: *mut c_void) -> u64 {
         return 0;
     }
     SUN_HALO_APPLY.get().unwrap().call(this, a2)
-}
-
-// ToneMappingEffect::GenerateHistogramForFinalScene -- auto-exposure histogram. Skipping stalls
-// adaptation, but preserve the out-param contract (this+764/765 = current slot indices) so callers
-// don't read garbage. A bisection aid for the stereo darkening.
-#[detour(
-    address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::GenerateHistogramForFinalScene_ADDRESS
-)]
-fn generate_histogram(
-    this: *mut c_void,
-    a2: *mut c_void,
-    a3: *mut c_void,
-    a4: *mut c_void,
-    a5: i32,
-    a6: *mut u32,
-    a7: *mut u32,
-) -> *mut u32 {
-    // Gate the histogram *population* on eye 1 when stereo, symmetric to the exposure-*adaptation*
-    // gate (exposure.gate). Both eyes otherwise write the GPU luminance buckets, so the gated
-    // per-frame exposure Update reads a histogram populated by both dispatches and settles too dark.
-    let (skip_histogram, gate_exposure) =
-        Config::lock_query(|c| (c.post_fx.skip_histogram, c.exposure.gate));
-    let eye1_gated = is_second_eye() && gate_exposure;
-    let skip = skip_histogram || eye1_gated;
-    TraceState::record_eye(TraceEvent::GenerateHistogram { skip });
-    // The histogram reads the final HDR scene (MainColor) for auto-exposure, so this is the first
-    // point in the post chain where MainColor still holds this dispatch's clean scene -- grab it for
-    // the per-eye "Scene" preview before the chain recycles it.
-    crate::capture_main_color(draw_index());
-
-    if skip {
-        unsafe {
-            let base = this as *const u32;
-            if !a6.is_null() {
-                *a6 = *base.add(764);
-            }
-            if !a7.is_null() {
-                *a7 = *base.add(765);
-            }
-        }
-        return a7;
-    }
-    GENERATE_HISTOGRAM
-        .get()
-        .unwrap()
-        .call(this, a2, a3, a4, a5, a6, a7)
-}
-
-// ToneMappingEffect::DrawHistogramWindow -- despite the name, this meters the *second*, un-exposure-
-// weighted histogram (m_Histogram2): the raw scene brightness that Update divides the auto-exposure
-// target by. Like GenerateHistogramForFinalScene it runs once per dispatch, but only that first meter
-// was gated -- so in stereo m_Histogram2 was metered on both eyes, its occlusion-query ring inflated
-// and corrupted, and the exposure divided by a too-large brightness => the frame went dark. Gate it to
-// eye 0 (under GATE_EXPOSURE), symmetric with generate_histogram, so it meters once per real frame.
-#[detour(
-    address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::DrawHistogramWindow_ADDRESS
-)]
-fn draw_histogram_window(
-    this: *mut c_void,
-    ctx: *mut c_void,
-    pec: *mut c_void,
-    mgr: *mut c_void,
-    index: u32,
-) {
-    let eye1_gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
-    TraceState::record_eye(TraceEvent::DrawHistogramWindow { skip: eye1_gated });
-    if eye1_gated {
-        return;
-    }
-    DRAW_HISTOGRAM_WINDOW
-        .get()
-        .unwrap()
-        .call(this, ctx, pec, mgr, index);
 }

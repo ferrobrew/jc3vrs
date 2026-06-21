@@ -8,9 +8,7 @@ pub mod character;
 pub mod clock;
 pub mod draw_count;
 pub mod game;
-pub mod graphics;
-pub mod post_effects;
-pub mod stereo;
+pub mod graphics_engine;
 pub mod wndproc;
 
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
@@ -27,11 +25,9 @@ pub(super) fn install() {
         Ok(HookLibraries::new([
             game::hook_library(),
             clock::hook_library(),
-            stereo::hook_library(),
+            graphics_engine::hook_library(),
             draw_count::hook_library(),
-            post_effects::hook_library(),
             camera::hook_library(),
-            graphics::hook_library(),
             wndproc::hook_library(),
             character::hook_library(),
         ])
