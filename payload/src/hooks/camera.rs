@@ -1,5 +1,4 @@
 use std::ffi::c_void;
-use std::sync::atomic::Ordering;
 
 use detours_macro::detour;
 use jc3gi::{
@@ -13,8 +12,9 @@ use jc3gi::{
     hash::hashlittle,
     types::math::Matrix4,
 };
-use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
+
+use crate::config::Config;
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -37,23 +37,32 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         crate::trace_eye(crate::TraceEvent::SetupRenderCamera);
     }
 
+    // Snapshot the stereo config once; drop the lock before the engine call below.
+    let (stereo_active, force_smaa_1x, stereo_cameras, ipd) = {
+        let active = crate::stereo::active();
+        Config::lock_query(|c| {
+            (
+                active,
+                c.stereo.force_smaa_1x,
+                c.stereo.cameras,
+                c.stereo.ipd,
+            )
+        })
+    };
+
     // Forcing SMAA 1x in stereo drops the temporal resolve, so the TAA sub-pixel jitter has nothing
     // to consume it (it would just shimmer) -- drop the jitter too.
-    let jitter = jitter
-        && !(crate::STEREO.load(Ordering::Relaxed) && crate::FORCE_SMAA_1X.load(Ordering::Relaxed));
+    let jitter = jitter && !(stereo_active && force_smaa_1x);
     let result = SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter);
 
     // Per-eye parallax: shift the camera world position (m_TransformF translation == camera+0x84,
     // the CameraPosition the camera-relative scene render subtracts) along its right axis by +/-
     // half the IPD. Same projection both eyes -- a per-eye zoom would make the pair unfusable.
-    if is_render_camera
-        && crate::STEREO.load(Ordering::Relaxed)
-        && crate::STEREO_CAMERAS.load(Ordering::Relaxed)
-    {
+    if is_render_camera && stereo_active && stereo_cameras {
         unsafe {
             if let Some(camera) = camera.as_mut() {
-                let eye1 = crate::DRAW_INDEX.load(Ordering::Relaxed) == 1;
-                let half_ipd = *crate::STEREO_IPD.lock() * 0.5;
+                let eye1 = crate::stereo::draw_index() == 1;
+                let half_ipd = ipd * 0.5;
                 // Eye 0 is the LEFT eye (shift -right), eye 1 the RIGHT (shift +right), so view 0 ==
                 // left (OpenXR convention). Previously reversed, which made the debug pair fuse
                 // cross-eyed when the "parallel" toggle was off.
@@ -90,7 +99,7 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
             && let Some(cm) = CameraManager::get()
             && cm.m_ActiveCamera == camera
         {
-            let camera_settings = *CAMERA_SETTINGS.lock();
+            let camera_settings = Config::lock_query(|c| c.camera);
             if !camera_settings.enabled {
                 CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
                 return;
@@ -140,29 +149,6 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
     CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
 }
 
-#[derive(Copy, Clone)]
-pub struct CameraSettings {
-    pub enabled: bool,
-    pub body_offset: glam::Vec3,
-    pub head_offset: glam::Vec3,
-    pub use_eye_matrices: bool,
-    pub blurs_enabled: bool,
-    pub always_use_t1: bool,
-}
-impl CameraSettings {
-    pub const fn new() -> Self {
-        Self {
-            enabled: true,
-            body_offset: glam::Vec3::new(0.0, 0.1, 0.0),
-            head_offset: glam::Vec3::new(0.0, -0.1, 0.0),
-            use_eye_matrices: true,
-            blurs_enabled: false,
-            always_use_t1: false,
-        }
-    }
-}
-pub static CAMERA_SETTINGS: Mutex<CameraSettings> = Mutex::new(CameraSettings::new());
-
 #[detour(address = jc3gi::camera::camera_tree::CameraTree::UpdateRenderContexts_ADDRESS)]
 fn camera_tree_update_render_contexts(
     tree: *mut c_void,
@@ -181,7 +167,7 @@ fn camera_tree_update_render_contexts(
             return;
         };
 
-        let camera_settings = *CAMERA_SETTINGS.lock();
+        let camera_settings = Config::lock_query(|c| c.camera);
         if !camera_settings.enabled {
             return;
         }
@@ -305,7 +291,7 @@ fn calculate_head_position(
     left_eye_matrix: glam::Mat4,
     right_eye_matrix: glam::Mat4,
     use_eye_matrices: bool,
-    camera_settings: &CameraSettings,
+    camera_settings: &crate::config::CameraConfig,
 ) -> glam::Vec3 {
     let (_, character_rotation, _character_position) =
         character_matrix.to_scale_rotation_translation();

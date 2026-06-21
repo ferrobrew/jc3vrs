@@ -9,51 +9,15 @@
 //! swap) and `HandBackBuffers` (constant-buffer recycle) run on both eyes.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use detours_macro::detour;
 use jc3gi::graphics_engine::post_effects::PostEffectContext;
 use jc3gi::graphics_engine::tone_mapping::{SHistogramGeneration, ToneMappingEffect};
-use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 
 use crate::TraceEvent;
-
-/// Skip the auto-exposure update on eye 1 (frame-counted; would double-adapt). Default on.
-pub static GATE_EXPOSURE: AtomicBool = AtomicBool::new(true);
-/// Skip the per-frame render-list rotation (`RotateRenderFrameData`) on eye 1, so eye 1 reuses eye
-/// 0's populated draw lists instead of flipping to the just-emptied buffer. Default on -- this is the
-/// core stereo geometry fix (eye 1 was drawing zero render blocks without it).
-pub static GATE_ROTATE_RENDER_FRAME_DATA: AtomicBool = AtomicBool::new(true);
-/// Skip `SetupRenderFrameData` (the per-batch RBI list *build*) on eye 1. Default off. NOTE: this is
-/// the list build, not the swap (that is `RotateRenderFrameData`); it runs during the sim, so gating
-/// it would starve both eyes' lists. Kept only for experimentation.
-pub static GATE_SETUP_RENDER_FRAME_DATA: AtomicBool = AtomicBool::new(false);
-/// Skip `HandBackBuffers` (constant-buffer recycle) on eye 1. Default off.
-pub static GATE_HAND_BACK_BUFFERS: AtomicBool = AtomicBool::new(false);
-/// Force the post-effect `dt` to 0 on the eye-1 dispatch so the dt-driven accumulators (world fade,
-/// screen-fade alpha, sun-direction / heat-haze) advance once per real frame instead of twice
-/// (otherwise fades run at ~2x and the sun/haze shimmer runs fast). Default on.
-pub static GATE_EYE1_DT: AtomicBool = AtomicBool::new(true);
-
-/// A/B / stopgap: pin `ToneMappingEffect::m_CurrentExposure` to `FORCED_EXPOSURE` right after the
-/// engine's per-frame `Update` writes it (see `tonemapping_update`) -- the canonical exposure write,
-/// so it overrides the auto-exposure feedback loop for the whole frame. Pin both modes to the same
-/// value: if stereo then matches non-stereo brightness the darkening was the loop; if stereo is still
-/// darker at the same pin it is a render path independent of exposure. Default off.
-pub static FORCE_EXPOSURE: AtomicBool = AtomicBool::new(false);
-/// The value `FORCE_EXPOSURE` pins `m_CurrentExposure` to (the non-stereo daylight value was ~0.11).
-pub static FORCED_EXPOSURE: Mutex<f32> = Mutex::new(0.11);
-
-/// True while the manual Draw driver is rendering the *second* eye.
-fn is_second_eye() -> bool {
-    crate::STEREO.load(Ordering::Relaxed) && crate::DRAW_INDEX.load(Ordering::Relaxed) == 1
-}
-
-/// Whether this eye-1 pass should skip the gated call (i.e. we're on eye 1 and the gate is on).
-fn gate(flag: &AtomicBool) -> bool {
-    is_second_eye() && flag.load(Ordering::Relaxed)
-}
+use crate::config::Config;
+use crate::stereo::is_second_eye;
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -76,7 +40,7 @@ pub(super) fn hook_library() -> HookLibrary {
 // identically. On by default -- this is the core stereo-geometry fix.
 #[detour(address = jc3gi::graphics_engine::render_pass::RotateRenderFrameData_ADDRESS)]
 fn rotate_render_frame_data() {
-    let gated = gate(&GATE_ROTATE_RENDER_FRAME_DATA);
+    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_rotate_render_frame_data);
     crate::trace_eye(TraceEvent::RotateRenderFrameData { gated });
     if gated {
         return;
@@ -89,7 +53,7 @@ fn rotate_render_frame_data() {
 // eye-1 gate never actually fires; it is NOT the add/draw swap (see rotate_render_frame_data above).
 #[detour(address = jc3gi::graphics_engine::render_pass::RenderPass::SetupRenderFrameData_ADDRESS)]
 fn setup_render_frame_data(a1: *mut c_void, count: i32, a3: *mut c_void, items: *mut c_void) {
-    let gated = gate(&GATE_SETUP_RENDER_FRAME_DATA);
+    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_setup_render_frame_data);
     crate::trace_eye(TraceEvent::SetupRenderFrameData { gated });
     if gated {
         return;
@@ -104,7 +68,7 @@ fn setup_render_frame_data(a1: *mut c_void, count: i32, a3: *mut c_void, items: 
 // pool. Suppressing it on eye 1 starves the second render of constant buffers. Off by default.
 #[detour(address = jc3gi::graphics_engine::render_pass::ConstantBufferPool::HandBackBuffers_ADDRESS)]
 fn hand_back_buffers(this: *mut c_void) {
-    let gated = gate(&GATE_HAND_BACK_BUFFERS);
+    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_hand_back_buffers);
     crate::trace_eye(TraceEvent::HandBackBuffers { gated });
     if gated {
         return;
@@ -117,7 +81,7 @@ fn hand_back_buffers(this: *mut c_void) {
 // first eye's exposure (which is what you want anyway -- no binocular rivalry).
 #[detour(address = jc3gi::graphics_engine::tone_mapping::SSmoothedExposure::Update_ADDRESS)]
 fn smoothed_exposure_update(this: *mut c_void, exposure: f32) {
-    let gated = gate(&GATE_EXPOSURE);
+    let gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
     crate::trace_eye(TraceEvent::SmoothedExposureUpdate { gated, exposure });
     if gated {
         return;
@@ -136,7 +100,7 @@ fn calc_histogram_mid_bright(
     arg3: f32,
     hist: *mut SHistogramGeneration,
 ) {
-    let gated = gate(&GATE_EXPOSURE);
+    let gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
     crate::trace_eye(TraceEvent::CalcHistogramMidBright { gated });
     if gated {
         return;
@@ -162,7 +126,7 @@ fn apply_world_filters(
     a7: *mut c_void,
     a8: *mut c_void,
 ) {
-    let gated = gate(&GATE_EYE1_DT);
+    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_eye1_dt);
     crate::trace_eye(TraceEvent::ApplyWorldFilters { gated });
     let dt = if gated { 0.0 } else { dt };
     APPLY_WORLD_FILTERS
@@ -176,7 +140,7 @@ fn apply_world_filters(
 // once-per-real-frame reason.
 #[detour(address = jc3gi::graphics_engine::post_effects::PostEffectsManager::ApplyGlobalFilters_ADDRESS)]
 fn apply_global_filters(this: *mut c_void, dt: f32, ctx: *mut c_void) {
-    let gated = gate(&GATE_EYE1_DT);
+    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_eye1_dt);
     crate::trace_eye(TraceEvent::ApplyGlobalFilters { gated });
     let dt = if gated { 0.0 } else { dt };
     APPLY_GLOBAL_FILTERS.get().unwrap().call(this, dt, ctx);
@@ -197,8 +161,10 @@ fn tonemapping_update(
     let Some(tme) = (unsafe { this.as_mut() }) else {
         return;
     };
-    if FORCE_EXPOSURE.load(Ordering::Relaxed) {
-        tme.m_CurrentExposure = *FORCED_EXPOSURE.lock();
+    let (force_exposure, forced_value) =
+        Config::lock_query(|c| (c.exposure.force, c.exposure.forced_value));
+    if force_exposure {
+        tme.m_CurrentExposure = forced_value;
     }
     if crate::tracing_active() {
         let target_num = unsafe { ctx.as_ref() }
@@ -224,7 +190,7 @@ fn tonemapping_update(
             hist2_buckets: tme.m_Histogram2.m_NumPixelsInBuckets[..n].to_vec(),
             num_buckets: tme.m_NumBuckets,
             pingpong,
-            forced: FORCE_EXPOSURE.load(Ordering::Relaxed),
+            forced: force_exposure,
         });
     }
 }

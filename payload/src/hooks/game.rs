@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 use detours_macro::detour;
 use jc3gi::{
@@ -11,14 +11,9 @@ use jc3gi::{
 use re_utilities::hook_library::HookLibrary;
 
 use crate::TraceEvent;
+use crate::stereo::STEREO_STATE;
 
 use super::graphics::BLOCK_FLIP;
-
-/// Snapshot the per-frame render counters before eye 0 and restore them before eye 1, so eye 1's
-/// prologue re-derives the same TAA jitter phase / shadow parity / CB ring as eye 0. Without this,
-/// running the whole `CGraphicsEngine::Draw` twice double-steps the counters and the eyes get
-/// opposite jitter -> flicker.
-pub static RESTORE_FRAME_COUNTERS: AtomicBool = AtomicBool::new(true);
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -52,33 +47,44 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
         let game = game.as_mut().unwrap();
 
-        if crate::STEREO.load(Ordering::Relaxed) {
+        // Start of a frame: publish the master toggle (and restore_frame_counters) from config into
+        // the live stereo state, which the render hooks read via `crate::stereo`. Copy the config
+        // values out and drop the lock before driving the eye loop / engine work.
+        let (stereo, restore_counters, present_eye_0) = crate::config::Config::lock_query(|c| {
+            (
+                c.stereo.enabled,
+                c.stereo.restore_frame_counters,
+                c.stereo.present_eye_0,
+            )
+        });
+        STEREO_STATE.lock().active = stereo;
+
+        if stereo {
             // Snapshot the reflection-proxy depth-history before eye 0 and restore it before eye 1,
             // so both dispatches make the same per-slot decisions -- the state then advances once
             // per real frame instead of once per dispatch, otherwise water reflections flicker.
             let effect_info = snapshot_effect_info();
             // Snapshot the prologue frame counters so we can rewind them before eye 1, keeping both
             // eyes on the same jitter phase / shadow parity / CB ring (see RESTORE_FRAME_COUNTERS).
-            let frame_counters = RESTORE_FRAME_COUNTERS
-                .load(Ordering::Relaxed)
-                .then(snapshot_frame_counters);
+            let frame_counters = restore_counters.then(snapshot_frame_counters);
 
             // The per-eye camera offset is injected on the render camera in the SetupRenderCamera
             // hook (see hooks::camera and docs/rendering.md section 2); here we just drive the two
-            // dispatches and tag each with its eye index via DRAW_INDEX. PRESENT_EYE_0 picks which
-            // eye reaches the screen (the other's flip is blocked), so each eye can be compared live.
-            let present_eye = usize::from(!crate::PRESENT_EYE_0.load(Ordering::Relaxed));
+            // dispatches and tag each with its eye index via STEREO_STATE.draw_index. present_eye_0
+            // picks which eye reaches the screen (the other's flip is blocked), so each eye can be
+            // compared live.
+            let present_eye = usize::from(!present_eye_0);
             crate::trace(TraceEvent::FrameBegin {
                 stereo: true,
                 present_eye: Some(present_eye),
-                restore_counters: Some(RESTORE_FRAME_COUNTERS.load(Ordering::Relaxed)),
+                restore_counters: Some(restore_counters),
             });
 
             crate::DRAW_CALLS.store(0, Ordering::Relaxed);
             crate::DRAW_INDEXED_CALLS.store(0, Ordering::Relaxed);
             crate::DISPATCH_CALLS.store(0, Ordering::Relaxed);
             crate::trace(TraceEvent::DrawBegin { eye: 0 });
-            crate::DRAW_INDEX.store(0, Ordering::Relaxed);
+            STEREO_STATE.lock().draw_index = 0;
             BLOCK_FLIP.store(present_eye != 0, Ordering::Relaxed);
             game.Draw(spf);
             if let Some(ge) = GraphicsEngine::get() {
@@ -103,7 +109,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             crate::DRAW_INDEXED_CALLS.store(0, Ordering::Relaxed);
             crate::DISPATCH_CALLS.store(0, Ordering::Relaxed);
             crate::trace(TraceEvent::DrawBegin { eye: 1 });
-            crate::DRAW_INDEX.store(1, Ordering::Relaxed);
+            STEREO_STATE.lock().draw_index = 1;
             BLOCK_FLIP.store(present_eye != 1, Ordering::Relaxed);
             game.Draw(spf);
             if let Some(ge) = GraphicsEngine::get() {
@@ -118,14 +124,14 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             });
             crate::trace_end_frame();
 
-            crate::DRAW_INDEX.store(0, Ordering::Relaxed);
+            STEREO_STATE.lock().draw_index = 0;
         } else {
             crate::trace(TraceEvent::FrameBegin {
                 stereo: false,
                 present_eye: None,
                 restore_counters: None,
             });
-            crate::DRAW_INDEX.store(0, Ordering::Relaxed);
+            STEREO_STATE.lock().draw_index = 0;
             game.Draw(spf);
             crate::capture_render_camera(0);
             crate::trace_end_frame();

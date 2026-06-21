@@ -2,7 +2,7 @@ use std::{
     ffi::c_void,
     sync::{
         OnceLock,
-        atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
+        atomic::{AtomicI32, AtomicUsize, Ordering},
     },
 };
 
@@ -32,32 +32,12 @@ pub mod egui_impl;
 pub mod module;
 pub mod util;
 
+mod config;
 mod crash;
 mod environment_ui;
 mod hooks;
 mod logging;
-
-/// When enabled, the manual Draw driver issues a second `game.Draw` per real frame (the stereo
-/// "second eye"), and the `CClock::Update` detour gates the clock to once per real frame so the
-/// SPF smoother isn't polluted (avoids slow-mo). Toggle via the Render tab.
-pub static STEREO: AtomicBool = AtomicBool::new(true);
-
-/// Which Draw (eye) the manual driver is currently dispatching: 0 or 1. Set before each
-/// `game.Draw`, read by the post-draw capture to route the back buffer into the matching RT.
-pub static DRAW_INDEX: AtomicUsize = AtomicUsize::new(0);
-
-/// Per-eye stereo: offset the render camera laterally by +/- half the IPD along its right axis, so
-/// each eye renders its own viewpoint. Toggle via the Render tab.
-pub static STEREO_CAMERAS: AtomicBool = AtomicBool::new(true);
-/// Inter-pupillary distance (metres) for the per-eye camera offset.
-pub static STEREO_IPD: Mutex<f32> = Mutex::new(0.068);
-/// Force SMAA T2X (AA mode 3) down to SMAA 1x while rendering in stereo. T2X's temporal resolve
-/// blends a mono, per-dispatch-shared history -> a cross-eye ghost; 1x carries no history. The
-/// matching TAA jitter is also dropped (no resolve to consume it). Default on.
-pub static FORCE_SMAA_1X: AtomicBool = AtomicBool::new(true);
-/// Which eye reaches the screen in stereo double-Draw: false = eye 1 (default), true = eye 0. Lets
-/// each eye's render be compared live, bypassing the (flaky) per-eye capture.
-pub static PRESENT_EYE_0: AtomicBool = AtomicBool::new(false);
+mod stereo;
 
 /// Render-call trace: when > 0, pipeline hooks append a JSON record per call to TRACE_LOG;
 /// decremented once per real frame and dumped as NDJSON when it reaches 0. Driven by the "Dump
@@ -87,25 +67,8 @@ pub enum TraceEvent {
     Manifest {
         /// Local capture time (YYYYMMDD-HHMMSS), matching the trace filename.
         timestamp: String,
-        stereo: bool,
-        stereo_cameras: bool,
-        stereo_ipd: f32,
-        force_smaa_1x: bool,
-        force_exposure: bool,
-        forced_exposure: f32,
-        gate_exposure: bool,
-        gate_rotate_render_frame_data: bool,
-        gate_eye1_dt: bool,
-        gate_setup_render_frame_data: bool,
-        gate_hand_back_buffers: bool,
-        skip_histogram: bool,
-        skip_motion_blur: bool,
-        skip_dof: bool,
-        dof_no_reproject: bool,
-        skip_fade: bool,
-        skip_glare: bool,
-        skip_player_damage: bool,
-        skip_sun_halo: bool,
+        /// The full runtime configuration snapshot (nests cleanly via its own `Serialize`).
+        config: config::Config,
     },
     #[serde(rename = "frame_begin")]
     FrameBegin {
@@ -249,7 +212,7 @@ pub fn trace_eye(event: TraceEvent) {
     if TRACE_FRAMES.load(Ordering::Relaxed) > 0
         && let Ok(serde_json::Value::Object(mut map)) = serde_json::to_value(&event)
     {
-        map.insert("eye".to_string(), DRAW_INDEX.load(Ordering::Relaxed).into());
+        map.insert("eye".to_string(), crate::stereo::draw_index().into());
         TRACE_LOG
             .lock()
             .push(serde_json::Value::Object(map).to_string());
@@ -264,30 +227,9 @@ fn trace_stamp() -> String {
 
 /// Snapshot the active runtime toggles into a [`TraceEvent::Manifest`] (the first record of a trace).
 fn build_manifest(timestamp: String) -> TraceEvent {
-    use hooks::post_effects as pe;
-    use hooks::stereo as st;
-    let r = Ordering::Relaxed;
     TraceEvent::Manifest {
         timestamp,
-        stereo: STEREO.load(r),
-        stereo_cameras: STEREO_CAMERAS.load(r),
-        stereo_ipd: *STEREO_IPD.lock(),
-        force_smaa_1x: FORCE_SMAA_1X.load(r),
-        force_exposure: st::FORCE_EXPOSURE.load(r),
-        forced_exposure: *st::FORCED_EXPOSURE.lock(),
-        gate_exposure: st::GATE_EXPOSURE.load(r),
-        gate_rotate_render_frame_data: st::GATE_ROTATE_RENDER_FRAME_DATA.load(r),
-        gate_eye1_dt: st::GATE_EYE1_DT.load(r),
-        gate_setup_render_frame_data: st::GATE_SETUP_RENDER_FRAME_DATA.load(r),
-        gate_hand_back_buffers: st::GATE_HAND_BACK_BUFFERS.load(r),
-        skip_histogram: pe::SKIP_HISTOGRAM.load(r),
-        skip_motion_blur: pe::SKIP_MOTION_BLUR.load(r),
-        skip_dof: pe::SKIP_DOF.load(r),
-        dof_no_reproject: pe::DOF_NO_REPROJECT.load(r),
-        skip_fade: pe::SKIP_FADE.load(r),
-        skip_glare: pe::SKIP_GLARE.load(r),
-        skip_player_damage: pe::SKIP_PLAYER_DAMAGE.load(r),
-        skip_sun_halo: pe::SKIP_SUN_HALO.load(r),
+        config: config::get(),
     }
 }
 
@@ -989,43 +931,35 @@ fn show_target_thumbnail(
 }
 
 fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
+    // Scope the CONFIG lock to just the config widgets -- it must never be held at the same time as
+    // EGUI_DEBUG_RENDER_STATE (lock ordering), so it is dropped before the capture/thumbnail code.
     {
-        let mut stereo = STEREO.load(Ordering::Relaxed);
-        if ui
-            .checkbox(&mut stereo, "Stereo (double-Draw)")
+        let mut cfg = config::CONFIG.lock();
+
+        ui.checkbox(&mut cfg.stereo.enabled, "Stereo (double-Draw)")
             .on_hover_text(
                 "Issue a second game.Draw per frame; CClock::Update is gated to once/frame",
-            )
-            .changed()
-        {
-            STEREO.store(stereo, Ordering::Relaxed);
-        }
+            );
 
         {
-            let mut sc = STEREO_CAMERAS.load(Ordering::Relaxed);
-            if ui
-                .checkbox(&mut sc, "Stereo cameras (per-eye IPD offset)")
-                .on_hover_text("Offset the active camera per eye so the two draws diverge")
-                .changed()
-            {
-                STEREO_CAMERAS.store(sc, Ordering::Relaxed);
-            }
-            ui.add(egui::Slider::new(&mut *STEREO_IPD.lock(), 0.0..=100.0).text("IPD (m)"));
-            gate_checkbox(
-                ui,
-                &FORCE_SMAA_1X,
+            ui.checkbox(
+                &mut cfg.stereo.cameras,
+                "Stereo cameras (per-eye IPD offset)",
+            )
+            .on_hover_text("Offset the active camera per eye so the two draws diverge");
+            ui.add(egui::Slider::new(&mut cfg.stereo.ipd, 0.0..=100.0).text("IPD (m)"));
+            ui.checkbox(
+                &mut cfg.stereo.force_smaa_1x,
                 "Force SMAA 1x in stereo (T2X ghosts across eyes)",
             );
         }
 
-        gate_checkbox(
-            ui,
-            &hooks::game::RESTORE_FRAME_COUNTERS,
+        ui.checkbox(
+            &mut cfg.stereo.restore_frame_counters,
             "Restore frame counters between eyes (fixes jitter/parity flicker)",
         );
-        gate_checkbox(
-            ui,
-            &PRESENT_EYE_0,
+        ui.checkbox(
+            &mut cfg.stereo.present_eye_0,
             "Present eye 0 (else eye 1) -- flip to compare each eye live",
         );
         ui.horizontal(|ui| {
@@ -1043,54 +977,37 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
         });
 
         ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
-            use hooks::stereo::{
-                GATE_EXPOSURE, GATE_EYE1_DT, GATE_HAND_BACK_BUFFERS, GATE_ROTATE_RENDER_FRAME_DATA,
-                GATE_SETUP_RENDER_FRAME_DATA,
-            };
-            gate_checkbox(
-                ui,
-                &GATE_ROTATE_RENDER_FRAME_DATA,
+            ui.checkbox(
+                &mut cfg.stereo.gate_rotate_render_frame_data,
                 "RotateRenderFrameData (RBI list flip -- the geometry fix)",
             );
-            gate_checkbox(
-                ui,
-                &GATE_EXPOSURE,
+            ui.checkbox(
+                &mut cfg.exposure.gate,
                 "Auto-exposure (SmoothedExposure + Histogram)",
             );
-            gate_checkbox(
-                ui,
-                &GATE_EYE1_DT,
+            ui.checkbox(
+                &mut cfg.stereo.gate_eye1_dt,
                 "Eye-1 dt=0 (world fade / sun / heat-haze step once per frame)",
             );
-            gate_checkbox(
-                ui,
-                &GATE_SETUP_RENDER_FRAME_DATA,
+            ui.checkbox(
+                &mut cfg.stereo.gate_setup_render_frame_data,
                 "SetupRenderFrameData (per-batch list build, not the swap)",
             );
-            gate_checkbox(
-                ui,
-                &GATE_HAND_BACK_BUFFERS,
+            ui.checkbox(
+                &mut cfg.stereo.gate_hand_back_buffers,
                 "HandBackBuffers (constant-buffer recycle)",
             );
         });
 
         ui.collapsing("Exposure A/B (pin m_CurrentExposure)", |ui| {
-            use hooks::stereo::{FORCE_EXPOSURE, FORCED_EXPOSURE};
-            gate_checkbox(
-                ui,
-                &FORCE_EXPOSURE,
+            ui.checkbox(
+                &mut cfg.exposure.force,
                 "Force exposure (pin after the engine's Update)",
             );
-            let mut v = *FORCED_EXPOSURE.lock();
-            if ui
-                .add(
-                    egui::Slider::new(&mut v, 0.0..=0.5)
-                        .text("Forced exposure (~0.11 = non-stereo daylight)"),
-                )
-                .changed()
-            {
-                *FORCED_EXPOSURE.lock() = v;
-            }
+            ui.add(
+                egui::Slider::new(&mut cfg.exposure.forced_value, 0.0..=0.5)
+                    .text("Forced exposure (~0.11 = non-stereo daylight)"),
+            );
             ui.label(
                 "A/B: enable in both stereo and non-stereo at the same value. Same brightness => the \
                  darkening was the exposure loop; stereo still darker => a render path.",
@@ -1098,36 +1015,36 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
         });
 
         ui.collapsing("Post-FX (reprojection passes, both eyes)", |ui| {
-            use hooks::post_effects::{
-                DOF_NO_REPROJECT, SKIP_DOF, SKIP_MOTION_BLUR, SKIP_MOTION_BLUR_RECON,
-            };
-            gate_checkbox(ui, &SKIP_MOTION_BLUR, "Skip MotionBlur::Apply (whole pass)");
-            gate_checkbox(
-                ui,
-                &SKIP_MOTION_BLUR_RECON,
+            ui.checkbox(
+                &mut cfg.post_fx.skip_motion_blur,
+                "Skip MotionBlur::Apply (whole pass)",
+            );
+            ui.checkbox(
+                &mut cfg.post_fx.skip_motion_blur_recon,
                 "Skip MotionBlur recon (if pass not skipped)",
             );
-            gate_checkbox(
-                ui,
-                &DOF_NO_REPROJECT,
+            ui.checkbox(
+                &mut cfg.post_fx.dof_no_reproject,
                 "DoF: plain composite, no reprojection (keeps picture)",
             );
-            gate_checkbox(ui, &SKIP_DOF, "Skip DepthOfField::Apply (washes out!)");
+            ui.checkbox(
+                &mut cfg.post_fx.skip_dof,
+                "Skip DepthOfField::Apply (washes out!)",
+            );
         });
 
         ui.collapsing("Post-FX stages (skip to bisect)", |ui| {
-            use hooks::post_effects::{
-                SKIP_FADE, SKIP_GLARE, SKIP_HISTOGRAM, SKIP_PLAYER_DAMAGE, SKIP_SUN_HALO,
-            };
-            gate_checkbox(
-                ui,
-                &SKIP_HISTOGRAM,
+            ui.checkbox(
+                &mut cfg.post_fx.skip_histogram,
                 "Exposure histogram (stalls auto-exposure)",
             );
-            gate_checkbox(ui, &SKIP_GLARE, "Glare / bloom");
-            gate_checkbox(ui, &SKIP_FADE, "Fade");
-            gate_checkbox(ui, &SKIP_SUN_HALO, "Sun halo");
-            gate_checkbox(ui, &SKIP_PLAYER_DAMAGE, "Player-damage vignette");
+            ui.checkbox(&mut cfg.post_fx.skip_glare, "Glare / bloom");
+            ui.checkbox(&mut cfg.post_fx.skip_fade, "Fade");
+            ui.checkbox(&mut cfg.post_fx.skip_sun_halo, "Sun halo");
+            ui.checkbox(
+                &mut cfg.post_fx.skip_player_damage,
+                "Player-damage vignette",
+            );
         });
     }
 
@@ -1373,7 +1290,8 @@ fn matrix_grid(ui: &mut egui::Ui, id: &str, label: &str, m: &[f32; 16], other: O
 }
 
 fn egui_debug_camera(ui: &mut egui::Ui) {
-    let mut cs = hooks::camera::CAMERA_SETTINGS.lock();
+    let mut cfg = config::CONFIG.lock();
+    let cs = &mut cfg.camera;
     ui.checkbox(&mut cs.enabled, "Enabled");
     ui.checkbox(&mut cs.always_use_t1, "Always use T1");
     ui.checkbox(&mut cs.blurs_enabled, "Blurs");

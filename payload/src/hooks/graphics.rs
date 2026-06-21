@@ -51,7 +51,7 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
         };
 
         let lock = crate::EGUI_DEBUG_RENDER_STATE.lock();
-        let index = crate::DRAW_INDEX.load(std::sync::atomic::Ordering::Relaxed);
+        let index = crate::stereo::draw_index();
 
         EnterCriticalSection(context.m_Mutex);
 
