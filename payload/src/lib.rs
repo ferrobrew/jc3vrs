@@ -109,6 +109,10 @@ pub enum TraceEvent {
     CalcHistogramMidBright { gated: bool },
     #[serde(rename = "GenerateHistogram")]
     GenerateHistogram { skip: bool },
+    #[serde(rename = "ApplyWorldFilters")]
+    ApplyWorldFilters { gated: bool },
+    #[serde(rename = "ApplyGlobalFilters")]
+    ApplyGlobalFilters { gated: bool },
     #[serde(rename = "DoF::Apply")]
     DofApply { input: u32, skip: bool },
     #[serde(rename = "MotionBlur::Apply")]
@@ -894,8 +898,8 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
 
         ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
             use hooks::stereo::{
-                GATE_EXPOSURE, GATE_HAND_BACK_BUFFERS, GATE_ROTATE_RENDER_FRAME_DATA,
-                GATE_SETUP_RENDER_FRAME_DATA,
+                GATE_EXPOSURE, GATE_EYE1_DT, GATE_HAND_BACK_BUFFERS,
+                GATE_ROTATE_RENDER_FRAME_DATA, GATE_SETUP_RENDER_FRAME_DATA,
             };
             gate_checkbox(
                 ui,
@@ -906,6 +910,11 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
                 ui,
                 &GATE_EXPOSURE,
                 "Auto-exposure (SmoothedExposure + Histogram)",
+            );
+            gate_checkbox(
+                ui,
+                &GATE_EYE1_DT,
+                "Eye-1 dt=0 (world fade / sun / heat-haze step once per frame)",
             );
             gate_checkbox(
                 ui,

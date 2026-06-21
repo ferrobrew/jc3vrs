@@ -28,6 +28,10 @@ pub static GATE_ROTATE_RENDER_FRAME_DATA: AtomicBool = AtomicBool::new(true);
 pub static GATE_SETUP_RENDER_FRAME_DATA: AtomicBool = AtomicBool::new(false);
 /// Skip `HandBackBuffers` (constant-buffer recycle) on eye 1. Default off.
 pub static GATE_HAND_BACK_BUFFERS: AtomicBool = AtomicBool::new(false);
+/// Force the post-effect `dt` to 0 on the eye-1 dispatch so the dt-driven accumulators (world fade,
+/// screen-fade alpha, sun-direction / heat-haze) advance once per real frame instead of twice
+/// (otherwise fades run at ~2x and the sun/haze shimmer runs fast). Default on.
+pub static GATE_EYE1_DT: AtomicBool = AtomicBool::new(true);
 
 /// True while the manual Draw driver is rendering the *second* eye.
 fn is_second_eye() -> bool {
@@ -46,6 +50,8 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
         .with_static_binder(&SMOOTHED_EXPOSURE_UPDATE_BINDER)
         .with_static_binder(&CALC_HISTOGRAM_MID_BRIGHT_BINDER)
+        .with_static_binder(&APPLY_WORLD_FILTERS_BINDER)
+        .with_static_binder(&APPLY_GLOBAL_FILTERS_BINDER)
 }
 
 // RotateRenderFrameData -- the per-frame render-block-item list rotation, run in each
@@ -119,4 +125,39 @@ fn calc_histogram_mid_bright(ctx: *mut c_void, arg1: f32, arg2: i32, arg3: f32, 
         .get()
         .unwrap()
         .call(ctx, arg1, arg2, arg3, hist);
+}
+
+// PostEffectsManager::ApplyWorldFilters -- enqueues the world post block and steps the world-fade
+// accumulator (ApplyWorldFadeFilter) by `dt`. Zero `dt` on eye 1 so the fade advances once per real
+// frame, not twice.
+#[detour(address = jc3gi::graphics_engine::post_effects::PostEffectsManager::ApplyWorldFilters_ADDRESS)]
+#[allow(clippy::too_many_arguments)]
+fn apply_world_filters(
+    this: *mut c_void,
+    dt: f32,
+    setup: *mut c_void,
+    a4: *mut c_void,
+    a5: *mut c_void,
+    a6: *mut c_void,
+    a7: *mut c_void,
+    a8: *mut c_void,
+) {
+    let gated = gate(&GATE_EYE1_DT);
+    crate::trace_eye(TraceEvent::ApplyWorldFilters { gated });
+    let dt = if gated { 0.0 } else { dt };
+    APPLY_WORLD_FILTERS
+        .get()
+        .unwrap()
+        .call(this, dt, setup, a4, a5, a6, a7, a8);
+}
+
+// PostEffectsManager::ApplyGlobalFilters -- enqueues the global post block and steps its dt-driven
+// accumulators (screen-fade alpha, sun-direction / heat-haze). Zero `dt` on eye 1 for the same
+// once-per-real-frame reason.
+#[detour(address = jc3gi::graphics_engine::post_effects::PostEffectsManager::ApplyGlobalFilters_ADDRESS)]
+fn apply_global_filters(this: *mut c_void, dt: f32, ctx: *mut c_void) {
+    let gated = gate(&GATE_EYE1_DT);
+    crate::trace_eye(TraceEvent::ApplyGlobalFilters { gated });
+    let dt = if gated { 0.0 } else { dt };
+    APPLY_GLOBAL_FILTERS.get().unwrap().call(this, dt, ctx);
 }
