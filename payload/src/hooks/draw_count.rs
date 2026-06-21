@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
 
-use crate::TraceEvent;
+use crate::trace::{TraceEvent, TraceState};
 
 // Per-pass tallies: bumped alongside the global per-eye counters, then read + reset on each
 // SetRenderSetup, so the count attached to a bind is "draws issued since the previous bind on this
@@ -176,7 +176,7 @@ fn dispatch_indirect(
 fn set_render_setup(ctx: *mut c_void, setup: *mut c_void, restore: bool) {
     // Flush this thread's per-pass tally onto the bind: counts are the draws issued into the
     // previously-bound target since the last SetRenderSetup.
-    crate::trace_eye(TraceEvent::SetRenderSetup {
+    TraceState::record_eye(TraceEvent::SetRenderSetup {
         setup: setup as u64,
         draws: PASS_DRAW.with(|c| c.replace(0)),
         indexed: PASS_INDEXED.with(|c| c.replace(0)),
@@ -195,13 +195,13 @@ fn clear(ctx: *mut c_void, flags: u32, color: *mut c_void, depth: f32, stencil: 
             [p.read(), p.add(1).read(), p.add(2).read(), p.add(3).read()]
         }
     };
-    crate::trace_eye(TraceEvent::Clear { color: color_rgba });
+    TraceState::record_eye(TraceEvent::Clear { color: color_rgba });
     CLEAR.get().unwrap().call(ctx, flags, color, depth, stencil);
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::CopySurfaceToTexture_ADDRESS)]
 fn copy_surface_to_texture(ctx: *mut c_void, dst: *mut c_void, src: *mut c_void) {
-    crate::trace_eye(TraceEvent::CopySurfaceToTexture {
+    TraceState::record_eye(TraceEvent::CopySurfaceToTexture {
         dst: dst as u64,
         src: src as u64,
     });
@@ -210,6 +210,6 @@ fn copy_surface_to_texture(ctx: *mut c_void, dst: *mut c_void, src: *mut c_void)
 
 #[detour(address = jc3gi::graphics_engine::draw::ResolveSurface_ADDRESS)]
 fn resolve_surface(ctx: *mut c_void, params: *mut c_void) {
-    crate::trace_eye(TraceEvent::ResolveSurface);
+    TraceState::record_eye(TraceEvent::ResolveSurface);
     RESOLVE_SURFACE.get().unwrap().call(ctx, params);
 }

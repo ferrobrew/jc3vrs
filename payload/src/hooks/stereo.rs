@@ -15,9 +15,9 @@ use jc3gi::graphics_engine::post_effects::PostEffectContext;
 use jc3gi::graphics_engine::tone_mapping::{SHistogramGeneration, ToneMappingEffect};
 use re_utilities::hook_library::HookLibrary;
 
-use crate::TraceEvent;
 use crate::config::Config;
 use crate::stereo::is_second_eye;
+use crate::trace::{TraceEvent, TraceState};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -41,7 +41,7 @@ pub(super) fn hook_library() -> HookLibrary {
 #[detour(address = jc3gi::graphics_engine::render_pass::RotateRenderFrameData_ADDRESS)]
 fn rotate_render_frame_data() {
     let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_rotate_render_frame_data);
-    crate::trace_eye(TraceEvent::RotateRenderFrameData { gated });
+    TraceState::record_eye(TraceEvent::RotateRenderFrameData { gated });
     if gated {
         return;
     }
@@ -54,7 +54,7 @@ fn rotate_render_frame_data() {
 #[detour(address = jc3gi::graphics_engine::render_pass::RenderPass::SetupRenderFrameData_ADDRESS)]
 fn setup_render_frame_data(a1: *mut c_void, count: i32, a3: *mut c_void, items: *mut c_void) {
     let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_setup_render_frame_data);
-    crate::trace_eye(TraceEvent::SetupRenderFrameData { gated });
+    TraceState::record_eye(TraceEvent::SetupRenderFrameData { gated });
     if gated {
         return;
     }
@@ -69,7 +69,7 @@ fn setup_render_frame_data(a1: *mut c_void, count: i32, a3: *mut c_void, items: 
 #[detour(address = jc3gi::graphics_engine::render_pass::ConstantBufferPool::HandBackBuffers_ADDRESS)]
 fn hand_back_buffers(this: *mut c_void) {
     let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_hand_back_buffers);
-    crate::trace_eye(TraceEvent::HandBackBuffers { gated });
+    TraceState::record_eye(TraceEvent::HandBackBuffers { gated });
     if gated {
         return;
     }
@@ -82,7 +82,7 @@ fn hand_back_buffers(this: *mut c_void) {
 #[detour(address = jc3gi::graphics_engine::tone_mapping::SSmoothedExposure::Update_ADDRESS)]
 fn smoothed_exposure_update(this: *mut c_void, exposure: f32) {
     let gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
-    crate::trace_eye(TraceEvent::SmoothedExposureUpdate { gated, exposure });
+    TraceState::record_eye(TraceEvent::SmoothedExposureUpdate { gated, exposure });
     if gated {
         return;
     }
@@ -101,7 +101,7 @@ fn calc_histogram_mid_bright(
     hist: *mut SHistogramGeneration,
 ) {
     let gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
-    crate::trace_eye(TraceEvent::CalcHistogramMidBright { gated });
+    TraceState::record_eye(TraceEvent::CalcHistogramMidBright { gated });
     if gated {
         return;
     }
@@ -127,7 +127,7 @@ fn apply_world_filters(
     a8: *mut c_void,
 ) {
     let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_eye1_dt);
-    crate::trace_eye(TraceEvent::ApplyWorldFilters { gated });
+    TraceState::record_eye(TraceEvent::ApplyWorldFilters { gated });
     let dt = if gated { 0.0 } else { dt };
     APPLY_WORLD_FILTERS
         .get()
@@ -141,7 +141,7 @@ fn apply_world_filters(
 #[detour(address = jc3gi::graphics_engine::post_effects::PostEffectsManager::ApplyGlobalFilters_ADDRESS)]
 fn apply_global_filters(this: *mut c_void, dt: f32, ctx: *mut c_void) {
     let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_eye1_dt);
-    crate::trace_eye(TraceEvent::ApplyGlobalFilters { gated });
+    TraceState::record_eye(TraceEvent::ApplyGlobalFilters { gated });
     let dt = if gated { 0.0 } else { dt };
     APPLY_GLOBAL_FILTERS.get().unwrap().call(this, dt, ctx);
 }
@@ -166,14 +166,14 @@ fn tonemapping_update(
     if force_exposure {
         tme.m_CurrentExposure = forced_value;
     }
-    if crate::tracing_active() {
+    if crate::trace::tracing_active() {
         let target_num = unsafe { ctx.as_ref() }
             .map(|c| c.m_AutoExposureKey)
             .unwrap_or_default();
         let pingpong = tme.m_HistogramPingPong;
         let divisor = tme.m_Histogram2.m_HistogramMidPoint;
         let n = (tme.m_NumBuckets as usize).min(tme.m_Histogram.m_NumPixelsInBuckets.len());
-        crate::trace_eye(TraceEvent::ExposureInternals {
+        TraceState::record_eye(TraceEvent::ExposureInternals {
             exposure: tme.m_CurrentExposure,
             target_num,
             divisor,

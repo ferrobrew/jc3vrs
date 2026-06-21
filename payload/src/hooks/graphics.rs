@@ -9,7 +9,7 @@ use jc3gi::graphics_engine::{
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::System::Threading::{EnterCriticalSection, LeaveCriticalSection};
 
-use crate::TraceEvent;
+use crate::trace::{TraceEvent, TraceState};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -22,7 +22,7 @@ pub static BLOCK_FLIP: AtomicBool = AtomicBool::new(false);
 #[detour(address = jc3gi::graphics_engine::graphics_engine::graphics_flip_ADDRESS)]
 fn graphics_flip(device: *mut Device) -> u64 {
     let blocked = BLOCK_FLIP.load(std::sync::atomic::Ordering::Relaxed);
-    crate::trace_eye(TraceEvent::Flip { blocked });
+    TraceState::record_eye(TraceEvent::Flip { blocked });
     if blocked {
         return 0;
     }
@@ -39,7 +39,7 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
         .get()
         .unwrap()
         .call(render_engine, context);
-    crate::trace_eye(TraceEvent::PostDraw);
+    TraceState::record_eye(TraceEvent::PostDraw);
 
     unsafe {
         let Some(context) = context.as_mut() else {

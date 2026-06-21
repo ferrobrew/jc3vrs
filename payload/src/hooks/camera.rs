@@ -15,6 +15,7 @@ use jc3gi::{
 use re_utilities::hook_library::HookLibrary;
 
 use crate::config::Config;
+use crate::trace::{TraceEvent, TraceState};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -34,7 +35,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
             .is_some_and(|ge| (ge as *mut GraphicsEngine as usize) + 0x170 == camera as usize)
     };
     if is_render_camera {
-        crate::trace_eye(crate::TraceEvent::SetupRenderCamera);
+        TraceState::record_eye(TraceEvent::SetupRenderCamera);
     }
 
     // Snapshot the stereo config once; drop the lock before the engine call below.

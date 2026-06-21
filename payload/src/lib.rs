@@ -2,7 +2,7 @@ use std::{
     ffi::c_void,
     sync::{
         OnceLock,
-        atomic::{AtomicI32, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -38,16 +38,7 @@ mod environment_ui;
 mod hooks;
 mod logging;
 mod stereo;
-
-/// Render-call trace: when > 0, pipeline hooks append a JSON record per call to TRACE_LOG;
-/// decremented once per real frame and dumped as NDJSON when it reaches 0. Driven by the "Dump
-/// render trace" button.
-pub static TRACE_FRAMES: AtomicI32 = AtomicI32::new(0);
-static TRACE_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// Absolute path of the most recent trace dump, shown in the UI so it's findable.
-static LAST_TRACE_PATH: Mutex<Option<String>> = Mutex::new(None);
-/// UTC stamp of the in-progress trace, set at `trace_start`; used for the filename and the manifest.
-static TRACE_STAMP: Mutex<String> = Mutex::new(String::new());
+mod trace;
 
 /// Per-eye GPU-command counters: reset at each eye's `draw_begin`, read at `draw_end`. Bumped by the
 /// detours on the engine's draw wrappers (the draw counters) and `Dispatch`/`DispatchIndirect` (the
@@ -55,229 +46,6 @@ static TRACE_STAMP: Mutex<String> = Mutex::new(String::new());
 pub static DRAW_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static DRAW_INDEXED_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static DISPATCH_CALLS: AtomicUsize = AtomicUsize::new(0);
-
-/// One render-trace record, serialized to NDJSON; the `ev` tag names the event. Pipeline-hook
-/// variants omit `eye` -- it's injected by [`trace_eye`]; the frame/eye markers carry it directly.
-#[derive(serde::Serialize)]
-#[serde(tag = "ev")]
-pub enum TraceEvent {
-    /// First record of every trace: a snapshot of the active runtime toggles, so a capture is
-    /// self-describing (which gates / skips / the exposure pin were on) without external notes.
-    #[serde(rename = "manifest")]
-    Manifest {
-        /// Local capture time (YYYYMMDD-HHMMSS), matching the trace filename.
-        timestamp: String,
-        /// The full runtime configuration snapshot (nests cleanly via its own `Serialize`).
-        config: config::Config,
-    },
-    #[serde(rename = "frame_begin")]
-    FrameBegin {
-        stereo: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        present_eye: Option<usize>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        restore_counters: Option<bool>,
-    },
-    #[serde(rename = "draw_begin")]
-    DrawBegin { eye: usize },
-    #[serde(rename = "draw_end")]
-    DrawEnd {
-        eye: usize,
-        draw: usize,
-        draw_indexed: usize,
-        dispatch: usize,
-    },
-    #[serde(rename = "SetupRenderCamera")]
-    SetupRenderCamera,
-    #[serde(rename = "RotateRenderFrameData")]
-    RotateRenderFrameData { gated: bool },
-    #[serde(rename = "SetupRenderFrameData")]
-    SetupRenderFrameData { gated: bool },
-    #[serde(rename = "HandBackBuffers")]
-    HandBackBuffers { gated: bool },
-    #[serde(rename = "SmoothedExposureUpdate")]
-    SmoothedExposureUpdate { gated: bool, exposure: f32 },
-    #[serde(rename = "CalcHistogramMidBright")]
-    CalcHistogramMidBright { gated: bool },
-    /// Post-`CalculateMidAndBrightPointForHistogram` readback of the auto-exposure histogram, used to
-    /// localize stereo darkening: is eye 0's histogram reading MORE pixels (viewport/RT area) or
-    /// BRIGHTER pixels (luminance source)? `total_pixels` is the sum of the per-bucket occlusion
-    /// counts (total fragments counted); `centroid` is the count-weighted mean bucket index (the
-    /// brightness centre of mass) -- a larger centroid at equal `total_pixels` means brighter input.
-    /// `bright_point`/`mid_point` are the floats the function computes into the histogram. A higher
-    /// `total_pixels` OR `centroid` in stereo (vs nonstereo, same scene) pins the cause.
-    #[serde(rename = "HistogramReadback")]
-    HistogramReadback {
-        total_pixels: u64,
-        centroid: f32,
-        bright_point: f32,
-        mid_point: f32,
-        /// Number of buckets actually summed (m_NumBuckets); 0 if it couldn't be read.
-        num_buckets: u32,
-        /// Current auto-exposure value read back from the ToneMappingEffect (this+3056). With the
-        /// exposure pin (FORCE_EXPOSURE) active this is the pinned value, so the buckets below are
-        /// metered at a fixed exposure -- the decoupled comparison.
-        current_exposure: f32,
-        /// Whether the exposure pin was active for this capture. The metering is exposure-weighted, so
-        /// only with the pin on (constant exposure) does a `buckets`/`bright_point` difference between
-        /// eyes or modes isolate the scene (render path) from the exposure loop.
-        forced: bool,
-        /// Live per-bucket occlusion counts (m_NumPixelsInBuckets[..num_buckets]) -- the full metered
-        /// luminance distribution. At a pinned exposure: a shape shift toward lower buckets = a dimmer
-        /// scene (render); the same shape merely scaled = the exposure loop.
-        buckets: Vec<u32>,
-    },
-    /// Per-frame exposure internals, read from inside `ToneMappingEffect::Update` (the canonical
-    /// exposure write, with the live effect in hand). `divisor` is `m_Histogram2`'s mid-point -- the
-    /// value the converged exposure actually tracks (`target = target_num / divisor`). The stereo
-    /// darkening should show up here as `divisor` (hence `target`/`exposure`) differing from
-    /// non-stereo, isolating whether it's the second histogram's metering or its ping-pong readback.
-    #[serde(rename = "ExposureInternals")]
-    ExposureInternals {
-        exposure: f32,
-        target_num: f32,
-        divisor: f32,
-        target: f32,
-        hist1_bright: f32,
-        hist1_mid: f32,
-        hist1_buckets: Vec<u32>,
-        hist2_bright: f32,
-        hist2_mid: f32,
-        hist2_buckets: Vec<u32>,
-        num_buckets: u32,
-        /// The metering ping-pong selector (`this[168]`), to spot a buffer-swap mismatch under stereo.
-        pingpong: u32,
-        forced: bool,
-    },
-    #[serde(rename = "GenerateHistogram")]
-    GenerateHistogram { skip: bool },
-    #[serde(rename = "DrawHistogramWindow")]
-    DrawHistogramWindow { skip: bool },
-    #[serde(rename = "ApplyWorldFilters")]
-    ApplyWorldFilters { gated: bool },
-    #[serde(rename = "ApplyGlobalFilters")]
-    ApplyGlobalFilters { gated: bool },
-    #[serde(rename = "DoF::Apply")]
-    DofApply { input: u32, skip: bool },
-    #[serde(rename = "MotionBlur::Apply")]
-    MotionBlurApply { input: u32, skip: bool },
-    #[serde(rename = "Glare::Apply")]
-    GlareApply { skip: bool },
-    #[serde(rename = "Fade::Apply")]
-    FadeApply { skip: bool },
-    #[serde(rename = "PlayerDamage::Apply")]
-    PlayerDamageApply { input: u32, skip: bool },
-    #[serde(rename = "SunHalo::PreApply")]
-    SunHaloPreApply { skip: bool },
-    #[serde(rename = "SunHalo::Apply")]
-    SunHaloApply { skip: bool },
-    #[serde(rename = "PostDraw")]
-    PostDraw,
-    #[serde(rename = "Flip")]
-    Flip { blocked: bool },
-    // Buffer-flow events (raw pointers as u64 so render-setup / texture instances can be compared
-    // across eyes -- same pointer = same target, different pointer = a swapped instance).
-    #[serde(rename = "SetRenderSetup")]
-    SetRenderSetup {
-        setup: u64,
-        /// Draws/dispatches issued into the *previous* target since the last bind (this thread).
-        draws: usize,
-        indexed: usize,
-        dispatch: usize,
-    },
-    #[serde(rename = "Clear")]
-    Clear { color: [f32; 4] },
-    #[serde(rename = "CopySurfaceToTexture")]
-    CopySurfaceToTexture { dst: u64, src: u64 },
-    #[serde(rename = "ResolveSurface")]
-    ResolveSurface,
-}
-
-/// Whether a render trace is currently collecting. Lets hooks skip expensive readback work when not.
-pub fn tracing_active() -> bool {
-    TRACE_FRAMES.load(Ordering::Relaxed) > 0
-}
-
-/// Append one trace record (frame/eye markers, which carry their own `eye` field), while active.
-pub fn trace(event: TraceEvent) {
-    if TRACE_FRAMES.load(Ordering::Relaxed) > 0
-        && let Ok(s) = serde_json::to_string(&event)
-    {
-        TRACE_LOG.lock().push(s);
-    }
-}
-
-/// Append one trace record from inside a per-dispatch pipeline hook, injecting the current eye.
-pub fn trace_eye(event: TraceEvent) {
-    if TRACE_FRAMES.load(Ordering::Relaxed) > 0
-        && let Ok(serde_json::Value::Object(mut map)) = serde_json::to_value(&event)
-    {
-        map.insert("eye".to_string(), crate::stereo::draw_index().into());
-        TRACE_LOG
-            .lock()
-            .push(serde_json::Value::Object(map).to_string());
-    }
-}
-
-/// Current local time formatted as `YYYYMMDD-HHMMSS` (via jiff), to make each trace filename unique
-/// so captures don't overwrite each other.
-fn trace_stamp() -> String {
-    jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string()
-}
-
-/// Snapshot the active runtime toggles into a [`TraceEvent::Manifest`] (the first record of a trace).
-fn build_manifest(timestamp: String) -> TraceEvent {
-    TraceEvent::Manifest {
-        timestamp,
-        config: config::get(),
-    }
-}
-
-/// Begin a render-call trace covering the next `frames` real frames.
-pub fn trace_start(frames: i32) {
-    let stamp = trace_stamp();
-    *TRACE_STAMP.lock() = stamp.clone();
-    // Push the manifest while TRACE_FRAMES is still 0 (holding the log lock) so it is always the first
-    // record -- otherwise render-thread hooks that observe the armed counter can race ahead of it.
-    {
-        let mut log = TRACE_LOG.lock();
-        log.clear();
-        if let Ok(s) = serde_json::to_string(&build_manifest(stamp)) {
-            log.push(s);
-        }
-    }
-    TRACE_FRAMES.store(frames, Ordering::Relaxed);
-    tracing::info!("Render trace started ({frames} frames)");
-}
-
-/// Called once per real frame by the Draw driver; decrements the trace counter and, when the run
-/// finishes, writes the collected trace as NDJSON next to the injected DLL (same place as
-/// `jc3vrs.log`), recording the absolute path for the UI.
-pub fn trace_end_frame() {
-    if TRACE_FRAMES.load(Ordering::Relaxed) <= 0 {
-        return;
-    }
-    if TRACE_FRAMES.fetch_sub(1, Ordering::Relaxed) - 1 <= 0 {
-        let log = TRACE_LOG.lock();
-        let stamp = TRACE_STAMP.lock().clone();
-        let name = if stamp.is_empty() {
-            "jc3vrs_render_trace.ndjson".to_string()
-        } else {
-            format!("jc3vrs_render_trace_{stamp}.ndjson")
-        };
-        let path = module::get_path()
-            .and_then(|p| p.parent().map(|dir| dir.join(&name)))
-            .unwrap_or_else(|| std::path::PathBuf::from(&name));
-        match std::fs::write(&path, log.join("\n")) {
-            Ok(()) => {
-                let shown = path.display().to_string();
-                tracing::info!("Render trace dumped: {} records -> {}", log.len(), shown);
-                *LAST_TRACE_PATH.lock() = Some(shown);
-            }
-            Err(e) => tracing::error!("Failed to write render trace: {e}"),
-        }
-    }
-}
 
 #[unsafe(no_mangle)]
 #[allow(non_snake_case)]
@@ -964,12 +732,12 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
         );
         ui.horizontal(|ui| {
             if ui.button("Dump render trace (4 frames)").clicked() {
-                trace_start(4);
+                crate::trace::TraceState::start(4);
             }
-            let remaining = TRACE_FRAMES.load(Ordering::Relaxed);
+            let remaining = crate::trace::active_frames();
             if remaining > 0 {
                 ui.label(format!("tracing... {remaining} frames left"));
-            } else if LAST_TRACE_PATH.lock().is_some() {
+            } else if crate::trace::TraceState::last_path().is_some() {
                 ui.label("dumped");
             } else {
                 ui.label("(writes next to the DLL)");

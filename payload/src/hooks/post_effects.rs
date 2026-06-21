@@ -14,9 +14,9 @@ use jc3gi::graphics_engine::post_effects::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::TraceEvent;
 use crate::config::Config;
 use crate::stereo::{self, draw_index, is_second_eye};
+use crate::trace::{TraceEvent, TraceState};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -92,7 +92,7 @@ fn motion_blur_apply(
 ) -> u32 {
     let (skip_motion_blur, skip_recon) =
         Config::lock_query(|c| (c.post_fx.skip_motion_blur, c.post_fx.skip_motion_blur_recon));
-    crate::trace_eye(TraceEvent::MotionBlurApply {
+    TraceState::record_eye(TraceEvent::MotionBlurApply {
         input,
         skip: skip_motion_blur,
     });
@@ -121,7 +121,7 @@ fn dof_apply(
 ) -> u32 {
     let (skip_dof, dof_no_reproject) =
         Config::lock_query(|c| (c.post_fx.skip_dof, c.post_fx.dof_no_reproject));
-    crate::trace_eye(TraceEvent::DofApply {
+    TraceState::record_eye(TraceEvent::DofApply {
         input,
         skip: skip_dof,
     });
@@ -154,7 +154,7 @@ fn dof_apply(
 #[detour(address = jc3gi::graphics_engine::post_effects::FadeEffect::Apply_ADDRESS)]
 fn fade_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void) -> u64 {
     let skip = Config::lock_query(|c| c.post_fx.skip_fade);
-    crate::trace_eye(TraceEvent::FadeApply { skip });
+    TraceState::record_eye(TraceEvent::FadeApply { skip });
     if skip {
         return 0;
     }
@@ -171,7 +171,7 @@ fn glare_apply(
     a5: *mut c_void,
 ) -> u64 {
     let skip = Config::lock_query(|c| c.post_fx.skip_glare);
-    crate::trace_eye(TraceEvent::GlareApply { skip });
+    TraceState::record_eye(TraceEvent::GlareApply { skip });
     if skip {
         return 0;
     }
@@ -188,7 +188,7 @@ fn player_damage_apply(
     input: u32,
 ) -> u32 {
     let skip = Config::lock_query(|c| c.post_fx.skip_player_damage);
-    crate::trace_eye(TraceEvent::PlayerDamageApply { input, skip });
+    TraceState::record_eye(TraceEvent::PlayerDamageApply { input, skip });
     if skip {
         return input;
     }
@@ -203,7 +203,7 @@ fn player_damage_apply(
 #[detour(address = jc3gi::graphics_engine::post_effects::SunHaloEffect::PreApply_ADDRESS)]
 fn sun_halo_pre_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void, a4: *mut c_void) -> u64 {
     let skip = Config::lock_query(|c| c.post_fx.skip_sun_halo);
-    crate::trace_eye(TraceEvent::SunHaloPreApply { skip });
+    TraceState::record_eye(TraceEvent::SunHaloPreApply { skip });
     if skip {
         unsafe {
             *(this as *mut u8).add(0x114) = 0;
@@ -217,7 +217,7 @@ fn sun_halo_pre_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void, a4: *
 #[detour(address = jc3gi::graphics_engine::post_effects::SunHaloEffect::Apply_ADDRESS)]
 fn sun_halo_apply(this: *mut c_void, a2: *mut c_void) -> u64 {
     let skip = Config::lock_query(|c| c.post_fx.skip_sun_halo);
-    crate::trace_eye(TraceEvent::SunHaloApply { skip });
+    TraceState::record_eye(TraceEvent::SunHaloApply { skip });
     if skip {
         return 0;
     }
@@ -246,7 +246,7 @@ fn generate_histogram(
         Config::lock_query(|c| (c.post_fx.skip_histogram, c.exposure.gate));
     let eye1_gated = is_second_eye() && gate_exposure;
     let skip = skip_histogram || eye1_gated;
-    crate::trace_eye(TraceEvent::GenerateHistogram { skip });
+    TraceState::record_eye(TraceEvent::GenerateHistogram { skip });
     // The histogram reads the final HDR scene (MainColor) for auto-exposure, so this is the first
     // point in the post chain where MainColor still holds this dispatch's clean scene -- grab it for
     // the per-eye "Scene" preview before the chain recycles it.
@@ -287,7 +287,7 @@ fn draw_histogram_window(
     index: u32,
 ) {
     let eye1_gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
-    crate::trace_eye(TraceEvent::DrawHistogramWindow { skip: eye1_gated });
+    TraceState::record_eye(TraceEvent::DrawHistogramWindow { skip: eye1_gated });
     if eye1_gated {
         return;
     }
