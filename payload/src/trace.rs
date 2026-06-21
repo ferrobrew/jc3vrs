@@ -18,12 +18,31 @@ pub struct TraceState {
     stamp: String,
     /// Absolute path of the most recent dump, shown in the UI so it's findable.
     last_path: Option<String>,
+    /// Monotonic origin set at [`TraceState::start`]; each record's `time_ns` is measured from it.
+    started: Option<std::time::Instant>,
+    /// Real-frame index within the current trace (0-based; bumped each [`TraceState::end_frame`]).
+    frame: u32,
+}
+
+/// One dumped trace record: a [`TraceEvent`] plus when/where it happened. Round-trips through serde,
+/// so a dumped trace reads back into `Vec<TraceRecord>` for analysis.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct TraceRecord {
+    /// Nanoseconds since the trace started (monotonic), for ordering + intra-frame timing.
+    pub time_ns: u64,
+    /// Real-frame index within the trace (0-based).
+    pub frame: u32,
+    /// The eye being drawn, for per-dispatch events; omitted for frame/driver markers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eye: Option<usize>,
+    /// The event itself.
+    pub event: TraceEvent,
 }
 static TRACE_STATE: Mutex<TraceState> = Mutex::new(TraceState::new());
 
-/// One render-trace record, serialized to NDJSON; the `ev` tag names the event. Pipeline-hook
-/// variants omit `eye` -- it's injected by [`TraceState::record_eye`]; the markers carry it directly.
-#[derive(serde::Serialize)]
+/// One render event, serialized inside a [`TraceRecord`] (which stamps timing / frame / eye). The
+/// `ev` tag names the event. Frame/driver markers that carry their own `eye` field set it explicitly.
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "ev")]
 pub enum TraceEvent {
     /// First record of every trace: a snapshot of the active runtime toggles, so a capture is
@@ -38,9 +57,9 @@ pub enum TraceEvent {
     #[serde(rename = "frame_begin")]
     FrameBegin {
         stereo: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         present_eye: Option<usize>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         restore_counters: Option<bool>,
     },
     #[serde(rename = "draw_begin")]
@@ -140,18 +159,40 @@ pub fn active_frames() -> i32 {
     TRACE_FRAMES.load(Ordering::Relaxed)
 }
 
+impl Default for TraceState {
+    /// Delegates to the const [`TraceState::new`] -- the `TRACE_STATE` static needs a const
+    /// initializer, which a derived `Default` can't provide, so `new` stays the single source.
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TraceState {
     const fn new() -> Self {
         Self {
             log: Vec::new(),
             stamp: String::new(),
             last_path: None,
+            started: None,
+            frame: 0,
         }
     }
 
-    /// Append one already-serialized record (caller holds the lock).
-    fn push(&mut self, record: String) {
-        self.log.push(record);
+    /// Build a [`TraceRecord`] (stamping the current time + frame) and append it (caller holds the
+    /// lock).
+    fn push_event(&mut self, eye: Option<usize>, event: TraceEvent) {
+        let record = TraceRecord {
+            time_ns: self
+                .started
+                .map(|s| s.elapsed().as_nanos() as u64)
+                .unwrap_or(0),
+            frame: self.frame,
+            eye,
+            event,
+        };
+        if let Ok(s) = serde_json::to_string(&record) {
+            self.log.push(s);
+        }
     }
 
     /// Write the collected log to an NDJSON file next to the injected DLL (same place as `jc3vrs.log`)
@@ -179,24 +220,18 @@ impl TraceState {
         }
     }
 
-    /// Append a frame/eye marker record (carries its own `eye`) while a trace is active (auto-locks).
+    /// Append a frame/driver marker record (no dispatch eye) while a trace is active (auto-locks).
     pub fn record(event: TraceEvent) {
-        if tracing_active()
-            && let Ok(s) = serde_json::to_string(&event)
-        {
-            TRACE_STATE.lock().push(s);
+        if tracing_active() {
+            TRACE_STATE.lock().push_event(None, event);
         }
     }
 
-    /// Append a per-dispatch record, injecting the current eye, while a trace is active (auto-locks).
+    /// Append a per-dispatch record tagged with the current eye while a trace is active (auto-locks).
     pub fn record_eye(event: TraceEvent) {
-        if tracing_active()
-            && let Ok(serde_json::Value::Object(mut map)) = serde_json::to_value(&event)
-        {
-            map.insert("eye".to_string(), crate::stereo::draw_index().into());
-            TRACE_STATE
-                .lock()
-                .push(serde_json::Value::Object(map).to_string());
+        if tracing_active() {
+            let eye = crate::stereo::draw_index();
+            TRACE_STATE.lock().push_event(Some(eye), event);
         }
     }
 
@@ -207,11 +242,14 @@ impl TraceState {
         let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string();
         {
             let mut state = TRACE_STATE.lock();
-            state.log.clear();
-            state.stamp = stamp.clone();
-            if let Ok(s) = serde_json::to_string(&build_manifest(stamp)) {
-                state.push(s);
-            }
+            let last_path = state.last_path.take();
+            *state = TraceState {
+                last_path,
+                stamp: stamp.clone(),
+                started: Some(std::time::Instant::now()),
+                ..Default::default()
+            };
+            state.push_event(None, build_manifest(stamp));
         }
         TRACE_FRAMES.store(frames, Ordering::Relaxed);
         tracing::info!("Render trace started ({frames} frames)");
@@ -223,8 +261,11 @@ impl TraceState {
         if TRACE_FRAMES.load(Ordering::Relaxed) <= 0 {
             return;
         }
-        if TRACE_FRAMES.fetch_sub(1, Ordering::Relaxed) - 1 <= 0 {
-            TRACE_STATE.lock().dump();
+        let finished = TRACE_FRAMES.fetch_sub(1, Ordering::Relaxed) - 1 <= 0;
+        let mut state = TRACE_STATE.lock();
+        state.frame += 1;
+        if finished {
+            state.dump();
         }
     }
 

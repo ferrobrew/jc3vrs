@@ -5,7 +5,7 @@ default-members = ["injector"]
 
 [workspace.dependencies]
 anyhow = "1.0"
-glam = "0.30.8"
+glam = { version = "0.30.8", features = ["serde"] }
 
 windows = { version = "0.62", features = [
     "Win32_Foundation",

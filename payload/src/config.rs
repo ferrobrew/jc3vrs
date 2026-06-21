@@ -5,6 +5,7 @@
 //! runtime statics.
 
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 
 /// The global runtime configuration. Cheap to lock (uncontended `parking_lot::Mutex`); read it at the
 /// top of a hook and release before doing engine work.
@@ -15,7 +16,7 @@ pub fn get() -> Config {
     CONFIG.lock().clone()
 }
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub stereo: StereoConfig,
     pub exposure: ExposureConfig,
@@ -40,7 +41,7 @@ impl Config {
 }
 
 /// Stereo rendering toggles. The live per-eye runtime state is [`crate::stereo::StereoState`].
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StereoConfig {
     /// Master switch: render the scene twice, once per eye.
     pub enabled: bool,
@@ -81,7 +82,7 @@ impl StereoConfig {
 }
 
 /// Auto-exposure toggles.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ExposureConfig {
     /// Skip the per-frame auto-exposure metering on eye 1 (the stereo-darkening fix).
     pub gate: bool,
@@ -101,7 +102,7 @@ impl ExposureConfig {
 }
 
 /// Post-effect skip toggles (bisection aids / VR cleanups).
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PostFxConfig {
     pub skip_motion_blur: bool,
     pub skip_motion_blur_recon: bool,
@@ -130,12 +131,10 @@ impl PostFxConfig {
 }
 
 /// VR head/body camera settings (was `hooks::camera::CameraSettings`).
-#[derive(Copy, Clone, serde::Serialize)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct CameraConfig {
     pub enabled: bool,
-    #[serde(serialize_with = "serialize_vec3")]
     pub body_offset: glam::Vec3,
-    #[serde(serialize_with = "serialize_vec3")]
     pub head_offset: glam::Vec3,
     pub use_eye_matrices: bool,
     pub blurs_enabled: bool,
@@ -152,10 +151,4 @@ impl CameraConfig {
             always_use_t1: false,
         }
     }
-}
-
-/// Serialize a `glam::Vec3` as a `[x, y, z]` array (for the trace manifest); glam's own serde feature
-/// is not enabled, and an array reads fine in the ndjson.
-fn serialize_vec3<S: serde::Serializer>(v: &glam::Vec3, s: S) -> Result<S::Ok, S::Error> {
-    serde::Serialize::serialize(&[v.x, v.y, v.z], s)
 }
