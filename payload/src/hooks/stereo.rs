@@ -12,6 +12,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use detours_macro::detour;
+use jc3gi::graphics_engine::tone_mapping::{SHistogramGeneration, ToneMappingEffect};
 use re_utilities::hook_library::HookLibrary;
 
 use crate::TraceEvent;
@@ -113,9 +114,17 @@ fn smoothed_exposure_update(this: *mut c_void, exposure: f32) {
 }
 
 // CalculateMidAndBrightPointForHistogram -- the per-frame eye-adaptation lerp (also frame-counted).
-// Same treatment: only advance for the first eye.
+// Same treatment: only advance for the first eye. When tracing, read the histogram back afterwards
+// (via the named SHistogramGeneration / ToneMappingEffect fields -- offsets live in the pyxis-def)
+// to localize the stereo darkening: more pixels counted vs brighter pixels.
 #[detour(address = jc3gi::graphics_engine::tone_mapping::CalculateMidAndBrightPointForHistogram_ADDRESS)]
-fn calc_histogram_mid_bright(ctx: *mut c_void, arg1: f32, arg2: i32, arg3: f32, hist: *mut c_void) {
+fn calc_histogram_mid_bright(
+    ctx: *mut c_void,
+    arg1: f32,
+    arg2: i32,
+    arg3: f32,
+    hist: *mut SHistogramGeneration,
+) {
     let gated = gate(&GATE_EXPOSURE);
     crate::trace_eye(TraceEvent::CalcHistogramMidBright { gated });
     if gated {
@@ -125,6 +134,41 @@ fn calc_histogram_mid_bright(ctx: *mut c_void, arg1: f32, arg2: i32, arg3: f32, 
         .get()
         .unwrap()
         .call(ctx, arg1, arg2, arg3, hist);
+
+    if crate::tracing_active() && !hist.is_null() {
+        // SAFETY: `hist` is the live SHistogramGeneration the engine just populated; it is the
+        // `m_Histogram` field of the enclosing ToneMappingEffect (so the tonemap is at
+        // `hist - offset_of(m_Histogram)`). Both are read-only here.
+        let event = unsafe {
+            let h = &*hist;
+            let tme = &*hist
+                .cast::<u8>()
+                .sub(std::mem::offset_of!(ToneMappingEffect, m_Histogram))
+                .cast::<ToneMappingEffect>();
+            let num_buckets = tme.m_NumBuckets;
+            let n = (num_buckets as usize).min(h.m_NumPixelsInBuckets.len());
+            let mut total_pixels: u64 = 0;
+            let mut weighted: u64 = 0;
+            for (i, &count) in h.m_NumPixelsInBuckets[..n].iter().enumerate() {
+                total_pixels += count as u64;
+                weighted += count as u64 * i as u64;
+            }
+            let centroid = if total_pixels > 0 {
+                weighted as f32 / total_pixels as f32
+            } else {
+                0.0
+            };
+            TraceEvent::HistogramReadback {
+                total_pixels,
+                centroid,
+                bright_point: h.m_HistogramBrightPoint,
+                mid_point: h.m_HistogramMidPoint,
+                num_buckets,
+                current_exposure: tme.m_CurrentExposure,
+            }
+        };
+        crate::trace_eye(event);
+    }
 }
 
 // PostEffectsManager::ApplyWorldFilters -- enqueues the world post block and steps the world-fade

@@ -33,6 +33,7 @@ pub mod module;
 pub mod util;
 
 mod crash;
+mod environment_ui;
 mod hooks;
 mod logging;
 
@@ -107,6 +108,24 @@ pub enum TraceEvent {
     SmoothedExposureUpdate { gated: bool, exposure: f32 },
     #[serde(rename = "CalcHistogramMidBright")]
     CalcHistogramMidBright { gated: bool },
+    /// Post-`CalculateMidAndBrightPointForHistogram` readback of the auto-exposure histogram, used to
+    /// localize stereo darkening: is eye 0's histogram reading MORE pixels (viewport/RT area) or
+    /// BRIGHTER pixels (luminance source)? `total_pixels` is the sum of the per-bucket occlusion
+    /// counts (total fragments counted); `centroid` is the count-weighted mean bucket index (the
+    /// brightness centre of mass) -- a larger centroid at equal `total_pixels` means brighter input.
+    /// `bright_point`/`mid_point` are the floats the function computes into the histogram. A higher
+    /// `total_pixels` OR `centroid` in stereo (vs nonstereo, same scene) pins the cause.
+    #[serde(rename = "HistogramReadback")]
+    HistogramReadback {
+        total_pixels: u64,
+        centroid: f32,
+        bright_point: f32,
+        mid_point: f32,
+        /// Number of buckets actually summed (m_NumBuckets); 0 if it couldn't be read.
+        num_buckets: u32,
+        /// Current auto-exposure value read back from the ToneMappingEffect (this+3056).
+        current_exposure: f32,
+    },
     #[serde(rename = "GenerateHistogram")]
     GenerateHistogram { skip: bool },
     #[serde(rename = "ApplyWorldFilters")]
@@ -147,6 +166,11 @@ pub enum TraceEvent {
     CopySurfaceToTexture { dst: u64, src: u64 },
     #[serde(rename = "ResolveSurface")]
     ResolveSurface,
+}
+
+/// Whether a render trace is currently collecting. Lets hooks skip expensive readback work when not.
+pub fn tracing_active() -> bool {
+    TRACE_FRAMES.load(Ordering::Relaxed) > 0
 }
 
 /// Append one trace record (frame/eye markers, which carry their own `eye` field), while active.
@@ -336,6 +360,7 @@ pub enum EguiTab {
     Render,
     Camera,
     Game,
+    Environment,
 }
 impl std::fmt::Display for EguiTab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -347,7 +372,12 @@ impl EguiTab {
     fn ui(ui: &mut egui::Ui) {
         let mut tab = EGUI_TAB.lock();
         ui.horizontal(|ui| {
-            for candidate_tab in [EguiTab::Render, EguiTab::Camera, EguiTab::Game] {
+            for candidate_tab in [
+                EguiTab::Render,
+                EguiTab::Camera,
+                EguiTab::Game,
+                EguiTab::Environment,
+            ] {
                 if ui
                     .add(
                         egui::Button::new(candidate_tab.to_string())
@@ -378,6 +408,9 @@ pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
         }
         EguiTab::Game => {
             egui_debug_game(ui);
+        }
+        EguiTab::Environment => {
+            environment_ui::render(ui);
         }
     }
 }
@@ -898,8 +931,8 @@ fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer)
 
         ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
             use hooks::stereo::{
-                GATE_EXPOSURE, GATE_EYE1_DT, GATE_HAND_BACK_BUFFERS,
-                GATE_ROTATE_RENDER_FRAME_DATA, GATE_SETUP_RENDER_FRAME_DATA,
+                GATE_EXPOSURE, GATE_EYE1_DT, GATE_HAND_BACK_BUFFERS, GATE_ROTATE_RENDER_FRAME_DATA,
+                GATE_SETUP_RENDER_FRAME_DATA,
             };
             gate_checkbox(
                 ui,

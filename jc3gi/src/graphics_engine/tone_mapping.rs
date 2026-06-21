@@ -7,8 +7,24 @@
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// Per-frame brightness histogram used for eye adaptation.
-pub struct SHistogramGeneration {}
+/// Per-frame brightness histogram used for eye adaptation. Embedded in ToneMappingEffect at +8; its
+/// occlusion-query bucket counts are what the exposure read-back consumes.
+pub struct SHistogramGeneration {
+    _field_0: [u8; 400],
+    /// Per-bucket pixel counts: one occlusion query per bucket counting samples whose luminance is
+    /// at or above the bucket's threshold. Only the first m_NumBuckets entries are live.
+    pub m_NumPixelsInBuckets: [u32; 64],
+    /// Bright-point computed from the buckets; drives the exposure target.
+    pub m_HistogramBrightPoint: f32,
+    /// Mid-point computed from the buckets.
+    pub m_HistogramMidPoint: f32,
+}
+fn _SHistogramGeneration_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x298], SHistogramGeneration>([0u8; 0x298]);
+    }
+    unreachable!()
+}
 impl SHistogramGeneration {}
 impl std::convert::AsRef<SHistogramGeneration> for SHistogramGeneration {
     fn as_ref(&self) -> &SHistogramGeneration {
@@ -46,7 +62,24 @@ impl std::convert::AsMut<SSmoothedExposure> for SSmoothedExposure {
 }
 #[repr(C, align(8))]
 /// HDR tone-mapping / auto-exposure (eye adaptation).
-pub struct ToneMappingEffect {}
+pub struct ToneMappingEffect {
+    _field_0: [u8; 8],
+    /// The exposure histogram: CalculateMidAndBrightPointForHistogram fills it, Update reads it.
+    pub m_Histogram: crate::graphics_engine::tone_mapping::SHistogramGeneration,
+    _field_2a0: [u8; 728],
+    /// The active histogram bucket count.
+    pub m_NumBuckets: u32,
+    _field_57c: [u8; 1652],
+    /// The current clamped/smoothed auto-exposure multiplier.
+    pub m_CurrentExposure: f32,
+    _field_bf4: [u8; 4],
+}
+fn _ToneMappingEffect_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xBF8], ToneMappingEffect>([0u8; 0xBF8]);
+    }
+    unreachable!()
+}
 impl ToneMappingEffect {
     pub const GenerateHistogramForFinalScene_ADDRESS: usize = 0x140119440;
     /// Builds the auto-exposure histogram for the final scene and writes the current histogram slot
@@ -107,7 +140,7 @@ impl std::convert::AsMut<ToneMappingEffect> for ToneMappingEffect {
 }
 pub const CalculateMidAndBrightPointForHistogram_ADDRESS: usize = 0x1400F8BF0;
 /// Computes the histogram mid / bright points (the per-frame eye-adaptation lerp). Free function;
-/// `ctx` is Graphics::HContext_t* (opaque), `hist` is the target SHistogramGeneration.
+/// `hist` is the target SHistogramGeneration.
 unsafe fn CalculateMidAndBrightPointForHistogram(
     ctx: *mut ::std::ffi::c_void,
     arg1: f32,

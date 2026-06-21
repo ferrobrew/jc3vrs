@@ -9,6 +9,7 @@ pub mod audio;
 pub mod camera;
 pub mod character;
 pub mod clock;
+pub mod environment;
 pub mod game;
 pub mod graphics_engine;
 pub mod hash;
