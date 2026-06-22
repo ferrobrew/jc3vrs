@@ -5,6 +5,9 @@ use crate::{config, debug::trace};
 
 pub fn egui_debug_debug(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
+    // Deferred so the trace button's start() doesn't re-lock CONFIG (it snapshots the config for the
+    // manifest) while this guard is held -- parking_lot is not reentrant, so that self-deadlocks.
+    let mut start_trace = false;
 
     ui.checkbox(
         &mut cfg.stereo.force_smaa_1x,
@@ -20,7 +23,7 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     );
     ui.horizontal(|ui| {
         if ui.button("Dump render trace (4 frames)").clicked() {
-            trace::TraceState::start(4);
+            start_trace = true;
         }
         let remaining = trace::active_frames();
         if remaining > 0 {
@@ -102,4 +105,10 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
             "Player-damage vignette",
         );
     });
+
+    // Release CONFIG before start(), whose manifest snapshot re-locks it.
+    drop(cfg);
+    if start_trace {
+        trace::TraceState::start(4);
+    }
 }
