@@ -606,6 +606,7 @@ dependencies = [
  "detours-macro",
  "egui",
  "egui-directx11",
+ "fsr-sys",
  "glam",
  "jc3gi",
  "jiff",

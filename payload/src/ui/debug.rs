@@ -10,6 +10,22 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     let mut start_trace = false;
 
     ui.checkbox(
+        &mut cfg.fsr.enabled,
+        "FSR anti-aliasing (replaces the engine SMAA)",
+    );
+    ui.horizontal(|ui| {
+        let mut sharpen = cfg.fsr.sharpness.is_some();
+        ui.checkbox(&mut sharpen, "FSR sharpening");
+        match (sharpen, cfg.fsr.sharpness) {
+            (true, None) => cfg.fsr.sharpness = Some(0.5),
+            (false, Some(_)) => cfg.fsr.sharpness = None,
+            _ => {}
+        }
+        if let Some(s) = cfg.fsr.sharpness.as_mut() {
+            ui.add(egui::Slider::new(s, 0.0..=1.0).text("strength"));
+        }
+    });
+    ui.checkbox(
         &mut cfg.stereo.force_smaa_1x,
         "Force SMAA 1x in stereo (T2X ghosts across eyes)",
     );

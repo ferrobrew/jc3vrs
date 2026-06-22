@@ -13,6 +13,7 @@ detours-macro = { workspace = true }
 glam = { workspace = true }
 
 jc3gi = { path = "../jc3gi" }
+fsr-sys = { path = "../fsr-sys" }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

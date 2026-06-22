@@ -149,6 +149,8 @@ pub enum TraceEvent {
     ApplyGlobalFilters { gated: bool },
     #[serde(rename = "SsaoDraw")]
     SsaoDraw { forced_first_pass: bool },
+    #[serde(rename = "Fsr::Dispatch")]
+    FsrDispatch { input: u32, ran: bool },
     #[serde(rename = "DoF::Apply")]
     DofApply { input: u32, skip: bool },
     #[serde(rename = "MotionBlur::Apply")]

@@ -22,6 +22,7 @@ pub struct Config {
     pub exposure: ExposureConfig,
     pub post_fx: PostFxConfig,
     pub camera: CameraConfig,
+    pub fsr: FsrConfig,
 }
 impl Config {
     pub const fn new() -> Self {
@@ -30,6 +31,7 @@ impl Config {
             exposure: ExposureConfig::new(),
             post_fx: PostFxConfig::new(),
             camera: CameraConfig::new(),
+            fsr: FsrConfig::new(),
         }
     }
 
@@ -155,6 +157,25 @@ impl CameraConfig {
             use_eye_matrices: true,
             blurs_enabled: false,
             always_use_t1: false,
+        }
+    }
+}
+
+/// FSR anti-aliasing / upscaling settings. When `enabled`, FSR runs in place of the engine's SMAA
+/// (which is suppressed); off restores the engine AA. See `docs/fsr.md`.
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub struct FsrConfig {
+    /// Master switch: run FSR and suppress the engine AA. Off = engine SMAA as normal, FSR idle.
+    pub enabled: bool,
+    /// Optional RCAS sharpening strength (0..1); `None` disables the sharpening pass.
+    pub sharpness: Option<f32>,
+}
+impl FsrConfig {
+    pub const fn new() -> Self {
+        Self {
+            // Off by default until the integration is proven; toggled live for A/B against SMAA.
+            enabled: false,
+            sharpness: None,
         }
     }
 }
