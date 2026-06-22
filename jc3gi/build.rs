@@ -6,6 +6,7 @@ fn main() {
         Some(Path::new("src")),
         pyxis::BuildOptions {
             public_addresses: true,
+            ..Default::default()
         },
     )
     .unwrap();

@@ -1,18 +1,5 @@
-#![allow(
-    dead_code,
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::missing_safety_doc,
-    clippy::unnecessary_cast
-)]
 #![cfg_attr(any(), rustfmt::skip)]
-use windows::Win32::{
-    Graphics::{
-        Direct3D11::{ID3D11Device, ID3D11DeviceContext},
-        Dxgi::{IDXGISwapChain, IDXGIOutput},
-    },
-    System::Threading::CRITICAL_SECTION,
-};
+pub use windows::Win32::System::Threading::CRITICAL_SECTION as CRITICAL_SECTION;
 #[repr(C, align(8))]
 pub struct Context {
     _field_0: [u8; 32800],
@@ -65,6 +52,10 @@ impl std::convert::AsMut<Device> for Device {
         self
     }
 }
+pub use windows::Win32::Graphics::Direct3D11::ID3D11Device as ID3D11Device;
+pub use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext as ID3D11DeviceContext;
+pub use windows::Win32::Graphics::Dxgi::IDXGIOutput as IDXGIOutput;
+pub use windows::Win32::Graphics::Dxgi::IDXGISwapChain as IDXGISwapChain;
 pub const GetMasterContext_ADDRESS: usize = 0x1419550D0;
 /// Returns the master context (the wrapper around the D3D11 immediate context). `device` is
 /// Graphics::HDevice_t* (opaque, unused).

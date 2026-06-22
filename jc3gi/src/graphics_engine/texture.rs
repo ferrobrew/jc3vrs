@@ -1,15 +1,8 @@
-#![allow(
-    dead_code,
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::missing_safety_doc,
-    clippy::unnecessary_cast
-)]
 #![cfg_attr(any(), rustfmt::skip)]
-use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Resource, ID3D11ShaderResourceView, ID3D11RenderTargetView,
-    ID3D11DepthStencilView,
-};
+pub use windows::Win32::Graphics::Direct3D11::ID3D11DepthStencilView as ID3D11DepthStencilView;
+pub use windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView as ID3D11RenderTargetView;
+pub use windows::Win32::Graphics::Direct3D11::ID3D11Resource as ID3D11Resource;
+pub use windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView as ID3D11ShaderResourceView;
 #[repr(C, align(8))]
 pub struct Texture {
     pub m_Texture: crate::graphics_engine::texture::ID3D11Resource,

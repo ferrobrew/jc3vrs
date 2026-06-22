@@ -1,10 +1,3 @@
-#![allow(
-    dead_code,
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::missing_safety_doc,
-    clippy::unnecessary_cast
-)]
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 /// Root of the camera pipeline tree: flattens and weights the pipelines and runs their render

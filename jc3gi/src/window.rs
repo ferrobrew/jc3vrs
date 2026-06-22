@@ -1,10 +1,3 @@
-#![allow(
-    dead_code,
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::missing_safety_doc,
-    clippy::unnecessary_cast
-)]
 #![cfg_attr(any(), rustfmt::skip)]
 pub const WndProc_ADDRESS: usize = 0x140006F40;
 /// The game's Win32 window procedure: LRESULT WndProc(HWND, UINT msg, WPARAM, LPARAM).

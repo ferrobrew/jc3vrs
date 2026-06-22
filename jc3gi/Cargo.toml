@@ -3,10 +3,20 @@ name = "jc3gi"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["glam"]
+glam = ["dep:glam"]
+
 [dependencies]
 bitflags = "2.10.0"
-glam = { workspace = true }
+glam = { workspace = true, optional = true }
 windows = { workspace = true }
 
 [build-dependencies]
 pyxis = { workspace = true }
+
+# The generated bindings mirror engine signatures verbatim, some of which exceed clippy's
+# argument-count threshold. pyxis no longer emits this allow in the generated crate root, so
+# keep it here where it survives regeneration.
+[lints.clippy]
+too_many_arguments = "allow"

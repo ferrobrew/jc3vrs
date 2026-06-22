@@ -1,10 +1,3 @@
-#![allow(
-    dead_code,
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::missing_safety_doc,
-    clippy::unnecessary_cast
-)]
 #![cfg_attr(any(), rustfmt::skip)]
 #[derive(Copy, Clone, Default)]
 #[repr(C, align(4))]
@@ -166,11 +159,13 @@ impl std::convert::AsMut<Vector4> for Vector4 {
         self
     }
 }
+#[cfg(feature = "glam")]
 impl From<glam::Mat3> for Matrix3 {
     fn from(m: glam::Mat3) -> Self {
         Self { data: m.to_cols_array() }
     }
 }
+#[cfg(feature = "glam")]
 impl From<Matrix3> for glam::Mat3 {
     fn from(m: Matrix3) -> Self {
         glam::Mat3::from_cols_array(&m.data)
@@ -184,11 +179,13 @@ impl Matrix3 {
         self.data.as_mut_ptr()
     }
 }
+#[cfg(feature = "glam")]
 impl From<glam::Mat4> for Matrix4 {
     fn from(m: glam::Mat4) -> Self {
         Self { data: m.to_cols_array() }
     }
 }
+#[cfg(feature = "glam")]
 impl From<Matrix4> for glam::Mat4 {
     fn from(m: Matrix4) -> Self {
         glam::Mat4::from_cols_array(&m.data)
@@ -202,13 +199,14 @@ impl Matrix4 {
         self.data.as_mut_ptr()
     }
 }
+#[cfg(feature = "glam")]
 impl std::ops::Mul for Matrix4 {
     type Output = Matrix4;
     fn mul(self, rhs: Matrix4) -> Matrix4 {
         Matrix4::from(glam::Mat4::from(rhs) * glam::Mat4::from(self))
     }
 }
-#[cfg(test)]
+#[cfg(all(test, feature = "glam"))]
 #[allow(clippy::items_after_test_module)]
 mod matrix4_mul_tests {
     use super::*;
@@ -250,31 +248,37 @@ mod matrix4_mul_tests {
         assert!((ab.data[14] - 33.0).abs() < 1e-5);
     }
 }
+#[cfg(feature = "glam")]
 impl From<glam::Vec2> for Vector2 {
     fn from(v: glam::Vec2) -> Self {
         Self { data: [v.x, v.y] }
     }
 }
+#[cfg(feature = "glam")]
 impl From<Vector2> for glam::Vec2 {
     fn from(v: Vector2) -> Self {
         glam::Vec2::new(v.data[0], v.data[1])
     }
 }
+#[cfg(feature = "glam")]
 impl From<glam::Vec3> for Vector3 {
     fn from(v: glam::Vec3) -> Self {
         Self { data: [v.x, v.y, v.z] }
     }
 }
+#[cfg(feature = "glam")]
 impl From<Vector3> for glam::Vec3 {
     fn from(v: Vector3) -> Self {
         glam::Vec3::new(v.data[0], v.data[1], v.data[2])
     }
 }
+#[cfg(feature = "glam")]
 impl From<glam::Vec4> for Vector4 {
     fn from(v: glam::Vec4) -> Self {
         Self { data: [v.x, v.y, v.z, v.w] }
     }
 }
+#[cfg(feature = "glam")]
 impl From<Vector4> for glam::Vec4 {
     fn from(v: Vector4) -> Self {
         glam::Vec4::new(v.data[0], v.data[1], v.data[2], v.data[3])

@@ -1,8 +1,13 @@
 #![allow(
-    nonstandard_style,
-    clippy::module_inception,
-    clippy::too_many_arguments
+    dead_code,
+    non_snake_case,
+    non_camel_case_types,
+    non_upper_case_globals,
+    clippy::missing_safety_doc,
+    clippy::unnecessary_cast,
+    clippy::module_inception
 )]
+#![cfg_attr(any(), rustfmt::skip)]
 pub mod aim;
 pub mod animation;
 pub mod audio;

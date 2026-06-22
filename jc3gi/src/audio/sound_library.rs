@@ -1,10 +1,3 @@
-#![allow(
-    dead_code,
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::missing_safety_doc,
-    clippy::unnecessary_cast
-)]
 #![cfg_attr(any(), rustfmt::skip)]
 pub const SetListenerTransform_ADDRESS: usize = 0x140D2AFF0;
 /// Sets the 3D audio listener pose and velocity. Free function.

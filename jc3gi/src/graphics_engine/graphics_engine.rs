@@ -1,12 +1,4 @@
-#![allow(
-    dead_code,
-    non_snake_case,
-    non_upper_case_globals,
-    clippy::missing_safety_doc,
-    clippy::unnecessary_cast
-)]
 #![cfg_attr(any(), rustfmt::skip)]
-use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::HICON};
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
 pub enum ActiveCursor {
@@ -263,6 +255,7 @@ impl std::convert::AsMut<HDevice_t> for HDevice_t {
         self
     }
 }
+pub use windows::Win32::UI::WindowsAndMessaging::HICON as HICON;
 #[repr(C, align(8))]
 /// Graphics::HRenderSetup_t (a render-target configuration a pass draws into).
 pub struct HRenderSetup_t {}
@@ -291,6 +284,7 @@ impl std::convert::AsMut<HTexture_t> for HTexture_t {
         self
     }
 }
+pub use windows::Win32::Foundation::HWND as HWND;
 #[repr(C, align(8))]
 /// The per-view render context the render passes read: camera matrices (view, projection, the
 /// translation-free offset view-projection and the separate camera world position), shadow data and
