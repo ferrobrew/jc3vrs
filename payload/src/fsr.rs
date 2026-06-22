@@ -192,6 +192,9 @@ pub fn current_jitter(render_width: u32, render_height: u32) -> Option<(f32, f32
     if render_width == 0 || render_height == 0 {
         return None;
     }
+    if !crate::config::Config::lock_query(|c| c.fsr.jitter) {
+        return None;
+    }
     let phase_count = fsr_sys::jitter_phase_count(render_width as i32, render_width as i32);
     if phase_count <= 0 {
         return None;

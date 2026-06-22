@@ -13,6 +13,10 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         &mut cfg.fsr.enabled,
         "FSR anti-aliasing (replaces the engine SMAA)",
     );
+    ui.checkbox(
+        &mut cfg.fsr.jitter,
+        "FSR temporal jitter (off = FSR blurs; A/B to confirm the jitter)",
+    );
     ui.horizontal(|ui| {
         let mut sharpen = cfg.fsr.sharpness.is_some();
         ui.checkbox(&mut sharpen, "FSR sharpening");

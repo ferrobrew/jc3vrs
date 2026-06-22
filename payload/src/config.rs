@@ -167,6 +167,9 @@ impl CameraConfig {
 pub struct FsrConfig {
     /// Master switch: run FSR and suppress the engine AA. Off = engine SMAA as normal, FSR idle.
     pub enabled: bool,
+    /// Apply the temporal sub-pixel jitter (camera projection + dispatch). FSR needs this to
+    /// reconstruct detail; without it FSR just blurs. A debug toggle to confirm the jitter's effect.
+    pub jitter: bool,
     /// Optional RCAS sharpening strength (0..1); `None` disables the sharpening pass.
     pub sharpness: Option<f32>,
 }
@@ -175,6 +178,7 @@ impl FsrConfig {
         Self {
             // Off by default until the integration is proven; toggled live for A/B against SMAA.
             enabled: false,
+            jitter: true,
             sharpness: None,
         }
     }
