@@ -39,6 +39,13 @@ fn main() {
         println!("cargo:rerun-if-changed={}", vendor.join(src).display());
     }
 
+    let shim = crate_dir.join("shim/fsr_shim.cpp");
+    println!("cargo:rerun-if-changed={}", shim.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        crate_dir.join("shim/fsr_shim.h").display()
+    );
+
     let mut build = cc::Build::new();
     build
         .cpp(true)
@@ -52,6 +59,8 @@ fn main() {
     for src in SOURCES {
         build.file(vendor.join(src));
     }
+    // Our C shim sits alongside the backend and includes its headers (ffx_fsr2.h, dx11/...).
+    build.file(&shim);
     build.compile("ffx_fsr2_dx11");
 
     // The backend pulls in the D3D11 + shader-compiler import libs.

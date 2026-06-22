@@ -439,6 +439,7 @@ name = "fsr-sys"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "windows 0.62.2",
 ]
 
 [[package]]

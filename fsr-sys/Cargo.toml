@@ -8,6 +8,7 @@ description = "FFI bindings to FidelityFX Super Resolution 2 (FSR2) with the nat
 path = "src/lib.rs"
 
 [dependencies]
+windows = { workspace = true }
 
 [build-dependencies]
 cc = { workspace = true }
