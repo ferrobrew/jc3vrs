@@ -42,7 +42,3 @@ So the clean approach (rendering §9) is to set the device display size to the p
 The camera hook currently writes position only — the translation columns of `m_TransformF` — and never orientation. Driving the head from the HMD needs a full rotation written into the render camera's `m_TransformF` / `m_CameraTransform`, after which the engine derives a consistent `m_View` (re-derive `m_View = Inverse(m_TransformF)` and rebuild the VP, rendering §2.5/§2.6).
 
 Before writing any rotation, verify the coordinate frame. Rendering §15.7 (PLAN) concludes JC3 is "almost certainly" right-handed Y-up but flags it unverified. Run the experiment first: log the render camera's `m_TransformF` column 2 at `SetupRenderCamera`, press W, and confirm `-column2` aligns with travel direction. Guessing wrong mirrors or rotates the whole view. The body-vs-head split, vehicle handling, and the baked-animation conflict are in `docs/head-and-body.md`; this blocker is just the runtime-side gate plus the matrix write.
-
-## Already solved — do not redo
-
-Stereo geometry is fixed by gating `RotateRenderFrameData` on eye 1 (rendering §11). The per-eye camera *position* offset and the `m_View`/`m_ViewProjection` rebuild are done (rendering §6/§13). Present is suppressed (`BLOCK_FLIP`). Eye-texture capture after the resolve is done (rendering §12). The clean-stereo per-dispatch state gating is mostly in place; the remaining gaps (notably eye-1 `m_Dt = 0`) are tracked separately.
