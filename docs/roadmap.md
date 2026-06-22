@@ -12,18 +12,20 @@ Two cooperating systems. **Engine-side detours** inside the JC3 process render t
 
 ## Where we are
 
-Stereo rendering works on the flat desktop: the scene renders twice per frame with per-eye cameras, the once-per-frame engine state is gated so it doesn't double-step, and each eye is captured and shown side-by-side for fusing. The camera already sits at the player's head (the eye-bone average). The temporal hazards (auto-exposure, anti-aliasing) are handled or scoped.
+Stereo rendering works on the flat desktop: the scene renders twice per frame with per-eye cameras, the once-per-frame engine state is gated so it doesn't double-step, and each eye is captured and shown side-by-side for fusing. The camera already sits at the player's head (the eye-bone average). The temporal hazards (auto-exposure, anti-aliasing) are handled or scoped — the engine's SMAA is held at 1x in stereo, with FSR lined up to replace it.
 
 What's left is the control and runtime work: driving the head and body from the player, the floating HUD, VR input, and the OpenXR runtime itself — the largest remaining piece, since today's build is a desktop stereo prototype with no headset path yet.
 
 ## Trajectory
 
 1. **Stereo rendering** — two eyes from the game camera, per-eye geometry and projection correctness, the once-per-frame state gating, and the temporal-effect fixes. Largely working; maturing. (`rendering.md`)
-2. **Head and body, flatscreen** — drive the character's head bone toward the player's head (mouse as HMD stand-in), tap the game's own input feeders for look and move, and hang the body off the head with kinematic IK. The head bone is the camera's source of truth, released to physics on loss of control. (`head-and-body.md`, `skeleton.md`, `input.md`)
-3. **Floating HUD, flatscreen** — render the HUD into a texture and float it as an in-engine quad per eye, with world-anchored markers reprojected against the live view. Tunable in the desktop preview before a headset. (`hud.md`)
-4. **The VR runtime** — bring up the OpenXR session and per-eye swapchains, drive the camera from real HMD pose, build per-eye off-axis projections from the HMD field of view, and render at the per-eye resolution. This swaps the desktop present and the mouse stand-in for the headset. (`vr-runtime.md`)
-5. **VR controllers and comfort** — map controller input onto the game's action effectors, add the comfort options (turning, vignette) and the debug/environment tooling. (`input.md`, `environment.md`)
-6. **Embodiment depth** (deferred) — full-body IK so the body follows crouch and lean, and the physics-head collision response. Out of near-term scope.
+2. **FSR anti-aliasing, flatscreen** — replace the engine's 2015-era SMAA with FSR 3.1 temporal reconstruction at native resolution (renderSize == displaySize), dispatched per eye with its own history and runtime-toggleable for A/B against SMAA. Built as an upscaler configured 1:1, so the upscaling step later is just a render-scale change, not a rewrite. Testable on the desktop preview now. (`fsr.md`)
+3. **Head and body, flatscreen** — drive the character's head bone toward the player's head (mouse as HMD stand-in), tap the game's own input feeders for look and move, and hang the body off the head with kinematic IK. The head bone is the camera's source of truth, released to physics on loss of control. (`head-and-body.md`, `skeleton.md`, `input.md`)
+4. **Floating HUD, flatscreen** — render the HUD into a texture and float it as an in-engine quad per eye, with world-anchored markers reprojected against the live view. Tunable in the desktop preview before a headset. (`hud.md`)
+5. **The VR runtime** — bring up the OpenXR session and per-eye swapchains, drive the camera from real HMD pose, build per-eye off-axis projections from the HMD field of view, and render at the per-eye resolution. This swaps the desktop present and the mouse stand-in for the headset. (`vr-runtime.md`)
+6. **FSR upscaling** — once the VR runtime can re-init the scene at a chosen per-eye resolution, drop FSR's render scale below 1:1 so the scene renders cheaper and reconstructs to panel resolution. This is the same FSR integration from step 2 with a render-scale slider; the per-eye resolution re-init (the VR runtime's blocker) is the only new dependency. Reuses the per-eye motion-vector path proven at native AA. (`fsr.md`, `vr-runtime.md`)
+7. **VR controllers and comfort** — map controller input onto the game's action effectors, add the comfort options (turning, vignette) and the debug/environment tooling. (`input.md`, `environment.md`)
+8. **Embodiment depth** (deferred) — full-body IK so the body follows crouch and lean, and the physics-head collision response. Out of near-term scope.
 
 ## Out of scope (for now)
 
@@ -34,6 +36,7 @@ What's left is the control and runtime work: driving the head and body from the 
 ## Detail lives elsewhere
 
 - `rendering.md` — the per-frame render pipeline, stereo dispatch, and the once-per-frame hazards.
+- `fsr.md` — FSR anti-aliasing and upscaling: version, dispatch point, and the AA-first/upscaler-later sequencing.
 - `vr-runtime.md` — OpenXR, per-eye off-axis projection, per-eye resolution.
 - `head-and-body.md` — the comfort and embodiment design; per-mode schemes.
 - `skeleton.md` — reading and overriding bones; the head and IK mechanics.
