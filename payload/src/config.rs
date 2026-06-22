@@ -51,9 +51,11 @@ pub struct StereoConfig {
     pub ipd: f32,
     /// Force SMAA 1x in stereo (T2X's shared history ghosts across the two eye dispatches).
     pub force_smaa_1x: bool,
-    /// Disable the SSAO temporal filter in stereo (its AO history ping-pong double-steps across the
-    /// two eye dispatches, compounding occlusion).
-    pub disable_ssao_temporal: bool,
+    /// Force the SSAO pass into its "first pass" state before each stereo eye, so each eye computes AO
+    /// fresh from its own depth instead of blending against the other eye's history. The SSAO history
+    /// index advances once per dispatch (inside CRenderBlockSSAO::Draw), so without this a stereo
+    /// render double-steps it and the two eyes compound. Kept on by default.
+    pub force_ssao_first_pass: bool,
     /// Which eye reaches the screen (debug A/B).
     pub present_eye_0: bool,
     /// Restore the TAA-jitter / shadow-phase counters between eyes.
@@ -74,7 +76,7 @@ impl StereoConfig {
             cameras: true,
             ipd: 0.068,
             force_smaa_1x: true,
-            disable_ssao_temporal: true,
+            force_ssao_first_pass: true,
             present_eye_0: false,
             restore_frame_counters: true,
             gate_rotate_render_frame_data: true,

@@ -14,8 +14,8 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         "Force SMAA 1x in stereo (T2X ghosts across eyes)",
     );
     ui.checkbox(
-        &mut cfg.stereo.disable_ssao_temporal,
-        "Disable SSAO temporal filter in stereo (history double-steps across eyes)",
+        &mut cfg.stereo.force_ssao_first_pass,
+        "Force SSAO first-pass per eye in stereo (stops cross-eye AO history blend)",
     );
     ui.checkbox(
         &mut cfg.stereo.restore_frame_counters,
