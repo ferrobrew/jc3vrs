@@ -167,33 +167,6 @@ impl std::convert::AsMut<RenderPass> for RenderPass {
         self
     }
 }
-#[repr(C, align(8))]
-/// One entry of CRenderEngine::m_RenderPasses: a `std::vector<CRenderPass*>` holding the pass(es)
-/// for one pass id. The render engine and the per-frame list rotation both walk these.
-pub struct RenderPassList {
-    /// Vector begin: the contiguous `CRenderPass*` array.
-    pub begin: *mut *mut crate::graphics_engine::render_pass::RenderPass,
-    /// Vector end: `begin + element_count`.
-    pub end: *mut *mut crate::graphics_engine::render_pass::RenderPass,
-    _field_10: [u8; 16],
-}
-fn _RenderPassList_size_check() {
-    unsafe {
-        ::std::mem::transmute::<[u8; 0x20], RenderPassList>([0u8; 0x20]);
-    }
-    unreachable!()
-}
-impl RenderPassList {}
-impl std::convert::AsRef<RenderPassList> for RenderPassList {
-    fn as_ref(&self) -> &RenderPassList {
-        self
-    }
-}
-impl std::convert::AsMut<RenderPassList> for RenderPassList {
-    fn as_mut(&mut self) -> &mut RenderPassList {
-        self
-    }
-}
 pub unsafe fn get_render_block_overflow_count() -> &'static mut u32 {
     unsafe { &mut *(0x142ED0FA0 as *mut u32) }
 }

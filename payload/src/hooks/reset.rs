@@ -25,19 +25,16 @@ pub(super) fn reset_per_eye() {
     };
     let mut cleared = 0u32;
     for list in re.m_RenderPasses.iter() {
-        let (mut p, end) = (list.begin, list.end);
-        while !p.is_null() && p < end {
-            // SAFETY: `p` walks the pass vector's [begin, end); each `*p` is a live CRenderPass*, and
-            // eye 0's workers have already drained (WaitForCPUDrawToFinish), so nothing else writes
-            // these lists right now.
+        // SAFETY: the vector's elements are live CRenderPass*, and eye 0's workers have already
+        // drained (WaitForCPUDrawToFinish), so nothing else writes these lists right now.
+        for &pass in unsafe { list.as_slice() } {
             unsafe {
-                if let Some(pass) = (*p).as_mut()
+                if let Some(pass) = pass.as_mut()
                     && let Some(add) = pass.m_CurrentAddList.as_mut()
                 {
                     cleared += u32::from(add.m_NumElements != 0);
                     add.m_NumElements = 0;
                 }
-                p = p.add(1);
             }
         }
     }

@@ -4,7 +4,9 @@ pub struct RenderEngine {
     _field_0: [u8; 128],
     /// Per-pass render-block-item lists: one `std::vector<CRenderPass*>` per pass id (stride 0x20, at
     /// `this + 32*pass + 128`). DrawRenderPassRange and the per-frame list rotation walk this.
-    pub m_RenderPasses: [crate::graphics_engine::render_pass::RenderPassList; 157],
+    pub m_RenderPasses: [crate::types::std_vector::Vector<
+        *mut crate::graphics_engine::render_pass::RenderPass,
+    >; 157],
     _field_1420: [u8; 3584],
 }
 fn _RenderEngine_size_check() {
