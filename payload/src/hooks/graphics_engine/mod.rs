@@ -10,6 +10,7 @@ use re_utilities::hook_library::HookLibrary;
 pub mod graphics_engine;
 mod post_effects;
 mod render_pass;
+mod ssao;
 mod tone_mapping;
 
 /// Bundle every CGraphicsEngine-area detour into one hook library, mirroring how the game groups
@@ -20,6 +21,7 @@ pub(crate) fn hook_library() -> HookLibrary {
         render_pass::extend,
         tone_mapping::extend,
         post_effects::extend,
+        ssao::extend,
     ]
     .into_iter()
     .fold(HookLibrary::new(), |library, extend| extend(library))

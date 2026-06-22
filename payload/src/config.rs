@@ -51,6 +51,9 @@ pub struct StereoConfig {
     pub ipd: f32,
     /// Force SMAA 1x in stereo (T2X's shared history ghosts across the two eye dispatches).
     pub force_smaa_1x: bool,
+    /// Disable the SSAO temporal filter in stereo (its AO history ping-pong double-steps across the
+    /// two eye dispatches, compounding occlusion).
+    pub disable_ssao_temporal: bool,
     /// Which eye reaches the screen (debug A/B).
     pub present_eye_0: bool,
     /// Restore the TAA-jitter / shadow-phase counters between eyes.
@@ -71,6 +74,7 @@ impl StereoConfig {
             cameras: true,
             ipd: 0.068,
             force_smaa_1x: true,
+            disable_ssao_temporal: true,
             present_eye_0: false,
             restore_frame_counters: true,
             gate_rotate_render_frame_data: true,
