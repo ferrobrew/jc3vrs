@@ -1,3 +1,6 @@
 [submodule "jc3gi/pyxis-defs"]
 	path = jc3gi/pyxis-defs
 	url = https://github.com/ferrobrew/pyxis-defs.git
+[submodule "vendor/FidelityFX-FSR2-DX11"]
+	path = vendor/FidelityFX-FSR2-DX11
+	url = https://github.com/optiscaler/FidelityFX-FSR2-DX11.git
