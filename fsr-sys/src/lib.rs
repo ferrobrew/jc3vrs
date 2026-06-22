@@ -9,7 +9,7 @@
 //! thread under the engine's context mutex, like the other D3D11 work in the payload.
 
 use windows::{
-    Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Resource},
+    Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Resource},
     core::Interface,
 };
 
@@ -24,6 +24,7 @@ mod ffi {
 
     #[repr(C)]
     pub struct FsrDispatchParams {
+        pub context: *mut c_void,
         pub color: *mut c_void,
         pub depth: *mut c_void,
         pub motion_vectors: *mut c_void,
@@ -88,6 +89,8 @@ pub struct Extent {
 
 /// Per-frame dispatch inputs. Textures are borrowed engine/our resources; `exposure` is optional.
 pub struct DispatchInfo<'a> {
+    /// The immediate context FSR records its passes onto (the engine's `ID3D11DeviceContext`).
+    pub context: &'a ID3D11DeviceContext,
     pub color: &'a ID3D11Resource,
     pub depth: &'a ID3D11Resource,
     pub motion_vectors: &'a ID3D11Resource,
@@ -143,6 +146,7 @@ impl Context {
     /// failure. Must run on the render thread under the engine's context mutex.
     pub fn dispatch(&mut self, info: &DispatchInfo<'_>) -> bool {
         let params = ffi::FsrDispatchParams {
+            context: info.context.as_raw(),
             color: info.color.as_raw(),
             depth: info.depth.as_raw(),
             motion_vectors: info.motion_vectors.as_raw(),

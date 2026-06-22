@@ -85,13 +85,18 @@ pub fn dispatch_eye(
         return false;
     };
 
-    // SAFETY: the engine's resource pointers are live for the duration of this render-thread call.
+    // SAFETY: the engine's context wrapper is live for the duration of this render-thread call.
+    let Some(context) = (unsafe { device.m_Context.as_ref() }) else {
+        return false;
+    };
+
     let color: &ID3D11Resource = &slot_color.m_Texture;
     let depth_res: &ID3D11Resource = &depth.m_Texture;
     let velocity_res: &ID3D11Resource = &velocity.m_Texture;
     let output_res: ID3D11Resource = eye_state.output.cast().expect("texture is a resource");
 
     let info = DispatchInfo {
+        context: &context.m_Context,
         color,
         depth: depth_res,
         motion_vectors: velocity_res,
@@ -110,23 +115,22 @@ pub fn dispatch_eye(
         camera_fov_vertical: DEFAULT_FOV_VERTICAL,
     };
 
-    if !eye_state.context.dispatch(&info) {
-        return false;
-    }
-
-    // Copy the AA'd result back into the chain's working slot so the rest of the post chain (and the
-    // back-buffer capture) sees it. Under the engine context mutex, like the other D3D11 work.
-    // SAFETY: `device.m_Context` is the live immediate context; both resources are valid.
+    // The FSR dispatch and the copy-back both record onto the engine's immediate context, so hold its
+    // mutex across both -- the same lock the rest of the payload's D3D11 work takes.
+    // SAFETY: `context.m_Mutex` guards the immediate context; both resources are valid for the call.
     unsafe {
-        if let Some(context) = device.m_Context.as_ref() {
-            windows::Win32::System::Threading::EnterCriticalSection(context.m_Mutex);
+        windows::Win32::System::Threading::EnterCriticalSection(context.m_Mutex);
+        let ran = eye_state.context.dispatch(&info);
+        if ran {
+            // Copy the AA'd result back into the chain's working slot so the rest of the post chain
+            // (and the back-buffer capture) sees it.
             context
                 .m_Context
                 .CopyResource(&slot_color.m_Texture, &output_res);
-            windows::Win32::System::Threading::LeaveCriticalSection(context.m_Mutex);
         }
+        windows::Win32::System::Threading::LeaveCriticalSection(context.m_Mutex);
+        ran
     }
-    true
 }
 
 /// Build one eye's FSR context + UAV output texture at `width`x`height`, matching the chain color's

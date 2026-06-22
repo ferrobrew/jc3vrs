@@ -18,6 +18,7 @@ typedef struct FsrContext FsrContext;
 // Forward-declared D3D11 types so the header is includable without <d3d11.h> (Rust passes the
 // `windows` crate's raw pointers through as `void*`).
 typedef struct ID3D11Device ID3D11Device;
+typedef struct ID3D11DeviceContext ID3D11DeviceContext;
 typedef struct ID3D11Resource ID3D11Resource;
 
 // Mirrors the subset of FfxFsr2InitializationFlagBits the integration sets. Combined as a bitmask.
@@ -42,6 +43,7 @@ FsrContext* fsr_context_create(
 // The inputs and per-frame camera parameters for one dispatch. All textures are raw ID3D11Resource*
 // (the engine's MainColor/MainDepth/Velocity and our output RT); `exposure`/`reactive` may be NULL.
 typedef struct FsrDispatchParams {
+    ID3D11DeviceContext* context; // the immediate context FSR records onto (the DX11 "command list")
     ID3D11Resource* color;        // render-res scene color
     ID3D11Resource* depth;        // render-res depth (reverse-Z if FSR_ENABLE_DEPTH_INVERTED)
     ID3D11Resource* motionVectors; // render-res screen-space velocity

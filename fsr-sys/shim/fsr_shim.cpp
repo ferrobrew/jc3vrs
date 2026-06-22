@@ -71,9 +71,9 @@ bool fsr_context_dispatch(FsrContext* ctx, const FsrDispatchParams* p)
     }
 
     FfxFsr2DispatchDescription desc = {};
-    // DX11 records onto the device's immediate context; the backend resolves it from the device, so
-    // the command list is unused (pass null).
-    desc.commandList = nullptr;
+    // FfxCommandList is an opaque void*; the DX11 backend reinterpret_casts it straight to
+    // ID3D11DeviceContext* and records onto it -- so this must be the immediate context, not null.
+    desc.commandList = reinterpret_cast<FfxCommandList>(p->context);
 
     desc.color = ffxGetResourceDX11(&ctx->fsr, p->color, nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
     desc.depth = ffxGetResourceDX11(&ctx->fsr, p->depth, nullptr, FFX_RESOURCE_STATE_COMPUTE_READ);
