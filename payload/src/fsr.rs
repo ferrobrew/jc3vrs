@@ -12,7 +12,10 @@
 //! context mutex like the other D3D11 work.
 
 use fsr_sys::{Context, DispatchInfo, Extent, init_flags};
-use jc3gi::graphics_engine::{device::Device, texture::Texture};
+use jc3gi::{
+    graphics_engine::{device::Device, texture::Texture},
+    types::math::Matrix4,
+};
 use parking_lot::Mutex;
 use windows::{
     Win32::Graphics::{
@@ -103,8 +106,9 @@ pub fn dispatch_eye(
         exposure: None,
         output: &output_res,
         render_size: Extent { width, height },
-        // Jitter + per-eye motion-vector scale are wired up in a later step; identity for now.
-        jitter: (0.0, 0.0),
+        // The same per-frame jitter applied to the camera projection (see apply_jitter_to_projection),
+        // in FSR's pixel space. Per-eye motion-vector scale is still identity (wired up next).
+        jitter: current_jitter(width, height).unwrap_or((0.0, 0.0)),
         motion_vector_scale: (1.0, 1.0),
         sharpening: sharpness,
         frame_time_delta_ms: 1000.0 / 60.0,
@@ -176,3 +180,53 @@ fn create_eye(device: &Device, slot_color: &Texture, width: u32, height: u32) ->
 const NEAR_PLANE: f32 = 0.1;
 const FAR_PLANE: f32 = 10000.0;
 const DEFAULT_FOV_VERTICAL: f32 = std::f32::consts::FRAC_PI_2;
+
+/// FSR's sub-pixel jitter offset for the current frame, in **pixel space** (FSR's native unit, fed
+/// straight to the dispatch's `jitter`). `None` when the resolution is degenerate.
+///
+/// The phase index is the engine's per-real-frame counter (`m_FrameIndex`), so both eye dispatches in
+/// one frame share the same offset -- each eye's own FSR history then sees a clean per-frame-advancing
+/// Halton sequence. The applied camera jitter ([`apply_jitter_to_projection`]) reads the same counter,
+/// so the two always agree.
+pub fn current_jitter(render_width: u32, render_height: u32) -> Option<(f32, f32)> {
+    if render_width == 0 || render_height == 0 {
+        return None;
+    }
+    let phase_count = fsr_sys::jitter_phase_count(render_width as i32, render_width as i32);
+    if phase_count <= 0 {
+        return None;
+    }
+    // SAFETY: the render-frame counters live for the process; advanced once per frame in the prologue.
+    let index = unsafe {
+        jc3gi::graphics_engine::graphics_engine::get_render_frame_counters().m_FrameIndex as i32
+    };
+    Some(fsr_sys::jitter_offset(index, phase_count))
+}
+
+/// Post-multiply FSR's sub-pixel jitter onto `proj` (in place), converting FSR's pixel-space offset to
+/// a clip-space translation: `proj' = proj * translate(2*jx/w, -2*jy/h, 0)`. This matches the engine's
+/// own `ApplySubsampleJitter` idiom (translation on the right, row-major), so it slots in where the
+/// engine's TAA jitter would have gone. The FSR docs' `-2*jy/h` sign (negative Y) is preserved.
+pub fn apply_jitter_to_projection(proj: &mut Matrix4, render_width: u32, render_height: u32) {
+    let Some((jx, jy)) = current_jitter(render_width, render_height) else {
+        return;
+    };
+    let ndc_x = 2.0 * jx / render_width as f32;
+    let ndc_y = -2.0 * jy / render_height as f32;
+
+    // Identity with the jitter in the row-major translation row (data[12], data[13]).
+    let jitter = Matrix4 {
+        #[rustfmt::skip]
+        data: [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            ndc_x, ndc_y, 0.0, 1.0,
+        ],
+    };
+    // proj = proj * jitter, the engine's Multiply4x4(proj, jitterMat) convention.
+    let mut out = Matrix4::default();
+    // SAFETY: the engine matrix-multiply reads two valid matrices and writes a third.
+    unsafe { Matrix4::Multiply4x4(proj, &jitter, &mut out) };
+    *proj = out;
+}

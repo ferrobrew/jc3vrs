@@ -40,8 +40,8 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         TraceState::record_eye(TraceEvent::SetupRenderCamera);
     }
 
-    // Snapshot the stereo config once; drop the lock before the engine call below.
-    let (stereo_active, force_smaa_1x, stereo_cameras, ipd) = {
+    // Snapshot the stereo + FSR config once; drop the lock before the engine call below.
+    let (stereo_active, force_smaa_1x, stereo_cameras, ipd, fsr_enabled) = {
         let active = crate::stereo::active();
         Config::lock_query(|c| {
             (
@@ -49,14 +49,37 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 c.stereo.force_smaa_1x,
                 c.stereo.cameras,
                 c.stereo.ipd,
+                c.fsr.enabled,
             )
         })
     };
 
-    // Forcing SMAA 1x in stereo drops the temporal resolve, so the TAA sub-pixel jitter has nothing
-    // to consume it (it would just shimmer) -- drop the jitter too.
-    let jitter = jitter && !(stereo_active && force_smaa_1x);
+    // The engine's TAA jitter only feeds its own SMAA T2X. Drop it when that resolve is gone --
+    // either because we force SMAA 1x in stereo, or because FSR has replaced the engine AA. FSR still
+    // needs jitter, but its own Halton sequence, applied below.
+    let jitter = jitter && !fsr_enabled && !(stereo_active && force_smaa_1x);
     let result = SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter);
+
+    // FSR is a temporal reconstructor: it needs the camera jittered by its sequence, with the same
+    // offset fed to the dispatch. Apply it to the render camera's projections after SetupRenderCamera
+    // has built them (reverse-Z done), then rebuild the view-projections from the jittered proj.
+    if is_render_camera && fsr_enabled {
+        unsafe {
+            if let Some(camera) = camera.as_mut()
+                && let Some(ge) = GraphicsEngine::get()
+                && let Some(mc) = ge.m_MainColorBuffer.as_ref()
+            {
+                let (w, h) = (u32::from(mc.m_Width), u32::from(mc.m_Height));
+                crate::fsr::apply_jitter_to_projection(&mut camera.m_Projection, w, h);
+                crate::fsr::apply_jitter_to_projection(&mut camera.m_ProjectionF, w, h);
+                let view = &camera.m_View as *const Matrix4;
+                let proj = &camera.m_Projection as *const Matrix4;
+                let proj_f = &camera.m_ProjectionF as *const Matrix4;
+                Matrix4::Multiply4x4(view, proj, &mut camera.m_ViewProjection);
+                Matrix4::Multiply4x4(view, proj_f, &mut camera.m_ViewProjectionF);
+            }
+        }
+    }
 
     // Per-eye parallax: shift the camera world position (m_TransformF translation == camera+0x84,
     // the CameraPosition the camera-relative scene render subtracts) along its right axis by +/-
