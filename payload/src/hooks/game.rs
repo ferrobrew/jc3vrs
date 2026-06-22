@@ -102,6 +102,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             if let Some(counters) = frame_counters {
                 restore_frame_counters(counters);
             }
+            // Zero the draw-time pass add-lists so eye 1 re-adds its SSAO / post-effect blocks fresh
+            // instead of accumulating onto eye 0's (the ~2x AO + doubled post chain).
+            super::reset::reset_per_eye();
 
             super::draw_count::DRAW_COUNTS.clear();
             TraceState::record(TraceEvent::DrawBegin { eye: 1 });

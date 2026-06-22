@@ -9,6 +9,7 @@ pub mod clock;
 pub mod draw_count;
 pub mod game;
 pub mod graphics_engine;
+mod reset;
 pub mod wndproc;
 
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();

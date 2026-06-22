@@ -75,7 +75,19 @@ impl std::convert::AsMut<RBILists> for RBILists {
     }
 }
 #[repr(C, align(8))]
-pub struct RenderPass {}
+pub struct RenderPass {
+    _field_0: [u8; 40],
+    /// The RBI list that new render-block-items append to this frame (the `CRBILists::Add` target).
+    /// Each rotation, `SaveRenderFrameData` re-points this at `m_Lists[parity]` and zeroes its count;
+    /// zeroing `m_CurrentAddList.m_NumElements` is how a pass's draw-time additions are reset.
+    pub m_CurrentAddList: *mut crate::graphics_engine::render_pass::RBILists,
+}
+fn _RenderPass_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x30], RenderPass>([0u8; 0x30]);
+    }
+    unreachable!()
+}
 impl RenderPass {
     pub const SetupRenderFrameData_ADDRESS: usize = 0x14048C4E0;
     /// Appends `count` render-block-items (`items`) to the active RBILists draw/add lists (`a3`
@@ -152,6 +164,33 @@ impl std::convert::AsRef<RenderPass> for RenderPass {
 }
 impl std::convert::AsMut<RenderPass> for RenderPass {
     fn as_mut(&mut self) -> &mut RenderPass {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// One entry of CRenderEngine::m_RenderPasses: a `std::vector<CRenderPass*>` holding the pass(es)
+/// for one pass id. The render engine and the per-frame list rotation both walk these.
+pub struct RenderPassList {
+    /// Vector begin: the contiguous `CRenderPass*` array.
+    pub begin: *mut *mut crate::graphics_engine::render_pass::RenderPass,
+    /// Vector end: `begin + element_count`.
+    pub end: *mut *mut crate::graphics_engine::render_pass::RenderPass,
+    _field_10: [u8; 16],
+}
+fn _RenderPassList_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x20], RenderPassList>([0u8; 0x20]);
+    }
+    unreachable!()
+}
+impl RenderPassList {}
+impl std::convert::AsRef<RenderPassList> for RenderPassList {
+    fn as_ref(&self) -> &RenderPassList {
+        self
+    }
+}
+impl std::convert::AsMut<RenderPassList> for RenderPassList {
+    fn as_mut(&mut self) -> &mut RenderPassList {
         self
     }
 }
