@@ -12,3 +12,5 @@ windows = { workspace = true }
 
 [build-dependencies]
 cc = { workspace = true }
+tar = "0.4"
+flate2 = "1"

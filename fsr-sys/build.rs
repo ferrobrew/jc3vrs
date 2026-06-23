@@ -1,14 +1,17 @@
 //! Compiles the vendored FSR2 DX11 backend and links it into the crate.
 //!
-//! The shader-permutation headers under `generated/dx11/` are produced by the `fsr-shadergen` crate
-//! (and git-ignored for now), so a fresh checkout must run it once before this builds. We check for
-//! them up front and fail with that instruction rather than emitting a wall of missing-include errors
-//! from the C++ compiler.
+//! The shader-permutation headers under `generated/dx11/` are git-ignored (124 files, ~9 MB), but a
+//! committed `generated/dx11.tar.gz` (~0.7 MB) holds them. When the headers are missing -- a fresh
+//! checkout or CI -- we unpack the archive, so the build needs no shader compiler. If neither is
+//! present, the `fsr-shadergen` crate regenerates both.
 
 use std::path::{Path, PathBuf};
 
-/// One representative generated header; its absence means the whole set needs regenerating.
+/// One representative generated header; its absence means the set needs unpacking (or regenerating).
 const SENTINEL_HEADER: &str = "generated/dx11/ffx_fsr2_rcas_pass_permutations.h";
+
+/// The committed compressed archive of the generated headers, unpacked when they're missing.
+const HEADERS_ARCHIVE: &str = "generated/dx11.tar.gz";
 
 /// The FSR2 backend translation units we compile (the portable core + the DX11 backend + its baked
 /// shader blobs). Paths are relative to the vendored submodule root.
@@ -23,14 +26,19 @@ fn main() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let generated = crate_dir.join("generated/dx11");
     let sentinel = crate_dir.join(SENTINEL_HEADER);
+    let archive = crate_dir.join(HEADERS_ARCHIVE);
     println!("cargo:rerun-if-changed={}", sentinel.display());
+    println!("cargo:rerun-if-changed={}", archive.display());
 
     if !sentinel.exists() {
+        unpack_headers(&archive, &crate_dir.join("generated"));
+    }
+    if !sentinel.exists() {
         panic!(
-            "fsr-sys: generated FSR2 shader headers are missing ({SENTINEL_HEADER}).\n       \
-             Generate them once with:\n           \
+            "fsr-sys: generated FSR2 shader headers are missing and {HEADERS_ARCHIVE} did not \
+             unpack them.\n       Regenerate both with:\n           \
              cargo run -p fsr-shadergen --target x86_64-unknown-linux-gnu\n       \
-             (see fsr-sys/README.md). They are git-ignored while the integration is in flux."
+             (see fsr-sys/README.md)."
         );
     }
 
@@ -67,6 +75,18 @@ fn main() {
     println!("cargo:rustc-link-lib=d3d11");
     println!("cargo:rustc-link-lib=d3dcompiler");
     println!("cargo:rustc-link-lib=dxguid");
+}
+
+/// Unpack the committed header archive into `dest` (the `generated/` dir; the archive holds a `dx11/`
+/// entry). No-op if the archive is absent -- the caller then falls back to the regenerate instruction.
+fn unpack_headers(archive: &Path, dest: &Path) {
+    let Ok(file) = std::fs::File::open(archive) else {
+        return;
+    };
+    let decoder = flate2::read::GzDecoder::new(file);
+    if let Err(e) = tar::Archive::new(decoder).unpack(dest) {
+        panic!("fsr-sys: failed to unpack {}: {e}", archive.display());
+    }
 }
 
 /// Locate the vendored submodule (workspace-root `vendor/`), overridable via `FSR_VENDOR_DIR`.

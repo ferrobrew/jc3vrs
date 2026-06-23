@@ -154,6 +154,7 @@ fn run() -> Result<(), String> {
         }
     }
     prune_depfiles(&out_dir)?;
+    archive_headers(&out_dir)?;
     println!("regen-shaders: done -> {}", out_dir.display());
 
     // The payload's own shaders use the same toolchain. Each compiles to a committed `.dxbc` blob the
@@ -317,6 +318,25 @@ fn prune_depfiles(out_dir: &Path) -> Result<(), String> {
                 .map_err(|e| format!("could not remove {}: {e}", path.display()))?;
         }
     }
+    Ok(())
+}
+
+/// Pack the generated headers into a committed `dx11.tar.gz` next to the `dx11/` dir. The extracted
+/// headers are git-ignored (124 files, ~9 MB) but this archive (~0.7 MB) is committed, so a fresh
+/// checkout or CI builds without a shader compiler: `fsr-sys`'s `build.rs` unpacks it on demand.
+fn archive_headers(out_dir: &Path) -> Result<(), String> {
+    let archive_path = out_dir.with_file_name("dx11.tar.gz");
+    let file = std::fs::File::create(&archive_path)
+        .map_err(|e| format!("could not create {}: {e}", archive_path.display()))?;
+    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::best());
+    let mut tar = tar::Builder::new(encoder);
+    // Store entries under `dx11/` so extraction into the parent recreates the headers directory.
+    tar.append_dir_all("dx11", out_dir)
+        .map_err(|e| format!("could not archive {}: {e}", out_dir.display()))?;
+    tar.into_inner()
+        .and_then(|enc| enc.finish())
+        .map_err(|e| format!("could not finish {}: {e}", archive_path.display()))?;
+    println!("regen-shaders: archived -> {}", archive_path.display());
     Ok(())
 }
 

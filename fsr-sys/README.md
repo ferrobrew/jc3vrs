@@ -6,7 +6,9 @@ The C++ backend is the vendored `optiscaler/FidelityFX-FSR2-DX11` submodule (MIT
 
 ## Shaders
 
-The DX11 backend bakes its compute shaders in as DXBC bytecode: AMD's shader compiler (`FidelityFX_SC.exe`, bundled in the submodule) turns each pass into a `<pass>_permutations.h` header of byte arrays that the backend `#include`s. Those generated headers live under `generated/dx11/` and are **git-ignored for now** (124 files of bytecode, too noisy to commit while the integration is in flux), so you must generate them once after checkout before the crate will build. `build.rs` fails with this instruction if they're missing:
+The DX11 backend bakes its compute shaders in as DXBC bytecode: AMD's shader compiler (`FidelityFX_SC.exe`, bundled in the submodule) turns each pass into a `<pass>_permutations.h` header of byte arrays that the backend `#include`s. Those generated headers live under `generated/dx11/` (124 files, ~9 MB) and are **git-ignored**; instead, a compressed `generated/dx11.tar.gz` (~0.7 MB) is **committed**. `build.rs` unpacks the archive automatically when the headers are missing, so a fresh checkout or CI builds with no shader compiler and no Wine.
+
+You only need to run the regenerator when the FSR version changes (it rebuilds both the headers and the archive); commit the updated `dx11.tar.gz`:
 
 ```sh
 cargo run -p fsr-shadergen --target x86_64-unknown-linux-gnu

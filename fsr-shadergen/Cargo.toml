@@ -8,3 +8,5 @@ publish = false
 [dependencies]
 ureq = "3"
 sevenz-rust2 = "0.21"
+tar = "0.4"
+flate2 = "1"
