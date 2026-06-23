@@ -22,12 +22,14 @@
 //! ([`binding`]), and the [`state`] machine that drives them.
 
 mod binding;
+mod quad;
 mod state;
 mod target;
 
 pub use state::HUD_STATE;
 
-use jc3gi::graphics_engine::device::Device;
+use jc3gi::graphics_engine::{device::Device, texture::Texture};
+use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 
 /// The per-frame render-thread step: redirects the HUD into our texture while enabled, restores the
 /// engine binding while disabled. Called from the render-thread post-draw hook.
@@ -37,6 +39,15 @@ pub fn tick(device: &Device, width: u32, height: u32) {
         hud.ensure_redirected(device, width, height);
     } else {
         hud.restore(width);
+    }
+}
+
+/// Draw the redirected HUD as a floating quad for `eye` over `target` (the eye's linear back buffer),
+/// when both the redirect and the quad are enabled. Called from the render-thread post-draw hook,
+/// before the back buffer is captured/presented, with the engine context mutex held.
+pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Texture, eye: usize) {
+    if crate::config::Config::lock_query(|c| c.hud.redirect && c.hud.quad) {
+        HUD_STATE.lock().draw_quad(context, device, target, eye);
     }
 }
 

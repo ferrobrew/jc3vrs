@@ -1,10 +1,11 @@
 //! The HUD-redirect state machine: it lazily creates the target, applies and relinquishes the rebind,
 //! and owns the egui preview registration.
 
-use jc3gi::graphics_engine::device::Device;
+use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
+use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 
-use super::{binding, target::HudTarget};
+use super::{binding, quad::HudQuad, target::HudTarget};
 
 /// Global HUD state. Locked briefly on the render thread.
 pub static HUD_STATE: Mutex<HudState> = Mutex::new(HudState::new());
@@ -17,6 +18,8 @@ pub struct HudState {
     redirected: bool,
     /// The egui texture id for the HUD preview, registered lazily on the UI thread.
     preview_id: Option<egui::TextureId>,
+    /// The quad pass that draws the redirected HUD back into the scene, built lazily on first draw.
+    quad: Option<HudQuad>,
 }
 
 impl HudState {
@@ -25,6 +28,7 @@ impl HudState {
             target: None,
             redirected: false,
             preview_id: None,
+            quad: None,
         }
     }
 
@@ -68,6 +72,36 @@ impl HudState {
             self.redirected = false;
         }
         self.target = None;
+    }
+
+    /// Draw the redirected HUD as a floating quad for `eye` over `target` (the eye's linear back
+    /// buffer). A no-op when not redirected. The quad pass is built lazily on first draw. The caller
+    /// must hold the engine context mutex.
+    pub fn draw_quad(
+        &mut self,
+        context: &ID3D11DeviceContext,
+        device: &Device,
+        target: &Texture,
+        eye: usize,
+    ) {
+        if !self.redirected {
+            return;
+        }
+        let Some(hud_srv) = self.target.as_ref().map(|t| t.color_srv().clone()) else {
+            return;
+        };
+        if self.quad.is_none() {
+            match HudQuad::new(device) {
+                Ok(quad) => self.quad = Some(quad),
+                Err(e) => {
+                    tracing::error!("HUD quad: {e:#}");
+                    return;
+                }
+            }
+        }
+        if let Some(quad) = self.quad.as_ref() {
+            quad.draw(context, device, target, &hud_srv, eye);
+        }
     }
 
     /// Register (once) and return the egui texture id for previewing the redirected HUD. `None` until

@@ -68,6 +68,15 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
 
         EnterCriticalSection(context.m_Mutex);
 
+        // Draw the floating HUD quad onto this eye's back buffer before it is captured/presented, so it
+        // shows in both the preview and the final image.
+        if let (Some(device), Some(back_buffer)) = (
+            graphics_engine.m_Device.as_ref(),
+            graphics_engine.m_BackBufferLinear.as_ref(),
+        ) {
+            crate::hud::draw_quad(&context.m_Context, device, back_buffer, index);
+        }
+
         // Final back buffer for this eye. (The HDR scene / MainColor is captured earlier, at the
         // start of the post chain, before it gets read and recycled -- see capture_main_color.)
         if let (Some(dst), Some(src)) = (

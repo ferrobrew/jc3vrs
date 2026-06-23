@@ -202,12 +202,15 @@ pub struct HudConfig {
     /// Redirect the HUD into our own offscreen texture (the first step toward the floating panel).
     /// Off leaves the HUD on the engine surface as normal.
     pub redirect: bool,
+    /// Draw the redirected HUD back into the scene as a floating quad, per eye. Requires `redirect`.
+    pub quad: bool,
 }
 impl HudConfig {
     pub const fn new() -> Self {
         Self {
             // Off by default until the redirect is proven; toggled live for first-light.
             redirect: false,
+            quad: false,
         }
     }
 }

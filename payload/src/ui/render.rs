@@ -444,6 +444,9 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
                 &mut cfg.hud.redirect,
                 "Redirect HUD into our texture (drops it from the scene composite)",
             );
+            ui.add_enabled_ui(cfg.hud.redirect, |ui| {
+                ui.checkbox(&mut cfg.hud.quad, "Draw the HUD as a floating quad per eye");
+            });
             cfg.hud.redirect
         };
         if redirect {

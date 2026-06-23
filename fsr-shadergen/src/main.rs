@@ -81,7 +81,11 @@ const DX11_BASE_ARGS: &[&str] = &[
 
 /// The payload's own shaders: `(name, shader-model profile)`. Each `payload/src/shaders/<name>.hlsl`
 /// (entry point `main`) compiles to a committed `payload/src/shaders/<name>.dxbc`.
-const PAYLOAD_SHADERS: &[(&str, &str)] = &[("velocity_decode", "cs_5_0")];
+const PAYLOAD_SHADERS: &[(&str, &str)] = &[
+    ("velocity_decode", "cs_5_0"),
+    ("hud_quad_vs", "vs_5_0"),
+    ("hud_quad_ps", "ps_5_0"),
+];
 
 fn main() {
     if let Err(e) = run() {
