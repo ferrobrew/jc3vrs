@@ -29,6 +29,27 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
             ui.add(egui::Slider::new(s, 0.0..=1.0).text("strength"));
         }
     });
+    ui.horizontal(|ui| {
+        ui.label("FSR motion-vector scale:");
+        let basis = &mut cfg.fsr.mv_scale.basis;
+        ui.selectable_value(basis, config::MvScaleBasis::Ndc, "NDC (x res)");
+        ui.selectable_value(basis, config::MvScaleBasis::Unit, "Unit");
+    });
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::DragValue::new(&mut cfg.fsr.mv_scale.x)
+                .speed(0.05)
+                .prefix("x: "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut cfg.fsr.mv_scale.y)
+                .speed(0.05)
+                .prefix("y: "),
+        );
+        if ui.button("reset").clicked() {
+            cfg.fsr.mv_scale = config::MvScale::new();
+        }
+    });
     ui.checkbox(
         &mut cfg.stereo.force_smaa_1x,
         "Force SMAA 1x in stereo (T2X ghosts across eyes)",

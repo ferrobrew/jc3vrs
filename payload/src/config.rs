@@ -172,6 +172,9 @@ pub struct FsrConfig {
     pub jitter: bool,
     /// Optional RCAS sharpening strength (0..1); `None` disables the sharpening pass.
     pub sharpness: Option<f32>,
+    /// The motion-vector scale fed to FSR. The velocity-buffer encoding isn't pinned yet, so this is a
+    /// live calibration knob -- tune against on-screen motion until objects track without ghosting.
+    pub mv_scale: MvScale,
 }
 impl FsrConfig {
     pub const fn new() -> Self {
@@ -180,6 +183,35 @@ impl FsrConfig {
             enabled: false,
             jitter: true,
             sharpness: None,
+            mv_scale: MvScale::new(),
+        }
+    }
+}
+
+/// Which base unit the per-axis motion-vector multipliers scale from.
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MvScaleBasis {
+    /// Scale by the render resolution (`x*width`, `y*height`) -- for NDC/[-1,1]-encoded velocity (the
+    /// reference SDK's convention).
+    Ndc,
+    /// Scale by 1 (`x`, `y` directly) -- for already-pixel-space velocity.
+    Unit,
+}
+
+/// The FSR motion-vector scale as a calibratable basis + per-axis multipliers. The reference SDK uses
+/// `(-renderWidth, renderHeight)`, i.e. `Ndc` with `x = -1, y = 1`.
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub struct MvScale {
+    pub basis: MvScaleBasis,
+    pub x: f32,
+    pub y: f32,
+}
+impl MvScale {
+    pub const fn new() -> Self {
+        Self {
+            basis: MvScaleBasis::Ndc,
+            x: -1.0,
+            y: 1.0,
         }
     }
 }

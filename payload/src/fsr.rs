@@ -33,6 +33,9 @@ struct EyeState {
     context: Context,
     /// The UAV output target FSR writes into (display-res; copied back into the post chain).
     output: ID3D11Texture2D,
+    /// Set on creation; the first dispatch consumes it as FSR's `reset` so a fresh context (after a
+    /// resize / toggle-on) discards any garbage history instead of reprojecting against it.
+    fresh: bool,
 }
 
 /// The live FSR integration state (render thread only).
@@ -98,6 +101,7 @@ pub fn dispatch_eye(
     let velocity_res: &ID3D11Resource = &velocity.m_Texture;
     let output_res: ID3D11Resource = eye_state.output.cast().expect("texture is a resource");
 
+    let camera = camera_params();
     let info = DispatchInfo {
         context: &context.m_Context,
         color,
@@ -107,16 +111,19 @@ pub fn dispatch_eye(
         output: &output_res,
         render_size: Extent { width, height },
         // The same per-frame jitter applied to the camera projection (see apply_jitter_to_projection),
-        // in FSR's pixel space. Per-eye motion-vector scale is still identity (wired up next).
+        // in FSR's pixel space.
         jitter: current_jitter(width, height).unwrap_or((0.0, 0.0)),
-        motion_vector_scale: (1.0, 1.0),
+        // The velocity-buffer encoding is not yet pinned (the convention lives in the velocity-write
+        // shader, which isn't in the binary), so the scale is a live debug knob -- calibrate in-game.
+        motion_vector_scale: motion_vector_scale(width, height),
         sharpening: sharpness,
-        frame_time_delta_ms: 1000.0 / 60.0,
+        frame_time_delta_ms: camera.frame_time_delta_ms,
         pre_exposure: 1.0,
-        reset: false,
-        camera_near: NEAR_PLANE,
-        camera_far: FAR_PLANE,
-        camera_fov_vertical: DEFAULT_FOV_VERTICAL,
+        // Discard history on the first dispatch of a freshly created context.
+        reset: std::mem::take(&mut eye_state.fresh),
+        camera_near: camera.near,
+        camera_far: camera.far,
+        camera_fov_vertical: camera.fov_vertical,
     };
 
     // The FSR dispatch and the copy-back both record onto the engine's immediate context, so hold its
@@ -172,14 +179,73 @@ fn create_eye(device: &Device, slot_color: &Texture, width: u32, height: u32) ->
     let flags = init_flags::DEPTH_INVERTED | init_flags::DEPTH_INFINITE | init_flags::AUTO_EXPOSURE;
     let extent = Extent { width, height };
     let context = Context::new(d3d, flags, extent, extent)?;
-    Some(EyeState { context, output })
+    Some(EyeState {
+        context,
+        output,
+        fresh: true,
+    })
 }
 
-// Camera constants for the dispatch. Provisional -- the real per-eye projection values get threaded
-// through once the camera path feeds them in.
-const NEAR_PLANE: f32 = 0.1;
-const FAR_PLANE: f32 = 10000.0;
-const DEFAULT_FOV_VERTICAL: f32 = std::f32::consts::FRAC_PI_2;
+/// The render camera's parameters FSR's depth reprojection needs this frame.
+struct CameraParams {
+    near: f32,
+    far: f32,
+    /// Vertical field of view in radians.
+    fov_vertical: f32,
+    frame_time_delta_ms: f32,
+}
+
+/// Fallbacks when the camera / clock singletons aren't reachable yet.
+const FALLBACK_NEAR: f32 = 0.1;
+const FALLBACK_FAR: f32 = 10000.0;
+const FALLBACK_FOV_VERTICAL: f32 = std::f32::consts::FRAC_PI_2;
+const FALLBACK_FRAME_MS: f32 = 1000.0 / 60.0;
+
+/// Read the live render camera's near/far/FOV and the real frame time. The vertical FOV is derived
+/// from the projection's `data[5]` (`= 1/tan(fovV/2)`) rather than `m_FOV`, which sidesteps the
+/// horizontal-vs-vertical question and is invariant under the jitter/reverse-Z we apply.
+fn camera_params() -> CameraParams {
+    // SAFETY: the camera-manager and clock singletons are valid once the engine is initialised; both
+    // accessors null-check the underlying pointer.
+    unsafe {
+        let mut params = CameraParams {
+            near: FALLBACK_NEAR,
+            far: FALLBACK_FAR,
+            fov_vertical: FALLBACK_FOV_VERTICAL,
+            frame_time_delta_ms: FALLBACK_FRAME_MS,
+        };
+        if let Some(cm) = jc3gi::camera::camera_manager::CameraManager::get()
+            && let Some(camera) = cm.GetRenderCamera().as_ref()
+        {
+            params.near = camera.m_Near;
+            params.far = camera.m_Far;
+            let focal_y = camera.m_Projection.data[5];
+            if focal_y.abs() > f32::EPSILON {
+                params.fov_vertical = 2.0 * (1.0 / focal_y).atan();
+            }
+        }
+        if let Some(clock) = jc3gi::clock::Clock::get()
+            && clock.m_RealSPF > 0.0
+        {
+            params.frame_time_delta_ms = clock.m_RealSPF * 1000.0;
+        }
+        params
+    }
+}
+
+/// The FSR `motionVectorScale` for this frame. FSR multiplies the sampled motion vectors by this to
+/// reach its internal pixel convention; the right factor depends on the units JC3's velocity buffer
+/// holds, which isn't yet pinned. The reference SDK uses `(-renderWidth, renderHeight)` for
+/// NDC-encoded vectors -- exposed as a live debug knob (sign + magnitude) so the convention can be
+/// calibrated against on-screen motion. See `config.fsr.mv_scale`.
+fn motion_vector_scale(render_width: u32, render_height: u32) -> (f32, f32) {
+    let cfg = crate::config::Config::lock_query(|c| c.fsr.mv_scale);
+    let base = match cfg.basis {
+        crate::config::MvScaleBasis::Ndc => (render_width as f32, render_height as f32),
+        crate::config::MvScaleBasis::Unit => (1.0, 1.0),
+    };
+    (base.0 * cfg.x, base.1 * cfg.y)
+}
 
 /// FSR's sub-pixel jitter offset for the current frame, in **pixel space** (FSR's native unit, fed
 /// straight to the dispatch's `jitter`). `None` when the resolution is degenerate.
