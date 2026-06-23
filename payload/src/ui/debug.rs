@@ -29,25 +29,24 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
             ui.add(egui::Slider::new(s, 0.0..=1.0).text("strength"));
         }
     });
+    ui.checkbox(
+        &mut cfg.fsr.motion_vectors,
+        "FSR motion vectors (off = ghosts moving objects; A/B the decode)",
+    );
     ui.horizontal(|ui| {
-        ui.label("FSR motion-vector scale:");
-        let basis = &mut cfg.fsr.mv_scale.basis;
-        ui.selectable_value(basis, config::MvScaleBasis::Ndc, "NDC (x res)");
-        ui.selectable_value(basis, config::MvScaleBasis::Unit, "Unit");
-    });
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::DragValue::new(&mut cfg.fsr.mv_scale.x)
-                .speed(0.05)
-                .prefix("x: "),
-        );
-        ui.add(
-            egui::DragValue::new(&mut cfg.fsr.mv_scale.y)
-                .speed(0.05)
-                .prefix("y: "),
-        );
-        if ui.button("reset").clicked() {
-            cfg.fsr.mv_scale = config::MvScale::new();
+        ui.label("MV sign:");
+        let (sx, sy) = &mut cfg.fsr.mv_sign;
+        if ui.selectable_label(*sx > 0.0, "x+").clicked() {
+            *sx = 1.0;
+        }
+        if ui.selectable_label(*sx < 0.0, "x-").clicked() {
+            *sx = -1.0;
+        }
+        if ui.selectable_label(*sy > 0.0, "y+").clicked() {
+            *sy = 1.0;
+        }
+        if ui.selectable_label(*sy < 0.0, "y-").clicked() {
+            *sy = -1.0;
         }
     });
     ui.checkbox(

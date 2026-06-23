@@ -79,6 +79,10 @@ const DX11_BASE_ARGS: &[&str] = &[
     "-DSPD_NO_WAVE_OPERATIONS",
 ];
 
+/// The payload's own shaders: `(name, shader-model profile)`. Each `payload/src/shaders/<name>.hlsl`
+/// (entry point `main`) compiles to a committed `payload/src/shaders/<name>.dxbc`.
+const PAYLOAD_SHADERS: &[(&str, &str)] = &[("velocity_decode", "cs_5_0")];
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("regen-shaders: {e}");
@@ -151,6 +155,17 @@ fn run() -> Result<(), String> {
     }
     prune_depfiles(&out_dir)?;
     println!("regen-shaders: done -> {}", out_dir.display());
+
+    // The payload's own shaders use the same toolchain. Each compiles to a committed `.dxbc` blob the
+    // payload `include_bytes!`s -- no runtime shader compiler (uncertain under Proton).
+    let payload_shaders = workspace.join("payload/src/shaders");
+    for (name, profile) in PAYLOAD_SHADERS {
+        compile_payload_shader(&runner, &sc_exe, &payload_shaders, name, profile)?;
+    }
+    println!(
+        "regen-shaders: payload shaders -> {}",
+        payload_shaders.display()
+    );
     Ok(())
 }
 
@@ -202,6 +217,92 @@ fn compile_pass(
     }
     println!("  compiled {name}");
     Ok(())
+}
+
+/// Compile one payload shader (`<dir>/<name>.hlsl`, entry point `main`) to a committed
+/// `<dir>/<name>.dxbc` blob. Uses the same compiler but emits the SC permutation header into a temp
+/// dir, then lifts the raw DXBC bytes out of it -- the payload wants a plain blob to `include_bytes!`,
+/// not FSR's permutation-table header.
+fn compile_payload_shader(
+    runner: &Runner,
+    sc_exe: &Path,
+    dir: &Path,
+    name: &str,
+    profile: &str,
+) -> Result<(), String> {
+    let tmp = dir.join(".sc-tmp");
+    std::fs::create_dir_all(&tmp)
+        .map_err(|e| format!("could not create {}: {e}", tmp.display()))?;
+
+    let args: Vec<String> = vec![
+        "-E".into(),
+        "main".into(),
+        "-T".into(),
+        profile.into(),
+        "-compiler=fxc".into(),
+        "-DFFX_HLSL=1".into(),
+        format!("-name={name}"),
+        format!("-output={}", tmp.to_string_lossy()),
+        dir.join(format!("{name}.hlsl"))
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    let status = runner
+        .command(sc_exe, &args)
+        .status()
+        .map_err(|e| format!("failed to spawn the shader compiler: {e}"))?;
+    if !status.success() {
+        return Err(format!("shader compile failed for {name} (exit {status})"));
+    }
+
+    let blob = lift_dxbc(&tmp, name)?;
+    let dest = dir.join(format!("{name}.dxbc"));
+    std::fs::write(&dest, blob).map_err(|e| format!("could not write {}: {e}", dest.display()))?;
+    std::fs::remove_dir_all(&tmp).ok();
+    println!("  compiled {name} -> {}.dxbc", name);
+    Ok(())
+}
+
+/// Recover the raw DXBC bytes from the SC tool's generated blob header. The header declares a
+/// `static const unsigned char g_<hash>_data[] = { 0x.., ... };`; we parse those hex bytes back out.
+fn lift_dxbc(tmp: &Path, name: &str) -> Result<Vec<u8>, String> {
+    // The blob header is the `<name>_<hash>.h` that is not the `<name>_permutations.h` index.
+    let mut blob_header = None;
+    for entry in std::fs::read_dir(tmp).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if file.starts_with(name)
+            && file.ends_with(".h")
+            && file != format!("{name}_permutations.h")
+        {
+            blob_header = Some(path);
+            break;
+        }
+    }
+    let header = blob_header.ok_or_else(|| format!("no blob header emitted for {name}"))?;
+    let text = std::fs::read_to_string(&header).map_err(|e| e.to_string())?;
+
+    // Take everything between the `_data[] = {` and the closing `}` and parse the `0x..` tokens.
+    let start = text
+        .find("_data[]")
+        .and_then(|i| text[i..].find('{').map(|j| i + j + 1))
+        .ok_or("could not find the data array in the blob header")?;
+    let end = text[start..]
+        .find('}')
+        .map(|j| start + j)
+        .ok_or("unterminated data array in the blob header")?;
+    let bytes = text[start..end]
+        .split(',')
+        .filter_map(|t| {
+            let t = t.trim();
+            t.strip_prefix("0x")
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        })
+        .collect::<Vec<u8>>();
+    if bytes.len() < 4 || &bytes[..4] != b"DXBC" {
+        return Err(format!("{name}: lifted bytes are not a DXBC blob"));
+    }
+    Ok(bytes)
 }
 
 /// Remove the GCC-style `.d` depfiles the compiler emits alongside each header (`-deps=gcc`). They

@@ -11,12 +11,15 @@
 //! it. All of this lives on the render thread, behind [`FSR_STATE`]; dispatch runs under the engine's
 //! context mutex like the other D3D11 work.
 
+mod velocity_decode;
+
 use fsr_sys::{Context, DispatchInfo, Extent, init_flags};
 use jc3gi::{
     graphics_engine::{device::Device, texture::Texture},
     types::math::Matrix4,
 };
 use parking_lot::Mutex;
+use velocity_decode::VelocityDecode;
 use windows::{
     Win32::Graphics::{
         Direct3D11::{
@@ -33,6 +36,9 @@ struct EyeState {
     context: Context,
     /// The UAV output target FSR writes into (display-res; copied back into the post chain).
     output: ID3D11Texture2D,
+    /// The velocity-decode pass + its R16G16F MV buffer (None if it failed to build -- FSR then runs
+    /// with no motion vectors).
+    decode: Option<VelocityDecode>,
     /// Set on creation; the first dispatch consumes it as FSR's `reset` so a fresh context (after a
     /// resize / toggle-on) discards any garbage history instead of reprojecting against it.
     fresh: bool,
@@ -62,8 +68,8 @@ pub static FSR_STATE: Mutex<FsrState> = Mutex::new(FsrState::new());
 ///
 /// `device` is the engine D3D11 device; `slot_color` is the chain's current result texture (input and
 /// copy-back target); `depth` / `velocity` are the engine's MainDepth / Velocity buffers; `sharpness`
-/// is the optional RCAS strength. Runs on the render thread; takes the engine context mutex itself for
-/// the copy-back.
+/// is the optional RCAS strength. Runs on the render thread; holds the engine context mutex across the
+/// velocity decode, the FSR dispatch, and the copy-back.
 pub fn dispatch_eye(
     state: &mut FsrState,
     device: &Device,
@@ -96,41 +102,64 @@ pub fn dispatch_eye(
         return false;
     };
 
-    let color: &ID3D11Resource = &slot_color.m_Texture;
-    let depth_res: &ID3D11Resource = &depth.m_Texture;
-    let velocity_res: &ID3D11Resource = &velocity.m_Texture;
     let output_res: ID3D11Resource = eye_state.output.cast().expect("texture is a resource");
 
-    let camera = camera_params();
-    let info = DispatchInfo {
-        context: &context.m_Context,
-        color,
-        depth: depth_res,
-        motion_vectors: velocity_res,
-        exposure: None,
-        output: &output_res,
-        render_size: Extent { width, height },
-        // The same per-frame jitter applied to the camera projection (see apply_jitter_to_projection),
-        // in FSR's pixel space.
-        jitter: current_jitter(width, height).unwrap_or((0.0, 0.0)),
-        // The velocity-buffer encoding is not yet pinned (the convention lives in the velocity-write
-        // shader, which isn't in the binary), so the scale is a live debug knob -- calibrate in-game.
-        motion_vector_scale: motion_vector_scale(width, height),
-        sharpening: sharpness,
-        frame_time_delta_ms: camera.frame_time_delta_ms,
-        pre_exposure: 1.0,
-        // Discard history on the first dispatch of a freshly created context.
-        reset: std::mem::take(&mut eye_state.fresh),
-        camera_near: camera.near,
-        camera_far: camera.far,
-        camera_fov_vertical: camera.fov_vertical,
-    };
+    // Snapshot the MV settings.
+    let (mv_enabled, mv_sign) =
+        crate::config::Config::lock_query(|c| (c.fsr.motion_vectors, c.fsr.mv_sign));
 
-    // The FSR dispatch and the copy-back both record onto the engine's immediate context, so hold its
-    // mutex across both -- the same lock the rest of the payload's D3D11 work takes.
-    // SAFETY: `context.m_Mutex` guards the immediate context; both resources are valid for the call.
+    let camera = camera_params();
+
+    // The decode, the FSR dispatch, and the copy-back all record onto the engine's immediate context,
+    // so hold its mutex across all of them -- the same lock the rest of the payload's D3D11 work takes.
+    // SAFETY: `context.m_Mutex` guards the immediate context; every resource is valid for these calls.
     unsafe {
         windows::Win32::System::Threading::EnterCriticalSection(context.m_Mutex);
+
+        // Decode JC3's bias-encoded velocity into FSR's MV buffer; on success FSR reads the decoded
+        // buffer, otherwise it falls back to the raw velocity (still biased -- only used if the decode
+        // is unavailable or disabled, as a degraded path).
+        let decoded_mv = if mv_enabled {
+            eye_state
+                .decode
+                .as_ref()
+                .filter(|d| d.dispatch(&context.m_Context, device, velocity, mv_sign))
+        } else {
+            None
+        };
+        let mv_res: ID3D11Resource = match decoded_mv {
+            Some(d) => d.output.cast().expect("texture is a resource"),
+            None => velocity.m_Texture.clone(),
+        };
+
+        let info = DispatchInfo {
+            context: &context.m_Context,
+            color: &slot_color.m_Texture,
+            depth: &depth.m_Texture,
+            motion_vectors: &mv_res,
+            exposure: None,
+            output: &output_res,
+            render_size: Extent { width, height },
+            // The same per-frame jitter applied to the camera projection (apply_jitter_to_projection),
+            // in FSR's pixel space.
+            jitter: current_jitter(width, height).unwrap_or((0.0, 0.0)),
+            // The decode emits motion in UV space; FSR wants pixels, so scale by the render size. The
+            // sign/Y convention is already applied inside the decode shader.
+            motion_vector_scale: if decoded_mv.is_some() {
+                (width as f32, height as f32)
+            } else {
+                (1.0, 1.0)
+            },
+            sharpening: sharpness,
+            frame_time_delta_ms: camera.frame_time_delta_ms,
+            pre_exposure: 1.0,
+            // Discard history on the first dispatch of a freshly created context.
+            reset: std::mem::take(&mut eye_state.fresh),
+            camera_near: camera.near,
+            camera_far: camera.far,
+            camera_fov_vertical: camera.fov_vertical,
+        };
+
         let ran = eye_state.context.dispatch(&info);
         if ran {
             // Copy the AA'd result back into the chain's working slot so the rest of the post chain
@@ -179,9 +208,14 @@ fn create_eye(device: &Device, slot_color: &Texture, width: u32, height: u32) ->
     let flags = init_flags::DEPTH_INVERTED | init_flags::DEPTH_INFINITE | init_flags::AUTO_EXPOSURE;
     let extent = Extent { width, height };
     let context = Context::new(d3d, flags, extent, extent)?;
+    let decode = VelocityDecode::new(device, width, height);
+    if decode.is_none() {
+        tracing::warn!("FSR: velocity-decode pass unavailable; running without motion vectors");
+    }
     Some(EyeState {
         context,
         output,
+        decode,
         fresh: true,
     })
 }
@@ -231,20 +265,6 @@ fn camera_params() -> CameraParams {
         }
         params
     }
-}
-
-/// The FSR `motionVectorScale` for this frame. FSR multiplies the sampled motion vectors by this to
-/// reach its internal pixel convention; the right factor depends on the units JC3's velocity buffer
-/// holds, which isn't yet pinned. The reference SDK uses `(-renderWidth, renderHeight)` for
-/// NDC-encoded vectors -- exposed as a live debug knob (sign + magnitude) so the convention can be
-/// calibrated against on-screen motion. See `config.fsr.mv_scale`.
-fn motion_vector_scale(render_width: u32, render_height: u32) -> (f32, f32) {
-    let cfg = crate::config::Config::lock_query(|c| c.fsr.mv_scale);
-    let base = match cfg.basis {
-        crate::config::MvScaleBasis::Ndc => (render_width as f32, render_height as f32),
-        crate::config::MvScaleBasis::Unit => (1.0, 1.0),
-    };
-    (base.0 * cfg.x, base.1 * cfg.y)
 }
 
 /// FSR's sub-pixel jitter offset for the current frame, in **pixel space** (FSR's native unit, fed
