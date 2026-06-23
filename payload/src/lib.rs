@@ -16,6 +16,7 @@ pub mod util;
 mod config;
 mod crash;
 mod debug;
+mod fsr;
 mod hooks;
 mod logging;
 mod stereo;

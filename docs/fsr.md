@@ -51,23 +51,58 @@ This also de-risks in the right order. The per-eye motion-vector work is shared 
 - **Compositor reprojection interaction.** The OpenXR runtime may apply its own motion reprojection to hit framerate; stacking FSR temporal reconstruction under it can compound artifacts. Tunable, but only evaluable in-headset.
 - **Motion vectors matter more.** An upscaler leans on MVs far harder than native AA; this is why the MV path must be solid before render scale drops.
 
+## Motion vectors
+
+FSR reprojects last frame's history through the current frame's motion vectors; a wrong MV path is the dominant source of ghosting and smearing, and it is what the whole temporal reconstruction leans on hardest under VR head motion.
+
+**JC3's velocity encoding (RE'd from the shader bytecode).** The engine's `m_VelocityBufferTexture` (`"motion_blur_velocity_buffer"`, an 8-bit `ABGR8` target) does not store raw motion vectors. The velocity-write pixel shader (`rendervelocitybuffer` in `Shaders_F.shader_bundle`) computes, per pixel:
+
+```
+stored.xy = clamp((curUV - prevUV) * 8, -1, 1) * 0.5 + 0.5
+```
+
+where `curUV`/`prevUV` are the current/previous-frame screen positions in UV space (Y-down). So the buffer is **bias-encoded into [0, 1] with 0.5 = zero motion**, scaled ×8, and **clamped to ±0.125 UV per frame**. Two independent shaders confirm this: the motion-blur filter (`compositehighprecisionvelocityfilter`) decodes it with the exact inverse, `(stored*2 - 1) * 0.125`.
+
+This is why FSR's `motionVectorScale` (a pure multiply) cannot consume the buffer directly: a multiply cannot subtract the 0.5 bias, so static geometry would read as constant motion. We decode it ourselves:
+
+```
+motion_uv = (stored.xy - 0.5) * 0.25     // = curUV - prevUV, UV space, Y-down
+```
+
+**The decode pass.** A compute shader reads `m_VelocityBufferTexture`, applies the decode above, converts to FSR's expected convention (sign + Y direction — the one small empirical bit, visually obvious if wrong: trails point backwards), and writes an `R16G16_FLOAT` buffer we hand to FSR with `motionVectorScale = (renderWidth, -renderHeight)` (UV→pixel). This replaces the earlier guess-the-scale knob with exact, RE-derived math.
+
+**Why we decode the engine buffer rather than produce our own.** FSR needs *object* motion (vehicles, characters, vegetation), not just camera motion. Object motion requires each object's previous-frame world matrix — data the engine materializes per-draw across thousands of renderables and that has no central source we can read. The velocity buffer *is* that materialization (the engine walking every object and resolving current-vs-previous into one texture), so decoding it is the only way to get object motion short of re-running the velocity pass. A camera-only buffer we compute from depth + previous-VP would miss all object motion — the larger error. This is settled, not a compromise.
+
+**Precision ceiling and follow-ups (deliberately deferred).** The decode recovers everything the buffer holds, but the buffer has an intrinsic ceiling: 8-bit quantization (the format) and the ±0.125 UV clamp (baked into the shader bytecode). The clamp is the dominant limit and saturates on fast head turns — exactly the VR case. Neither is removable cheaply:
+
+- *Format tap* (hook `CreateRenderSetups` to make the velocity RT `R16G16F`): removes quantization only, not the clamp. Additive to the decode, low value on its own.
+- *Shader replacement* (repack the bundle / hook shader creation to lift the clamp): removes both, but touches ~40 velocity variants and is disproportionate for a 2015 game's AA.
+- *Hybrid (the real upgrade)*: keep JC3's decoded **object** velocity, but compute the **camera** component ourselves from depth + per-eye previous-VP at full precision, unclamped, and combine. This attacks the clamp precisely where it hurts in VR (head turns are camera motion) without touching shaders.
+
+We start with the plain decode at the buffer's ceiling — a legitimate stopping point, not a cut corner — and treat the hybrid as the targeted fix if head-turn ghosting proves objectionable in a headset.
+
 ## Runtime toggle
 
 FSR must be switchable on and off at runtime, so we can A/B it against the engine's SMAA live in the preview and judge how well it is actually working. The toggle drives two coupled things together: whether the FSR dispatch runs, and whether the engine's own `CAntiAliasingEffect` is suppressed. Off means engine AA runs as normal and FSR does nothing; on means FSR runs and engine AA is dropped to off. The render-scale parameter (1:1 for now) sits alongside it in config, ready for the upscaling slider later. These live in the stereo/post-fx config block with the other toggles.
 
+The MV decode and FSR's shaders are extracted from `Shaders_F.shader_bundle` (an ADF container; shaders are named DXBC blobs laid out as `<name>\0…pad…DXBC<bytecode>`). The throwaway extraction recipe — slice by the `DXBC` magic + the size field at `+0x18`, disassemble via `D3DDisassemble` from the native `d3dcompiler_47.dll` under Wine — is how the encoding above was recovered, should other shaders need reading later.
+
 ## Open risks to verify before/while building
 
 - **DX11 port maturity under Proton/Wine.** The FSR 3.1 native DX11 backend is community-maintained and newer than the FSR2 one. Confirm it builds, loads its shader permutations, and dispatches under Proton before committing; FSR 2.2-DX11 is the proven fallback.
-- **Motion-vector convention and scale.** Engine velocity is per-object screen-space ABGR32 written with the previous-frame VP. Confirm the sign, packing, and the scale into FSR's expected units — a wrong scale is ghosting/smearing.
+- **Motion-vector convention and scale.** Resolved — see the *Motion vectors* section. The buffer is bias-encoded 8-bit (`(curUV-prevUV)*8`, clamped ±1, `*0.5+0.5`), so it needs a decode pass, not just a scale. The remaining empirical bit is FSR's sign/Y convention (visually obvious if wrong).
 - **Reverse-Z / infinite-far flags.** Depth is reverse-Z near=1/far=0; FSR must be told depth-inverted (and infinite-far if applicable) or reprojection breaks.
 - **Jitter ownership.** FSR needs the camera jittered by its own Halton sequence and the identical pixel offset fed to the dispatch, per eye per frame. The engine's 2-phase TAA jitter is the wrong sequence and must be fully replaced (rendering §2.7 describes the projection-jitter injection point).
 - **Reactive / transparency masks.** Water, particles, and muzzle flashes can ghost without a reactive mask; plan a second pass if transparencies smear.
+- **Per-eye FOV / asymmetric frusta (VR only).** FSR's dispatch takes a single `cameraFovAngleVertical` scalar to linearize depth for reprojection. On the flat desktop both eyes share one symmetric projection, so deriving the vertical FOV from the render camera's projection (`data[5] = 1/tan(fovV/2)` — invariant under our jitter/reverse-Z, and sidestepping the horizontal-vs-vertical question) is exact. In real VR each eye has its own field of view *and* an asymmetric off-axis frustum (left ≠ right, up ≠ down — the "wedge"), which a single vertical-FOV scalar cannot represent. The fix is structurally already in place: because we read FOV from the projection matrix rather than a constant, the same extraction yields a per-eye vertical FOV automatically once VR injects per-eye projections — and a symmetric-equivalent vertical FOV is a good enough depth-linearization approximation for mild asymmetry. Revisit only if depth-reconstruction artifacts appear at the frustum edges under wide-FOV / strongly-canted HMD projections. Ties into the VR runtime's off-axis-projection work.
 
 ## Order of work
 
-1. Vendor the MIT FSR 3.1 DX11 backend and build its shader permutations; get it linking into the payload.
-2. Stand up a per-eye FSR context (one per `draw_index`), sized to the per-eye RT, native-AA configured, recreated on resolution change.
-3. Dispatch post-tonemap at the `anti_aliasing_apply` hook: feed the slot-ring LDR input, write the resolved output back into the ring, suppress the engine AA. Get it visible in the desktop stereo preview with a runtime on/off toggle.
-4. Wire per-eye previous-VP motion vectors and FSR's jitter sequence; verify ghosting is controlled in motion.
-5. Evaluate the pre-tonemap HDR path for highlight quality; adopt if it is worth the extra wiring.
-6. Later, once the VR runtime provides per-eye resolution re-init, drop render scale below 1:1 to enable upscaling, and expose the render-scale slider.
+1. ✅ Vendor the MIT FSR DX11 backend (FSR 2.2.1 in practice — see the version note) and build its shader permutations; link it into the payload via the `fsr-sys` crate.
+2. ✅ Stand up a per-eye FSR context (one per `draw_index`), sized to the per-eye RT, native-AA configured, recreated on resolution change.
+3. ✅ Dispatch post-tonemap at the `anti_aliasing_apply` hook: feed the slot-ring LDR input, write the resolved output back into the ring, suppress the engine AA. Visible in the desktop stereo preview with a runtime on/off toggle.
+4. ✅ FSR's jitter sequence (camera projection + dispatch, shared per-frame phase); the real camera near/far/FOV, frame time, and history reset. Proven in-game.
+5. **(current)** Motion vectors: a decode pass turning JC3's bias-encoded velocity buffer into an `R16G16F` MV buffer for FSR (see *Motion vectors*); settle FSR's sign/Y convention; verify ghosting is controlled in motion.
+6. Evaluate the pre-tonemap HDR path for highlight quality; adopt if it is worth the extra wiring.
+7. Later, once the VR runtime provides per-eye resolution re-init, drop render scale below 1:1 to enable upscaling, and expose the render-scale slider.
+8. *(deferred)* MV precision: the hybrid camera-MV path if head-turn ghosting bites in a headset (see *Motion vectors*).

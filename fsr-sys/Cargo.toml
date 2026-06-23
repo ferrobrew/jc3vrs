@@ -1,0 +1,14 @@
+[package]
+name = "fsr-sys"
+version = "0.1.0"
+edition = "2024"
+description = "FFI bindings to FidelityFX Super Resolution 2 (FSR2) with the native DirectX 11 backend."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+windows = { workspace = true }
+
+[build-dependencies]
+cc = { workspace = true }

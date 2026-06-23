@@ -36,6 +36,45 @@ pub(super) fn extend(library: HookLibrary) -> HookLibrary {
         .with_static_binder(&ANTI_ALIASING_APPLY_BINDER)
 }
 
+/// Dispatch FSR for the current eye, reading the chain's current slot color (`mgr[slot + 83]`) as
+/// input and writing the anti-aliased result back into it. Returns whether FSR ran (in which case the
+/// engine AA should be neutralized to a passthrough). Mirrors `capture_post_result`'s slot access.
+fn fsr_dispatch(mgr: *mut c_void, slot: u32, sharpness: Option<f32>) -> bool {
+    if mgr.is_null() {
+        return false;
+    }
+    // SAFETY: at the AA stage `mgr[slot + 83]` is the chain's current result texture (the LDR,
+    // post-tonemap color), and the engine buffers are live on the render thread.
+    let ran = unsafe {
+        let slot_color = (mgr as *const *mut jc3gi::graphics_engine::texture::Texture)
+            .add(slot as usize + 83)
+            .read();
+        let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
+            return false;
+        };
+        let (Some(device), Some(color), Some(depth), Some(velocity)) = (
+            ge.m_Device.as_ref(),
+            slot_color.as_ref(),
+            ge.m_MainDepthTexture.as_ref(),
+            ge.m_VelocityBufferTexture.as_ref(),
+        ) else {
+            return false;
+        };
+        let mut state = crate::fsr::FSR_STATE.lock();
+        crate::fsr::dispatch_eye(
+            &mut state,
+            device,
+            draw_index(),
+            color,
+            depth,
+            velocity,
+            sharpness,
+        )
+    };
+    TraceState::record_eye(TraceEvent::FsrDispatch { input: slot, ran });
+    ran
+}
+
 // PostEffectsManager::ApplyWorldFilters -- enqueues the world post block and steps the world-fade
 // accumulator (ApplyWorldFadeFilter) by `dt`. Zero `dt` on eye 1 so the fade advances once per real
 // frame, not twice.
@@ -71,10 +110,12 @@ fn apply_global_filters(this: *mut c_void, dt: f32, ctx: *mut c_void) {
     APPLY_GLOBAL_FILTERS.get().unwrap().call(this, dt, ctx);
 }
 
-// AntiAliasingEffect::Apply -- drop SMAA T2X (mode 3) to SMAA 1x (mode 2) for the pass when forcing
-// 1x in stereo. T2X's temporal resolve blends a previous-frame history that is a single buffer shared
-// (ping-ponged) across the two eye dispatches, so each eye blends the other -> a cross-eye ghost. 1x
-// carries no history. Restore the real mode afterwards so the engine's own state stays intact.
+// AntiAliasingEffect::Apply -- the AA stage of the post chain. Two roles:
+//   * FSR on: resolve the slot color ourselves (post-tonemap) via fsr_dispatch, then neutralize the
+//     engine AA to AA_NONE so it passthrough-blits our FSR result onward (docs/fsr.md).
+//   * else, force-SMAA-1x in stereo: drop T2X (mode 3) to SMAA 1x (mode 2) -- T2X's temporal resolve
+//     blends a single history shared across the two eye dispatches, so each eye ghosts the other.
+// Either way, restore the real mode afterwards so the engine's own state stays intact.
 #[detour(address = jc3gi::graphics_engine::post_effects::AntiAliasingEffect::Apply_ADDRESS)]
 fn anti_aliasing_apply(
     this: *mut AntiAliasingEffect,
@@ -83,21 +124,38 @@ fn anti_aliasing_apply(
     mgr: *mut c_void,
     slot: *mut u32,
 ) -> u64 {
-    let force_smaa_1x = stereo::active() && Config::lock_query(|c| c.stereo.force_smaa_1x);
-    let restore = unsafe {
-        if force_smaa_1x && (*this).m_Mode == AAMode::AA_SMAA_T2X {
-            (*this).m_Mode = AAMode::AA_SMAA;
-            true
-        } else {
-            false
+    let (force_smaa_1x, fsr) = Config::lock_query(|c| {
+        (
+            stereo::active() && c.stereo.force_smaa_1x,
+            c.fsr.enabled.then_some(c.fsr.sharpness),
+        )
+    });
+
+    // When FSR is on, resolve into the current slot ourselves, then let the engine AA run as a
+    // passthrough (AA_NONE blits the slot onward without filtering). FSR replaces SMAA, so its
+    // 1x-forcing is moot here.
+    let saved_mode = unsafe { (*this).m_Mode };
+    let mut restore = false;
+    if let Some(sharpness) = fsr {
+        // SAFETY: `slot` is a valid out-param holding the current chain slot index.
+        let slot_index = unsafe { *slot };
+        if fsr_dispatch(mgr, slot_index, sharpness) {
+            unsafe { (*this).m_Mode = AAMode::AA_NONE };
+            restore = true;
         }
-    };
+    } else if force_smaa_1x && saved_mode == AAMode::AA_SMAA_T2X {
+        // T2X's temporal resolve blends a single shared history across the two eye dispatches, so each
+        // eye ghosts the other; 1x carries no history.
+        unsafe { (*this).m_Mode = AAMode::AA_SMAA };
+        restore = true;
+    }
+
     let r = ANTI_ALIASING_APPLY
         .get()
         .unwrap()
         .call(this, ctx, pec, mgr, slot);
     if restore {
-        unsafe { (*this).m_Mode = AAMode::AA_SMAA_T2X };
+        unsafe { (*this).m_Mode = saved_mode };
     }
     r
 }

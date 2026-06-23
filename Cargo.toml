@@ -1,10 +1,11 @@
 [workspace]
-members = ["injector", "jc3gi", "payload"]
+members = ["injector", "jc3gi", "payload", "fsr-sys", "fsr-shadergen"]
 resolver = "3"
 default-members = ["injector"]
 
 [workspace.dependencies]
 anyhow = "1.0"
+cc = "1"
 glam = { version = "0.30.8", features = ["serde"] }
 
 windows = { version = "0.62", features = [

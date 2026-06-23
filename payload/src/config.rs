@@ -22,6 +22,7 @@ pub struct Config {
     pub exposure: ExposureConfig,
     pub post_fx: PostFxConfig,
     pub camera: CameraConfig,
+    pub fsr: FsrConfig,
 }
 impl Config {
     pub const fn new() -> Self {
@@ -30,6 +31,7 @@ impl Config {
             exposure: ExposureConfig::new(),
             post_fx: PostFxConfig::new(),
             camera: CameraConfig::new(),
+            fsr: FsrConfig::new(),
         }
     }
 
@@ -155,6 +157,39 @@ impl CameraConfig {
             use_eye_matrices: true,
             blurs_enabled: false,
             always_use_t1: false,
+        }
+    }
+}
+
+/// FSR anti-aliasing / upscaling settings. When `enabled`, FSR runs in place of the engine's SMAA
+/// (which is suppressed); off restores the engine AA. See `docs/fsr.md`.
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub struct FsrConfig {
+    /// Master switch: run FSR and suppress the engine AA. Off = engine SMAA as normal, FSR idle.
+    pub enabled: bool,
+    /// Apply the temporal sub-pixel jitter (camera projection + dispatch). FSR needs this to
+    /// reconstruct detail; without it FSR just blurs. A debug toggle to confirm the jitter's effect.
+    pub jitter: bool,
+    /// Optional RCAS sharpening strength (0..1); `None` disables the sharpening pass.
+    pub sharpness: Option<f32>,
+    /// Feed motion vectors to FSR. Off makes FSR reproject with zero motion (ghosts moving objects) --
+    /// a debug A/B to confirm the decode is helping.
+    pub motion_vectors: bool,
+    /// The sign/axis convention applied to the decoded UV motion before FSR. The decode math is now
+    /// RE-exact (see `docs/fsr.md`); only FSR's expected sign/Y direction is empirical -- a wrong sign
+    /// is visually obvious (trails point backwards). Defaults to `(1, -1)` (UV is Y-down; FSR's
+    /// convention TBD against on-screen motion).
+    pub mv_sign: (f32, f32),
+}
+impl FsrConfig {
+    pub const fn new() -> Self {
+        Self {
+            // Off by default until the integration is proven; toggled live for A/B against SMAA.
+            enabled: false,
+            jitter: true,
+            sharpness: None,
+            motion_vectors: true,
+            mv_sign: (1.0, -1.0),
         }
     }
 }
