@@ -10,7 +10,7 @@ use std::ffi::c_void;
 use detours_macro::detour;
 use jc3gi::graphics_engine::{
     post_effects::PostEffectContext,
-    tone_mapping::{SHistogramGeneration, ToneMappingEffect},
+    tone_mapping::{HistogramGeneration, ToneMappingEffect},
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -29,10 +29,10 @@ pub(super) fn extend(library: HookLibrary) -> HookLibrary {
         .with_static_binder(&DRAW_HISTOGRAM_WINDOW_BINDER)
 }
 
-// ToneMappingEffect::SSmoothedExposure::Update -- N-frame exposure smoother (no dt term, so it
+// ToneMappingEffect::SmoothedExposure::Update -- N-frame exposure smoother (no dt term, so it
 // double-adapts when the scene renders twice per frame). Skip on eye 1; both eyes then share the
 // first eye's exposure (which is what you want anyway -- no binocular rivalry).
-#[detour(address = jc3gi::graphics_engine::tone_mapping::SSmoothedExposure::Update_ADDRESS)]
+#[detour(address = jc3gi::graphics_engine::tone_mapping::SmoothedExposure::Update_ADDRESS)]
 fn smoothed_exposure_update(this: *mut c_void, exposure: f32) {
     let gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
     TraceState::record_eye(TraceEvent::SmoothedExposureUpdate { gated, exposure });
@@ -51,7 +51,7 @@ fn calc_histogram_mid_bright(
     arg1: f32,
     arg2: i32,
     arg3: f32,
-    hist: *mut SHistogramGeneration,
+    hist: *mut HistogramGeneration,
 ) {
     let gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
     TraceState::record_eye(TraceEvent::CalcHistogramMidBright { gated });

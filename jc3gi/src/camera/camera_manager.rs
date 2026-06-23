@@ -24,8 +24,8 @@ impl CameraManager {
 }
 impl CameraManager {
     pub const InitTransform_ADDRESS: usize = 0x14009D390;
-    /// Sets the active camera's transform, writing both T0 and T1 to `mat` (so the subsequent
-    /// interpolation is constant).
+    /// Sets the active camera's transform, writing both `m_TransformT0` and `m_TransformT1` from `mat`
+    /// so the subsequent interpolation holds it constant.
     pub unsafe fn InitTransform(&mut self, mat: *const crate::types::math::Matrix4) {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -36,7 +36,7 @@ impl CameraManager {
         }
     }
     pub const InitFOV_ADDRESS: usize = 0x14009D400;
-    /// Sets the active camera's field of view (both T0 and T1).
+    /// Sets the active camera's field of view, both the T0 and T1 values.
     pub unsafe fn InitFOV(&mut self, fov: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, fov: f32) = ::std::mem::transmute(
@@ -46,7 +46,7 @@ impl CameraManager {
         }
     }
     pub const GetRenderCamera_ADDRESS: usize = 0x14009D380;
-    /// Returns m_RenderCamera (the camera the render thread reads).
+    /// Returns the camera the render thread reads.
     pub unsafe fn GetRenderCamera(&self) -> *const crate::camera::camera::Camera {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -58,8 +58,9 @@ impl CameraManager {
         }
     }
     pub const UpdateRender_ADDRESS: usize = 0x1400D4000;
-    /// Sim-path per-frame update: iterates every camera in the manager's list and calls
-    /// Camera::UpdateRender on each. This is where m_ActiveCamera's m_View is produced for the frame.
+    /// The sim-path per-frame update: iterates every camera in the manager's list and calls
+    /// [`Camera::UpdateRender`] on each. This is where the active camera's `m_View` is produced for the
+    /// frame.
     pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32, dtf: f32) = ::std::mem::transmute(

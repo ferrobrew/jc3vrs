@@ -1,15 +1,12 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// Scaleform render-target binding. The UI's m_RenderBuffer points at one of these; UpdateData
-/// swaps the views it holds (RTV @ +0x20, DSV @ +0x28, depth buffer @ +0x08), refcounting them.
-/// Pointing it at an offscreen RTV redirects where the UI HAL renders. Not tied to startup, so the
-/// rebind can happen at any time.
+/// A Scaleform render-target binding. The UI's `m_RenderBuffer` points at one of these; pointing it
+/// at an offscreen render-target view redirects where the UI HAL renders. The rebind is not tied to
+/// startup, so it can happen at any time.
 pub struct RenderTargetData {}
 impl RenderTargetData {
     pub const UpdateData_ADDRESS: usize = 0x141DE0CF0;
-    /// Binds the views into this RenderTargetData (RTV @ +0x20, DSV @ +0x28, depth @ +0x08),
-    /// releasing the old ones and AddRef-ing the new. `self` is the inner RenderTargetData at
-    /// `*(render_buffer + 0x20)`.
+    /// Binds the views into this target, releasing the old ones and adding a reference to the new.
     pub unsafe fn UpdateData(
         &mut self,
         rtv: *mut ::std::ffi::c_void,
@@ -39,8 +36,8 @@ impl std::convert::AsMut<RenderTargetData> for RenderTargetData {
 }
 #[repr(u32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// Screen-position code returned by the UI world-to-screen / marker placement: 0 = on-screen, 1-8 =
-/// off-screen clamped edge/corner, 9 = off-screen in front (no clamp), 10 = off-screen behind.
+/// The screen-position code returned by the UI world-to-screen and marker placement: on-screen, an
+/// off-screen clamped edge or corner, off-screen in front (no clamp), or off-screen behind.
 pub enum ScreenPos {
     SCREEN_POS_ONSCREEN = 0isize as _,
     SCREEN_POS_OFFSCREEN_LEFT = 1isize as _,
@@ -61,14 +58,17 @@ fn _ScreenPos_size_check() {
     unreachable!()
 }
 #[repr(C, align(8))]
-/// Scaleform-backed UI manager (the concrete class behind IUIManager; a single instance). It renders
-/// the HUD into the engine surface; InitPlatformRT rebinds its render target.
+/// The Scaleform-backed UI manager, the single concrete instance behind `IUIManager`. It renders the
+/// HUD into the engine surface; [`InitPlatformRT`](UIManager::InitPlatformRT) rebinds its render
+/// target.
 pub struct UIManager {
     _field_0: [u8; 5008],
-    /// The Scaleform RenderBuffer the UI HAL renders into (set up by InitPlatformRT).
+    /// The Scaleform render buffer the UI HAL renders into, set up by
+    /// [`InitPlatformRT`](UIManager::InitPlatformRT).
     pub m_RenderBuffer: *mut ::std::ffi::c_void,
     _field_1398: [u8; 236],
-    /// Viewport width / height the world-to-screen mapping (Convert3DCoords) maps NDC into.
+    /// The viewport width that the world-to-screen mapping
+    /// ([`Convert3DCoords`](UIManager::Convert3DCoords)) maps NDC into.
     pub m_ViewWidth: f32,
     pub m_ViewHeight: f32,
     _field_148c: [u8; 4],
@@ -89,10 +89,9 @@ impl UIManager {
 }
 impl UIManager {
     pub const InitPlatformRT_ADDRESS: usize = 0x140F696E0;
-    /// Bind the UI render target: build a Scaleform RenderTargetData (m_RenderBuffer) from the
-    /// engine surface's RTV/DSV (GetRTVFromSurface / GetDSVFromSurface) via RenderTargetData::UpdateData.
-    /// Called at startup (InitializeSystem) and on every device/resolution reset (RestoreAfterReset);
-    /// `a2` carries the target dimensions.
+    /// Binds the UI render target: builds a [`RenderTargetData`] from the engine surface's
+    /// render-target and depth-stencil views via [`RenderTargetData::UpdateData`]. Called at startup
+    /// and on every device or resolution reset; `a2` carries the target dimensions.
     pub unsafe fn InitPlatformRT(&mut self, a2: i32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, a2: i32) = ::std::mem::transmute(
@@ -102,8 +101,8 @@ impl UIManager {
         }
     }
     pub const RestoreAfterReset_ADDRESS: usize = 0x140FA9C70;
-    /// Re-runs InitPlatformRT after a device/resolution reset (`a2` is the new width; the dimensions
-    /// otherwise track the engine surface).
+    /// Re-runs [`InitPlatformRT`](UIManager::InitPlatformRT) after a device or resolution reset (`a2`
+    /// is the new width; the dimensions otherwise track the engine surface).
     pub unsafe fn RestoreAfterReset(&mut self, a2: i32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, a2: i32) = ::std::mem::transmute(
@@ -113,8 +112,8 @@ impl UIManager {
         }
     }
     pub const Convert3DCoords_ADDRESS: usize = 0x140F69A70;
-    /// World-to-screen: project `world` through `vp`, divide by w, aspect-correct, and map NDC to
-    /// pixels (m_ViewWidth/Height). Returns false when the point is behind the camera.
+    /// World-to-screen: projects `world` through `vp`, divides by w, aspect-corrects, and maps NDC to
+    /// pixels. Returns false when the point is behind the camera.
     pub unsafe fn Convert3DCoords(
         &self,
         world: *const crate::types::math::Vector3,
@@ -134,8 +133,9 @@ impl UIManager {
         }
     }
     pub const Get2DInfo_ADDRESS: usize = 0x140F69CB0;
-    /// Marker placement: Convert3DCoords with the supplied `vp`, plus an on-screen test and an
-    /// off-screen edge-clamp (ClampToScreen). Gameplay markers route through here.
+    /// Marker placement: [`Convert3DCoords`](UIManager::Convert3DCoords) with the supplied `vp`, plus
+    /// an on-screen test and an off-screen edge-clamp via [`ClampToScreen`](UIManager::ClampToScreen).
+    /// Gameplay markers route through here.
     pub unsafe fn Get2DInfo(
         &self,
         world: *const crate::types::math::Vector3,
@@ -179,8 +179,8 @@ impl UIManager {
         }
     }
     pub const ClampToScreen_ADDRESS: usize = 0x140F470A0;
-    /// Clamp an off-screen point to the screen-rect edge/corner (atan2 against the corners) and set
-    /// the position code. Static.
+    /// Clamps an off-screen point to the screen-rect edge or corner and sets the position code.
+    /// Static.
     pub unsafe fn ClampToScreen(
         x: *mut f32,
         y: *mut f32,
@@ -204,7 +204,7 @@ impl UIManager {
         }
     }
     pub const StartRender_ADDRESS: usize = 0x140F1B030;
-    /// Begin the UI render job (post to the async render thread).
+    /// Begins the UI render job, posting to the async render thread.
     pub unsafe fn StartRender(
         &mut self,
         context: *const crate::graphics_engine::graphics_engine::HContext_t,
@@ -218,7 +218,7 @@ impl UIManager {
         }
     }
     pub const SyncRender_ADDRESS: usize = 0x140F1B0C0;
-    /// Barrier: spin-waits until the async UI render job has finished.
+    /// A barrier that spin-waits until the async UI render job has finished.
     pub unsafe fn SyncRender(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -228,7 +228,7 @@ impl UIManager {
         }
     }
     pub const Submit_ADDRESS: usize = 0x140F1B0D0;
-    /// Final commit: submit the render HAL's output under a graphics scoped lock.
+    /// The final commit: submits the render HAL's output under a graphics scoped lock.
     pub unsafe fn Submit(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -238,7 +238,7 @@ impl UIManager {
         }
     }
     pub const RenderStaticBackGround_ADDRESS: usize = 0x140F46C20;
-    /// Draws the pause / menu static background (vtable method).
+    /// Draws the pause / menu static background.
     pub unsafe fn RenderStaticBackGround(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -248,7 +248,7 @@ impl UIManager {
         }
     }
     pub const RenderOffScreenTextures_ADDRESS: usize = 0x1410076C0;
-    /// Renders Scaleform UI to offscreen textures for in-world screens (not the HUD; vtable method).
+    /// Renders Scaleform UI to offscreen textures for in-world screens. This is not the HUD.
     pub unsafe fn RenderOffScreenTextures(
         &mut self,
         ctx: *mut *mut crate::graphics_engine::graphics_engine::HContext_t,
@@ -262,7 +262,7 @@ impl UIManager {
         }
     }
     pub const IsUsingStaticBackGround_ADDRESS: usize = 0x140F1B4C0;
-    /// True when a static background is being shown.
+    /// Whether a static background is being shown.
     pub unsafe fn IsUsingStaticBackGround(&self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
@@ -283,7 +283,7 @@ impl std::convert::AsMut<UIManager> for UIManager {
     }
 }
 pub const GetIUIManager_ADDRESS: usize = 0x1400995A0;
-/// Returns the single UIManager instance (the concrete class behind IUIManager).
+/// Returns the single [`UIManager`] instance.
 pub unsafe fn GetIUIManager() -> *mut crate::ui::ui_manager::UIManager {
     unsafe {
         let f: unsafe extern "system" fn() -> *mut crate::ui::ui_manager::UIManager = ::std::mem::transmute(

@@ -1,10 +1,10 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// The camera arm/boom; the look delta rotates it.
+/// The camera arm, rotated by the look delta.
 pub struct BoomTransform {}
 impl BoomTransform {
     pub const DeltaTransform_ADDRESS: usize = 0x14043D180;
-    /// Apply a (yaw, pitch, roll) delta-angle to the boom.
+    /// Applies a `(yaw, pitch, roll)` delta-angle to the boom.
     pub unsafe fn DeltaTransform(&mut self, yaw: f32, pitch: f32, roll: f32) {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -28,20 +28,22 @@ impl std::convert::AsMut<BoomTransform> for BoomTransform {
     }
 }
 #[repr(C, align(8))]
+/// Converts the look effectors into a camera orbit delta-angle and applies it to the [`BoomTransform`]
+/// camera arm.
 pub struct InputToOrbitModifier {}
 impl InputToOrbitModifier {
     pub const CalculateInputDeltaAngles_ADDRESS: usize = 0x1406CB3F0;
-    /// Read the look effectors, combine them, apply per-axis sensitivity, and return the
-    /// delta-angle (yaw, pitch).
+    /// Reads the look effectors, combines them, applies per-axis sensitivity, and returns the
+    /// `(yaw, pitch)` delta-angle.
     pub unsafe fn CalculateInputDeltaAngles(
         &mut self,
-        params: *const crate::camera::input_to_orbit::SInputToOrbitModifierParams,
+        params: *const crate::camera::input_to_orbit::InputToOrbitModifierParams,
         pipeline: *mut crate::camera::camera_context::CameraPipelineContext,
     ) -> crate::types::math::Vector2 {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
-                params: *const crate::camera::input_to_orbit::SInputToOrbitModifierParams,
+                params: *const crate::camera::input_to_orbit::InputToOrbitModifierParams,
                 pipeline: *mut crate::camera::camera_context::CameraPipelineContext,
             ) -> crate::types::math::Vector2 = ::std::mem::transmute(
                 Self::CalculateInputDeltaAngles_ADDRESS,
@@ -50,8 +52,9 @@ impl InputToOrbitModifier {
         }
     }
     pub const ProcessCameraContext_ADDRESS: usize = 0x1406DBB80;
-    /// Caller of CalculateInputDeltaAngles: takes the returned delta-angle and applies it to the
-    /// camera via BoomTransform::DeltaTransform (the call is at +0x17D).
+    /// The caller of [`CalculateInputDeltaAngles`](InputToOrbitModifier::CalculateInputDeltaAngles):
+    /// takes the returned delta-angle and applies it to the camera via
+    /// [`BoomTransform::DeltaTransform`].
     pub unsafe fn ProcessCameraContext(
         &mut self,
         pipeline: *mut crate::camera::camera_context::CameraPipelineContext,
@@ -80,15 +83,15 @@ impl std::convert::AsMut<InputToOrbitModifier> for InputToOrbitModifier {
     }
 }
 #[repr(C, align(8))]
-pub struct SInputToOrbitModifierParams {}
-impl SInputToOrbitModifierParams {}
-impl std::convert::AsRef<SInputToOrbitModifierParams> for SInputToOrbitModifierParams {
-    fn as_ref(&self) -> &SInputToOrbitModifierParams {
+pub struct InputToOrbitModifierParams {}
+impl InputToOrbitModifierParams {}
+impl std::convert::AsRef<InputToOrbitModifierParams> for InputToOrbitModifierParams {
+    fn as_ref(&self) -> &InputToOrbitModifierParams {
         self
     }
 }
-impl std::convert::AsMut<SInputToOrbitModifierParams> for SInputToOrbitModifierParams {
-    fn as_mut(&mut self) -> &mut SInputToOrbitModifierParams {
+impl std::convert::AsMut<InputToOrbitModifierParams> for InputToOrbitModifierParams {
+    fn as_mut(&mut self) -> &mut InputToOrbitModifierParams {
         self
     }
 }

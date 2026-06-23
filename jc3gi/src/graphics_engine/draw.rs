@@ -1,8 +1,8 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// Primitive topology passed to the draw wrappers (Graphics::EPrimitiveType). Patchlists 0x21-0x24
-/// are tessellation control-point counts.
+/// The primitive topology passed to the draw wrappers. The patchlist variants are tessellation
+/// control-point counts.
 pub enum PrimitiveType {
     PRIMTYPE_POINTLIST = 1isize as _,
     PRIMTYPE_LINES = 2isize as _,
@@ -23,7 +23,7 @@ fn _PrimitiveType_size_check() {
     unreachable!()
 }
 pub const DrawIndexed_ADDRESS: usize = 0x141967720;
-/// Indexed draw (`Graphics::DrawIndexed`).
+/// An indexed draw.
 pub unsafe fn DrawIndexed(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     prim: crate::graphics_engine::draw::PrimitiveType,
@@ -45,7 +45,7 @@ pub unsafe fn DrawIndexed(
     }
 }
 pub const Draw_ADDRESS: usize = 0x141967680;
-/// Non-indexed draw (`Graphics::Draw`).
+/// A non-indexed draw.
 pub unsafe fn Draw(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     prim: crate::graphics_engine::draw::PrimitiveType,
@@ -63,7 +63,7 @@ pub unsafe fn Draw(
     }
 }
 pub const DrawInstanced_ADDRESS: usize = 0x141962F10;
-/// Instanced draw (`Graphics::DrawInstanced`).
+/// An instanced draw.
 pub unsafe fn DrawInstanced(
     a1: *mut ::std::ffi::c_void,
     a2: *mut ::std::ffi::c_void,
@@ -85,7 +85,7 @@ pub unsafe fn DrawInstanced(
     }
 }
 pub const DrawIndexedInstanced_ADDRESS: usize = 0x141962E80;
-/// Indexed instanced draw (`Graphics::DrawIndexedInstanced`).
+/// An indexed instanced draw.
 pub unsafe fn DrawIndexedInstanced(
     a1: *mut ::std::ffi::c_void,
     a2: *mut ::std::ffi::c_void,
@@ -107,7 +107,7 @@ pub unsafe fn DrawIndexedInstanced(
     }
 }
 pub const DrawInstancedIndirect_ADDRESS: usize = 0x141962CC0;
-/// GPU-driven instanced draw (`Graphics::DrawInstancedIndirect`).
+/// A GPU-driven instanced draw.
 pub unsafe fn DrawInstancedIndirect(
     a1: *mut ::std::ffi::c_void,
     a2: *mut ::std::ffi::c_void,
@@ -129,7 +129,7 @@ pub unsafe fn DrawInstancedIndirect(
     }
 }
 pub const DrawIndexedInstancedIndirect_ADDRESS: usize = 0x141963080;
-/// GPU-driven indexed instanced draw (`Graphics::DrawIndexedInstancedIndirect`).
+/// A GPU-driven indexed instanced draw.
 pub unsafe fn DrawIndexedInstancedIndirect(
     a1: *mut ::std::ffi::c_void,
     a2: *mut ::std::ffi::c_void,
@@ -151,7 +151,7 @@ pub unsafe fn DrawIndexedInstancedIndirect(
     }
 }
 pub const Dispatch_ADDRESS: usize = 0x141962AD0;
-/// Compute dispatch (`Graphics::Dispatch`).
+/// A compute dispatch.
 pub unsafe fn Dispatch(
     a1: *mut ::std::ffi::c_void,
     a2: *mut ::std::ffi::c_void,
@@ -173,7 +173,7 @@ pub unsafe fn Dispatch(
     }
 }
 pub const DispatchIndirect_ADDRESS: usize = 0x141962B60;
-/// GPU-driven compute dispatch (`Graphics::DispatchIndirect`).
+/// A GPU-driven compute dispatch.
 pub unsafe fn DispatchIndirect(
     a1: *mut ::std::ffi::c_void,
     a2: *mut ::std::ffi::c_void,
@@ -195,7 +195,7 @@ pub unsafe fn DispatchIndirect(
     }
 }
 pub const SetRenderSetup_ADDRESS: usize = 0x141966D20;
-/// Bind a render setup -- the render-target configuration a pass draws into.
+/// Binds a render setup, the render-target configuration a pass draws into.
 pub unsafe fn SetRenderSetup(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     setup: *mut ::std::ffi::c_void,
@@ -211,7 +211,7 @@ pub unsafe fn SetRenderSetup(
     }
 }
 pub const Clear_ADDRESS: usize = 0x141967020;
-/// Clear the currently-bound render setup (`color` is a 4-float RGBA pointer, may be null).
+/// Clears the currently-bound render setup. `color` is a 4-float RGBA pointer and may be null.
 pub unsafe fn Clear(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     flags: u32,
@@ -231,7 +231,7 @@ pub unsafe fn Clear(
     }
 }
 pub const CopySurfaceToTexture_ADDRESS: usize = 0x14195ABA0;
-/// Copy one surface into another texture.
+/// Copies one surface into another texture.
 pub unsafe fn CopySurfaceToTexture(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     dst: *mut ::std::ffi::c_void,
@@ -247,7 +247,7 @@ pub unsafe fn CopySurfaceToTexture(
     }
 }
 pub const ResolveSurface_ADDRESS: usize = 0x1419672B0;
-/// Resolve an MSAA surface.
+/// Resolves an MSAA surface.
 pub unsafe fn ResolveSurface(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     params: *mut ::std::ffi::c_void,
@@ -261,7 +261,7 @@ pub unsafe fn ResolveSurface(
     }
 }
 pub const GetRTVFromSurface_ADDRESS: usize = 0x141956240;
-/// Returns the surface's render-target view (`*(surface + 0x18)`).
+/// Returns the surface's render-target view.
 pub unsafe fn GetRTVFromSurface(
     surface: *mut ::std::ffi::c_void,
 ) -> *mut ::std::ffi::c_void {
@@ -273,7 +273,7 @@ pub unsafe fn GetRTVFromSurface(
     }
 }
 pub const GetDSVFromSurface_ADDRESS: usize = 0x141956250;
-/// Returns the surface's depth-stencil view (`*(surface + 0x20)`).
+/// Returns the surface's depth-stencil view.
 pub unsafe fn GetDSVFromSurface(
     surface: *mut ::std::ffi::c_void,
 ) -> *mut ::std::ffi::c_void {

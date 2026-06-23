@@ -1,7 +1,7 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// Anti-aliasing resolve mode (AntiAliasingEffect::m_Mode).
+/// Anti-aliasing resolve mode.
 pub enum AAMode {
     AA_NONE = 0isize as _,
     AA_FXAA_COMPUTE = 1isize as _,
@@ -16,8 +16,8 @@ fn _AAMode_size_check() {
     unreachable!()
 }
 #[repr(C, align(8))]
-/// Anti-aliasing resolve. `m_Mode`: 1/4 = FXAA, 2 = SMAA 1x, 3 = SMAA T2X. Mode 3 adds a temporal
-/// reprojection against a previous-frame history texture.
+/// The anti-aliasing resolve. [`AAMode::AA_SMAA_T2X`] additionally reprojects against a previous-frame
+/// history texture.
 pub struct AntiAliasingEffect {
     _field_0: [u8; 768],
     pub m_Mode: crate::graphics_engine::post_effects::AAMode,
@@ -51,8 +51,8 @@ impl AntiAliasingEffect {
         }
     }
     pub const ApplySubsampleJitter_ADDRESS: usize = 0x1400C7700;
-    /// Post-multiplies the sub-pixel clip-space jitter translation onto `proj`, but only when
-    /// m_Mode == 3 (SMAA T2X); the phase comes from the previous-frame counter parity.
+    /// Post-multiplies the sub-pixel clip-space jitter translation onto `proj`, only when the resolve
+    /// mode is [`AAMode::AA_SMAA_T2X`]. The phase comes from the previous-frame counter parity.
     pub unsafe fn ApplySubsampleJitter(
         &self,
         proj: *mut crate::types::math::Matrix4,
@@ -70,8 +70,8 @@ impl AntiAliasingEffect {
         }
     }
     pub const CreateRenderTargetResources_ADDRESS: usize = 0x1400A5E30;
-    /// Allocates the AA's render-target resources (the T2X history ping-pong textures and their
-    /// render setups) sized `width` x `height`.
+    /// Allocates the temporal history ping-pong textures and their render setups, sized `width` by
+    /// `height`.
     pub unsafe fn CreateRenderTargetResources(
         &mut self,
         mgr: *const crate::graphics_engine::post_effects::PostEffectsManager,
@@ -100,7 +100,7 @@ impl std::convert::AsMut<AntiAliasingEffect> for AntiAliasingEffect {
     }
 }
 #[repr(C, align(8))]
-/// Gaussian blur (the non-bokeh blur path).
+/// The Gaussian blur, used on the non-bokeh path.
 pub struct BlurEffect {}
 impl BlurEffect {
     pub const Apply_ADDRESS: usize = 0x1400BCB10;
@@ -132,7 +132,8 @@ impl std::convert::AsMut<BlurEffect> for BlurEffect {
     }
 }
 #[repr(C, align(8))]
-/// Bokeh blur (the IsBokehActive path; runs after DownScale2x2PackFocus).
+/// The bokeh blur, used when [`PostEffectsManager::IsBokehActive`]; runs after
+/// [`DownScale2x2PackFocus`].
 pub struct BlurEffectBokeh {}
 impl BlurEffectBokeh {
     pub const Apply_ADDRESS: usize = 0x1400A7870;
@@ -197,7 +198,7 @@ impl std::convert::AsMut<DepthOfFieldEffect> for DepthOfFieldEffect {
     }
 }
 #[repr(C, align(8))]
-/// Bokeh depth-of-field downscale prepass (2x2 pack + focus).
+/// The bokeh depth-of-field downscale prepass: a 2x2 pack plus focus.
 pub struct DownScale2x2PackFocus {}
 impl DownScale2x2PackFocus {
     pub const Apply_ADDRESS: usize = 0x1400C82E0;
@@ -229,7 +230,7 @@ impl std::convert::AsMut<DownScale2x2PackFocus> for DownScale2x2PackFocus {
     }
 }
 #[repr(C, align(8))]
-/// Alpha-blended fade quad over the scene.
+/// The alpha-blended fade quad over the scene.
 pub struct FadeEffect {}
 impl FadeEffect {
     pub const Apply_ADDRESS: usize = 0x1400A9570;
@@ -259,7 +260,7 @@ impl std::convert::AsMut<FadeEffect> for FadeEffect {
     }
 }
 #[repr(C, align(8))]
-/// Bloom / glare generator (writes its own scratch targets, composited later).
+/// The bloom / glare generator. Writes its own scratch targets, composited later.
 pub struct GlareEffect {}
 impl GlareEffect {
     pub const Apply_ADDRESS: usize = 0x1400AA510;
@@ -332,7 +333,7 @@ impl std::convert::AsMut<MotionBlurEffect> for MotionBlurEffect {
     }
 }
 #[repr(C, align(8))]
-/// Red damage vignette. Slot-passthrough (returns the input slot index).
+/// The red damage vignette. Returns the input slot index unchanged.
 pub struct PlayerDamageEffect {}
 impl PlayerDamageEffect {
     pub const Apply_ADDRESS: usize = 0x1400F76E0;
@@ -369,8 +370,8 @@ impl std::convert::AsMut<PlayerDamageEffect> for PlayerDamageEffect {
 pub struct PostEffectContext {
     pub m_RenderContext: *mut crate::graphics_engine::post_effects::PostEffectRenderContext,
     _field_8: [u8; 148],
-    /// The auto-exposure target numerator ("key"): ToneMappingEffect::Update sets the exposure target
-    /// to this divided by the raw-brightness histogram mid-point.
+    /// The auto-exposure target numerator. [`ToneMappingEffect::Update`] sets the exposure target to
+    /// this divided by the raw-brightness histogram mid-point.
     pub m_AutoExposureKey: f32,
 }
 fn _PostEffectContext_size_check() {
@@ -415,8 +416,8 @@ impl std::convert::AsMut<PostEffectRenderContext> for PostEffectRenderContext {
 }
 bitflags::bitflags! {
     #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] #[doc =
-    " Per-frame render-context flags."] pub struct PostEffectRenderFlags : u8 { const
-    m_MotionVectorReprojection = 1usize as _; }
+    " Per-frame render-context flags carried by a [`PostEffectRenderContext`]."] pub
+    struct PostEffectRenderFlags : u8 { const m_MotionVectorReprojection = 1usize as _; }
 }
 fn _PostEffectRenderFlags_size_check() {
     unsafe {
@@ -428,9 +429,9 @@ fn _PostEffectRenderFlags_size_check() {
 pub struct PostEffectsManager {}
 impl PostEffectsManager {
     pub const ApplyWorldFilters_ADDRESS: usize = 0x14014BFE0;
-    /// Wires up and enqueues the world post-effect block, then runs the world fade accumulator
-    /// (ApplyWorldFadeFilter). `dt` flows only into that accumulator; the texture arguments are
-    /// the scene inputs.
+    /// Enqueues the world post-effect block, then steps the world fade accumulator
+    /// ([`ApplyWorldFadeFilter`](PostEffectsManager::ApplyWorldFadeFilter)). `dt` flows only into
+    /// that accumulator; the texture arguments are the scene inputs.
     pub unsafe fn ApplyWorldFilters(
         &mut self,
         dt: f32,
@@ -456,8 +457,8 @@ impl PostEffectsManager {
         }
     }
     pub const ApplyGlobalFilters_ADDRESS: usize = 0x14014C0C0;
-    /// Enqueues the global post-effect block and advances its dt-driven accumulators: the screen
-    /// fade alpha (clamped [0,1]) and the sun-direction / heat-haze accumulator.
+    /// Enqueues the global post-effect block and advances its `dt`-driven accumulators: the screen
+    /// fade alpha and the sun-direction / heat-haze accumulator.
     pub unsafe fn ApplyGlobalFilters(
         &mut self,
         dt: f32,
@@ -473,7 +474,7 @@ impl PostEffectsManager {
         }
     }
     pub const ApplyWorldFadeFilter_ADDRESS: usize = 0x1400F9BD0;
-    /// The world fade accumulator stepped by ApplyWorldFilters' dt.
+    /// Steps the world fade accumulator.
     pub unsafe fn ApplyWorldFadeFilter(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
@@ -483,8 +484,8 @@ impl PostEffectsManager {
         }
     }
     pub const IsBokehActive_ADDRESS: usize = 0x1400A0270;
-    /// True when the bokeh depth-of-field path is active (selects the downscale + bokeh blur over
-    /// the plain blur).
+    /// Whether the bokeh depth-of-field path is active, selecting the downscale plus bokeh blur over
+    /// the plain [`BlurEffect`].
     pub unsafe fn IsBokehActive(&self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
@@ -494,7 +495,7 @@ impl PostEffectsManager {
         }
     }
     pub const IsMotionBlurActive_ADDRESS: usize = 0x1400FA3E0;
-    /// True when motion blur is active.
+    /// Whether motion blur is active.
     pub unsafe fn IsMotionBlurActive(&self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
@@ -504,7 +505,8 @@ impl PostEffectsManager {
         }
     }
     pub const ApplySubsampleJitter_ADDRESS: usize = 0x1400FA050;
-    /// Post-multiplies the AA's sub-pixel TAA jitter onto `proj` (effective only at AA mode 3).
+    /// Post-multiplies the temporal sub-pixel jitter onto `proj`. Effective only when the resolve mode
+    /// is [`AAMode::AA_SMAA_T2X`].
     pub unsafe fn ApplySubsampleJitter(
         &self,
         proj: *mut crate::types::math::Matrix4,
@@ -533,25 +535,27 @@ impl std::convert::AsMut<PostEffectsManager> for PostEffectsManager {
     }
 }
 #[repr(C, align(8))]
-/// The render block for the RP_POSTEFFECTS pass. Its Draw runs the HDR post chain in order:
-/// histogram generation, sun-halo pre-apply, blur (bokeh or plain), glare, depth of field, motion
-/// blur, the HDR->LDR tonemap (DrawHistogramWindow), player-damage vignette, anti-aliasing, sun
-/// halo + additive blend, and the final fade. It threads a single result-texture slot index through
-/// the slot-returning effects (DoF / motion blur / damage / AA), hopping between the three
-/// fullscreen temp textures. `ctx` is RenderContext*; `info` is a CRBIInfo*.
+/// The render block for the post-effects pass. Its [`Draw`](RenderBlockPostEffects::Draw) runs the
+/// HDR post chain in order: histogram generation, sun-halo pre-apply, blur (bokeh or plain), glare,
+/// depth of field, motion blur, the HDR-to-LDR tonemap, the player-damage vignette, anti-aliasing,
+/// sun halo, and the final fade.
+///
+/// It threads a single result-texture slot index through the slot-returning effects
+/// ([`DepthOfFieldEffect`], [`MotionBlurEffect`], [`PlayerDamageEffect`], [`AntiAliasingEffect`]),
+/// hopping between the three fullscreen temp textures.
 pub struct RenderBlockPostEffects {}
 impl RenderBlockPostEffects {
     pub const Draw_ADDRESS: usize = 0x14016A260;
     pub unsafe fn Draw(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
-        info: *const ::std::ffi::c_void,
+        info: *const crate::graphics_engine::render_pass::RBIInfo,
     ) -> u64 {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
                 ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
-                info: *const ::std::ffi::c_void,
+                info: *const crate::graphics_engine::render_pass::RBIInfo,
             ) -> u64 = ::std::mem::transmute(Self::Draw_ADDRESS);
             f(self as *mut Self as _, ctx, info)
         }
@@ -568,7 +572,8 @@ impl std::convert::AsMut<RenderBlockPostEffects> for RenderBlockPostEffects {
     }
 }
 #[repr(C, align(8))]
-/// Sun halo. PreApply prepares and sets the ready flag (byte at +0x114); Apply composites it.
+/// The sun halo. [`PreApply`](SunHaloEffect::PreApply) prepares it and sets the ready flag;
+/// [`Apply`](SunHaloEffect::Apply) composites it.
 pub struct SunHaloEffect {}
 impl SunHaloEffect {
     pub const PreApply_ADDRESS: usize = 0x140118450;

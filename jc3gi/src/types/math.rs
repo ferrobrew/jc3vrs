@@ -23,14 +23,17 @@ impl std::convert::AsMut<Matrix3> for Matrix3 {
 }
 #[derive(Copy, Clone, Default)]
 #[repr(C, align(4))]
-/// `CMatrix4f` -- the engine's 4x4 matrix. D3D convention: row-major storage, row vectors (a point
-/// is a row vector left-multiplied by the matrix: `clip = p * M`). The 16 floats are 4 rows; a
-/// world/camera transform's rows are its basis vectors: `data[0..2]` = right (+X), `data[4..6]` =
-/// up (+Y), `data[8..10]` = +Z basis (so forward = `-data[8..10]`), `data[12..14]` = translation.
-/// Right-handed, Y-up. The glam conversions below bridge to glam's column-vector convention by
-/// transposing (row-major rows become glam columns), so glam matrix math on a converted `Matrix4`
-/// works without an explicit transpose; to build an engine transform in glam, set the basis
-/// vectors as the glam COLUMNS (right, up, -forward, translation) and use `to_cols_array`.
+/// The engine's 4x4 matrix, in the D3D convention: row-major storage with row vectors (a point is a
+/// row vector left-multiplied by the matrix, `clip = p * M`).
+///
+/// The 16 floats are four rows; a world or camera transform's rows are its basis vectors:
+/// `data[0..2]` is right (+X), `data[4..6]` is up (+Y), `data[8..10]` is the +Z basis (so forward is
+/// `-data[8..10]`), and `data[12..14]` is the translation. Right-handed, Y-up.
+///
+/// The glam conversions below bridge to glam's column-vector convention by transposing (row-major rows
+/// become glam columns), so glam matrix math on a converted [`Matrix4`] works without an explicit
+/// transpose. To build an engine transform in glam, set the basis vectors as the glam *columns*
+/// (right, up, -forward, translation) and use `to_cols_array`.
 pub struct Matrix4 {
     pub data: [f32; 16],
 }
@@ -42,9 +45,9 @@ fn _Matrix4_size_check() {
 }
 impl Matrix4 {
     pub const Multiply4x4_ADDRESS: usize = 0x140034530;
-    /// `CMatrix4f::Multiply4x4` -- the engine's 4x4 product, `result = a * b` (row-major: result
-    /// row i = a's row i times b). E.g. `Multiply4x4(View, Proj, ViewProjection)` gives
-    /// `VP = View * Proj` and `clip = p * View * Proj`. Static (no `this`).
+    /// The engine's 4x4 product, `result = a * b` (row-major: result row `i` is `a`'s row `i` times
+    /// `b`). For example, `Multiply4x4(View, Proj, ViewProjection)` gives `VP = View * Proj` and
+    /// `clip = p * View * Proj`. Static.
     pub unsafe fn Multiply4x4(
         a: *const crate::types::math::Matrix4,
         b: *const crate::types::math::Matrix4,

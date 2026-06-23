@@ -145,7 +145,7 @@ for CameraEnvironmentPresetWeights {
     }
 }
 #[repr(C, align(8))]
-/// The per-frame camera pipeline context (opaque).
+/// The opaque per-frame camera pipeline context.
 pub struct CameraPipelineContext {}
 impl CameraPipelineContext {}
 impl std::convert::AsRef<CameraPipelineContext> for CameraPipelineContext {

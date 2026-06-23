@@ -1,10 +1,9 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// Action ID, indexing the static action-name-to-ID table (action_name_table at 0x142_D99_370).
-/// 255 actions (PAUSE..GUI_USE_BUTTON); the numbering is fixed at build time, so IDs can be
-/// hardcoded. The engine takes a raw int for these, and this enum is repr-int, so it transmutes
-/// cleanly into the action_id / action parameters.
+/// An action ID, indexing [`action_name_table`]. The numbering is fixed at build time, so action IDs
+/// can be hardcoded. The engine takes a raw int, and this enum is int-repr, so it converts cleanly
+/// into the action parameters.
 pub enum Action {
     PAUSE = 0isize as _,
     LOOK_UP = 1isize as _,
@@ -270,7 +269,7 @@ fn _Action_size_check() {
 }
 #[repr(u32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// Digital state of an InputDeviceEffector (the m_State enum). IsSet/IsPressed are state in {2, 3}.
+/// The digital state of an [`InputDeviceEffector`].
 pub enum EffectorState {
     Idle = 0isize as _,
     Idle2 = 1isize as _,
@@ -286,7 +285,7 @@ fn _EffectorState_size_check() {
     unreachable!()
 }
 #[repr(C, align(8))]
-/// Maps action IDs to effector slots (255 action IDs total).
+/// Maps action IDs to effector slots.
 pub struct InputActionMap {}
 impl InputActionMap {
     pub const GetActionEffector_ADDRESS: usize = 0x1402F43B0;
@@ -318,17 +317,22 @@ impl std::convert::AsMut<InputActionMap> for InputActionMap {
     }
 }
 #[repr(C, align(4))]
-/// One input effector slot. Layout from the debug PDB (Input::InputDeviceEffector, 0x14),
-/// cross-checked against retail usage (m_Value@0, m_State@8, m_StateTime@0x10 all match). The
-/// pointer GetActionEffector returns is the head of a linked-list node whose extra id/next fields
-/// follow this struct; reading the effector itself uses these offsets.
+/// One input effector slot. The pointer [`InputActionMap::GetActionEffector`] returns is the head of a
+/// linked-list node whose extra id / next fields follow this struct; reading the effector itself uses
+/// only these fields.
+///
+/// **Provenance:** the layout is from the debug PDB, cross-checked against retail usage (`m_Value`,
+/// `m_State`, and `m_StateTime` offsets all match).
 pub struct InputDeviceEffector {
+    /// The analog value, e.g. trigger pressure or stick axis. [`Click`](InputDeviceEffector::Click)
+    /// sets it to `1.0`.
     pub m_Value: f32,
     pub m_PrevValue: f32,
     pub m_State: crate::input::input_action_map::EffectorState,
     pub m_IsAnalogue: bool,
     pub m_IsDeltaBased: bool,
     pub m_IsUpdated: bool,
+    /// Injects a click that survives the next device poll.
     pub m_ForceClick: bool,
     pub m_StateTime: f32,
 }
@@ -340,7 +344,8 @@ fn _InputDeviceEffector_size_check() {
 }
 impl InputDeviceEffector {
     pub const Click_ADDRESS: usize = 0x1402EE630;
-    /// Sets m_Value to 1.0 and m_State to Clicked (a one-frame press edge).
+    /// Drives a one-frame press edge: sets `m_Value` to `1.0` and the state to
+    /// [`EffectorState::Clicked`].
     pub unsafe fn Click(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -350,7 +355,7 @@ impl InputDeviceEffector {
         }
     }
     pub const Press_ADDRESS: usize = 0x1402EE660;
-    /// Sets m_Value and m_State to Pressed/Held.
+    /// Sets `m_Value` and drives the [`EffectorState::Pressed`] state.
     pub unsafe fn Press(&mut self, value: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, value: f32) = ::std::mem::transmute(
@@ -360,7 +365,7 @@ impl InputDeviceEffector {
         }
     }
     pub const Freeze_ADDRESS: usize = 0x1402EE6B0;
-    /// Latches the effector into the Frozen state (ignores the device poll until cleared).
+    /// Latches into [`EffectorState::Frozen`], ignoring the device poll until cleared.
     pub unsafe fn Freeze(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -370,7 +375,7 @@ impl InputDeviceEffector {
         }
     }
     pub const ForceClick_ADDRESS: usize = 0x1402EE6D0;
-    /// Sets m_ForceClick so the click survives the next per-frame poll (UpdateForceClicks consumes it).
+    /// Sets `m_ForceClick` so the click survives the next per-frame poll.
     pub unsafe fn ForceClick(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -391,10 +396,8 @@ impl std::convert::AsMut<InputDeviceEffector> for InputDeviceEffector {
     }
 }
 #[repr(C, align(8))]
-/// The local player's action map: a write-side wrapper that drives effectors by action ID. The
-/// global at 0x142_F38_740 holds the instance pointer. Invalid action IDs resolve to a shared
-/// null-effector sentinel, which the setters guard against. Action-name-to-ID is a static table
-/// (action_name_table), so action IDs are stable across builds and can be referenced directly.
+/// The local player's action map: a write-side wrapper that drives effectors by [`Action`]. Invalid
+/// action IDs resolve to a shared null-effector sentinel, which the setters guard against.
 pub struct LocalPlayerActionMap {}
 impl LocalPlayerActionMap {
     pub unsafe fn get() -> Option<&'static mut Self> {
@@ -406,7 +409,7 @@ impl LocalPlayerActionMap {
 }
 impl LocalPlayerActionMap {
     pub const ForceSetPressed_ADDRESS: usize = 0x140C124B0;
-    /// Drives an analog / held action: sets the effector's value (and presses it).
+    /// Drives an analog or held action: sets the effector's value and presses it.
     pub unsafe fn ForceSetPressed(
         &mut self,
         action: crate::input::input_action_map::Action,
@@ -422,7 +425,7 @@ impl LocalPlayerActionMap {
         }
     }
     pub const ForceSetClicked_ADDRESS: usize = 0x140C12480;
-    /// Drives a one-frame click for an action (a press edge that survives the poll).
+    /// Drives a one-frame click for an action: a press edge that survives the poll.
     pub unsafe fn ForceSetClicked(
         &mut self,
         action: crate::input::input_action_map::Action,

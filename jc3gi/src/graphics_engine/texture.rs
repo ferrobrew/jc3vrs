@@ -14,7 +14,7 @@ pub struct Texture {
     pub m_Width: u16,
     pub m_Height: u16,
     _field_34: [u8; 8],
-    /// DXGI_FORMAT (e.g. 28 = R8G8B8A8_UNORM).
+    /// The `DXGI_FORMAT` value.
     pub m_Format: u32,
     _field_40: [u8; 24],
 }

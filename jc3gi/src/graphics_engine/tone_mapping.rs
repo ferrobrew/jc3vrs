@@ -1,38 +1,39 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// Per-frame brightness histogram used for eye adaptation. Embedded in ToneMappingEffect at +8; its
-/// occlusion-query bucket counts are what the exposure read-back consumes.
-pub struct SHistogramGeneration {
+/// A per-frame brightness histogram used for eye adaptation. Its occlusion-query bucket counts are
+/// what the exposure read-back consumes.
+pub struct HistogramGeneration {
     _field_0: [u8; 400],
-    /// Per-bucket pixel counts: one occlusion query per bucket counting samples whose luminance is
-    /// at or above the bucket's threshold. Only the first m_NumBuckets entries are live.
+    /// The per-bucket pixel counts: one occlusion query per bucket, counting samples whose luminance
+    /// is at or above the bucket's threshold. Only the first `m_NumBuckets` entries are live.
     pub m_NumPixelsInBuckets: [u32; 64],
-    /// Bright-point computed from the buckets; drives the exposure target.
+    /// The bright-point computed from the buckets, driving the exposure target.
     pub m_HistogramBrightPoint: f32,
-    /// Mid-point computed from the buckets.
+    /// The mid-point computed from the buckets.
     pub m_HistogramMidPoint: f32,
 }
-fn _SHistogramGeneration_size_check() {
+fn _HistogramGeneration_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x298], SHistogramGeneration>([0u8; 0x298]);
+        ::std::mem::transmute::<[u8; 0x298], HistogramGeneration>([0u8; 0x298]);
     }
     unreachable!()
 }
-impl SHistogramGeneration {}
-impl std::convert::AsRef<SHistogramGeneration> for SHistogramGeneration {
-    fn as_ref(&self) -> &SHistogramGeneration {
+impl HistogramGeneration {}
+impl std::convert::AsRef<HistogramGeneration> for HistogramGeneration {
+    fn as_ref(&self) -> &HistogramGeneration {
         self
     }
 }
-impl std::convert::AsMut<SHistogramGeneration> for SHistogramGeneration {
-    fn as_mut(&mut self) -> &mut SHistogramGeneration {
+impl std::convert::AsMut<HistogramGeneration> for HistogramGeneration {
+    fn as_mut(&mut self) -> &mut HistogramGeneration {
         self
     }
 }
 #[repr(C, align(8))]
-/// N-frame exposure smoother (a ring-buffer average; advances once per render, with no dt term).
-pub struct SSmoothedExposure {}
-impl SSmoothedExposure {
+/// An N-frame exposure smoother: a ring-buffer average that advances once per render, with no `dt`
+/// term.
+pub struct SmoothedExposure {}
+impl SmoothedExposure {
     pub const Update_ADDRESS: usize = 0x1400F8200;
     pub unsafe fn Update(&mut self, exposure: f32) {
         unsafe {
@@ -43,35 +44,39 @@ impl SSmoothedExposure {
         }
     }
 }
-impl std::convert::AsRef<SSmoothedExposure> for SSmoothedExposure {
-    fn as_ref(&self) -> &SSmoothedExposure {
+impl std::convert::AsRef<SmoothedExposure> for SmoothedExposure {
+    fn as_ref(&self) -> &SmoothedExposure {
         self
     }
 }
-impl std::convert::AsMut<SSmoothedExposure> for SSmoothedExposure {
-    fn as_mut(&mut self) -> &mut SSmoothedExposure {
+impl std::convert::AsMut<SmoothedExposure> for SmoothedExposure {
+    fn as_mut(&mut self) -> &mut SmoothedExposure {
         self
     }
 }
 #[repr(C, align(8))]
-/// HDR tone-mapping / auto-exposure (eye adaptation).
+/// HDR tone-mapping and auto-exposure (eye adaptation).
 pub struct ToneMappingEffect {
     _field_0: [u8; 8],
-    /// The exposure histogram: CalculateMidAndBrightPointForHistogram fills it, Update reads it.
-    pub m_Histogram: crate::graphics_engine::tone_mapping::SHistogramGeneration,
-    /// Ping-pong selector for the exposure-weighted histogram metering, flipped each frame by Update.
+    /// The exposure-weighted histogram, filled by
+    /// [`CalculateMidAndBrightPointForHistogram`] and read by [`Update`](ToneMappingEffect::Update).
+    pub m_Histogram: crate::graphics_engine::tone_mapping::HistogramGeneration,
+    /// The ping-pong selector for the exposure-weighted histogram metering, flipped each frame by
+    /// [`Update`](ToneMappingEffect::Update).
     pub m_HistogramPingPong: u32,
     _field_2a4: [u8; 4],
-    /// A second histogram, processed by Update's second CalculateMidAndBrightPointForHistogram call.
-    /// Its m_HistogramMidPoint is the divisor of the auto-exposure target (target = key / midpoint),
-    /// so this -- not m_Histogram -- is what the converged m_CurrentExposure actually tracks.
-    pub m_Histogram2: crate::graphics_engine::tone_mapping::SHistogramGeneration,
+    /// The second histogram, metering raw scene brightness. Its `m_HistogramMidPoint` is the divisor
+    /// of the auto-exposure target (`target = key / midpoint`), so this -- not `m_Histogram` -- is
+    /// what the converged `m_CurrentExposure` actually tracks.
+    pub m_Histogram2: crate::graphics_engine::tone_mapping::HistogramGeneration,
     _field_540: [u8; 56],
     /// The active histogram bucket count.
     pub m_NumBuckets: u32,
     _field_57c: [u8; 1652],
-    /// The current clamped/smoothed auto-exposure multiplier. Written by Update once per frame and
-    /// read back into the next frame's GenerateHistogramForFinalScene metering (the feedback loop).
+    /// The current clamped, smoothed auto-exposure multiplier. Written once per frame by
+    /// [`Update`](ToneMappingEffect::Update) and read back into the next frame's
+    /// [`GenerateHistogramForFinalScene`](ToneMappingEffect::GenerateHistogramForFinalScene) metering,
+    /// closing the feedback loop.
     pub m_CurrentExposure: f32,
     _field_bf4: [u8; 4],
 }
@@ -83,11 +88,10 @@ fn _ToneMappingEffect_size_check() {
 }
 impl ToneMappingEffect {
     pub const GenerateHistogramForFinalScene_ADDRESS: usize = 0x140119440;
-    /// Builds the auto-exposure histogram for the final scene and writes the current histogram slot
-    /// indices to a6 / a7 (out-params); returns a7. Meters luminance through a
-    /// "LuminanceToDepthWithExposure" shader fed the previous frame's m_CurrentExposure as a
-    /// constant, so metering is exposure-weighted -- the histogram feeds back into the exposure that
-    /// weights the next frame's metering (via CalculateMidAndBrightPointForHistogram and Update).
+    /// Builds the auto-exposure histogram for the final scene, writes the current histogram slot
+    /// indices through `a6` and `a7`, and returns `a7`. Meters luminance through a shader fed the
+    /// previous frame's `m_CurrentExposure`, so metering is exposure-weighted -- the histogram feeds
+    /// back into the exposure that weights the next frame's metering.
     pub unsafe fn GenerateHistogramForFinalScene(
         &mut self,
         ctx: *mut ::std::ffi::c_void,
@@ -113,10 +117,11 @@ impl ToneMappingEffect {
         }
     }
     pub const DrawHistogramWindow_ADDRESS: usize = 0x1401198F0;
-    /// Meters the second, NON-exposure-weighted scene-luminance histogram (m_Histogram2) -- it calls
-    /// PopulateHistogram with a fixed exposure of 1.0, so it measures raw scene brightness, which is
-    /// the value Update divides the auto-exposure target by. Runs once per dispatch in the post chain,
-    /// like GenerateHistogramForFinalScene (which meters the exposure-weighted m_Histogram).
+    /// Meters the second, non-exposure-weighted scene-luminance histogram (`m_Histogram2`) at a fixed
+    /// exposure of `1.0`, so it measures raw scene brightness -- the value
+    /// [`Update`](ToneMappingEffect::Update) divides the auto-exposure target by. Runs once per
+    /// dispatch in the post chain, like
+    /// [`GenerateHistogramForFinalScene`](ToneMappingEffect::GenerateHistogramForFinalScene).
     pub unsafe fn DrawHistogramWindow(
         &self,
         ctx: *mut ::std::ffi::c_void,
@@ -136,10 +141,9 @@ impl ToneMappingEffect {
         }
     }
     pub const Update_ADDRESS: usize = 0x140119560;
-    /// The per-frame eye-adaptation step: runs CalculateMidAndBrightPointForHistogram over both
-    /// histograms, then writes the new m_CurrentExposure (target = ctx.m_AutoExposureKey /
-    /// m_Histogram2 midpoint, clamped, then adapted). Runs once per real frame from
-    /// CPostEffectsManager::UpdateRender.
+    /// The per-frame eye-adaptation step: runs [`CalculateMidAndBrightPointForHistogram`] over both
+    /// histograms, then writes the new `m_CurrentExposure` (the target is `m_AutoExposureKey` over the
+    /// `m_Histogram2` mid-point, clamped, then adapted). Runs once per real frame.
     pub unsafe fn Update(
         &mut self,
         manager: *mut ::std::ffi::c_void,
@@ -166,14 +170,13 @@ impl std::convert::AsMut<ToneMappingEffect> for ToneMappingEffect {
     }
 }
 pub const CalculateMidAndBrightPointForHistogram_ADDRESS: usize = 0x1400F8BF0;
-/// Computes the histogram mid / bright points (the per-frame eye-adaptation lerp). Free function;
-/// `hist` is the target SHistogramGeneration.
+/// Computes the histogram mid and bright points, the per-frame eye-adaptation lerp.
 unsafe fn CalculateMidAndBrightPointForHistogram(
     ctx: *mut ::std::ffi::c_void,
     arg1: f32,
     arg2: i32,
     arg3: f32,
-    hist: *mut crate::graphics_engine::tone_mapping::SHistogramGeneration,
+    hist: *mut crate::graphics_engine::tone_mapping::HistogramGeneration,
 ) {
     unsafe {
         let f: unsafe extern "system" fn(
@@ -181,7 +184,7 @@ unsafe fn CalculateMidAndBrightPointForHistogram(
             arg1: f32,
             arg2: i32,
             arg3: f32,
-            hist: *mut crate::graphics_engine::tone_mapping::SHistogramGeneration,
+            hist: *mut crate::graphics_engine::tone_mapping::HistogramGeneration,
         ) = ::std::mem::transmute(CalculateMidAndBrightPointForHistogram_ADDRESS);
         f(ctx, arg1, arg2, arg3, hist)
     }

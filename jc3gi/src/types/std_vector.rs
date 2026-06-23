@@ -1,10 +1,10 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// A `std::vector<T>` (MSVC layout): the `_Myfirst` / `_Mylast` / `_Myend` pointers. This build's
-/// vectors measure 0x20 -- a trailing allocator pointer beyond the three -- so the type is sized to
-/// match (e.g. when used as a fixed array element).
+/// A `std::vector<T>` in the MSVC layout: the `_Myfirst` / `_Mylast` / `_Myend` pointers. This build's
+/// vectors carry a trailing allocator pointer beyond the three, so the type is sized to match (e.g.
+/// when used as a fixed-array element).
 pub struct Vector<T> {
-    /// `_Myfirst`: start of the element array.
+    /// `_Myfirst`: the start of the element array.
     pub begin: *mut T,
     /// `_Mylast`: one past the last live element.
     pub end: *mut T,

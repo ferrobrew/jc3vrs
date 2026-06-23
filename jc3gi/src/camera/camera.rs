@@ -52,8 +52,8 @@ fn _Camera_size_check() {
 }
 impl Camera {
     pub const UpdateRender_ADDRESS: usize = 0x1400C3020;
-    /// Per-frame camera update: snapshots the previous view-projection, Lerps the transform between
-    /// T0 and T1 by `dtf`, and recalculates projection and frustum.
+    /// The per-frame camera update: snapshots the previous view-projection, lerps the transform from
+    /// `m_TransformT0` to `m_TransformT1` by `dtf`, and recalculates the projection and frustum.
     pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32, dtf: f32) = ::std::mem::transmute(
@@ -63,9 +63,10 @@ impl Camera {
         }
     }
     pub const SetupRenderCamera_ADDRESS: usize = 0x1400B3B80;
-    /// Builds the render-camera matrices once per Draw: applies reverse-Z and TAA jitter to the
-    /// projection, then rebuilds m_ViewProjection / m_ViewProjectionF from m_View. One-shot per
-    /// camera via the m_IsRenderCamera flag (0x20). Returns the last matrix-copy destination.
+    /// Builds the render-camera matrices once per draw: applies reverse-Z and the TAA jitter to the
+    /// projection, then rebuilds `m_ViewProjection` and `m_ViewProjectionF` from `m_View`. Runs at most
+    /// once per camera, guarded by the `m_IsRenderCamera` flag. Returns the last matrix-copy
+    /// destination.
     pub unsafe fn SetupRenderCamera(&mut self, jitter: bool) -> *mut ::std::ffi::c_void {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -78,8 +79,9 @@ impl Camera {
         }
     }
     pub const SetComputeView_ADDRESS: usize = 0x14009BDB0;
-    /// Sets (or clears) the m_ComputeView flag bit (0x08). When set, UpdateRender re-derives
-    /// m_View as Inverse(m_TransformF) each frame instead of reading a supplied view matrix.
+    /// Sets or clears the `m_ComputeView` flag. When set, [`UpdateRender`](Camera::UpdateRender)
+    /// re-derives `m_View` as the inverse of `m_TransformF` each frame instead of reading a supplied
+    /// view matrix.
     pub unsafe fn SetComputeView(&mut self, enable: bool) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, enable: bool) = ::std::mem::transmute(
@@ -89,10 +91,9 @@ impl Camera {
         }
     }
     pub const RecalcProjection_ADDRESS: usize = 0x1400B24F0;
-    /// Rebuilds m_Projection from the FOV / near / far / aspect parameters (PerspectiveFov,
-    /// PerspectiveOffCenter or Ortho per the m_UseOffCenter / m_Ortho flags), clears
-    /// m_DirtyProjection, and applies the reverse-Z remap (z' = w - z) only when m_IsRenderCamera
-    /// (0x20) is set.
+    /// Rebuilds `m_Projection` from the FOV, near, far, and aspect parameters (perspective,
+    /// off-center, or orthographic per the `m_UseOffCenter` and `m_Ortho` flags), clears
+    /// `m_DirtyProjection`, and applies the reverse-Z remap only when `m_IsRenderCamera` is set.
     pub unsafe fn RecalcProjection(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(

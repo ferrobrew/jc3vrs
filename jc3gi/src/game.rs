@@ -45,7 +45,7 @@ impl Game {
         }
     }
     pub const Update_ADDRESS: usize = 0x1409604E0;
-    /// Top-level per-frame update (advances the sim and drives rendering). Returns false on exit.
+    /// The top-level per-frame update: advances the sim and drives rendering. Returns false on exit.
     pub unsafe fn Update(&mut self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) -> bool = ::std::mem::transmute(

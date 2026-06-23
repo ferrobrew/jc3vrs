@@ -15,7 +15,8 @@ fn _ActiveCursor_size_check() {
     unreachable!()
 }
 #[repr(C, align(8))]
-/// CGraphicsEngine::DrawThreadTaskParam
+/// The opaque parameter block passed to
+/// [`HandleDrawThreadTask`](GraphicsEngine::HandleDrawThreadTask).
 pub struct DrawThreadTaskParam {}
 impl DrawThreadTaskParam {}
 impl std::convert::AsRef<DrawThreadTaskParam> for DrawThreadTaskParam {
@@ -29,13 +30,14 @@ impl std::convert::AsMut<DrawThreadTaskParam> for DrawThreadTaskParam {
     }
 }
 #[repr(C, align(8))]
-/// One reflection-proxy depth-history slot (the planar / water reflection state machine). Five of
+/// One reflection-proxy depth-history slot in the planar / water reflection state machine. Five of
 /// these live on the graphics engine; the lifecycle byte advances once per scene dispatch.
 pub struct EffectInfo {
-    /// Reflection-proxy depth texture (Graphics::HTexture_t handle).
-    pub m_DepthTexture: *mut ::std::ffi::c_void,
+    /// The reflection-proxy depth texture.
+    pub m_DepthTexture: *mut crate::graphics_engine::graphics_engine::HTexture_t,
     pub m_Transform: crate::types::math::Matrix4,
-    /// Lifecycle counter: 0 = free, 2 -> promote to 3, 3 = pick, else += 1.
+    /// The lifecycle counter: `0` is free, `2` promotes to `3`, `3` is picked, otherwise it
+    /// increments.
     pub m_FrameIndex: u8,
     _field_49: [u8; 7],
 }
@@ -114,8 +116,8 @@ impl GraphicsEngine {
         }
     }
     pub const Draw_ADDRESS: usize = 0x1400F4170;
-    /// Graphics entry point: runs the per-frame prologue (presents the previous frame, advances the
-    /// clock and constant-buffer pools) then dispatches this frame's draw.
+    /// The graphics entry point: runs the per-frame prologue (presents the previous frame, advances
+    /// the clock and constant-buffer pools), then dispatches this frame's draw.
     pub unsafe fn Draw(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
@@ -145,8 +147,7 @@ impl GraphicsEngine {
         }
     }
     pub const HandleDrawThreadTask_ADDRESS: usize = 0x1400F1D10;
-    /// Render-thread body: gbuffer, lighting, post-effects and UI. `param` is
-    /// DrawThreadTaskParam* (layout TBD).
+    /// The render-thread body: GBuffer, lighting, post-effects, and UI.
     pub unsafe fn HandleDrawThreadTask(
         &mut self,
         param: *mut crate::graphics_engine::graphics_engine::DrawThreadTaskParam,
@@ -160,10 +161,9 @@ impl GraphicsEngine {
         }
     }
     pub const TextureCachePlatformUpdate_ADDRESS: usize = 0x1400C46D0;
-    /// Draw-prologue step. Copies m_ActiveCamera into the engine-owned render-camera slot
-    /// (this + 0x170), runs CCamera::SetupRenderCamera on it, publishes it as CameraManager's
-    /// m_RenderCamera, then runs the per-frame texture-cache update under the context lock. `ctx`
-    /// is Graphics::HContext_t* (opaque).
+    /// A draw-prologue step. Copies the active camera into the engine-owned render-camera slot, runs
+    /// [`Camera::SetupRenderCamera`] on it, publishes it as the camera manager's render camera, then
+    /// runs the per-frame texture-cache update under the context lock.
     pub unsafe fn TextureCachePlatformUpdate(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
@@ -228,7 +228,7 @@ impl std::convert::AsMut<GraphicsParams> for GraphicsParams {
     }
 }
 #[repr(C, align(8))]
-/// Graphics::HContext_t (GPU context handle)
+/// A GPU context handle.
 pub struct HContext_t {}
 impl HContext_t {}
 impl std::convert::AsRef<HContext_t> for HContext_t {
@@ -242,7 +242,7 @@ impl std::convert::AsMut<HContext_t> for HContext_t {
     }
 }
 #[repr(C, align(8))]
-/// Graphics::HDevice_t (GPU device handle)
+/// A GPU device handle.
 pub struct HDevice_t {}
 impl HDevice_t {}
 impl std::convert::AsRef<HDevice_t> for HDevice_t {
@@ -257,7 +257,7 @@ impl std::convert::AsMut<HDevice_t> for HDevice_t {
 }
 pub use windows::Win32::UI::WindowsAndMessaging::HICON as HICON;
 #[repr(C, align(8))]
-/// Graphics::HRenderSetup_t (a render-target configuration a pass draws into).
+/// A render-target configuration a pass draws into.
 pub struct HRenderSetup_t {}
 impl HRenderSetup_t {}
 impl std::convert::AsRef<HRenderSetup_t> for HRenderSetup_t {
@@ -271,7 +271,7 @@ impl std::convert::AsMut<HRenderSetup_t> for HRenderSetup_t {
     }
 }
 #[repr(C, align(8))]
-/// Graphics::HTexture_t (GPU texture handle).
+/// A GPU texture handle.
 pub struct HTexture_t {}
 impl HTexture_t {}
 impl std::convert::AsRef<HTexture_t> for HTexture_t {
@@ -286,9 +286,9 @@ impl std::convert::AsMut<HTexture_t> for HTexture_t {
 }
 pub use windows::Win32::Foundation::HWND as HWND;
 #[repr(C, align(8))]
-/// The per-view render context the render passes read: camera matrices (view, projection, the
-/// translation-free offset view-projection and the separate camera world position), shadow data and
-/// per-frame flags. Filled each dispatch by RenderPass::SetRenderContextCamera.
+/// The per-view render context the render passes read: the camera matrices (view, projection, the
+/// translation-free offset view-projection, and the separate camera world position), shadow data, and
+/// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].
 pub struct RenderContext {}
 impl RenderContext {}
 impl std::convert::AsRef<RenderContext> for RenderContext {
@@ -303,9 +303,9 @@ impl std::convert::AsMut<RenderContext> for RenderContext {
 }
 #[derive(Copy, Clone)]
 #[repr(C, align(4))]
-/// Per-real-frame counters advanced once in the CGraphicsEngine::Draw prologue. m_FrameIndex (set
-/// from m_Counter, which post-increments) drives the TAA jitter phase and shadow parity (& 1);
-/// m_RingIndex is the %3 constant-buffer ring (m_FrameIndex % 3).
+/// Per-real-frame counters, advanced once in the [`GraphicsEngine::Draw`] prologue. `m_FrameIndex`
+/// (set from the post-incrementing `m_Counter`) drives the TAA jitter phase and shadow parity;
+/// `m_RingIndex` is the three-slot constant-buffer ring.
 pub struct RenderFrameCounters {
     pub m_Counter: u32,
     pub m_FrameIndex: u32,
@@ -341,8 +341,7 @@ pub unsafe fn get_render_frame_counters() -> &'static mut crate::graphics_engine
     }
 }
 pub const graphics_flip_ADDRESS: usize = 0x14195A820;
-/// Low-level present (Graphics::Flip); returns Graphics::EResult. `device` is
-/// Graphics::HDevice_t* (opaque).
+/// The low-level present.
 unsafe fn graphics_flip(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
 ) -> i32 {

@@ -28,9 +28,9 @@ impl InputDeviceManager {
             as *const crate::input::input_device_manager::InputDeviceManagerVftable
     }
     pub const Update_ADDRESS: usize = 0x1402F20C0;
-    /// Per-frame device poll: reads all devices and refreshes their effector states. Runs
-    /// UpdateForceClicks afterwards. Effector writes injected before this are overwritten by the
-    /// poll; inject after it instead.
+    /// The per-frame device poll: reads all devices, refreshes their effector states, and then runs
+    /// [`UpdateForceClicks`](InputDeviceManager::UpdateForceClicks). Effector writes injected before
+    /// this are overwritten by the poll, so inject after it instead.
     pub unsafe fn Update(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
@@ -40,7 +40,7 @@ impl InputDeviceManager {
         }
     }
     pub const UpdateForceClicks_ADDRESS: usize = 0x1402F2050;
-    /// Applies the m_ForceClick flags latched on effectors so an injected click survives the poll.
+    /// Applies the force-click flags latched on effectors so an injected click survives the poll.
     pub unsafe fn UpdateForceClicks(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(

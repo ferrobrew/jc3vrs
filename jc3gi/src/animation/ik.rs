@@ -1,12 +1,13 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// Autodesk HumanIK wrapper.
+/// An Autodesk HumanIK wrapper.
 pub struct HumanIK {}
 impl HumanIK {
     pub const AddEffectorTargetPosition_ADDRESS: usize = 0x140408860;
-    /// Pushes an IK effector target (character-local space). Prototype verified against the debug
-    /// PDB. solve_step / pass_info are 4-byte enums (HumanIK::HIKSolveStep / HIKPassInfo), passed
-    /// as i32.
+    /// Pushes an IK effector target, in character-local space. `solve_step` and `pass_info` are the
+    /// `HIKSolveStep` and `HIKPassInfo` enums.
+    ///
+    /// **Provenance:** the prototype is verified against the debug PDB.
     pub unsafe fn AddEffectorTargetPosition(
         &mut self,
         effector: i32,
@@ -55,15 +56,15 @@ impl std::convert::AsMut<HumanIK> for HumanIK {
     }
 }
 pub const NHandIKTask_Update_ADDRESS: usize = 0x140816430;
-/// Per-frame hand-IK driver (sources its targets from weapon grip positions). Free function.
+/// The per-frame hand-IK driver. Sources its targets from weapon grip positions.
 unsafe fn NHandIKTask_Update(
-    ctx: *mut crate::state::SStateContext,
+    ctx: *mut crate::state::StateContext,
     p1: *mut ::std::ffi::c_void,
     p2: *mut ::std::ffi::c_void,
 ) {
     unsafe {
         let f: unsafe extern "system" fn(
-            ctx: *mut crate::state::SStateContext,
+            ctx: *mut crate::state::StateContext,
             p1: *mut ::std::ffi::c_void,
             p2: *mut ::std::ffi::c_void,
         ) = ::std::mem::transmute(NHandIKTask_Update_ADDRESS);
