@@ -66,8 +66,9 @@ fn _ScreenPos_size_check() {
 pub struct UIManager {
     _field_0: [u8; 5008],
     /// The Scaleform render buffer the UI HAL renders into, set up by
-    /// [`InitPlatformRT`](UIManager::InitPlatformRT).
-    pub m_RenderBuffer: *mut ::std::ffi::c_void,
+    /// [`InitPlatformRT`](UIManager::InitPlatformRT). Pass it to [`RenderTargetData::UpdateData`] to
+    /// rebind where the HUD renders.
+    pub m_RenderBuffer: *mut crate::ui::ui_manager::RenderTargetData,
     _field_1398: [u8; 236],
     /// The viewport width that the world-to-screen mapping
     /// ([`Convert3DCoords`](UIManager::Convert3DCoords)) maps NDC into.

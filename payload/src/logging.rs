@@ -8,6 +8,9 @@ pub(super) fn install() {
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
+                // No console is allocated, so stdout is not a TTY; keep ANSI off explicitly rather
+                // than relying on auto-detection.
+                .with_ansi(false)
                 .with_filter(env_filter.clone()),
         )
         .with(
@@ -18,8 +21,9 @@ pub(super) fn install() {
                 .and_then(|path| std::fs::File::create(&path).ok())
                 .map(|file| {
                     tracing_subscriber::fmt::layer()
-                        .with_writer(file)
+                        // Never write ANSI escapes to the log file.
                         .with_ansi(false)
+                        .with_writer(file)
                         .with_filter(env_filter)
                 }),
         )

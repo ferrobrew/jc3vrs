@@ -356,9 +356,12 @@ pub fn capture_main_color(eye: usize) {
     }
 }
 
-/// Tear down the render-state captures; called from the game-thread shutdown path.
-pub fn uninstall(renderer: &mut egui_directx11::Renderer) {
-    EGUI_DEBUG_RENDER_STATE.lock().uninstall(renderer);
+/// Register the debug render-state cleanup. Call once at init; it tears down the captured textures and
+/// egui registrations at shutdown.
+pub fn install() {
+    crate::lifecycle::on_cleanup(|renderer| {
+        EGUI_DEBUG_RENDER_STATE.lock().uninstall(renderer);
+    });
 }
 
 fn gate_checkbox(ui: &mut egui::Ui, flag: &std::sync::atomic::AtomicBool, label: &str) {
@@ -432,6 +435,34 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
         ui.add(egui::Slider::new(&mut *w, 48.0..=4096.0).text("Preview size (px)"));
         *w
     };
+
+    // HUD redirect: toggle, and a preview of our redirected HUD texture (the floating-HUD checkpoint).
+    {
+        let redirect = {
+            let mut cfg = config::CONFIG.lock();
+            ui.checkbox(
+                &mut cfg.hud.redirect,
+                "Redirect HUD into our texture (drops it from the scene composite)",
+            );
+            cfg.hud.redirect
+        };
+        if redirect {
+            let mut hud = crate::hud::HUD_STATE.lock();
+            egui::CollapsingHeader::new("HUD texture")
+                .default_open(true)
+                .show(ui, |ui| match hud.preview_id(renderer) {
+                    Some(id) => {
+                        let size = egui::vec2(preview_width, preview_width * 0.5625);
+                        ui.add(egui::Image::new(egui::ImageSource::Texture(
+                            egui::load::SizedTexture { id, size },
+                        )));
+                    }
+                    None => {
+                        ui.label("(redirect not yet applied)");
+                    }
+                });
+        }
+    }
 
     let mut state = EGUI_DEBUG_RENDER_STATE.lock();
     state.prepare_if_necessary(renderer);

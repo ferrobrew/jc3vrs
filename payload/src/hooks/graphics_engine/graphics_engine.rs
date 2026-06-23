@@ -50,6 +50,19 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             return result;
         };
 
+        // Drive the HUD redirect on the render thread: redirect while enabled, restore while disabled.
+        // The rebind is sticky, so applying it here -- before the UI renders later in the frame --
+        // takes effect on the next UI render.
+        if let Some(device) = graphics_engine.m_Device.as_ref()
+            && let Some(back_buffer) = device.m_BackBuffer.as_ref()
+        {
+            crate::hud::tick(
+                device,
+                u32::from(back_buffer.m_Width),
+                u32::from(back_buffer.m_Height),
+            );
+        }
+
         let lock = crate::ui::render::EGUI_DEBUG_RENDER_STATE.lock();
         let index = crate::stereo::draw_index();
 

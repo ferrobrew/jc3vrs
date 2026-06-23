@@ -18,6 +18,8 @@ mod crash;
 mod debug;
 mod fsr;
 mod hooks;
+mod hud;
+mod lifecycle;
 mod logging;
 mod stereo;
 
@@ -72,6 +74,11 @@ fn initialize_startup() {
 
 /// Called to undo `initialize_startup` and eject
 fn shutdown_startup() {
+    // The cleanups cleared render-thread-driven config flags (e.g. the HUD redirect). Give the still-
+    // live hooks a few frames to tick those changes through -- the per-frame restore runs on the
+    // render thread -- before uninstalling.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
     tracing::info!("Uninstalling hooks");
     hooks::uninstall();
 
@@ -92,6 +99,8 @@ fn initialize_from_game() -> anyhow::Result<()> {
     INITIALIZED.set(true).unwrap();
 
     EguiState::install()?;
+    ui::render::install();
+    hud::install();
     tracing::info!("Initialized in game thread");
 
     Ok(())
@@ -100,7 +109,7 @@ fn initialize_from_game() -> anyhow::Result<()> {
 /// Called to undo `initialize_from_game`; called once shutdown is triggered
 fn shutdown_from_game() {
     if let Some(egui_state) = EguiState::get().as_mut() {
-        ui::render::uninstall(&mut egui_state.egui_renderer);
+        lifecycle::run_cleanups(&mut egui_state.egui_renderer);
     }
     EguiState::uninstall();
 }

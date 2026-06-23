@@ -23,6 +23,7 @@ pub struct Config {
     pub post_fx: PostFxConfig,
     pub camera: CameraConfig,
     pub fsr: FsrConfig,
+    pub hud: HudConfig,
 }
 impl Config {
     pub const fn new() -> Self {
@@ -32,6 +33,7 @@ impl Config {
             post_fx: PostFxConfig::new(),
             camera: CameraConfig::new(),
             fsr: FsrConfig::new(),
+            hud: HudConfig::new(),
         }
     }
 
@@ -190,6 +192,22 @@ impl FsrConfig {
             sharpness: None,
             motion_vectors: true,
             mv_sign: (1.0, -1.0),
+        }
+    }
+}
+
+/// Floating-HUD settings. See `docs/hud.md`.
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub struct HudConfig {
+    /// Redirect the HUD into our own offscreen texture (the first step toward the floating panel).
+    /// Off leaves the HUD on the engine surface as normal.
+    pub redirect: bool,
+}
+impl HudConfig {
+    pub const fn new() -> Self {
+        Self {
+            // Off by default until the redirect is proven; toggled live for first-light.
+            redirect: false,
         }
     }
 }
