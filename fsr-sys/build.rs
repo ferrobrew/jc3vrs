@@ -3,7 +3,7 @@
 //! The shader-permutation headers under `generated/dx11/` are git-ignored (124 files, ~9 MB), but a
 //! committed `generated/dx11.tar.gz` (~0.7 MB) holds them. When the headers are missing -- a fresh
 //! checkout or CI -- we unpack the archive, so the build needs no shader compiler. If neither is
-//! present, the `fsr-shadergen` crate regenerates both.
+//! present, the `shadergen` crate regenerates both.
 
 use std::path::{Path, PathBuf};
 
@@ -37,7 +37,7 @@ fn main() {
         panic!(
             "fsr-sys: generated FSR2 shader headers are missing and {HEADERS_ARCHIVE} did not \
              unpack them.\n       Regenerate both with:\n           \
-             cargo run -p fsr-shadergen --target x86_64-unknown-linux-gnu\n       \
+             cargo run -p shadergen --target x86_64-unknown-linux-gnu\n       \
              (see fsr-sys/README.md)."
         );
     }

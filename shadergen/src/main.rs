@@ -1,4 +1,5 @@
-//! Regenerate the FSR2 DX11 compute-shader permutation headers consumed by `fsr-sys`.
+//! Regenerate the FSR2 DX11 compute-shader permutation headers consumed by `fsr-sys`, and compile the
+//! payload's own DX11 shaders.
 //!
 //! The FidelityFX DX11 backend bakes its compute shaders in as DXBC bytecode: the shader compiler
 //! (`FidelityFX_SC.exe`, bundled in the vendored submodule) compiles each pass into a
@@ -8,13 +9,16 @@
 //! its HTTP / archive dependencies never reach a normal build of the `-sys` crate or the payload. It
 //! runs only on an FSR version bump or after a fresh checkout.
 //!
+//! In addition, the payload's own DX11 shaders (velocity decode, HUD quad) are compiled by the same
+//! toolchain and committed as `.dxbc` blobs alongside their `.hlsl` sources.
+//!
 //! `FidelityFX_SC.exe` is a Windows executable: on a Windows host it runs directly; elsewhere it runs
 //! under Wine. The Wine half -- provisioning a prefix with a native `d3dcompiler_47.dll`, since Wine's
 //! built-in reimplementation rejects FSR's shaders -- is isolated in [`wine`]. The compile recipe in
 //! this file matches the upstream CMake (`src/ffx-fsr2-api/CMakeLists.txt` base args +
 //! `src/ffx-fsr2-api/dx11/CMakeLists.txt` DX11 args), the same on both hosts.
 //!
-//! Usage: `cargo run -p fsr-shadergen`. On a non-Windows host this also needs `wine` on PATH (from
+//! Usage: `cargo run -p shadergen`. On a non-Windows host this also needs `wine` on PATH (from
 //! `shell.nix`) and network access on the first run to fetch the native DLL.
 //!
 //! Environment overrides (all optional):

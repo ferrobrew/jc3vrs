@@ -1,0 +1,12 @@
+[package]
+name = "shadergen"
+version = "0.1.0"
+edition = "2024"
+description = "Compiles DX11 shaders consumed by the payload and fsr-sys. Run on a shader change or fresh checkout; kept separate so its HTTP/archive deps never reach fsr-sys or the payload."
+publish = false
+
+[dependencies]
+ureq = "3"
+sevenz-rust2 = "0.21"
+tar = "0.4"
+flate2 = "1"
