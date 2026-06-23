@@ -69,7 +69,8 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
         EnterCriticalSection(context.m_Mutex);
 
         // Draw the floating HUD quad onto this eye's back buffer before it is captured/presented, so it
-        // shows in both the preview and the final image.
+        // shows in both the preview and the final image. The HUD render target is also cleared so the
+        // next frame starts clean rather than accumulating past frames.
         if let (Some(device), Some(back_buffer)) = (
             graphics_engine.m_Device.as_ref(),
             graphics_engine.m_BackBufferLinear.as_ref(),

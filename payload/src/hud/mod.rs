@@ -43,11 +43,14 @@ pub fn tick(device: &Device, width: u32, height: u32) {
 }
 
 /// Draw the redirected HUD as a floating quad for `eye` over `target` (the eye's linear back buffer),
-/// when both the redirect and the quad are enabled. Called from the render-thread post-draw hook,
-/// before the back buffer is captured/presented, with the engine context mutex held.
+/// when both the redirect and the quad are enabled. Then clear the HUD render target so the next
+/// frame starts clean. Called from the render-thread post-draw hook, before the back buffer is
+/// captured/presented, with the engine context mutex held.
 pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Texture, eye: usize) {
     if crate::config::Config::lock_query(|c| c.hud.redirect && c.hud.quad) {
-        HUD_STATE.lock().draw_quad(context, device, target, eye);
+        let mut hud = HUD_STATE.lock();
+        hud.draw_quad(context, device, target, eye);
+        hud.clear(context);
     }
 }
 

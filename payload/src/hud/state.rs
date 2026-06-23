@@ -3,7 +3,9 @@
 
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
-use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_CLEAR_DEPTH, D3D11_CLEAR_STENCIL, ID3D11DeviceContext,
+};
 
 use super::{binding, quad::HudQuad, target::HudTarget};
 
@@ -101,6 +103,27 @@ impl HudState {
         }
         if let Some(quad) = self.quad.as_ref() {
             quad.draw(context, device, target, &hud_srv, eye);
+        }
+    }
+
+    /// Clear the HUD render target and depth-stencil so the next frame starts clean. A no-op when
+    /// not redirected. The caller must hold the engine context mutex.
+    pub fn clear(&mut self, context: &ID3D11DeviceContext) {
+        if !self.redirected {
+            return;
+        }
+        let Some(target) = self.target.as_ref() else {
+            return;
+        };
+        // SAFETY: `context` is the live engine context; RTV and DSV belong to our target texture.
+        unsafe {
+            context.ClearRenderTargetView(target.color_rtv(), &[0.0, 0.0, 0.0, 0.0]);
+            context.ClearDepthStencilView(
+                target.depth_dsv(),
+                (D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL).0,
+                1.0,
+                0,
+            );
         }
     }
 
