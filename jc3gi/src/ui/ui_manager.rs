@@ -1,12 +1,14 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// A Scaleform render-target binding. The UI's `m_RenderBuffer` points at one of these; pointing it
-/// at an offscreen render-target view redirects where the UI HAL renders. The rebind is not tied to
-/// startup, so it can happen at any time.
+/// A Scaleform render buffer: what [`UIManager::m_RenderBuffer`] points at. Pointing its bound views
+/// at an offscreen render-target view redirects where the UI HAL renders, and the rebind is not tied
+/// to startup, so it can happen at any time.
 pub struct RenderTargetData {}
 impl RenderTargetData {
     pub const UpdateData_ADDRESS: usize = 0x141DE0CF0;
-    /// Binds the views into this target, releasing the old ones and adding a reference to the new.
+    /// Rebinds the buffer's views, releasing the old ones and adding a reference to the new. `self`
+    /// is the render buffer itself ([`UIManager::m_RenderBuffer`]); the call reaches its inner
+    /// view-holder internally. Passing `depth` as null leaves the depth buffer unchanged.
     pub unsafe fn UpdateData(
         &mut self,
         rtv: *mut ::std::ffi::c_void,
