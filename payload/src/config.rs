@@ -188,10 +188,9 @@ pub struct FsrConfig {
 impl FsrConfig {
     pub const fn new() -> Self {
         Self {
-            // Off by default until the integration is proven; toggled live for A/B against SMAA.
-            enabled: false,
+            enabled: true,
             jitter: true,
-            sharpness: None,
+            sharpness: Some(0.2),
             motion_vectors: true,
             mv_sign: (1.0, -1.0),
         }

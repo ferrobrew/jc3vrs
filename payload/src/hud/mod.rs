@@ -69,38 +69,40 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
     // per-eye view (VP = Inverse(Transform) · Projection), collapsing the panel to view space
     // (head-locked, zero disparity, appears at infinity).
     if eye == 0 {
-        let (head_yaw, head_pitch) = extract_head_orientation();
-        let (follow_yaw, follow_pitch) = hud.update_follow(
+        let (head_yaw, head_pitch, head_roll) = extract_head_orientation();
+        let (follow_yaw, follow_pitch, follow_roll) = hud.update_follow(
             &state::FollowParams {
                 head_yaw,
                 head_pitch,
+                head_roll,
             },
             &cfg.follow,
         );
-        hud.compute_world_corners(
-            u32::from(target.m_Width),
-            u32::from(target.m_Height),
-            cfg.distance,
-            cfg.panel_height,
+        hud.compute_world_corners(&quad::PanelParams {
+            width: u32::from(target.m_Width),
+            height: u32::from(target.m_Height),
+            distance: cfg.distance,
+            panel_height: cfg.panel_height,
             follow_yaw,
             follow_pitch,
-        );
+            follow_roll,
+        });
     }
 
     hud.draw_quad(context, device, target, eye);
     hud.clear(context);
 }
 
-/// Extract yaw and pitch (in degrees) from the render camera's world transform.
-/// Returns `(0.0, 0.0)` if the camera is not available.
-fn extract_head_orientation() -> (f32, f32) {
+/// Extract yaw, pitch, and roll (in degrees) from the render camera's world transform.
+/// Returns `(0.0, 0.0, 0.0)` if the camera is not available.
+fn extract_head_orientation() -> (f32, f32, f32) {
     let transform = unsafe {
         let cm = jc3gi::camera::camera_manager::CameraManager::get();
         let cam = cm.and_then(|cm| cm.m_RenderCamera.as_ref());
         cam.map(|cam| cam.m_TransformF.data)
     };
     let Some(transform) = transform else {
-        return (0.0, 0.0);
+        return (0.0, 0.0, 0.0);
     };
 
     // The camera's world transform has its basis vectors in the rows (pyxis docs):
@@ -118,7 +120,12 @@ fn extract_head_orientation() -> (f32, f32) {
         90.0 * forward_y.signum()
     };
 
-    (yaw, pitch)
+    // Roll: the right vector's tilt from horizontal. Positive = right side down (clockwise from
+    // behind, matching the yaw convention).
+    let right_xz_len = (transform[0] * transform[0] + transform[2] * transform[2]).sqrt();
+    let roll = (-transform[1]).atan2(right_xz_len).to_degrees();
+
+    (yaw, pitch, roll)
 }
 
 /// Register the HUD's shutdown cleanup. Call once at init. The cleanup clears the redirect config flag

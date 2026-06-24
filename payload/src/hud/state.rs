@@ -15,6 +15,7 @@ use super::{binding, quad::HudQuad, target::HudTarget};
 pub(crate) struct FollowParams {
     pub head_yaw: f32,
     pub head_pitch: f32,
+    pub head_roll: f32,
 }
 
 /// Global HUD state. Locked briefly on the render thread.
@@ -37,12 +38,14 @@ pub struct HudState {
     cached_corners: Option<[[f32; 4]; 4]>,
 }
 
-/// Damped follow state: tracks the panel's eased yaw and pitch offset relative to the head.
+/// Damped follow state: tracks the panel's eased orientation relative to the head.
 struct FollowState {
-    /// Damped yaw offset in radians (positive = panel rotated right of head center).
+    /// Damped yaw in radians (positive = panel rotated right of head center).
     yaw: f32,
-    /// Damped pitch offset in radians (positive = panel rotated above head center).
+    /// Damped pitch in radians (positive = panel rotated above head center).
     pitch: f32,
+    /// Damped roll in radians (positive = panel rolled right, clockwise from behind).
+    roll: f32,
     /// Last frame's instant for delta-time computation.
     last_time: Option<Instant>,
 }
@@ -52,19 +55,22 @@ impl FollowState {
         Self {
             yaw: 0.0,
             pitch: 0.0,
+            roll: 0.0,
             last_time: None,
         }
     }
 
-    /// Update the damped offsets toward the head's orientation, using the critically-damped
-    /// exponential: `alpha = 1 - 2^(-dt/halflife); current = lerp(current, target, alpha)`.
-    /// Returns the resulting damped offsets `(yaw_rad, pitch_rad)` for the quad's world-space
+    /// Ease the panel's orientation toward the head's current orientation using the critically-damped
+    /// exponential: `alpha = 1 - 2^(-dt/halflife); current += (target - current) * alpha`. No
+    /// deadzone -- the panel always follows, with the halflife controlling the lag. This avoids the
+    /// stuck-offset problem where the panel could remain at a permanent offset from the head. Returns
+    /// the resulting damped angles `(yaw_rad, pitch_rad, roll_rad)` for the quad's world-space
     /// orientation.
     fn update(
         &mut self,
         params: &FollowParams,
         config: &super::config::FollowConfig,
-    ) -> (f32, f32) {
+    ) -> (f32, f32, f32) {
         let dt = self
             .last_time
             .map(|t| t.elapsed().as_secs_f32())
@@ -73,36 +79,22 @@ impl FollowState {
         // Clamp dt to avoid huge leaps on frame drops.
         let dt = dt.min(0.1);
 
-        // Deadzone is relative to the panel's current orientation, not the initial forward.
-        // The panel only moves when the head is more than deadzone away from the panel's
-        // current yaw/pitch, keeping the panel within a few degrees of the head at all times.
         let yaw_rad = params.head_yaw.to_radians();
         let pitch_rad = params.head_pitch.to_radians();
-        let dz_yaw = config.yaw_deadzone.to_radians();
-        let dz_pitch = config.pitch_deadzone.to_radians();
+        let roll_rad = params.head_roll.to_radians();
 
-        let yaw_delta = shortest_angle_delta(self.yaw, yaw_rad);
-        let target_yaw = if yaw_delta.abs() < dz_yaw {
-            self.yaw
-        } else {
-            yaw_rad - dz_yaw * yaw_delta.signum()
-        };
-        let pitch_delta = pitch_rad - self.pitch;
-        let target_pitch = if pitch_delta.abs() < dz_pitch {
-            self.pitch
-        } else {
-            pitch_rad - dz_pitch * pitch_delta.signum()
-        };
-
-        // Compute frame-rate independent damping factors.
+        // Frame-rate independent damping factors.
         let alpha_yaw = (1.0 - 2.0_f32.powf(-dt / config.yaw_halflife)).min(1.0);
         let alpha_pitch = (1.0 - 2.0_f32.powf(-dt / config.pitch_halflife)).min(1.0);
+        let alpha_roll = (1.0 - 2.0_f32.powf(-dt / config.roll_halflife)).min(1.0);
 
-        // Lerp toward targets.
-        self.yaw = self.yaw + (target_yaw - self.yaw) * alpha_yaw;
-        self.pitch = self.pitch + (target_pitch - self.pitch) * alpha_pitch;
+        // Use the shortest angular path for yaw (handles ±180° wrapping).
+        let yaw_delta = shortest_angle_delta(self.yaw, yaw_rad);
+        self.yaw += yaw_delta * alpha_yaw;
+        self.pitch += (pitch_rad - self.pitch) * alpha_pitch;
+        self.roll += (roll_rad - self.roll) * alpha_roll;
 
-        (self.yaw, self.pitch)
+        (self.yaw, self.pitch, self.roll)
     }
 }
 
@@ -176,36 +168,21 @@ impl HudState {
     }
 
     /// Update the lazy-follow damping state from the current head orientation. Returns the damped
-    /// offsets `(yaw_rad, pitch_rad)` for the quad's 3D rotation.
+    /// angles `(yaw_rad, pitch_rad, roll_rad)` for the quad's world-space orientation.
     pub fn update_follow(
         &mut self,
         params: &FollowParams,
         config: &super::config::FollowConfig,
-    ) -> (f32, f32) {
+    ) -> (f32, f32, f32) {
         self.follow.update(params, config)
     }
 
     /// Compute the panel's world-space corners from the current camera and follow state, caching
     /// the result for both eyes. Call once per frame (eye 0); eye 1 reuses the cached corners.
-    pub fn compute_world_corners(
-        &mut self,
-        width: u32,
-        height: u32,
-        distance: f32,
-        panel_height: f32,
-        follow_yaw: f32,
-        follow_pitch: f32,
-    ) {
+    pub fn compute_world_corners(&mut self, params: &super::quad::PanelParams) {
         // Invalidate the cache first; if the computation fails, eye 1 won't draw stale corners.
         self.cached_corners = None;
-        if let Some(corners) = super::quad::compute_world_corners(
-            width,
-            height,
-            distance,
-            panel_height,
-            follow_yaw,
-            follow_pitch,
-        ) {
+        if let Some(corners) = super::quad::compute_world_corners(params) {
             self.cached_corners = Some(corners);
         }
     }

@@ -24,7 +24,7 @@ impl HudConfig {
             redirect: false,
             quad: false,
             distance: 1.8,
-            panel_height: 0.8,
+            panel_height: 2.0,
             follow: FollowConfig::new(),
         }
     }
@@ -33,24 +33,21 @@ impl HudConfig {
 /// Lazy-follow damping parameters for the floating HUD panel. See `docs/hud.md`.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct FollowConfig {
-    /// Yaw deadzone in degrees. Head yaw within this range does not move the panel.
-    pub yaw_deadzone: f32,
-    /// Pitch deadzone in degrees. Head pitch within this range does not move the panel.
-    pub pitch_deadzone: f32,
     /// Yaw follow halflife in seconds. Lower = snappier follow.
     pub yaw_halflife: f32,
     /// Pitch follow halflife in seconds. Lower = snappier follow.
     pub pitch_halflife: f32,
+    /// Roll follow halflife in seconds. Lower = snappier follow.
+    pub roll_halflife: f32,
     /// Position de-jitter halflife in seconds.
     pub position_halflife: f32,
 }
 impl FollowConfig {
     pub const fn new() -> Self {
         Self {
-            yaw_deadzone: 10.0,
-            pitch_deadzone: 6.0,
             yaw_halflife: 0.15,
             pitch_halflife: 0.3,
+            roll_halflife: 0.2,
             position_halflife: 0.1,
         }
     }

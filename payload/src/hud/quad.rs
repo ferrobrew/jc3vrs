@@ -249,28 +249,33 @@ impl HudQuad {
     }
 }
 
+/// Geometry + follow parameters for computing the panel's world-space corners. Bundled into a
+/// struct to keep the argument list under `clippy::too_many_arguments`.
+pub(crate) struct PanelParams {
+    pub width: u32,
+    pub height: u32,
+    pub distance: f32,
+    pub panel_height: f32,
+    pub follow_yaw: f32,
+    pub follow_pitch: f32,
+    pub follow_roll: f32,
+}
+
 /// Compute the panel's world-space corners from the render camera's world position and the
 /// follow/distance parameters. Call once per frame (eye 0) and cache the result so both eyes
 /// project the same world-space quad through their own per-eye VP. Returns `None` if the camera
 /// is unavailable.
 ///
-/// The panel sits at its own world-space orientation (the damped follow yaw/pitch), positioned at
-/// the camera position + panel_forward * distance. It is NOT rotated through the camera's
+/// The panel sits at its own world-space orientation (the damped follow yaw/pitch/roll), positioned
+/// at the camera position + panel_forward * distance. It is NOT rotated through the camera's
 /// transform — that would stack the follow rotation on top of the head rotation, swinging the
 /// panel offscreen on large turns. The camera contributes only its position (the anchor point);
 /// the panel's orientation comes entirely from the damped follow angles.
-pub(crate) fn compute_world_corners(
-    width: u32,
-    height: u32,
-    distance: f32,
-    panel_height: f32,
-    follow_yaw: f32,
-    follow_pitch: f32,
-) -> Option<[[f32; 4]; 4]> {
-    if width == 0 || height == 0 {
+pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4]> {
+    if params.width == 0 || params.height == 0 {
         return None;
     }
-    let aspect = width as f32 / height as f32;
+    let aspect = params.width as f32 / params.height as f32;
 
     let transform = unsafe {
         let cm = jc3gi::camera::camera_manager::CameraManager::get()?;
@@ -283,17 +288,21 @@ pub(crate) fn compute_world_corners(
     // disparity for eye 1.
     let cam_pos = Vec3::new(transform[12], transform[13], transform[14]);
 
-    // Panel orientation in world space from the damped follow yaw/pitch. Yaw is a compass
+    // Panel orientation in world space from the damped follow yaw/pitch/roll. Yaw is a compass
     // bearing (positive = right = clockwise from above), so negate for glam's right-handed
     // convention. Pitch (positive = looking up) already aligns with `from_rotation_x(positive)`.
-    let rot = Mat4::from_rotation_x(follow_pitch) * Mat4::from_rotation_y(-follow_yaw);
+    // Roll (positive = right side down, clockwise from behind) is likewise negated. Roll is applied
+    // first (rightmost) so it rotates around the panel's local forward axis before yaw/pitch.
+    let rot = Mat4::from_rotation_x(params.follow_pitch)
+        * Mat4::from_rotation_y(-params.follow_yaw)
+        * Mat4::from_rotation_z(-params.follow_roll);
     let forward = rot.transform_vector3(Vec3::NEG_Z);
     let right = rot.transform_vector3(Vec3::X);
     let up = rot.transform_vector3(Vec3::Y);
 
-    let center = cam_pos + forward * distance;
-    let half_h = panel_height * 0.5;
-    let half_w = panel_height * aspect * 0.5;
+    let center = cam_pos + forward * params.distance;
+    let half_h = params.panel_height * 0.5;
+    let half_w = params.panel_height * aspect * 0.5;
 
     let layout = [
         (-half_w, half_h),
