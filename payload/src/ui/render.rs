@@ -446,6 +446,38 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
             );
             ui.add_enabled_ui(cfg.hud.redirect, |ui| {
                 ui.checkbox(&mut cfg.hud.quad, "Draw the HUD as a floating quad per eye");
+                ui.add_enabled_ui(cfg.hud.quad, |ui| {
+                    ui.indent("hud_sliders", |ui| {
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.distance, 0.5..=5.0)
+                                .text("Distance (m)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.panel_height, 0.2..=2.0)
+                                .text("Panel height (m)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.follow.yaw_deadzone, 0.0..=30.0)
+                                .text("Yaw deadzone (deg)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.follow.pitch_deadzone, 0.0..=20.0)
+                                .text("Pitch deadzone (deg)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.follow.yaw_halflife, 0.01..=1.0)
+                                .text("Yaw halflife (s)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.follow.pitch_halflife, 0.01..=2.0)
+                                .text("Pitch halflife (s)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.follow.position_halflife, 0.01..=1.0)
+                                .text("Position halflife (s)"),
+                        );
+                    });
+                });
             });
             cfg.hud.redirect
         };

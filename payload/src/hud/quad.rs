@@ -1,17 +1,22 @@
-//! Draw the redirected HUD texture as a fixed in-scene quad, per eye, over the final image.
+//! Draw the redirected HUD texture as a lazy-follow in-scene quad, per eye, over the final image.
 //!
 //! Step one redirected the HUD into our texture and dropped it from the scene composite; this draws it
-//! back in as a head-locked panel floating a fixed distance ahead, with a per-eye horizontal offset so
-//! the two eyes get the stereo disparity that places it at that distance. The corners are computed
-//! CPU-side ([`quad_corners`]) and uploaded to a constant buffer; the shaders are a trivial textured
-//! quad ([`hud_quad_vs`](../shaders/hud_quad_vs.hlsl) / `hud_quad_ps`). The panel is an alpha-blended
-//! overlay with the depth test disabled, drawn onto the linear back buffer at the end of the eye's
-//! draw.
+//! back in as a head-relative panel that lazily follows the head's orientation, with deadzones and
+//! critically-damped easing. The panel sits at its own world-space orientation (the damped follow
+//! yaw/pitch), positioned at the camera position + panel_forward * distance. The deadzone is relative
+//! to the panel's current orientation, so the panel always stays within a few degrees of the head —
+//! it never swings offscreen on large turns. Corners are uploaded alongside the camera's per-eye
+//! view-projection matrix; the vertex shader projects each corner
+//! ([`hud_quad_vs`](../shaders/hud_quad_vs.hlsl) / `hud_quad_ps`). The panel is an alpha-blended overlay
+//! with the depth test disabled, drawn onto the linear back buffer at the end of the eye's draw.
 //!
-//! The geometry is hardcoded for now (step two: get it visible); the distance, size, and follow
-//! behavior become tunable in step three.
+//! World-space corners are computed once per frame (eye 0) via [`compute_world_corners`] and cached
+//! by [`super::state::HudState`]; both eyes then project the same world-space quad through their own
+//! per-eye VP. Geometry and follow parameters come from [`crate::hud::config::HudConfig`]; the damped
+//! yaw/pitch offsets are computed by [`super::state::HudState::update_follow`].
 
 use anyhow::Context as _;
+use glam::{Mat4, Vec3};
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use windows::Win32::Graphics::{
     Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
@@ -32,16 +37,16 @@ use windows::Win32::Graphics::{
 const VERTEX_DXBC: &[u8] = include_bytes!("../shaders/hud_quad_vs.dxbc");
 const PIXEL_DXBC: &[u8] = include_bytes!("../shaders/hud_quad_ps.dxbc");
 
-/// Distance from the eye to the panel, in meters.
-const DISTANCE: f32 = 2.0;
-/// Panel height in meters; its width keeps the back-buffer aspect so the HUD is not distorted.
-const PANEL_HEIGHT: f32 = 1.4;
-/// The panel's stereo separation, in meters (its apparent depth comes from this against `DISTANCE`).
-const PANEL_IPD: f32 = 0.064;
-/// Vertical field of view used to project the panel, in radians (roughly the game's).
-const FOV_Y: f32 = 0.9;
+/// Constant buffer uploaded per draw: view-projection matrix followed by four world-space corners.
+/// Matches the HLSL `cbuffer Quad` layout: `row_major float4x4 ViewProjection` (64 bytes) +
+/// `float4 Corners[4]` (64 bytes).
+#[repr(C)]
+struct QuadConstants {
+    view_projection: [f32; 16],
+    corners: [[f32; 4]; 4], // .xyz = world-space position, .w = unused
+}
 
-/// The quad pass: the textured-quad pipeline and a constant buffer for the per-eye corners.
+/// The quad pass: the textured-quad pipeline and a constant buffer for the per-eye draw data.
 pub struct HudQuad {
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
@@ -126,7 +131,7 @@ impl HudQuad {
             let mut constants: Option<ID3D11Buffer> = None;
             d3d.CreateBuffer(
                 &D3D11_BUFFER_DESC {
-                    ByteWidth: size_of::<[[f32; 4]; 4]>() as u32,
+                    ByteWidth: size_of::<QuadConstants>() as u32,
                     Usage: D3D11_USAGE_DYNAMIC,
                     BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
                     CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
@@ -151,23 +156,28 @@ impl HudQuad {
         }
     }
 
-    /// Draw the HUD panel for `eye` over `target` (the eye's linear back buffer), sampling `hud_srv`
-    /// (the redirected HUD texture). The caller must hold the engine context mutex. Returns `false` on
-    /// failure.
+    /// Draw the HUD panel over `target` (the eye's linear back buffer), sampling `hud_srv` (the
+    /// redirected HUD texture). `corners` are the pre-computed world-space quad corners (computed
+    /// once per frame by [`compute_world_corners`]). The per-eye view-projection is read from the
+    /// render camera at draw time. The caller must hold the engine context mutex. Returns `false`
+    /// on failure.
     pub fn draw(
         &self,
         context: &ID3D11DeviceContext,
         device: &Device,
         target: &Texture,
         hud_srv: &ID3D11ShaderResourceView,
-        eye: usize,
+        corners: &[[f32; 4]; 4],
     ) -> bool {
         let width = u32::from(target.m_Width);
         let height = u32::from(target.m_Height);
         if width == 0 || height == 0 {
             return false;
         }
-        let aspect = width as f32 / height as f32;
+
+        let Some(view_proj) = fetch_view_projection() else {
+            return false;
+        };
 
         // SAFETY: `device.m_Device` is live; `target.m_Texture` is the engine's render-target-capable
         // back buffer; we record onto the caller-locked immediate context.
@@ -184,7 +194,11 @@ impl HudQuad {
                 return false;
             };
 
-            let corners = quad_corners(eye, aspect);
+            let constants = QuadConstants {
+                view_projection: view_proj,
+                corners: *corners,
+            };
+
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
             if context
                 .Map(
@@ -198,7 +212,11 @@ impl HudQuad {
             {
                 return false;
             }
-            std::ptr::copy_nonoverlapping(corners.as_ptr(), mapped.pData as *mut [f32; 4], 4);
+            std::ptr::copy_nonoverlapping(
+                &constants as *const QuadConstants as *const u8,
+                mapped.pData as *mut u8,
+                size_of::<QuadConstants>(),
+            );
             context.Unmap(&self.constants, 0);
 
             context.RSSetViewports(Some(&[D3D11_VIEWPORT {
@@ -231,34 +249,70 @@ impl HudQuad {
     }
 }
 
-/// The four clip-space corners (`.xy` = NDC, `.zw` = UV) of the panel for `eye`, given the back-buffer
-/// `aspect`. The panel is head-locked at [`DISTANCE`] ahead; each eye is offset by half [`PANEL_IPD`]
-/// so the pair converges at that distance. Order is a triangle strip: top-left, top-right, bottom-
-/// left, bottom-right.
-fn quad_corners(eye: usize, aspect: f32) -> [[f32; 4]; 4] {
-    let half_h = PANEL_HEIGHT * 0.5;
-    let half_w = PANEL_HEIGHT * aspect * 0.5;
-    // Eye 0 = left, eye 1 = right. The panel sits at head origin, so relative to this eye its center
-    // shifts opposite the eye offset -- left eye sees it right of center, which converges in front.
-    let eye_offset = if eye == 0 {
-        -PANEL_IPD * 0.5
-    } else {
-        PANEL_IPD * 0.5
-    };
-    let center_x = -eye_offset;
+/// Compute the panel's world-space corners from the render camera's world position and the
+/// follow/distance parameters. Call once per frame (eye 0) and cache the result so both eyes
+/// project the same world-space quad through their own per-eye VP. Returns `None` if the camera
+/// is unavailable.
+///
+/// The panel sits at its own world-space orientation (the damped follow yaw/pitch), positioned at
+/// the camera position + panel_forward * distance. It is NOT rotated through the camera's
+/// transform — that would stack the follow rotation on top of the head rotation, swinging the
+/// panel offscreen on large turns. The camera contributes only its position (the anchor point);
+/// the panel's orientation comes entirely from the damped follow angles.
+pub(crate) fn compute_world_corners(
+    width: u32,
+    height: u32,
+    distance: f32,
+    panel_height: f32,
+    follow_yaw: f32,
+    follow_pitch: f32,
+) -> Option<[[f32; 4]; 4]> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let aspect = width as f32 / height as f32;
 
-    let tan_y = (FOV_Y * 0.5).tan();
-    let tan_x = tan_y * aspect;
+    let transform = unsafe {
+        let cm = jc3gi::camera::camera_manager::CameraManager::get()?;
+        let cam = cm.m_RenderCamera.as_ref()?;
+        cam.m_TransformF.data
+    };
+
+    // Camera world position (translation row of the world transform). The per-eye IPD offset is
+    // tiny compared to the panel distance, so anchoring at eye 0's position gives correct stereo
+    // disparity for eye 1.
+    let cam_pos = Vec3::new(transform[12], transform[13], transform[14]);
+
+    // Panel orientation in world space from the damped follow yaw/pitch. Yaw is a compass
+    // bearing (positive = right = clockwise from above), so negate for glam's right-handed
+    // convention. Pitch (positive = looking up) already aligns with `from_rotation_x(positive)`.
+    let rot = Mat4::from_rotation_x(follow_pitch) * Mat4::from_rotation_y(-follow_yaw);
+    let forward = rot.transform_vector3(Vec3::NEG_Z);
+    let right = rot.transform_vector3(Vec3::X);
+    let up = rot.transform_vector3(Vec3::Y);
+
+    let center = cam_pos + forward * distance;
+    let half_h = panel_height * 0.5;
+    let half_w = panel_height * aspect * 0.5;
 
     let layout = [
-        (-half_w, half_h, 0.0, 0.0),
-        (half_w, half_h, 1.0, 0.0),
-        (-half_w, -half_h, 0.0, 1.0),
-        (half_w, -half_h, 1.0, 1.0),
+        (-half_w, half_h),
+        (half_w, half_h),
+        (-half_w, -half_h),
+        (half_w, -half_h),
     ];
-    layout.map(|(dx, dy, u, v)| {
-        let ndc_x = (center_x + dx) / DISTANCE / tan_x;
-        let ndc_y = dy / DISTANCE / tan_y;
-        [ndc_x, ndc_y, u, v]
-    })
+
+    Some(layout.map(|(dx, dy)| {
+        let corner = center + right * dx + up * dy;
+        [corner.x, corner.y, corner.z, 1.0]
+    }))
+}
+
+/// Fetch the render camera's view-projection matrix for the current eye.
+fn fetch_view_projection() -> Option<[f32; 16]> {
+    unsafe {
+        let cm = jc3gi::camera::camera_manager::CameraManager::get()?;
+        let cam = cm.m_RenderCamera.as_ref()?;
+        Some(cam.m_ViewProjectionF.data)
+    }
 }

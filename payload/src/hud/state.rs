@@ -1,5 +1,7 @@
 //! The HUD-redirect state machine: it lazily creates the target, applies and relinquishes the rebind,
-//! and owns the egui preview registration.
+//! owns the egui preview registration, and drives the lazy-follow damping for the floating panel.
+
+use std::time::Instant;
 
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
@@ -8,6 +10,12 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 
 use super::{binding, quad::HudQuad, target::HudTarget};
+
+/// Parameters for the lazy-follow damping update.
+pub(crate) struct FollowParams {
+    pub head_yaw: f32,
+    pub head_pitch: f32,
+}
 
 /// Global HUD state. Locked briefly on the render thread.
 pub static HUD_STATE: Mutex<HudState> = Mutex::new(HudState::new());
@@ -22,6 +30,95 @@ pub struct HudState {
     preview_id: Option<egui::TextureId>,
     /// The quad pass that draws the redirected HUD back into the scene, built lazily on first draw.
     quad: Option<HudQuad>,
+    /// Lazy-follow damping state for the floating panel.
+    follow: FollowState,
+    /// World-space panel corners, computed once per frame on eye 0 and reused for eye 1 so both
+    /// eyes project the same world position through their own per-eye VP (correct stereo depth).
+    cached_corners: Option<[[f32; 4]; 4]>,
+}
+
+/// Damped follow state: tracks the panel's eased yaw and pitch offset relative to the head.
+struct FollowState {
+    /// Damped yaw offset in radians (positive = panel rotated right of head center).
+    yaw: f32,
+    /// Damped pitch offset in radians (positive = panel rotated above head center).
+    pitch: f32,
+    /// Last frame's instant for delta-time computation.
+    last_time: Option<Instant>,
+}
+
+impl FollowState {
+    const fn new() -> Self {
+        Self {
+            yaw: 0.0,
+            pitch: 0.0,
+            last_time: None,
+        }
+    }
+
+    /// Update the damped offsets toward the head's orientation, using the critically-damped
+    /// exponential: `alpha = 1 - 2^(-dt/halflife); current = lerp(current, target, alpha)`.
+    /// Returns the resulting damped offsets `(yaw_rad, pitch_rad)` for the quad's world-space
+    /// orientation.
+    fn update(
+        &mut self,
+        params: &FollowParams,
+        config: &super::config::FollowConfig,
+    ) -> (f32, f32) {
+        let dt = self
+            .last_time
+            .map(|t| t.elapsed().as_secs_f32())
+            .unwrap_or(0.016);
+        self.last_time = Some(Instant::now());
+        // Clamp dt to avoid huge leaps on frame drops.
+        let dt = dt.min(0.1);
+
+        // Deadzone is relative to the panel's current orientation, not the initial forward.
+        // The panel only moves when the head is more than deadzone away from the panel's
+        // current yaw/pitch, keeping the panel within a few degrees of the head at all times.
+        let yaw_rad = params.head_yaw.to_radians();
+        let pitch_rad = params.head_pitch.to_radians();
+        let dz_yaw = config.yaw_deadzone.to_radians();
+        let dz_pitch = config.pitch_deadzone.to_radians();
+
+        let yaw_delta = shortest_angle_delta(self.yaw, yaw_rad);
+        let target_yaw = if yaw_delta.abs() < dz_yaw {
+            self.yaw
+        } else {
+            yaw_rad - dz_yaw * yaw_delta.signum()
+        };
+        let pitch_delta = pitch_rad - self.pitch;
+        let target_pitch = if pitch_delta.abs() < dz_pitch {
+            self.pitch
+        } else {
+            pitch_rad - dz_pitch * pitch_delta.signum()
+        };
+
+        // Compute frame-rate independent damping factors.
+        let alpha_yaw = (1.0 - 2.0_f32.powf(-dt / config.yaw_halflife)).min(1.0);
+        let alpha_pitch = (1.0 - 2.0_f32.powf(-dt / config.pitch_halflife)).min(1.0);
+
+        // Lerp toward targets.
+        self.yaw = self.yaw + (target_yaw - self.yaw) * alpha_yaw;
+        self.pitch = self.pitch + (target_pitch - self.pitch) * alpha_pitch;
+
+        (self.yaw, self.pitch)
+    }
+}
+
+/// Shortest angular distance from `from` to `to`, wrapped to [-π, π]. Handles the ±180°
+/// discontinuity in yaw so the panel doesn't swing the long way around when the head crosses
+/// that boundary.
+fn shortest_angle_delta(from: f32, to: f32) -> f32 {
+    let pi = std::f32::consts::PI;
+    let two_pi = 2.0 * pi;
+    let mut delta = (to - from) % two_pi;
+    if delta > pi {
+        delta -= two_pi;
+    } else if delta < -pi {
+        delta += two_pi;
+    }
+    delta
 }
 
 impl HudState {
@@ -31,6 +128,8 @@ impl HudState {
             redirected: false,
             preview_id: None,
             quad: None,
+            follow: FollowState::new(),
+            cached_corners: None,
         }
     }
 
@@ -76,19 +175,58 @@ impl HudState {
         self.target = None;
     }
 
+    /// Update the lazy-follow damping state from the current head orientation. Returns the damped
+    /// offsets `(yaw_rad, pitch_rad)` for the quad's 3D rotation.
+    pub fn update_follow(
+        &mut self,
+        params: &FollowParams,
+        config: &super::config::FollowConfig,
+    ) -> (f32, f32) {
+        self.follow.update(params, config)
+    }
+
+    /// Compute the panel's world-space corners from the current camera and follow state, caching
+    /// the result for both eyes. Call once per frame (eye 0); eye 1 reuses the cached corners.
+    pub fn compute_world_corners(
+        &mut self,
+        width: u32,
+        height: u32,
+        distance: f32,
+        panel_height: f32,
+        follow_yaw: f32,
+        follow_pitch: f32,
+    ) {
+        // Invalidate the cache first; if the computation fails, eye 1 won't draw stale corners.
+        self.cached_corners = None;
+        if let Some(corners) = super::quad::compute_world_corners(
+            width,
+            height,
+            distance,
+            panel_height,
+            follow_yaw,
+            follow_pitch,
+        ) {
+            self.cached_corners = Some(corners);
+        }
+    }
+
     /// Draw the redirected HUD as a floating quad for `eye` over `target` (the eye's linear back
-    /// buffer). A no-op when not redirected. The quad pass is built lazily on first draw. The caller
-    /// must hold the engine context mutex.
+    /// buffer). A no-op when not redirected or when no cached corners are available (e.g. the camera
+    /// was unavailable on eye 0). The quad pass is built lazily on first draw. The caller must hold
+    /// the engine context mutex.
     pub fn draw_quad(
         &mut self,
         context: &ID3D11DeviceContext,
         device: &Device,
         target: &Texture,
-        eye: usize,
+        _eye: usize,
     ) {
         if !self.redirected {
             return;
         }
+        let Some(corners) = self.cached_corners else {
+            return;
+        };
         let Some(hud_srv) = self.target.as_ref().map(|t| t.color_srv().clone()) else {
             return;
         };
@@ -102,7 +240,7 @@ impl HudState {
             }
         }
         if let Some(quad) = self.quad.as_ref() {
-            quad.draw(context, device, target, &hud_srv, eye);
+            quad.draw(context, device, target, &hud_srv, &corners);
         }
     }
 
