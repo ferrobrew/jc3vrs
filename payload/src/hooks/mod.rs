@@ -10,6 +10,7 @@ pub mod draw_count;
 pub mod game;
 pub mod graphics_engine;
 mod reset;
+pub mod ui;
 pub mod wndproc;
 
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
@@ -31,6 +32,7 @@ pub(super) fn install() {
             camera::hook_library(),
             wndproc::hook_library(),
             character::hook_library(),
+            ui::hook_library(),
         ])
         .enable(&mut patcher)?)
     });

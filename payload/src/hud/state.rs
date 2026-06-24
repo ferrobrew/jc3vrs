@@ -131,6 +131,12 @@ impl HudState {
         self.follow.update(head_rotation, config)
     }
 
+    /// The current damped follow rotation. Used by the W2S hook to project markers onto the
+    /// panel's surface rather than the screen plane.
+    pub fn follow_rotation(&self) -> Quat {
+        self.follow.rotation
+    }
+
     /// Compute the panel's world-space corners from the current camera and follow state, caching
     /// the result for both eyes. Call once per frame (eye 0); eye 1 reuses the cached corners.
     pub fn compute_world_corners(&mut self, params: &super::quad::PanelParams) {

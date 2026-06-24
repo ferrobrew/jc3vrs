@@ -36,8 +36,12 @@ mod target;
 pub use config::HudConfig;
 pub use state::HUD_STATE;
 
-use glam::{Mat3, Quat, Vec3};
-use jc3gi::graphics_engine::{device::Device, texture::Texture};
+use glam::{Mat3, Mat4, Quat, Vec3};
+use jc3gi::{
+    camera::camera_manager::CameraManager,
+    graphics_engine::{device::Device, texture::Texture},
+    types::math::Matrix4,
+};
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 
 /// The per-frame render-thread step: redirects the HUD into our texture while enabled, restores the
@@ -107,6 +111,50 @@ fn extract_head_rotation() -> Quat {
     let back = Vec3::new(transform[8], transform[9], transform[10]);
 
     Quat::from_mat3(&Mat3::from_cols(right, up, back))
+}
+
+/// Compute the view-projection and camera matrices for the floating panel's orientation, so that
+/// W2S (`Get2DInfo`) projects world points onto the panel's surface rather than the screen plane.
+/// Returns `(vp, camera_transform)` in engine format, or `None` if the camera is unavailable.
+///
+/// The panel VP uses the damped follow rotation for orientation and the active camera's position
+/// and projection. This ensures markers are positioned correctly on the floating quad: a POI
+/// directly ahead of the camera but off-center from the panel's facing direction appears at the
+/// correct position on the panel surface, compensating for the follow-damping lag.
+pub fn compute_panel_vp() -> Option<(Matrix4, Matrix4)> {
+    let follow_rotation = HUD_STATE.lock().follow_rotation();
+
+    let (transform, projection) = unsafe {
+        let cm = CameraManager::get()?;
+        let active = cm.m_ActiveCamera.as_ref()?;
+        (&active.m_TransformF, &active.m_ProjectionF)
+    };
+
+    let cam_pos = Vec3::new(transform.data[12], transform.data[13], transform.data[14]);
+
+    // Build the panel world transform from the follow rotation's basis vectors + camera position.
+    // The engine stores +Z as the third basis (back), so back = quat * Z (not -Z).
+    let right = follow_rotation * Vec3::X;
+    let up = follow_rotation * Vec3::Y;
+    let back = follow_rotation * Vec3::Z;
+
+    let panel_transform = Mat4::from_cols(
+        right.extend(0.0),
+        up.extend(0.0),
+        back.extend(0.0),
+        cam_pos.extend(1.0),
+    );
+
+    // View = inverse(world transform). VP = P * V (glam column-vector convention).
+    // The Matrix4 ↔ Mat4 From impls transpose, so the engine-format result is correct.
+    let panel_view = panel_transform.inverse();
+    let glam_proj = Mat4::from(*projection);
+    let glam_vp = glam_proj * panel_view;
+
+    let engine_vp = Matrix4::from(glam_vp);
+    let engine_camera = Matrix4::from(panel_transform);
+
+    Some((engine_vp, engine_camera))
 }
 
 /// Register the HUD's shutdown cleanup. Call once at init. The cleanup clears the redirect config flag
