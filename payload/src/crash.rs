@@ -3,11 +3,18 @@
 //! A vectored exception handler logs the faulting address + a module-resolved backtrace the moment a
 //! fatal exception is *raised* -- before any handler unwinds. This covers the case where the game
 //! catches a fault itself and turns it into a clean exit: Wine prints no backtrace and the window
-//! just vanishes, but the record still lands in `jc3vrs.log` (its writer is an unbuffered `File`, so
-//! the line is flushed to the kernel before the process dies). A panic hook does the same for Rust
+//! just vanishes, but the record still lands in `jc3vrs.log`. A panic hook does the same for Rust
 //! panics, which don't raise an SEH exception and so are invisible to the VEH handler. Each address
 //! is resolved to its containing module + offset (`module+0xoff`), which works under Wine where
 //! `std::backtrace` usually can't symbolize.
+//!
+//! All output goes through [`log_raw`], which writes directly to the log file via `writeln!`,
+//! bypassing the `tracing` subscriber entirely. This is critical: `tracing::error!` acquires the
+//! subscriber's internal mutex and touches thread-local state, both of which can be poisoned or
+//! unavailable inside a VEH handler or panic hook. Calling `tracing` from a crash handler causes a
+//! reentrant panic that masks the original error -- exactly the failure that motivated this rewrite.
+
+use std::io::Write;
 
 use windows::{
     Win32::{
@@ -39,15 +46,48 @@ const FATAL_CODES: &[u32] = &[
     0xC00000FD, // STACK_OVERFLOW
 ];
 
+/// The log file for crash-handler writes. Opened at [`install`] time as a raw `File` so it works
+/// even when the `tracing` subscriber is poisoned or unavailable. Uses `try_lock` so a reentrant
+/// call (e.g. a panic inside the crash handler itself) skips the write instead of deadlocking.
+static CRASH_LOG: parking_lot::Mutex<Option<std::fs::File>> = parking_lot::Mutex::new(None);
+
 pub fn install() {
+    // Open the log file for direct writes, sharing the same `jc3vrs.log` the tracing subscriber
+    // writes to. Append mode so crash records are appended to the existing log.
+    if let Some(path) = crate::module::get_path()
+        .as_ref()
+        .and_then(|path| path.parent())
+        .map(|parent| parent.join("jc3vrs.log"))
+        .and_then(|path| {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&path)
+                .ok()
+        })
+    {
+        *CRASH_LOG.lock() = Some(path);
+    }
+
     unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
     // Rust panics unwind/abort instead of raising an SEH exception, so the VEH handler above never
     // sees them. Log the message + a module-resolved backtrace ourselves before the process dies.
     std::panic::set_hook(Box::new(|info| {
-        tracing::error!("rust panic: {info}");
+        log_raw(&format!("rust panic: {info}"));
         unsafe { log_backtrace() };
     }));
     tracing::info!("Crash handler installed");
+}
+
+/// Write a line directly to the crash log file, bypassing `tracing`. Safe to call from VEH handlers
+/// and panic hooks -- uses `try_lock` so a reentrant call skips the write instead of deadlocking,
+/// and never touches `tracing`'s subscriber mutex or thread-local state.
+fn log_raw(line: &str) {
+    if let Some(mut guard) = CRASH_LOG.try_lock()
+        && let Some(file) = guard.as_mut()
+    {
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
@@ -85,13 +125,12 @@ unsafe fn resolve(addr: usize) -> Option<(String, usize)> {
 unsafe fn log_frame(at: &str, addr: usize) {
     unsafe {
         match resolve(addr) {
-            Some((module, offset)) => tracing::error!(
-                at = %at,
-                module = %module,
-                offset = %format_args!("{offset:#X}"),
-                addr = %format_args!("{addr:#018X}"),
-            ),
-            None => tracing::error!(at = %at, addr = %format_args!("{addr:#018X}")),
+            Some((module, offset)) => {
+                log_raw(&format!(
+                    "  {at}: module={module} offset={offset:#X} addr={addr:#018X}"
+                ));
+            }
+            None => log_raw(&format!("  {at}: addr={addr:#018X}")),
         }
     }
 }
@@ -122,12 +161,9 @@ unsafe fn log_record(rec: &EXCEPTION_RECORD) {
             ("n/a", 0)
         };
 
-        tracing::error!(
-            code = %format_args!("{code:#010X}"),
-            access = access_kind,
-            access_addr = %format_args!("{access_addr:#018X}"),
-            "fatal exception"
-        );
+        log_raw(&format!(
+            "fatal exception: code={code:#010X} access={access_kind} access_addr={access_addr:#018X}"
+        ));
 
         // The faulting instruction, then the captured stack.
         log_frame("fault", rec.ExceptionAddress as usize);
