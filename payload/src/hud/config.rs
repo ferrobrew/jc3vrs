@@ -22,8 +22,8 @@ impl HudConfig {
         Self {
             redirect: true,
             quad: true,
-            distance: 1.8,
-            panel_height: 2.0,
+            distance: 3.0,
+            panel_height: 5.0,
             follow: FollowConfig::new(),
         }
     }
