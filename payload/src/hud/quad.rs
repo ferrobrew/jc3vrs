@@ -290,10 +290,12 @@ pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4
 
     // Panel orientation in world space from the damped follow yaw/pitch/roll. Yaw is a compass
     // bearing (positive = right = clockwise from above), so negate for glam's right-handed
-    // convention. Pitch (positive = looking up) already aligns with `from_rotation_x(positive)`.
-    // Roll (positive = right side down, clockwise from behind) is likewise negated. Roll is applied
-    // first (rightmost) so it rotates around the panel's local forward axis before yaw/pitch.
-    let rot = Mat4::from_rotation_x(params.follow_pitch)
+    // convention. Pitch (positive = looking up) is likewise negated — glam's from_rotation_x
+    // tilts -Z toward +Y, but in the engine's convention the forward already encodes the head's
+    // upward tilt, so the negation keeps the panel tracking in the same direction as the head.
+    // Roll (positive = right side down, clockwise from behind) is likewise negated. Roll is
+    // applied first (rightmost) so it rotates around the panel's local forward before yaw/pitch.
+    let rot = Mat4::from_rotation_x(-params.follow_pitch)
         * Mat4::from_rotation_y(-params.follow_yaw)
         * Mat4::from_rotation_z(-params.follow_roll);
     let forward = rot.transform_vector3(Vec3::NEG_Z);
