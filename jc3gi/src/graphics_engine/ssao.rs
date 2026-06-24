@@ -1,12 +1,10 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::graphics_engine::render_pass::RotateRenderFrameData;
 #[repr(C, align(8))]
 /// The screen-space ambient-occlusion render pass.
 ///
 /// It maintains a two-slot temporal AO history, blended in when `m_EnableTemporalFilter` is set. The
 /// history index advances once per render-block draw (an inlined `SetNextHistoryBuffer` at the end of
-/// the apply), not in [`RotateRenderFrameData`], so a twice-per-frame stereo render double-steps the
+/// the apply), not in the per-frame list rotation, so a twice-per-frame stereo render double-steps the
 /// history and blends each eye's AO against the other's.
 ///
 /// The render block's final composite draw lives inside the `m_EnableTemporalFilter` branch, so

@@ -101,14 +101,8 @@ pub enum TraceEvent {
     DrawBegin { eye: usize },
     #[serde(rename = "draw_end")]
     DrawEnd { eye: usize, counts: DrawCounts },
-    /// Between-eyes per-pass add-list reset; `cleared` = passes whose draw-time list still had
-    /// items from eye 0 (so a non-zero count here is the doubling being prevented).
-    #[serde(rename = "ResetPerEye")]
-    ResetPerEye { cleared: u32 },
     #[serde(rename = "SetupRenderCamera")]
     SetupRenderCamera,
-    #[serde(rename = "RotateRenderFrameData")]
-    RotateRenderFrameData { gated: bool },
     #[serde(rename = "SetupRenderFrameData")]
     SetupRenderFrameData { gated: bool },
     #[serde(rename = "HandBackBuffers")]

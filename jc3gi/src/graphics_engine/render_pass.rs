@@ -157,9 +157,9 @@ impl RenderPass {
         }
     }
     pub const SaveRenderFrameData_ADDRESS: usize = 0x140194480;
-    /// The per-pass half of the list rotation, driven by [`RotateRenderFrameData`]: points
-    /// `m_CurrentAddList` at the new parity's list, the draw list at the other, and zeroes the new
-    /// add-list's element count. Also snapshots the pass camera.
+    /// The per-pass half of the list rotation, driven by the per-frame `CKeep1000Frames` call in the
+    /// `CGraphicsEngine::Draw` prologue: points `m_CurrentAddList` at the new parity's list, the draw
+    /// list at the other, and zeroes the new add-list's element count. Also snapshots the pass camera.
     pub unsafe fn SaveRenderFrameData(&mut self, parity: u32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, parity: u32) = ::std::mem::transmute(
@@ -196,6 +196,9 @@ impl std::convert::AsMut<RenderPass> for RenderPass {
         self
     }
 }
+pub unsafe fn get_current_add_buffer() -> &'static mut u32 {
+    unsafe { &mut *(0x142ED7680 as *mut u32) }
+}
 pub unsafe fn get_render_block_overflow_count() -> &'static mut u32 {
     unsafe { &mut *(0x142ED0FA0 as *mut u32) }
 }
@@ -215,22 +218,5 @@ pub unsafe fn CalculateOffsetViewProjectionMatrix(
             dst: *mut crate::types::math::Matrix4,
         ) = ::std::mem::transmute(CalculateOffsetViewProjectionMatrix_ADDRESS);
         f(src, proj, dst)
-    }
-}
-pub const RotateRenderFrameData_ADDRESS: usize = 0x1401A3000;
-/// The per-frame render-block-item list rotation, run once in each graphics-engine draw prologue.
-/// Toggles the global add/draw parity, then for every render pass swaps the add and draw lists to the
-/// new parity (via [`RenderPass::SaveRenderFrameData`]) and zeroes the new add-list's element count,
-/// and finally flushes the overflow list. This -- not the per-batch
-/// [`SetupRenderFrameData`](RenderPass::SetupRenderFrameData) build above -- is the actual draw-list
-/// swap. Static; reads the render engine and parity from globals.
-///
-/// **Note:** the call site is mislabeled `CKeep1000Frames` in this binary's symbols.
-pub unsafe fn RotateRenderFrameData() {
-    unsafe {
-        let f: unsafe extern "system" fn() = ::std::mem::transmute(
-            RotateRenderFrameData_ADDRESS,
-        );
-        f()
     }
 }

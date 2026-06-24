@@ -4,8 +4,9 @@ use detours_macro::detour;
 use jc3gi::{
     clock::Clock,
     game::{Game, GameState, UpdateContexts},
-    graphics_engine::graphics_engine::{
-        GraphicsEngine, RenderFrameCounters, get_render_frame_counters,
+    graphics_engine::{
+        graphics_engine::{GraphicsEngine, RenderFrameCounters, get_render_frame_counters},
+        render_pass::get_current_add_buffer,
     },
 };
 use re_utilities::hook_library::HookLibrary;
@@ -69,6 +70,11 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             // Snapshot the prologue frame counters so we can rewind them before eye 1, keeping both
             // eyes on the same jitter phase / shadow parity / CB ring (see RESTORE_FRAME_COUNTERS).
             let frame_counters = restore_counters.then(snapshot_frame_counters);
+            // Snapshot the add/draw list parity so eye 1's CKeep1000Frames toggles it to the same
+            // value as eye 0, making SaveRenderFrameData set the same list pointers. This replaces the
+            // former RotateRenderFrameData eye-1 gate -- the function now runs on both eyes, so the
+            // overflow list is processed and the external render camera is updated on both eyes too.
+            let saved_add_buffer = *get_current_add_buffer();
 
             // The per-eye camera offset is injected on the render camera in the SetupRenderCamera
             // hook (see hooks::camera and docs/rendering.md section 2); here we just drive the two
@@ -102,9 +108,10 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             if let Some(counters) = frame_counters {
                 restore_frame_counters(counters);
             }
-            // Zero the draw-time pass add-lists so eye 1 re-adds its SSAO / post-effect blocks fresh
-            // instead of accumulating onto eye 0's (the ~2x AO + doubled post chain).
-            super::reset::reset_per_eye();
+            // Restore the add/draw parity so eye 1's CKeep1000Frames produces the same toggle as eye 0,
+            // and SaveRenderFrameData zeroes the same add-list (removing eye 0's draw-time additions
+            // like SSAO/post blocks). This replaces the former reset_per_eye() call.
+            *get_current_add_buffer() = saved_add_buffer;
 
             super::draw_count::DRAW_COUNTS.clear();
             TraceState::record(TraceEvent::DrawBegin { eye: 1 });

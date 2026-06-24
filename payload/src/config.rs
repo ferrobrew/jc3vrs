@@ -66,8 +66,6 @@ pub struct StereoConfig {
     pub present_eye_0: bool,
     /// Restore the TAA-jitter / shadow-phase counters between eyes.
     pub restore_frame_counters: bool,
-    /// Skip RotateRenderFrameData on eye 1 (the core geometry fix).
-    pub gate_rotate_render_frame_data: bool,
     /// Skip SetupRenderFrameData on eye 1 (experimental; normally inert).
     pub gate_setup_render_frame_data: bool,
     /// Skip HandBackBuffers on eye 1.
@@ -85,7 +83,6 @@ impl StereoConfig {
             force_ssao_first_pass: true,
             present_eye_0: false,
             restore_frame_counters: true,
-            gate_rotate_render_frame_data: true,
             gate_setup_render_frame_data: false,
             gate_hand_back_buffers: false,
             gate_eye1_dt: true,

@@ -1,7 +1,7 @@
 //! Detour on the SSAO pass.
 //!
 //! The SSAO history index advances once per `CRenderBlockSSAO::Draw` (an inlined
-//! `SetNextHistoryBuffer` at the end of the apply), not in `RotateRenderFrameData`. A stereo render
+//! `SetNextHistoryBuffer` at the end of the apply), not in the per-frame list rotation. A stereo render
 //! dispatches that draw twice per frame, so the two-slot AO history double-steps and each eye's
 //! temporal filter blends against the other eye's AO. Clearing `m_EnableTemporalFilter` would avoid
 //! that, but the render block's final composite draw lives inside that flag's branch, so doing so

@@ -81,10 +81,6 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
 
     ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {
         ui.checkbox(
-            &mut cfg.stereo.gate_rotate_render_frame_data,
-            "RotateRenderFrameData (RBI list flip -- the geometry fix)",
-        );
-        ui.checkbox(
             &mut cfg.exposure.gate,
             "Auto-exposure (SmoothedExposure + Histogram)",
         );
