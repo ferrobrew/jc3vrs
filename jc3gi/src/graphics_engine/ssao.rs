@@ -1,4 +1,6 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::graphics_engine::render_pass::RotateRenderFrameData;
 #[repr(C, align(8))]
 /// The screen-space ambient-occlusion render pass.
 ///

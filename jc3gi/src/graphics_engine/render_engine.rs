@@ -1,4 +1,9 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::{
+    graphics_engine::post_effects::PostEffectsManager,
+    graphics_engine::post_effects::RenderBlockPostEffects,
+};
 #[repr(C, align(8))]
 pub struct RenderEngine {
     _field_0: [u8; 128],

@@ -1,4 +1,6 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::graphics_engine::tone_mapping::ToneMappingEffect;
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
 /// Anti-aliasing resolve mode.
@@ -414,10 +416,10 @@ impl std::convert::AsMut<PostEffectRenderContext> for PostEffectRenderContext {
         self
     }
 }
-bitflags::bitflags! {
-    #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] #[doc =
-    " Per-frame render-context flags carried by a [`PostEffectRenderContext`]."] pub
-    struct PostEffectRenderFlags : u8 { const m_MotionVectorReprojection = 1usize as _; }
+crate::__bitflags! {
+    #[doc = " Per-frame render-context flags carried by a [`PostEffectRenderContext`]."]
+    pub struct PostEffectRenderFlags : u8 { const m_MotionVectorReprojection = 1usize as
+    _; }
 }
 fn _PostEffectRenderFlags_size_check() {
     unsafe {

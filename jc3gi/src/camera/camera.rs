@@ -113,11 +113,11 @@ impl std::convert::AsMut<Camera> for Camera {
         self
     }
 }
-bitflags::bitflags! {
-    #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)] pub struct CameraState
-    : u8 { const m_UseOffCenter = 1usize as _; const m_ScreenshotSeriesRunning = 2usize
-    as _; const m_Ortho = 4usize as _; const m_ComputeView = 8usize as _; const
-    m_DirtyProjection = 16usize as _; const m_IsRenderCamera = 32usize as _; }
+crate::__bitflags! {
+    pub struct CameraState : u8 { const m_UseOffCenter = 1usize as _; const
+    m_ScreenshotSeriesRunning = 2usize as _; const m_Ortho = 4usize as _; const
+    m_ComputeView = 8usize as _; const m_DirtyProjection = 16usize as _; const
+    m_IsRenderCamera = 32usize as _; }
 }
 fn _CameraState_size_check() {
     unsafe {
