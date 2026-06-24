@@ -90,7 +90,18 @@ fn log_raw(line: &str) {
     }
 }
 
+/// Reentrancy guard: set when the VEH handler is running. If the handler's own logging code
+/// triggers an exception (e.g. `GetModuleHandleExW` faults under Wine), the recursive call sees
+/// this flag and returns immediately, preventing an infinite loop of self-inflicted exceptions.
+/// The flag is never cleared once set by a recursive fault -- this is intentional: if logging
+/// itself crashes, we've already logged what we can, and further attempts would only repeat the
+/// same crash.
+static IN_HANDLER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
+    if IN_HANDLER.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
     unsafe {
         if let Some(info) = info.as_ref()
             && let Some(rec) = info.ExceptionRecord.as_ref()
@@ -98,8 +109,9 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         {
             log_record(rec);
         }
-        EXCEPTION_CONTINUE_SEARCH
     }
+    IN_HANDLER.store(false, std::sync::atomic::Ordering::SeqCst);
+    EXCEPTION_CONTINUE_SEARCH
 }
 
 /// Resolve `addr` to (module basename, offset within that module), or `None` if it isn't inside a
