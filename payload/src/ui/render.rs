@@ -457,16 +457,8 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
                                 .text("Panel height (m)"),
                         );
                         ui.add(
-                            egui::Slider::new(&mut cfg.hud.follow.yaw_halflife, 0.01..=1.0)
-                                .text("Yaw halflife (s)"),
-                        );
-                        ui.add(
-                            egui::Slider::new(&mut cfg.hud.follow.pitch_halflife, 0.01..=2.0)
-                                .text("Pitch halflife (s)"),
-                        );
-                        ui.add(
-                            egui::Slider::new(&mut cfg.hud.follow.roll_halflife, 0.01..=2.0)
-                                .text("Roll halflife (s)"),
+                            egui::Slider::new(&mut cfg.hud.follow.rotation_halflife, 0.01..=2.0)
+                                .text("Rotation halflife (s)"),
                         );
                         ui.add(
                             egui::Slider::new(&mut cfg.hud.follow.position_halflife, 0.01..=1.0)

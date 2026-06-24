@@ -1,22 +1,20 @@
 //! Draw the redirected HUD texture as a lazy-follow in-scene quad, per eye, over the final image.
 //!
 //! Step one redirected the HUD into our texture and dropped it from the scene composite; this draws it
-//! back in as a head-relative panel that lazily follows the head's orientation, with deadzones and
-//! critically-damped easing. The panel sits at its own world-space orientation (the damped follow
-//! yaw/pitch), positioned at the camera position + panel_forward * distance. The deadzone is relative
-//! to the panel's current orientation, so the panel always stays within a few degrees of the head —
-//! it never swings offscreen on large turns. Corners are uploaded alongside the camera's per-eye
-//! view-projection matrix; the vertex shader projects each corner
+//! back in as a head-relative panel that lazily follows the head's orientation with critically-damped
+//! quaternion slerp. The panel sits at its own world-space orientation (the damped follow rotation),
+//! positioned at the camera position + panel_forward * distance. Corners are uploaded alongside the
+//! camera's per-eye view-projection matrix; the vertex shader projects each corner
 //! ([`hud_quad_vs`](../shaders/hud_quad_vs.hlsl) / `hud_quad_ps`). The panel is an alpha-blended overlay
 //! with the depth test disabled, drawn onto the linear back buffer at the end of the eye's draw.
 //!
 //! World-space corners are computed once per frame (eye 0) via [`compute_world_corners`] and cached
 //! by [`super::state::HudState`]; both eyes then project the same world-space quad through their own
 //! per-eye VP. Geometry and follow parameters come from [`crate::hud::config::HudConfig`]; the damped
-//! yaw/pitch offsets are computed by [`super::state::HudState::update_follow`].
+//! rotation is computed by [`super::state::HudState::update_follow`].
 
 use anyhow::Context as _;
-use glam::{Mat4, Vec3};
+use glam::{Quat, Vec3};
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use windows::Win32::Graphics::{
     Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
@@ -256,21 +254,19 @@ pub(crate) struct PanelParams {
     pub height: u32,
     pub distance: f32,
     pub panel_height: f32,
-    pub follow_yaw: f32,
-    pub follow_pitch: f32,
-    pub follow_roll: f32,
+    pub follow_rotation: Quat,
 }
 
 /// Compute the panel's world-space corners from the render camera's world position and the
-/// follow/distance parameters. Call once per frame (eye 0) and cache the result so both eyes
+/// damped follow rotation. Call once per frame (eye 0) and cache the result so both eyes
 /// project the same world-space quad through their own per-eye VP. Returns `None` if the camera
 /// is unavailable.
 ///
-/// The panel sits at its own world-space orientation (the damped follow yaw/pitch/roll), positioned
+/// The panel sits at its own world-space orientation (the damped follow quaternion), positioned
 /// at the camera position + panel_forward * distance. It is NOT rotated through the camera's
 /// transform — that would stack the follow rotation on top of the head rotation, swinging the
 /// panel offscreen on large turns. The camera contributes only its position (the anchor point);
-/// the panel's orientation comes entirely from the damped follow angles.
+/// the panel's orientation comes entirely from the damped quaternion.
 pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4]> {
     if params.width == 0 || params.height == 0 {
         return None;
@@ -288,19 +284,12 @@ pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4
     // disparity for eye 1.
     let cam_pos = Vec3::new(transform[12], transform[13], transform[14]);
 
-    // Panel orientation in world space from the damped follow yaw/pitch/roll. Yaw is a compass
-    // bearing (positive = right = clockwise from above), so negate for glam's right-handed
-    // convention. Pitch (positive = looking up) is likewise negated — glam's from_rotation_x
-    // tilts -Z toward +Y, but in the engine's convention the forward already encodes the head's
-    // upward tilt, so the negation keeps the panel tracking in the same direction as the head.
-    // Roll (positive = right side down, clockwise from behind) is likewise negated. Roll is
-    // applied first (rightmost) so it rotates around the panel's local forward before yaw/pitch.
-    let rot = Mat4::from_rotation_x(-params.follow_pitch)
-        * Mat4::from_rotation_y(-params.follow_yaw)
-        * Mat4::from_rotation_z(-params.follow_roll);
-    let forward = rot.transform_vector3(Vec3::NEG_Z);
-    let right = rot.transform_vector3(Vec3::X);
-    let up = rot.transform_vector3(Vec3::Y);
+    // Panel basis vectors from the damped quaternion. The quaternion represents the same
+    // rotation as the camera's world transform, so forward = quat * -Z matches the head's
+    // forward direction.
+    let forward = params.follow_rotation * Vec3::NEG_Z;
+    let right = params.follow_rotation * Vec3::X;
+    let up = params.follow_rotation * Vec3::Y;
 
     let center = cam_pos + forward * params.distance;
     let half_h = params.panel_height * 0.5;

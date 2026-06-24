@@ -33,21 +33,15 @@ impl HudConfig {
 /// Lazy-follow damping parameters for the floating HUD panel. See `docs/hud.md`.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct FollowConfig {
-    /// Yaw follow halflife in seconds. Lower = snappier follow.
-    pub yaw_halflife: f32,
-    /// Pitch follow halflife in seconds. Lower = snappier follow.
-    pub pitch_halflife: f32,
-    /// Roll follow halflife in seconds. Lower = snappier follow.
-    pub roll_halflife: f32,
+    /// Rotation follow halflife in seconds. Lower = snappier follow.
+    pub rotation_halflife: f32,
     /// Position de-jitter halflife in seconds.
     pub position_halflife: f32,
 }
 impl FollowConfig {
     pub const fn new() -> Self {
         Self {
-            yaw_halflife: 0.15,
-            pitch_halflife: 0.3,
-            roll_halflife: 0.2,
+            rotation_halflife: 0.2,
             position_halflife: 0.1,
         }
     }

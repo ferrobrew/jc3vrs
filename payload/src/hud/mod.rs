@@ -18,8 +18,8 @@
 //! more frames tick before the hooks come down, so the restore happens on the render thread the same
 //! way a toggle-off does.
 //!
-//! The floating panel lazily follows the head's orientation with deadzones and critically-damped
-//! easing ([`HUD_STATE`].update_follow). The panel's world-space corners are computed once per
+//! The floating panel lazily follows the head's orientation with critically-damped quaternion
+//! slerp ([`HUD_STATE`].update_follow). The panel's world-space corners are computed once per
 //! frame (eye 0) and projected through each eye's own per-eye VP, so it sits at a finite world
 //! position with correct stereo depth rather than being head-locked at infinity.
 //!
@@ -36,6 +36,7 @@ mod target;
 pub use config::HudConfig;
 pub use state::HUD_STATE;
 
+use glam::{Mat3, Quat, Vec3};
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 
@@ -69,23 +70,14 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
     // per-eye view (VP = Inverse(Transform) · Projection), collapsing the panel to view space
     // (head-locked, zero disparity, appears at infinity).
     if eye == 0 {
-        let (head_yaw, head_pitch, head_roll) = extract_head_orientation();
-        let (follow_yaw, follow_pitch, follow_roll) = hud.update_follow(
-            &state::FollowParams {
-                head_yaw,
-                head_pitch,
-                head_roll,
-            },
-            &cfg.follow,
-        );
+        let head_rotation = extract_head_rotation();
+        let follow_rotation = hud.update_follow(head_rotation, &cfg.follow);
         hud.compute_world_corners(&quad::PanelParams {
             width: u32::from(target.m_Width),
             height: u32::from(target.m_Height),
             distance: cfg.distance,
             panel_height: cfg.panel_height,
-            follow_yaw,
-            follow_pitch,
-            follow_roll,
+            follow_rotation,
         });
     }
 
@@ -93,39 +85,28 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
     hud.clear(context);
 }
 
-/// Extract yaw, pitch, and roll (in degrees) from the render camera's world transform.
-/// Returns `(0.0, 0.0, 0.0)` if the camera is not available.
-fn extract_head_orientation() -> (f32, f32, f32) {
+/// Extract the head's world-space rotation as a quaternion from the render camera's world
+/// transform. Returns `Quat::IDENTITY` if the camera is not available.
+///
+/// The camera's world transform stores its basis vectors in rows (pyxis docs):
+/// `data[0..2]` = right (+X), `data[4..6]` = up (+Y), `data[8..10]` = +Z basis (back).
+/// We build a `Mat3` from these columns and convert to a quaternion. The quaternion maps
+/// camera-local to world space, so `quat * Vec3::NEG_Z` yields the forward direction.
+fn extract_head_rotation() -> Quat {
     let transform = unsafe {
         let cm = jc3gi::camera::camera_manager::CameraManager::get();
         let cam = cm.and_then(|cm| cm.m_RenderCamera.as_ref());
         cam.map(|cam| cam.m_TransformF.data)
     };
     let Some(transform) = transform else {
-        return (0.0, 0.0, 0.0);
+        return Quat::IDENTITY;
     };
 
-    // The camera's world transform has its basis vectors in the rows (pyxis docs):
-    // data[0..2] = right (+X), data[4..6] = up (+Y), data[8..10] = +Z basis (forward = -Z basis).
-    let forward_x = -transform[8];
-    let forward_y = -transform[9];
-    let forward_z = -transform[10];
+    let right = Vec3::new(transform[0], transform[1], transform[2]);
+    let up = Vec3::new(transform[4], transform[5], transform[6]);
+    let back = Vec3::new(transform[8], transform[9], transform[10]);
 
-    // Yaw: angle from -Z around the Y axis. 0 when looking along -Z, positive when turning right.
-    let yaw = forward_x.atan2(-forward_z).to_degrees();
-    let horizontal_len = (forward_x * forward_x + forward_z * forward_z).sqrt();
-    let pitch = if horizontal_len > 1e-6 {
-        forward_y.atan2(horizontal_len).to_degrees()
-    } else {
-        90.0 * forward_y.signum()
-    };
-
-    // Roll: the right vector's tilt from horizontal. Positive = right side down (clockwise from
-    // behind, matching the yaw convention).
-    let right_xz_len = (transform[0] * transform[0] + transform[2] * transform[2]).sqrt();
-    let roll = (-transform[1]).atan2(right_xz_len).to_degrees();
-
-    (yaw, pitch, roll)
+    Quat::from_mat3(&Mat3::from_cols(right, up, back))
 }
 
 /// Register the HUD's shutdown cleanup. Call once at init. The cleanup clears the redirect config flag
