@@ -20,9 +20,8 @@ pub struct HudConfig {
 impl HudConfig {
     pub const fn new() -> Self {
         Self {
-            // Off by default until the redirect is proven; toggled live for first-light.
-            redirect: false,
-            quad: false,
+            redirect: true,
+            quad: true,
             distance: 1.8,
             panel_height: 2.0,
             follow: FollowConfig::new(),

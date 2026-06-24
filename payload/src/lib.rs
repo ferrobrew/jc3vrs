@@ -146,7 +146,9 @@ fn update() {
             }
 
             egui_state.run(|ctx, renderer| {
-                egui::Window::new("Debug").show(ctx, |ui| ui::egui_debug_window(ui, renderer));
+                egui::Window::new("Debug")
+                    .current_pos(egui::pos2(0.0, 0.0))
+                    .show(ctx, |ui| ui::egui_debug_window(ui, renderer));
             });
         }
     });

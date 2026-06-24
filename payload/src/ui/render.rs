@@ -297,7 +297,7 @@ pub static EGUI_DEBUG_RENDER_STATE: Mutex<EguiDebugRenderState> =
     Mutex::new(EguiDebugRenderState::new());
 
 /// Preview thumbnail width (px) in the Render tab; user-controllable via a slider.
-static PREVIEW_WIDTH: Mutex<f32> = Mutex::new(176.0);
+static PREVIEW_WIDTH: Mutex<f32> = Mutex::new(700.0);
 
 /// Capture a post-effect stage's result texture for the given eye -- called from the stage's detour
 /// on the render thread, after the stage runs. `result` is the stage's slot result texture.
@@ -373,7 +373,7 @@ fn gate_checkbox(ui: &mut egui::Ui, flag: &std::sync::atomic::AtomicBool, label:
 
 /// Debug-UI only: swap the two eyes in the side-by-side stereo preview, so the pair can be fused
 /// cross-eyed (left image -> right eye) instead of parallel (left image -> left eye).
-static STEREO_CROSS_EYED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static STEREO_CROSS_EYED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 fn show_target_thumbnail(
     ui: &mut egui::Ui,
@@ -472,7 +472,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
         if redirect {
             let mut hud = crate::hud::HUD_STATE.lock();
             egui::CollapsingHeader::new("HUD texture")
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| match hud.preview_id(renderer) {
                     Some(id) => {
                         let size = egui::vec2(preview_width, preview_width * 0.5625);
