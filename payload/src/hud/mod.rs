@@ -46,13 +46,32 @@ use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 
 /// The per-frame render-thread step: redirects the HUD into our texture while enabled, restores the
 /// engine binding while disabled. Called from the render-thread post-draw hook.
-pub fn tick(device: &Device, width: u32, height: u32) {
+///
+/// `back_buffer_width`/`back_buffer_height` are the game window's back-buffer dimensions, used both
+/// to size the square HUD texture (via [`hud_target_size`]) and to restore the engine binding on a
+/// toggle-off. The HUD texture's aspect is 1:1, independent of the per-eye render aspect.
+pub fn tick(device: &Device, back_buffer_width: u32, back_buffer_height: u32) {
     let mut hud = HUD_STATE.lock();
-    if crate::config::Config::lock_query(|c| c.hud.redirect) {
-        hud.ensure_redirected(device, width, height);
+    let cfg = crate::config::Config::lock_query(|c| c.hud);
+    if cfg.redirect {
+        let hud_size = hud_target_size(cfg.render_scale, back_buffer_width, back_buffer_height);
+        hud.ensure_redirected(
+            device,
+            hud_size,
+            hud_size,
+            back_buffer_width,
+            back_buffer_height,
+        );
     } else {
-        hud.restore(width);
+        hud.restore(back_buffer_width, back_buffer_height);
     }
+}
+
+/// Compute the square HUD texture side from the render scale and the back buffer's largest axis.
+/// Clamped to at least 1 pixel so a zero-sized back buffer never reaches texture creation.
+fn hud_target_size(render_scale: f32, back_buffer_width: u32, back_buffer_height: u32) -> u32 {
+    let largest = back_buffer_width.max(back_buffer_height) as f32;
+    (render_scale * largest).round().max(1.0) as u32
 }
 
 /// Draw the redirected HUD as a floating quad for `eye` over `target` (the eye's linear back buffer),
@@ -76,9 +95,12 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
     if eye == 0 {
         let head_rotation = extract_head_rotation();
         let follow_rotation = hud.update_follow(head_rotation, &cfg.follow);
+        // The panel aspect comes from the HUD texture's own dimensions (1:1 by construction). If
+        // no target exists yet the quad won't draw either, so the corners are moot.
+        let (width, height) = hud.target_size().unwrap_or((1, 1));
         hud.compute_world_corners(&quad::PanelParams {
-            width: u32::from(target.m_Width),
-            height: u32::from(target.m_Height),
+            width,
+            height,
             distance: cfg.distance,
             panel_height: cfg.panel_height,
             follow_rotation,

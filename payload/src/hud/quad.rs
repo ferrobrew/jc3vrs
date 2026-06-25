@@ -250,6 +250,8 @@ impl HudQuad {
 /// Geometry + follow parameters for computing the panel's world-space corners. Bundled into a
 /// struct to keep the argument list under `clippy::too_many_arguments`.
 pub(crate) struct PanelParams {
+    /// HUD texture dimensions in pixels; the panel aspect is `width / height` so it matches the
+    /// texture and the HUD is never distorted.
     pub width: u32,
     pub height: u32,
     pub distance: f32,

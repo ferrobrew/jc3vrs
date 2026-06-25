@@ -447,6 +447,10 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
                 "Redirect HUD into our texture (drops it from the scene composite)",
             );
             ui.add_enabled_ui(cfg.hud.redirect, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0)
+                        .text("Render scale (x)"),
+                );
                 ui.checkbox(&mut cfg.hud.quad, "Draw the HUD as a floating quad per eye");
                 ui.add_enabled_ui(cfg.hud.quad, |ui| {
                     ui.indent("hud_sliders", |ui| {
@@ -477,7 +481,8 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
                 .default_open(false)
                 .show(ui, |ui| match hud.preview_id(renderer) {
                     Some(id) => {
-                        let size = egui::vec2(preview_width, preview_width * 0.5625);
+                        // The HUD texture is square (1:1), so the preview is too.
+                        let size = egui::vec2(preview_width, preview_width);
                         ui.add(egui::Image::new(egui::ImageSource::Texture(
                             egui::load::SizedTexture { id, size },
                         )));

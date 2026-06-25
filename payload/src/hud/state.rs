@@ -21,6 +21,11 @@ pub struct HudState {
     target: Option<HudTarget>,
     /// Whether the redirect is currently applied to the UI's render buffer.
     redirected: bool,
+    /// The last back-buffer size seen by [`ensure_redirected`]. A change means the engine re-ran
+    /// `InitPlatformRT` (its device/reset path), rebuilding `m_RenderBuffer` from the engine surface
+    /// and discarding our rebind -- so the redirect must be re-applied even though our target texture
+    /// is independent of the back buffer.
+    back_buffer_size: Option<(u32, u32)>,
     /// The egui texture id for the HUD preview, registered lazily on the UI thread.
     preview_id: Option<egui::TextureId>,
     /// The quad pass that draws the redirected HUD back into the scene, built lazily on first draw.
@@ -72,6 +77,7 @@ impl HudState {
         Self {
             target: None,
             redirected: false,
+            back_buffer_size: None,
             preview_id: None,
             quad: None,
             follow: FollowState::new(),
@@ -79,16 +85,26 @@ impl HudState {
         }
     }
 
-    /// Ensure the HUD is redirected into our target at `width` x `height`, (re)creating the target on a
-    /// size change and applying the rebind once. A failed target build or a not-yet-live UI leaves the
-    /// state unredirected, so the next tick retries.
-    pub(super) fn ensure_redirected(&mut self, device: &Device, width: u32, height: u32) {
-        if width == 0 || height == 0 {
+    /// Ensure the HUD is redirected into a target at `texture_width` x `texture_height`, (re)creating
+    /// the target on a config-size change and applying the rebind once. A back-buffer size change
+    /// (`back_buffer_width`/`back_buffer_height`) forces a re-apply without recreating the target,
+    /// because the engine re-runs `InitPlatformRT` on a device/reset and discards our rebind. A failed
+    /// target build or a not-yet-live UI leaves the state unredirected, so the next tick retries.
+    pub(super) fn ensure_redirected(
+        &mut self,
+        device: &Device,
+        texture_width: u32,
+        texture_height: u32,
+        back_buffer_width: u32,
+        back_buffer_height: u32,
+    ) {
+        if texture_width == 0 || texture_height == 0 {
             return;
         }
 
-        if self.target.as_ref().map(HudTarget::size) != Some((width, height)) {
-            match HudTarget::new(device, width, height) {
+        // Recreate the target when the configured HUD resolution changes (or when none exists yet).
+        if self.target.as_ref().map(HudTarget::size) != Some((texture_width, texture_height)) {
+            match HudTarget::new(device, texture_width, texture_height) {
                 Ok(target) => {
                     self.target = Some(target);
                     self.redirected = false;
@@ -103,19 +119,28 @@ impl HudState {
             }
         }
 
+        // A back-buffer size change means the engine re-ran `InitPlatformRT` (its device/reset path),
+        // which rebuilds `m_RenderBuffer` from the engine surface and discards our rebind. Re-apply it
+        // even though our target texture is independent of the back buffer.
+        if self.back_buffer_size != Some((back_buffer_width, back_buffer_height)) {
+            self.back_buffer_size = Some((back_buffer_width, back_buffer_height));
+            self.redirected = false;
+        }
+
         let Some(target) = self.target.as_ref() else {
             return;
         };
-        if !self.redirected && binding::redirect_to(target) {
+        if !self.redirected && binding::redirect_to(target, texture_width, texture_height) {
             self.redirected = true;
         }
     }
 
     /// Restore the engine's own binding and drop our target, so the UI no longer renders into our
-    /// texture. A no-op when not redirected. `width` is the back-buffer width `InitPlatformRT` expects.
-    pub(super) fn restore(&mut self, width: u32) {
+    /// texture. A no-op when not redirected. `back_buffer_width`/`back_buffer_height` are the
+    /// back-buffer dimensions `InitPlatformRT` and the viewport expect.
+    pub(super) fn restore(&mut self, back_buffer_width: u32, back_buffer_height: u32) {
         if self.redirected {
-            binding::restore_engine_binding(width);
+            binding::restore_engine_binding(back_buffer_width, back_buffer_height);
             self.redirected = false;
         }
         self.target = None;
@@ -135,6 +160,12 @@ impl HudState {
     /// panel's surface rather than the screen plane.
     pub fn follow_rotation(&self) -> Quat {
         self.follow.rotation
+    }
+
+    /// The HUD render target's pixel dimensions, or `None` if no target has been created. The panel
+    /// quad's aspect is derived from this so it always matches the texture.
+    pub fn target_size(&self) -> Option<(u32, u32)> {
+        self.target.as_ref().map(HudTarget::size)
     }
 
     /// Compute the panel's world-space corners from the current camera and follow state, caching

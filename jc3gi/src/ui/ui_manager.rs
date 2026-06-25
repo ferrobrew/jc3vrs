@@ -61,24 +61,49 @@ fn _ScreenPos_size_check() {
 }
 #[repr(C, align(8))]
 /// The Scaleform-backed UI manager, the single concrete instance behind `IUIManager`. It renders the
-/// HUD into the engine surface; [`InitPlatformRT`](UIManager::InitPlatformRT) rebinds its render
-/// target.
+/// HUD into the engine surface. Redirecting the HUD to an independent resolution and aspect takes
+/// four coordinated steps: set the movie render rectangle ([`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth)
+/// / [`m_MovieScaleHeight`](UIManager::m_MovieScaleHeight)), set the cached viewport
+/// ([`m_CachedViewportWidth`](UIManager::m_CachedViewportWidth) /
+/// [`m_CachedViewportHeight`](UIManager::m_CachedViewportHeight)) and recompute the safe area so the
+/// UI reflows to the new aspect, set the Scaleform movie viewport
+/// ([`SetMovieViewport`](UIManager::SetMovieViewport)), and rebind the render buffer
+/// ([`InitPlatformRT`](UIManager::InitPlatformRT)).
 pub struct UIManager {
-    _field_0: [u8; 5008],
+    _field_0: [u8; 52],
+    /// The movie render rectangle's width, part of the engine's `MovieScaleInfo`. The HUD movie is
+    /// rendered into a `m_MovieScaleWidth` x `m_MovieScaleHeight` rectangle, centered within the
+    /// viewport set by [`SetMovieViewport`](UIManager::SetMovieViewport). Setting it equal to the
+    /// render target's dimensions (and matching the viewport) makes the movie fill the target with a
+    /// zero centering offset. [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize)
+    /// overwrites it from the device resolution, so the HUD redirect sets it directly instead.
+    pub m_MovieScaleWidth: i32,
+    /// The movie render rectangle's height; see [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth).
+    pub m_MovieScaleHeight: i32,
+    _field_3c: [u8; 4948],
     /// The Scaleform render buffer the UI HAL renders into, set up by
     /// [`InitPlatformRT`](UIManager::InitPlatformRT). Pass it to [`RenderTargetData::UpdateData`] to
     /// rebind where the HUD renders.
     pub m_RenderBuffer: *mut crate::ui::ui_manager::RenderTargetData,
     _field_1398: [u8; 236],
-    /// The viewport width that the world-to-screen mapping
-    /// ([`Convert3DCoords`](UIManager::Convert3DCoords)) maps NDC into.
-    pub m_ViewWidth: f32,
-    pub m_ViewHeight: f32,
-    _field_148c: [u8; 4],
+    /// The movie stage's authored width (`m_CachedStageSize.x`), refreshed every frame from the loaded
+    /// movie. The world-to-screen mapping ([`Convert3DCoords`](UIManager::Convert3DCoords)) maps NDC
+    /// into this. Read-only for the redirect.
+    pub m_CachedStageWidth: f32,
+    /// The movie stage's authored height; see [`m_CachedStageWidth`](UIManager::m_CachedStageWidth).
+    pub m_CachedStageHeight: f32,
+    _field_148c: [u8; 12],
+    /// The cached viewport width (`m_CachedViewportSize.x`), refreshed every frame from the graphics
+    /// device's display resolution. [`ComputeSafeArea`](UIManager::ComputeSafeArea) reads it to expand
+    /// the UI safe area to the viewport's aspect (the HUD's reflow mechanism), so the redirect
+    /// overrides it to the render target's dimensions before recomputing the safe area.
+    pub m_CachedViewportWidth: i32,
+    /// The cached viewport height; see [`m_CachedViewportWidth`](UIManager::m_CachedViewportWidth).
+    pub m_CachedViewportHeight: i32,
 }
 fn _UIManager_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x1490], UIManager>([0u8; 0x1490]);
+        ::std::mem::transmute::<[u8; 0x14A0], UIManager>([0u8; 0x14A0]);
     }
     unreachable!()
 }
@@ -94,7 +119,9 @@ impl UIManager {
     pub const InitPlatformRT_ADDRESS: usize = 0x140F696E0;
     /// Binds the UI render target: builds a [`RenderTargetData`] from the engine surface's
     /// render-target and depth-stencil views via [`RenderTargetData::UpdateData`]. Called at startup
-    /// and on every device or resolution reset; `a2` carries the target dimensions.
+    /// and on every device or resolution reset; `a2` carries the target side length (the buffer is
+    /// square: width = height = a2). This only creates the render buffer -- the Scaleform movie's
+    /// viewport is set separately by [`SetMovieViewport`](UIManager::SetMovieViewport).
     pub unsafe fn InitPlatformRT(&mut self, a2: i32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, a2: i32) = ::std::mem::transmute(
@@ -104,14 +131,66 @@ impl UIManager {
         }
     }
     pub const RestoreAfterReset_ADDRESS: usize = 0x140FA9C70;
-    /// Re-runs [`InitPlatformRT`](UIManager::InitPlatformRT) after a device or resolution reset (`a2`
-    /// is the new width; the dimensions otherwise track the engine surface).
-    pub unsafe fn RestoreAfterReset(&mut self, a2: i32) {
+    /// Re-runs [`InitPlatformRT`](UIManager::InitPlatformRT) after a device or resolution reset. Also
+    /// recomputes the movie size, sets the movie viewport, and recomputes the safe area. Gated by an
+    /// internal reset counter, so a direct call may no-op if the counter is not at 1.
+    pub unsafe fn RestoreAfterReset(&mut self) {
         unsafe {
-            let f: unsafe extern "system" fn(this: *mut Self, a2: i32) = ::std::mem::transmute(
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
                 Self::RestoreAfterReset_ADDRESS,
             );
-            f(self as *mut Self as _, a2)
+            f(self as *mut Self as _)
+        }
+    }
+    pub const ComputeMovieSizeOnViewSize_ADDRESS: usize = 0x140F46830;
+    /// Recomputes the movie render rectangle ([`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth) /
+    /// [`m_MovieScaleHeight`](UIManager::m_MovieScaleHeight)). It first refreshes the cached stage and
+    /// viewport sizes from the live device resolution (via an internal `UpdateCachedValues`), then
+    /// sizes the movie rectangle from them -- so it always forces the device's aspect and cannot be
+    /// steered by writing the cached fields beforehand. The HUD redirect therefore avoids it and sets
+    /// the movie rectangle directly; it is used only by the restore path to return the rectangle to
+    /// the engine-native device size.
+    pub unsafe fn ComputeMovieSizeOnViewSize(&mut self, a2: bool, a3: bool) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, a2: bool, a3: bool) = ::std::mem::transmute(
+                Self::ComputeMovieSizeOnViewSize_ADDRESS,
+            );
+            f(self as *mut Self as _, a2, a3)
+        }
+    }
+    pub const SetMovieViewport_ADDRESS: usize = 0x140F1B260;
+    /// Sets the Scaleform movie's viewport to `width` x `height`, centering the movie (of size
+    /// [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth) x
+    /// [`m_MovieScaleHeight`](UIManager::m_MovieScaleHeight)) within it at offset
+    /// `((width - m_MovieScaleWidth) / 2, (height - m_MovieScaleHeight) / 2)`. This is the viewport the
+    /// Scaleform HAL uses for rendering, so it must match the render target's dimensions; passing the
+    /// movie rectangle's own dimensions yields a zero offset (the movie fills the target).
+    pub unsafe fn SetMovieViewport(&mut self, width: i32, height: i32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, width: i32, height: i32) = ::std::mem::transmute(
+                Self::SetMovieViewport_ADDRESS,
+            );
+            f(self as *mut Self as _, width, height)
+        }
+    }
+    pub const ComputeSafeArea_ADDRESS: usize = 0x140F89B30;
+    /// Computes the safe-area rectangle from the current movie viewport.
+    pub unsafe fn ComputeSafeArea(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::ComputeSafeArea_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub const ComputeGameViewArea_ADDRESS: usize = 0x140F89CB0;
+    /// Computes the game view area from the current movie viewport.
+    pub unsafe fn ComputeGameViewArea(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::ComputeGameViewArea_ADDRESS,
+            );
+            f(self as *mut Self as _)
         }
     }
     pub const Convert3DCoords_ADDRESS: usize = 0x140F69A70;
