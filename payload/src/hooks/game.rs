@@ -92,10 +92,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             TraceState::record(TraceEvent::DrawBegin { eye: 0 });
             STEREO_STATE.lock().draw_index = 0;
             BLOCK_FLIP.store(present_eye != 0, Ordering::Relaxed);
+            tracing::trace!(target: "frameloop", "game_update_render: eye 0 Draw");
             game.Draw(spf);
+            tracing::trace!(target: "frameloop", "game_update_render: eye 0 WaitForCPUDrawToFinish");
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
             }
+            tracing::trace!(target: "frameloop", "game_update_render: eye 0 done");
             crate::debug::camera::capture_render_camera(0);
             TraceState::record(TraceEvent::DrawEnd {
                 eye: 0,
@@ -117,10 +120,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             TraceState::record(TraceEvent::DrawBegin { eye: 1 });
             STEREO_STATE.lock().draw_index = 1;
             BLOCK_FLIP.store(present_eye != 1, Ordering::Relaxed);
+            tracing::trace!(target: "frameloop", "game_update_render: eye 1 Draw");
             game.Draw(spf);
+            tracing::trace!(target: "frameloop", "game_update_render: eye 1 WaitForCPUDrawToFinish");
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
             }
+            tracing::trace!(target: "frameloop", "game_update_render: eye 1 done");
             crate::debug::camera::capture_render_camera(1);
             TraceState::record(TraceEvent::DrawEnd {
                 eye: 1,
@@ -140,6 +146,10 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             crate::debug::camera::capture_render_camera(0);
             TraceState::end_frame();
         }
+
+        // Drive the F10 stereo capture composite after the frame's draws are done (both eyes
+        // captured in stereo, eye 0 in non-stereo). No-op when capture is inactive.
+        crate::capture::present_frame();
     }
 }
 

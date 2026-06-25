@@ -372,8 +372,10 @@ fn gate_checkbox(ui: &mut egui::Ui, flag: &std::sync::atomic::AtomicBool, label:
 }
 
 /// Debug-UI only: swap the two eyes in the side-by-side stereo preview, so the pair can be fused
-/// cross-eyed (left image -> right eye) instead of parallel (left image -> left eye).
-static STEREO_CROSS_EYED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// cross-eyed (left image -> right eye) instead of parallel (left image -> left eye). Read by the
+/// F10 capture composite so the recording window fuses the same way as the preview.
+pub(crate) static STEREO_CROSS_EYED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(true);
 
 fn show_target_thumbnail(
     ui: &mut egui::Ui,

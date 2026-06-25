@@ -13,6 +13,7 @@ pub mod module;
 pub mod ui;
 pub mod util;
 
+mod capture;
 mod config;
 mod crash;
 mod debug;
@@ -101,6 +102,7 @@ fn initialize_from_game() -> anyhow::Result<()> {
     EguiState::install()?;
     ui::render::install();
     hud::install();
+    capture::install();
     tracing::info!("Initialized in game thread");
 
     Ok(())
@@ -141,7 +143,12 @@ fn update() {
         }
 
         if let Some(egui_state) = EguiState::get().as_mut() {
-            if util::is_pressed(VK_F6) {
+            // While the F10 capture mode is active, keep input with the game (no egui capture
+            // toggle) but still run the egui window so the eye-texture maintenance in
+            // `prepare_if_necessary` keeps the per-eye captures sized correctly. The overlay
+            // itself is hidden by skipping `egui_state.render()` in `graphics_flip` while capture
+            // is active.
+            if util::is_pressed(VK_F6) && !crate::capture::is_active() {
                 egui_state.toggle_game_input_capture();
             }
 

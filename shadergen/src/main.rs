@@ -89,6 +89,8 @@ const PAYLOAD_SHADERS: &[(&str, &str)] = &[
     ("velocity_decode", "cs_5_0"),
     ("hud_quad_vs", "vs_5_0"),
     ("hud_quad_ps", "ps_5_0"),
+    ("capture_vs", "vs_5_0"),
+    ("capture_ps", "ps_5_0"),
 ];
 
 fn main() {

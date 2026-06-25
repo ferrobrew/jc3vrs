@@ -23,14 +23,22 @@ pub static BLOCK_FLIP: AtomicBool = AtomicBool::new(false);
 fn graphics_flip(device: *mut Device) -> u64 {
     let blocked = BLOCK_FLIP.load(std::sync::atomic::Ordering::Relaxed);
     TraceState::record_eye(TraceEvent::Flip { blocked });
+    tracing::trace!(target: "frameloop", "graphics_flip: entry (blocked={blocked})");
     if blocked {
+        tracing::trace!(target: "frameloop", "graphics_flip: blocked, returning");
         return 0;
     }
 
     if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {
-        egui_state.render();
+        // Hide the debug overlay while the F10 capture window is up, so the recording is clean.
+        if !crate::capture::is_active() {
+            egui_state.render();
+        }
     }
-    GRAPHICS_FLIP.get().unwrap().call(device)
+    tracing::trace!(target: "frameloop", "graphics_flip: calling original");
+    let r = GRAPHICS_FLIP.get().unwrap().call(device);
+    tracing::trace!(target: "frameloop", "graphics_flip: original returned");
+    r
 }
 
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PostDraw_ADDRESS)]
