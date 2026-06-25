@@ -6,11 +6,13 @@ pub mod camera;
 pub mod debug;
 pub mod environment;
 pub mod game;
+pub mod hud;
 pub mod render;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EguiTab {
     Render,
+    Hud,
     Debug,
     Camera,
     Game,
@@ -28,6 +30,7 @@ impl EguiTab {
         ui.horizontal(|ui| {
             for candidate_tab in [
                 EguiTab::Render,
+                EguiTab::Hud,
                 EguiTab::Debug,
                 EguiTab::Camera,
                 EguiTab::Game,
@@ -57,6 +60,9 @@ pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
     match EguiTab::get() {
         EguiTab::Render => {
             render::egui_debug_render(ui, renderer);
+        }
+        EguiTab::Hud => {
+            hud::egui_debug_hud(ui, renderer);
         }
         EguiTab::Debug => {
             debug::egui_debug_debug(ui);

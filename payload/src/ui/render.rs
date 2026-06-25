@@ -438,62 +438,6 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
         *w
     };
 
-    // HUD redirect: toggle, and a preview of our redirected HUD texture (the floating-HUD checkpoint).
-    {
-        let redirect = {
-            let mut cfg = config::CONFIG.lock();
-            ui.checkbox(
-                &mut cfg.hud.redirect,
-                "Redirect HUD into our texture (drops it from the scene composite)",
-            );
-            ui.add_enabled_ui(cfg.hud.redirect, |ui| {
-                ui.add(
-                    egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0)
-                        .text("Render scale (x)"),
-                );
-                ui.checkbox(&mut cfg.hud.quad, "Draw the HUD as a floating quad per eye");
-                ui.add_enabled_ui(cfg.hud.quad, |ui| {
-                    ui.indent("hud_sliders", |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut cfg.hud.distance, 0.3..=10.0)
-                                .text("Distance (m)"),
-                        );
-                        ui.add(
-                            egui::Slider::new(&mut cfg.hud.panel_height, 0.2..=5.0)
-                                .text("Panel height (m)"),
-                        );
-                        ui.add(
-                            egui::Slider::new(&mut cfg.hud.follow.rotation_halflife, 0.01..=2.0)
-                                .text("Rotation halflife (s)"),
-                        );
-                        ui.add(
-                            egui::Slider::new(&mut cfg.hud.follow.position_halflife, 0.01..=1.0)
-                                .text("Position halflife (s)"),
-                        );
-                    });
-                });
-            });
-            cfg.hud.redirect
-        };
-        if redirect {
-            let mut hud = crate::hud::HUD_STATE.lock();
-            egui::CollapsingHeader::new("HUD texture")
-                .default_open(false)
-                .show(ui, |ui| match hud.preview_id(renderer) {
-                    Some(id) => {
-                        // The HUD texture is square (1:1), so the preview is too.
-                        let size = egui::vec2(preview_width, preview_width);
-                        ui.add(egui::Image::new(egui::ImageSource::Texture(
-                            egui::load::SizedTexture { id, size },
-                        )));
-                    }
-                    None => {
-                        ui.label("(redirect not yet applied)");
-                    }
-                });
-        }
-    }
-
     let mut state = EGUI_DEBUG_RENDER_STATE.lock();
     state.prepare_if_necessary(renderer);
 
