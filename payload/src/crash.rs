@@ -1,47 +1,63 @@
 //! First-chance crash instrumentation.
 //!
-//! A vectored exception handler logs the faulting address, a register dump, and a
-//! module-resolved backtrace the moment a fatal exception is *raised* -- before any handler
-//! unwinds. This covers the case where the game catches a fault itself and turns it into a clean
-//! exit: Wine prints no backtrace and the window just vanishes, but the record still lands in
-//! `jc3vrs.log`. A panic hook does the same for Rust panics, which don't raise an SEH exception and
-//! so are invisible to the VEH handler. Each address is resolved to its containing module +
-//! offset (`module+0xoff`) via `VirtualQuery`, which works under Wine where `std::backtrace`
-//! usually can't symbolize.
+//! A vectored exception handler logs the faulting address, a register dump, a module-resolved
+//! backtrace of the faulting thread, and a backtrace of every other thread the moment a fatal
+//! exception is *raised* -- before any handler unwinds. This covers the case where the game catches a
+//! fault itself and turns it into a clean exit: Wine prints no backtrace and the window just
+//! vanishes, but the record still lands in `jc3vrs.log`. A panic hook does the same for Rust panics,
+//! which don't raise an SEH exception and so are invisible to the VEH handler. Each address is
+//! resolved to its containing module + offset (`module+0xoff`) via `VirtualQuery`, which works under
+//! Wine where `std::backtrace` usually can't symbolize.
 //!
-//! **The whole logging path is allocation-free and uses no `core::fmt` machinery.** Everything is
-//! formatted manually into a fixed [`Line`] stack buffer and written to the file with a single
-//! `write_all`. This is critical: when the original fault has already smashed or exhausted the
-//! stack, `format!`/`write!` fault again while marshalling their arguments through
-//! `core::fmt::Arguments` -- the handler then immolates itself and masks the very crash it was
-//! meant to report (observed in practice as a recursive access violation inside `UpperHex::fmt`).
-//! Manual formatting touches only a single stack array and the file handle, so it survives a
-//! corrupt stack and a poisoned allocator. The writes also bypass the `tracing` subscriber, whose
-//! internal mutex and thread-local state can be unavailable inside a VEH handler or panic hook.
+//! **The whole logging path is allocation-free, lock-free, and uses no `core::fmt` or `std::io`.**
+//! Everything is formatted manually into a fixed [`Line`] stack buffer and written with a direct
+//! `WriteFile` syscall to a raw `HANDLE` opened once at [`install`]. This is critical: when the
+//! original fault has already corrupted memory or is raised in an unusual context, `format!`/`write!`
+//! (which marshal arguments through `core::fmt::Arguments`) and `std::fs::File::write_all` (which
+//! threads through std's I/O abstraction and thread-locals) fault again -- the handler then immolates
+//! itself and masks the very crash it was meant to report (observed in practice). A bare `WriteFile`
+//! to a stored handle touches only a single stack array and the OS, so it survives.
 //!
 //! A single [`IN_HANDLER`] re-entrancy guard covers both the VEH handler and the panic hook, so a
 //! fault raised while logging is dropped instead of being logged as a fresh masking record.
 //!
 //! Repeated identical exceptions (same code + faulting address) are deduplicated: the first
 //! occurrence gets a full log, subsequent ones are counted and summarised as a single line. This
-//! prevents the log from being flooded with hundreds of identical entries when the game's
-//! exception handler retries the faulting instruction.
+//! prevents the log from being flooded with hundreds of identical entries when the game's exception
+//! handler retries the faulting instruction.
 
 use std::{
-    io::Write,
-    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+    os::windows::ffi::OsStrExt,
+    sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering},
 };
 
-use windows::Win32::{
-    Foundation::HMODULE,
-    System::{
-        Diagnostics::Debug::{
-            AddVectoredExceptionHandler, CONTEXT, EXCEPTION_POINTERS, EXCEPTION_RECORD,
-            RtlCaptureStackBackTrace,
+use windows::{
+    Win32::{
+        Foundation::{CloseHandle, HANDLE, HMODULE},
+        Storage::FileSystem::{
+            CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, OPEN_ALWAYS, WriteFile,
         },
-        LibraryLoader::GetModuleFileNameW,
-        Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+        System::{
+            Diagnostics::{
+                Debug::{
+                    AddVectoredExceptionHandler, CONTEXT, CONTEXT_FLAGS, EXCEPTION_POINTERS,
+                    EXCEPTION_RECORD, GetThreadContext, RtlCaptureStackBackTrace,
+                },
+                ToolHelp::{
+                    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First,
+                    Thread32Next,
+                },
+            },
+            LibraryLoader::GetModuleFileNameW,
+            Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            Threading::{
+                GetCurrentProcessId, GetCurrentThreadId, OpenThread, ResumeThread, SuspendThread,
+                THREAD_GET_CONTEXT, THREAD_SUSPEND_RESUME,
+            },
+        },
     },
+    core::PCWSTR,
 };
 
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
@@ -55,16 +71,29 @@ const FATAL_CODES: &[u32] = &[
     0xC00000FD, // STACK_OVERFLOW
 ];
 
-/// The log file for crash-handler writes. Opened at [`install`] time as a raw `File` so it works
-/// even when the `tracing` subscriber is poisoned or unavailable. Uses `try_lock` so a reentrant
-/// call (e.g. a panic inside the crash handler itself) skips the write instead of deadlocking.
-static CRASH_LOG: parking_lot::Mutex<Option<std::fs::File>> = parking_lot::Mutex::new(None);
+/// `CONTEXT_AMD64 | CONTEXT_CONTROL | CONTEXT_INTEGER`: the register groups [`dump_thread`] needs
+/// (`Rip`/`Rsp`/`Rbp` and the general-purpose registers).
+const CONTEXT_AMD64_CONTROL_INTEGER: u32 = 0x0010_0003;
+/// The page-protection bits that mark executable memory; a stack value pointing at executable code is
+/// a probable return address.
+const PAGE_EXECUTE_ANY: u32 = 0xF0;
+/// Stop dumping after this many threads, so a runaway thread count can't flood the log.
+const MAX_THREADS: usize = 96;
+/// Stack words scanned per thread for return addresses (8 KiB).
+const STACK_SCAN_WORDS: usize = 1024;
+/// Probable frames logged per thread.
+const MAX_FRAMES_PER_THREAD: usize = 24;
+
+/// The raw file handle for crash-handler writes, opened once at [`install`] and never closed (the
+/// process is dying). `0` means "not opened". Stored as an `isize` so it lives in an atomic without a
+/// lock -- the handler must not touch `parking_lot` or `std::io`.
+static CRASH_LOG: AtomicIsize = AtomicIsize::new(0);
 
 /// Reentrancy guard: set while the VEH handler or panic hook is running. If the logging code itself
 /// triggers an exception (or a panic fires mid-handler), the recursive entry sees this flag and
-/// returns immediately, preventing an infinite loop of self-inflicted exceptions that would mask
-/// the original fault. Cleared after the handler finishes, so genuinely different exceptions on
-/// other threads are still logged.
+/// returns immediately, preventing an infinite loop of self-inflicted exceptions that would mask the
+/// original fault. Cleared after the handler finishes, so genuinely different exceptions on other
+/// threads are still logged.
 static IN_HANDLER: AtomicBool = AtomicBool::new(false);
 
 /// Tracks the last logged exception (code + faulting address) to deduplicate repeats. If the same
@@ -75,28 +104,39 @@ static LAST_ADDR: AtomicU64 = AtomicU64::new(0);
 static REPEAT_COUNT: AtomicU32 = AtomicU32::new(0);
 
 pub fn install() {
-    // Open the log file for direct writes, sharing the same `jc3vrs.log` the tracing subscriber
-    // writes to. Append mode so crash records are appended to the existing log.
+    // Open the log file with a raw handle, sharing the same `jc3vrs.log` the tracing subscriber
+    // writes to. FILE_APPEND_DATA makes every WriteFile append, and the share flags let the tracing
+    // subscriber keep its own handle open.
     if let Some(path) = crate::module::get_path()
         .as_ref()
         .and_then(|path| path.parent())
         .map(|parent| parent.join("jc3vrs.log"))
-        .and_then(|path| {
-            std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&path)
-                .ok()
-        })
     {
-        *CRASH_LOG.lock() = Some(path);
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        wide.push(0);
+        // SAFETY: `wide` is a null-terminated UTF-16 path; all other arguments are plain flags.
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(wide.as_ptr()),
+                FILE_APPEND_DATA.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                None,
+            )
+        };
+        if let Ok(handle) = handle
+            && !handle.is_invalid()
+        {
+            CRASH_LOG.store(handle.0 as isize, Ordering::Relaxed);
+        }
     }
 
     unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
     // Rust panics unwind/abort instead of raising an SEH exception, so the VEH handler above never
-    // sees them. Log the message + a module-resolved backtrace ourselves before the process dies.
-    // The same re-entrancy guard the VEH handler uses covers this hook, so a fault while logging a
-    // panic can't be logged as a fresh masking record.
+    // sees them. Log the message + a backtrace ourselves before the process dies. The same
+    // re-entrancy guard the VEH handler uses covers this hook.
     std::panic::set_hook(Box::new(|info| {
         if IN_HANDLER.swap(true, Ordering::SeqCst) {
             return;
@@ -202,14 +242,19 @@ impl Line {
         self
     }
 
-    /// Write the accumulated line (plus a newline) directly to the crash log, bypassing `tracing`.
-    /// Uses `try_lock` so a reentrant call skips the write instead of deadlocking.
+    /// Append a newline and write the line straight to the crash log with a single `WriteFile`. No
+    /// heap, no mutex, no `std::io` -- just the stored handle and the stack buffer.
     fn flush(&mut self) {
         self.byte(b'\n');
-        if let Some(mut guard) = CRASH_LOG.try_lock()
-            && let Some(file) = guard.as_mut()
-        {
-            let _ = file.write_all(&self.buf[..self.len]);
+        let raw = CRASH_LOG.load(Ordering::Relaxed);
+        if raw == 0 {
+            return;
+        }
+        let handle = HANDLE(raw as *mut std::ffi::c_void);
+        // SAFETY: `handle` is the append-mode log handle from `install`; `self.buf[..self.len]` is a
+        // valid slice. A failed write is ignored -- there is nowhere better to report it.
+        unsafe {
+            let _ = WriteFile(handle, Some(&self.buf[..self.len]), None, None);
         }
     }
 }
@@ -231,10 +276,10 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
 }
 
 /// Append `module=NAME offset=0xNN ` for `addr` if it lies in a loaded module; returns whether it
-/// resolved. Uses `VirtualQuery` instead of `GetModuleHandleExW` because the latter takes a
-/// `PCWSTR` and Wine's implementation may try to dereference it as a wide string, causing a
-/// reentrant access violation inside the crash handler itself. The basename is copied byte-by-byte
-/// (lossy ASCII) so it never allocates.
+/// resolved. Uses `VirtualQuery` instead of `GetModuleHandleExW` because the latter takes a `PCWSTR`
+/// and Wine's implementation may try to dereference it as a wide string, causing a reentrant access
+/// violation inside the crash handler itself. The basename is copied byte-by-byte (lossy ASCII) so it
+/// never allocates.
 unsafe fn append_module(line: &mut Line, addr: usize) -> bool {
     unsafe {
         let mut mbi = MEMORY_BASIC_INFORMATION::default();
@@ -250,9 +295,8 @@ unsafe fn append_module(line: &mut Line, addr: usize) -> bool {
         if base.is_null() {
             return false;
         }
-        let hmod = HMODULE(base as *mut _);
         let mut buf = [0u16; 260];
-        let len = GetModuleFileNameW(Some(hmod), &mut buf) as usize;
+        let len = GetModuleFileNameW(Some(HMODULE(base)), &mut buf) as usize;
         if len == 0 {
             return false;
         }
@@ -268,9 +312,26 @@ unsafe fn append_module(line: &mut Line, addr: usize) -> bool {
             line.byte(if c < 0x80 { c as u8 } else { b'?' });
         }
         line.str(" offset=")
-            .hex(addr.wrapping_sub(hmod.0 as usize) as u64, 1);
+            .hex(addr.wrapping_sub(base as usize) as u64, 1);
         line.byte(b' ');
         true
+    }
+}
+
+/// Whether `addr` points into committed, executable memory -- i.e. a value on the stack that is a
+/// probable return address rather than data.
+unsafe fn is_executable(addr: usize) -> bool {
+    unsafe {
+        let mut mbi = MEMORY_BASIC_INFORMATION::default();
+        if VirtualQuery(
+            Some(addr as *const std::ffi::c_void),
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        ) == 0
+        {
+            return false;
+        }
+        mbi.Protect.0 & PAGE_EXECUTE_ANY != 0
     }
 }
 
@@ -417,9 +478,123 @@ unsafe fn log_record(rec: &EXCEPTION_RECORD, ctx: *mut CONTEXT) {
             .hex(access_addr, 16)
             .flush();
 
-        // Register dump, then the faulting instruction, then the captured stack.
+        // Register dump, the faulting instruction, and the faulting thread's stack first -- the
+        // essential record. The other-thread dump (riskier: it suspends threads) runs last, so a
+        // fault there can't lose the primary information.
         log_context(ctx);
         log_frame("fault", rec.ExceptionAddress as usize);
         log_backtrace();
+        dump_other_threads();
+    }
+}
+
+/// Walk every other thread in the process and log its instruction pointer plus a heuristic backtrace
+/// (stack values that point at executable code). Runs after the primary record so any fault here
+/// leaves that record intact. Resolves modules only after each thread is resumed, so a thread holding
+/// the loader lock cannot deadlock `GetModuleFileNameW`.
+unsafe fn dump_other_threads() {
+    unsafe {
+        let pid = GetCurrentProcessId();
+        let current = GetCurrentThreadId();
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) else {
+            return;
+        };
+
+        Line::new().str("-- other threads --").flush();
+
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
+        let mut dumped = 0usize;
+        if Thread32First(snapshot, &mut entry).is_ok() {
+            loop {
+                if entry.th32OwnerProcessID == pid
+                    && entry.th32ThreadID != current
+                    && dumped < MAX_THREADS
+                {
+                    dump_thread(entry.th32ThreadID);
+                    dumped += 1;
+                }
+                if Thread32Next(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+    }
+}
+
+/// Suspend one thread, capture its register context and a bounded copy of its stack, resume it, then
+/// log its `rip` and the probable return addresses found on the stack.
+unsafe fn dump_thread(tid: u32) {
+    unsafe {
+        let Ok(handle) = OpenThread(THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME, false, tid) else {
+            return;
+        };
+
+        // CONTEXT must be 16-byte aligned for GetThreadContext.
+        #[repr(C, align(16))]
+        struct Aligned(CONTEXT);
+        let mut ctx = Aligned(CONTEXT {
+            ContextFlags: CONTEXT_FLAGS(CONTEXT_AMD64_CONTROL_INTEGER),
+            ..Default::default()
+        });
+
+        let mut stack = [0usize; STACK_SCAN_WORDS];
+        let mut stack_words = 0usize;
+        let mut rip = 0u64;
+        let mut rsp = 0u64;
+
+        let suspended = SuspendThread(handle) != u32::MAX;
+        if suspended && GetThreadContext(handle, &mut ctx.0).is_ok() {
+            rip = ctx.0.Rip;
+            rsp = ctx.0.Rsp;
+            // Copy a bounded, in-bounds slice of the stack while the thread is frozen. VirtualQuery
+            // bounds the read to the committed region so the copy never faults.
+            let mut mbi = MEMORY_BASIC_INFORMATION::default();
+            if rsp != 0
+                && VirtualQuery(
+                    Some(rsp as *const std::ffi::c_void),
+                    &mut mbi,
+                    std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+                ) != 0
+            {
+                let region_end = mbi.BaseAddress as usize + mbi.RegionSize;
+                let available = region_end.saturating_sub(rsp as usize) / 8;
+                stack_words = available.min(STACK_SCAN_WORDS);
+                for (i, slot) in stack[..stack_words].iter_mut().enumerate() {
+                    *slot = *((rsp as usize + i * 8) as *const usize);
+                }
+            }
+        }
+        if suspended {
+            ResumeThread(handle);
+        }
+        let _ = CloseHandle(handle);
+
+        // Thread resumed: now resolve and log (GetModuleFileNameW takes the loader lock, which a
+        // suspended thread might hold).
+        let mut line = Line::new();
+        line.str("thread ").dec(tid as u64).str(": rip=");
+        append_module(&mut line, rip as usize);
+        line.str("addr=").hex(rip, 16).str(" rsp=").hex(rsp, 16);
+        line.flush();
+
+        let mut frames = 0usize;
+        for &value in &stack[..stack_words] {
+            if frames >= MAX_FRAMES_PER_THREAD {
+                break;
+            }
+            if is_executable(value) {
+                let mut frame = Line::new();
+                frame.str("  ");
+                if append_module(&mut frame, value) {
+                    frame.str("addr=").hex(value as u64, 16);
+                    frame.flush();
+                    frames += 1;
+                }
+            }
+        }
     }
 }
