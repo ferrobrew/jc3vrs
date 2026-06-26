@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use glam::Quat;
+use glam::{Quat, Vec3};
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{
@@ -30,8 +30,15 @@ pub struct HudState {
     preview_id: Option<egui::TextureId>,
     /// The quad pass that draws the redirected HUD back into the scene, built lazily on first draw.
     quad: Option<HudQuad>,
-    /// Lazy-follow damping state for the floating panel.
+    /// Lazy-follow damping state for the floating panel (gameplay HUD mode).
     follow: FollowState,
+    /// The latched world-static pose `(position, rotation)` for [`HudMode::Movie`](crate::hud::HudMode::Movie):
+    /// captured when the mode is entered and held so the panel does not move with the head. `None`
+    /// outside movie mode.
+    latched_pose: Option<(Vec3, Quat)>,
+    /// The panel pose `(position, rotation)` chosen for the current frame, cached for the marker
+    /// projection ([`compute_panel_vp`](crate::hud::compute_panel_vp)) to reuse.
+    current_pose: Option<(Vec3, Quat)>,
     /// World-space panel corners, computed once per frame on eye 0 and reused for eye 1 so both
     /// eyes project the same world position through their own per-eye VP (correct stereo depth).
     cached_corners: Option<[[f32; 4]; 4]>,
@@ -81,6 +88,8 @@ impl HudState {
             preview_id: None,
             quad: None,
             follow: FollowState::new(),
+            latched_pose: None,
+            current_pose: None,
             cached_corners: None,
         }
     }
@@ -146,20 +155,37 @@ impl HudState {
         self.target = None;
     }
 
-    /// Update the lazy-follow damping state from the current head rotation. Returns the damped
-    /// quaternion for the quad's world-space orientation.
-    pub fn update_follow(
+    /// Choose the panel pose `(position, rotation)` for the current frame from the head pose and the
+    /// [`HudMode`](crate::hud::HudMode), caching it for the marker projection to reuse.
+    ///
+    /// In [`HudMode::Hud`](crate::hud::HudMode::Hud) the panel tracks the head: the position is the
+    /// live head position and the rotation is the damped follow quaternion. In
+    /// [`HudMode::Movie`](crate::hud::HudMode::Movie) the panel is world-static: the pose is latched
+    /// on the first movie-mode frame and held, so head movement no longer moves it (the latch is
+    /// cleared whenever `Hud` mode resumes).
+    pub fn update_pose(
         &mut self,
+        mode: super::HudMode,
+        head_pos: Vec3,
         head_rotation: Quat,
-        config: &super::config::FollowConfig,
-    ) -> Quat {
-        self.follow.update(head_rotation, config)
+        follow: &super::config::FollowConfig,
+    ) -> (Vec3, Quat) {
+        let pose = match mode {
+            super::HudMode::Movie => *self.latched_pose.get_or_insert((head_pos, head_rotation)),
+            super::HudMode::Hud => {
+                self.latched_pose = None;
+                (head_pos, self.follow.update(head_rotation, follow))
+            }
+        };
+        self.current_pose = Some(pose);
+        pose
     }
 
-    /// The current damped follow rotation. Used by the W2S hook to project markers onto the
-    /// panel's surface rather than the screen plane.
-    pub fn follow_rotation(&self) -> Quat {
-        self.follow.rotation
+    /// The panel pose chosen for the current frame. Used by the W2S hook to project markers onto the
+    /// panel's surface rather than the screen plane. `None` until [`update_pose`](HudState::update_pose)
+    /// has run.
+    pub fn panel_pose(&self) -> Option<(Vec3, Quat)> {
+        self.current_pose
     }
 
     /// Compute the panel's world-space corners from the current camera and follow state, caching

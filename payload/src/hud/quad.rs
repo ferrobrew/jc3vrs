@@ -10,8 +10,9 @@
 //!
 //! World-space corners are computed once per frame (eye 0) via [`compute_world_corners`] and cached
 //! by [`super::state::HudState`]; both eyes then project the same world-space quad through their own
-//! per-eye VP. Geometry and follow parameters come from [`crate::hud::config::HudConfig`]; the damped
-//! rotation is computed by [`super::state::HudState::update_follow`].
+//! per-eye VP. Geometry comes from [`crate::hud::config::HudConfig`]; the panel pose (head-following
+//! or world-static, per the [`crate::hud::HudMode`]) is chosen by
+//! [`super::state::HudState::update_pose`].
 
 use anyhow::Context as _;
 use glam::{Quat, Vec3};
@@ -247,53 +248,43 @@ impl HudQuad {
     }
 }
 
-/// Geometry + follow parameters for computing the panel's world-space corners. Bundled into a
-/// struct to keep the argument list under `clippy::too_many_arguments`.
+/// Geometry parameters for computing the panel's world-space corners. Bundled into a struct to keep
+/// the argument list under `clippy::too_many_arguments`.
 pub(crate) struct PanelParams {
-    /// Panel aspect ratio (width / height), from [`HudConfig::aspect`](crate::hud::HudConfig::aspect)
-    /// -- the single source of truth shared with the render target and marker projection, so the
-    /// panel always matches the texture and the HUD is never distorted.
+    /// The panel's anchor position (the eye/head position the panel is placed in front of). In
+    /// [`HudMode::Hud`](crate::hud::HudMode::Hud) this tracks the head; in
+    /// [`HudMode::Movie`](crate::hud::HudMode::Movie) it is the latched world-static position.
+    pub pos: Vec3,
+    /// The panel's world orientation: the damped follow rotation in `Hud` mode, or the latched
+    /// rotation in `Movie` mode.
+    pub rot: Quat,
+    /// Panel aspect ratio (width / height) -- the effective aspect for the current mode, shared with
+    /// the render target and marker projection so the panel always matches the texture.
     pub aspect: f32,
     pub distance: f32,
     pub panel_height: f32,
-    pub follow_rotation: Quat,
 }
 
-/// Compute the panel's world-space corners from the render camera's world position and the
-/// damped follow rotation. Call once per frame (eye 0) and cache the result so both eyes
-/// project the same world-space quad through their own per-eye VP. Returns `None` if the camera
-/// is unavailable.
+/// Compute the panel's world-space corners from the supplied pose. Call once per frame (eye 0) and
+/// cache the result so both eyes project the same world-space quad through their own per-eye VP.
+/// Returns `None` only for a degenerate aspect.
 ///
-/// The panel sits at its own world-space orientation (the damped follow quaternion), positioned
-/// at the camera position + panel_forward * distance. It is NOT rotated through the camera's
-/// transform — that would stack the follow rotation on top of the head rotation, swinging the
-/// panel offscreen on large turns. The camera contributes only its position (the anchor point);
-/// the panel's orientation comes entirely from the damped quaternion.
+/// The panel sits at its own world-space orientation (`rot`), positioned at `pos + forward *
+/// distance`. It is NOT rotated through the camera's transform — that would stack the rotation on
+/// top of the head rotation, swinging the panel offscreen on large turns.
 pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4]> {
     if params.aspect <= 0.0 {
         return None;
     }
     let aspect = params.aspect;
 
-    let transform = unsafe {
-        let cm = jc3gi::camera::camera_manager::CameraManager::get()?;
-        let cam = cm.m_RenderCamera.as_ref()?;
-        cam.m_TransformF.data
-    };
+    // Panel basis vectors from the pose quaternion. The quaternion represents the same rotation as a
+    // camera world transform, so forward = quat * -Z matches the head's forward direction.
+    let forward = params.rot * Vec3::NEG_Z;
+    let right = params.rot * Vec3::X;
+    let up = params.rot * Vec3::Y;
 
-    // Camera world position (translation row of the world transform). The per-eye IPD offset is
-    // tiny compared to the panel distance, so anchoring at eye 0's position gives correct stereo
-    // disparity for eye 1.
-    let cam_pos = Vec3::new(transform[12], transform[13], transform[14]);
-
-    // Panel basis vectors from the damped quaternion. The quaternion represents the same
-    // rotation as the camera's world transform, so forward = quat * -Z matches the head's
-    // forward direction.
-    let forward = params.follow_rotation * Vec3::NEG_Z;
-    let right = params.follow_rotation * Vec3::X;
-    let up = params.follow_rotation * Vec3::Y;
-
-    let center = cam_pos + forward * params.distance;
+    let center = params.pos + forward * params.distance;
     let half_h = params.panel_height * 0.5;
     let half_w = params.panel_height * aspect * 0.5;
 

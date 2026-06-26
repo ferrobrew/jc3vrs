@@ -11,14 +11,17 @@ static HUD_PREVIEW_WIDTH: Mutex<f32> = Mutex::new(512.0);
 pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
     // Redirect toggle and the quad placement/follow parameters. The CONFIG lock is scoped to this
     // block and dropped before HUD_STATE is locked for the preview.
-    let (redirect, aspect) = {
+    let redirect = {
         let mut cfg = config::CONFIG.lock();
         ui.checkbox(
             &mut cfg.hud.redirect,
             "Redirect HUD into our texture (drops it from the scene composite)",
         );
         ui.add_enabled_ui(cfg.hud.redirect, |ui| {
-            ui.add(egui::Slider::new(&mut cfg.hud.aspect, 0.5..=2.5).text("Aspect (w/h)"));
+            ui.add(egui::Slider::new(&mut cfg.hud.hud_aspect, 0.5..=2.5).text("HUD aspect (w/h)"));
+            ui.add(
+                egui::Slider::new(&mut cfg.hud.movie_aspect, 0.5..=2.5).text("Movie aspect (w/h)"),
+            );
             ui.add(
                 egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0).text("Render scale (x)"),
             );
@@ -43,10 +46,12 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 });
             });
         });
-        (cfg.hud.redirect, cfg.hud.aspect)
+        cfg.hud.redirect
     };
 
     if redirect {
+        // Preview matches the current mode's effective aspect, so it tracks the live texture shape.
+        let aspect = crate::hud::current_aspect();
         let preview_width = {
             let mut w = HUD_PREVIEW_WIDTH.lock();
             ui.add(egui::Slider::new(&mut *w, 48.0..=4096.0).text("Preview size (px)"));

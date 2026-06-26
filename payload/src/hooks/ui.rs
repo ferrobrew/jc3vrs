@@ -39,8 +39,8 @@ fn get_2d_info(
     a10: bool,
     offset: Vector2,
 ) {
-    let (panel_enabled, aspect) =
-        Config::lock_query(|c| (c.hud.redirect && c.hud.quad, c.hud.aspect));
+    let panel_enabled = Config::lock_query(|c| c.hud.redirect && c.hud.quad);
+    let aspect = crate::hud::current_aspect();
     let panel = panel_enabled.then(crate::hud::compute_panel_vp).flatten();
     let (vp, camera) = panel
         .as_ref()
