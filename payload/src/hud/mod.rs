@@ -96,6 +96,21 @@ pub fn current_aspect() -> f32 {
     aspect_for(&cfg, current_mode())
 }
 
+/// The panel's reference width as a fraction of its distance at scale 1.0: 4 m wide at 3 m, the
+/// comfortable baseline from issue #14.
+const PANEL_WIDTH_PER_DISTANCE: f32 = 4.0 / 3.0;
+
+/// The panel's physical height in meters for the given size knob, distance, and effective aspect.
+///
+/// The panel width is `scale * PANEL_WIDTH_PER_DISTANCE * distance`, so it grows with distance to
+/// keep a constant apparent (angular) size -- moving the panel nearer or farther does not change how
+/// big it looks. The height is the width divided by the aspect, so the width (and thus the amount of
+/// content that fits horizontally) is invariant to aspect changes: a 16:9 panel is the same width as
+/// a 1:1 panel, just shorter.
+pub fn panel_height(scale: f32, distance: f32, aspect: f32) -> f32 {
+    (scale * PANEL_WIDTH_PER_DISTANCE * distance) / aspect.max(f32::EPSILON)
+}
+
 /// The per-frame render-thread step: redirects the HUD into our texture while enabled, restores the
 /// engine binding while disabled. Called from the render-thread post-draw hook.
 ///
@@ -165,13 +180,14 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         && let Some((head_pos, head_rotation)) = render_camera_pose()
     {
         let mode = current_mode();
+        let aspect = aspect_for(&cfg, mode);
         let (pos, rot) = hud.update_pose(mode, head_pos, head_rotation, &cfg.follow);
         hud.compute_world_corners(&quad::PanelParams {
             pos,
             rot,
-            aspect: aspect_for(&cfg, mode),
+            aspect,
             distance: cfg.distance,
-            panel_height: cfg.panel_height,
+            panel_height: panel_height(cfg.panel_scale, cfg.distance, aspect),
         });
     }
 

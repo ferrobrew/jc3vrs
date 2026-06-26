@@ -31,10 +31,7 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                     ui.add(
                         egui::Slider::new(&mut cfg.hud.distance, 0.3..=10.0).text("Distance (m)"),
                     );
-                    ui.add(
-                        egui::Slider::new(&mut cfg.hud.panel_height, 0.2..=5.0)
-                            .text("Panel height (m)"),
-                    );
+                    ui.add(egui::Slider::new(&mut cfg.hud.panel_scale, 0.2..=3.0).text("Size (x)"));
                     ui.add(
                         egui::Slider::new(&mut cfg.hud.follow.rotation_halflife, 0.01..=2.0)
                             .text("Rotation halflife (s)"),

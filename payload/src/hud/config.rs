@@ -24,10 +24,15 @@ pub struct HudConfig {
     /// axis is `render_scale * max(back_buffer_width, back_buffer_height)` pixels; the shorter axis
     /// follows from the effective aspect. Lower trades sharpness for fill rate.
     pub render_scale: f32,
-    /// Distance from the eye to the panel, in meters. Comfort band: 1.5-2.5m.
+    /// Distance from the eye to the panel, in meters. The panel resizes with distance to keep a
+    /// constant apparent (angular) size, so this can be changed freely without the HUD growing or
+    /// shrinking. Comfort band: 1.5-3m.
     pub distance: f32,
-    /// Panel height in meters; the width follows from the effective aspect.
-    pub panel_height: f32,
+    /// Apparent-size multiplier for the panel; `1.0` is the comfortable baseline (4 m wide at 3 m).
+    /// The physical size is derived from this, [`distance`](HudConfig::distance), and the effective
+    /// aspect (see [`crate::hud::panel_height`]), so changing the distance or aspect keeps the panel
+    /// looking the same size and fitting the same horizontal content.
+    pub panel_scale: f32,
     /// Lazy-follow damping parameters for the floating panel.
     pub follow: FollowConfig,
 }
@@ -40,7 +45,7 @@ impl HudConfig {
             movie_aspect: 16.0 / 9.0,
             render_scale: 1.0,
             distance: 3.0,
-            panel_height: 5.0,
+            panel_scale: 1.0,
             follow: FollowConfig::new(),
         }
     }
