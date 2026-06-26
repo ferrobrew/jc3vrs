@@ -88,7 +88,14 @@ pub struct GraphicsEngine {
     pub m_EffectInfo: [crate::graphics_engine::graphics_engine::EffectInfo; 5],
     /// Final linear back buffer ("BackBufferLinear").
     pub m_BackBufferLinear: *mut crate::graphics_engine::texture::Texture,
-    _field_1238: [u8; 144],
+    _field_1238: [u8; 134],
+    /// Whether [`HandleDrawThreadTask`](GraphicsEngine::HandleDrawThreadTask) renders the 3D scene
+    /// this frame (GBuffer, world, post-effects) rather than only the UI. [`Draw`](GraphicsEngine::Draw)
+    /// sets it from the game state and the UI's static-background grab: it is cleared while a
+    /// full-screen UI with a static background is shown (pause / map / menus), in which case the draw
+    /// thread clears the target to transparent instead of rendering the scene.
+    pub m_DrawScene: bool,
+    _field_12bf: [u8; 9],
     /// Index of the reflection-proxy slot picked this frame.
     pub m_EffectInfoIndex: u32,
     _field_12cc: [u8; 3140],

@@ -1,10 +1,14 @@
 use std::sync::atomic::AtomicBool;
 
 use detours_macro::detour;
-use jc3gi::graphics_engine::{
-    device::{Context, Device},
-    graphics_engine::GraphicsEngine,
-    render_engine::RenderEngine,
+use jc3gi::{
+    game::GameState,
+    graphics_engine::{
+        device::{Context, Device},
+        graphics_engine::GraphicsEngine,
+        render_engine::RenderEngine,
+    },
+    ui::ui_manager::GetIUIManager,
 };
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::System::Threading::{EnterCriticalSection, LeaveCriticalSection};
@@ -14,7 +18,32 @@ use crate::debug::trace::{TraceEvent, TraceState};
 pub(super) fn extend(library: HookLibrary) -> HookLibrary {
     library
         .with_static_binder(&GRAPHICS_FLIP_BINDER)
+        .with_static_binder(&GRAPHICS_ENGINE_DRAW_BINDER)
         .with_static_binder(&RENDER_ENGINE_POST_DRAW_BINDER)
+}
+
+// `CGame::Draw` clears `m_DrawScene` while a static-background full-screen UI is up (pause / map), so
+// the draw thread renders only the UI and clears the eye to transparent -- a black void behind the
+// floating panel in VR. Force the 3D scene to keep rendering during gameplay menus so the
+// frozen-but-head-trackable world stays visible behind the panel. Gated to E_GAME_RUN + a static
+// background so loading screens, the frontend, and full-screen videos are untouched. See issue #7.
+#[detour(address = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::Draw_ADDRESS)]
+fn graphics_engine_draw(graphics_engine: *mut GraphicsEngine, dt: f32) {
+    // SAFETY: runs inside `CGame::Draw` (which just set the flag) before the draw is dispatched, on
+    // the render thread; `graphics_engine` is the live engine and `GetIUIManager` the live UI.
+    unsafe {
+        if GameState::get() == GameState::E_GAME_RUN
+            && let Some(ge) = graphics_engine.as_mut()
+            && let Some(ui) = GetIUIManager().as_ref()
+            && ui.IsUsingStaticBackGround()
+        {
+            ge.m_DrawScene = true;
+        }
+        GRAPHICS_ENGINE_DRAW
+            .get()
+            .unwrap()
+            .call(graphics_engine, dt);
+    }
 }
 
 pub static BLOCK_FLIP: AtomicBool = AtomicBool::new(false);
