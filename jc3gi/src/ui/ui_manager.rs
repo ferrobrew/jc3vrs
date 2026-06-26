@@ -1,9 +1,29 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// A Scaleform render buffer: what [`UIManager::m_RenderBuffer`] points at. Pointing its bound views
-/// at an offscreen render-target view redirects where the UI HAL renders, and the rebind is not tied
-/// to startup, so it can happen at any time.
-pub struct RenderTargetData {}
+/// A Scaleform render buffer: what [`UIManager::m_RenderBuffer`] points at. It holds the
+/// render-target and depth-stencil views the UI HAL renders into; [`UpdateData`](RenderTargetData::UpdateData)
+/// rebinds those views, and is not tied to startup.
+pub struct RenderTargetData {
+    _field_0: [u8; 40],
+    /// The render-target buffer width. [`InitPlatformRT`](UIManager::InitPlatformRT) builds the
+    /// buffer square, setting width = height = its side argument.
+    pub m_BufferWidth: i32,
+    /// The render-target buffer height; [`InitPlatformRT`](UIManager::InitPlatformRT) sets it equal to
+    /// the width (a square buffer).
+    pub m_BufferHeight: i32,
+    _field_30: [u8; 8],
+    /// The view rectangle's right edge (x2 = width).
+    pub m_ViewRectRight: i32,
+    /// The view rectangle's bottom edge (y2); [`InitPlatformRT`](UIManager::InitPlatformRT) sets it
+    /// equal to the width.
+    pub m_ViewRectBottom: i32,
+}
+fn _RenderTargetData_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x40], RenderTargetData>([0u8; 0x40]);
+    }
+    unreachable!()
+}
 impl RenderTargetData {
     pub const UpdateData_ADDRESS: usize = 0x141DE0CF0;
     /// Rebinds the buffer's views, releasing the old ones and adding a reference to the new. `self`
@@ -61,49 +81,48 @@ fn _ScreenPos_size_check() {
 }
 #[repr(C, align(8))]
 /// The Scaleform-backed UI manager, the single concrete instance behind `IUIManager`. It renders the
-/// HUD into the engine surface. Redirecting the HUD to an independent resolution and aspect takes
-/// four coordinated steps: set the movie render rectangle ([`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth)
-/// / [`m_MovieScaleHeight`](UIManager::m_MovieScaleHeight)), set the cached viewport
-/// ([`m_CachedViewportWidth`](UIManager::m_CachedViewportWidth) /
-/// [`m_CachedViewportHeight`](UIManager::m_CachedViewportHeight)) and recompute the safe area so the
-/// UI reflows to the new aspect, set the Scaleform movie viewport
-/// ([`SetMovieViewport`](UIManager::SetMovieViewport)), and rebind the render buffer
-/// ([`InitPlatformRT`](UIManager::InitPlatformRT)).
+/// HUD into the engine surface. [`InitPlatformRT`](UIManager::InitPlatformRT) builds its render
+/// buffer, [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize) sizes the movie
+/// render rectangle, [`SetMovieViewport`](UIManager::SetMovieViewport) sets the Scaleform movie
+/// viewport, and [`ComputeSafeArea`](UIManager::ComputeSafeArea) derives the UI safe area.
 pub struct UIManager {
     _field_0: [u8; 52],
-    /// The movie render rectangle's width, part of the engine's `MovieScaleInfo`. The HUD movie is
-    /// rendered into a `m_MovieScaleWidth` x `m_MovieScaleHeight` rectangle, centered within the
-    /// viewport set by [`SetMovieViewport`](UIManager::SetMovieViewport). Setting it equal to the
-    /// render target's dimensions (and matching the viewport) makes the movie fill the target with a
-    /// zero centering offset. [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize)
-    /// overwrites it from the device resolution, so the HUD redirect sets it directly instead.
+    /// The movie render rectangle's width, from the engine's `MovieScaleInfo`. The movie is rendered
+    /// into a `m_MovieScaleWidth` x `m_MovieScaleHeight` rectangle, centered within the viewport
+    /// passed to [`SetMovieViewport`](UIManager::SetMovieViewport).
+    /// [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize) recomputes it from the
+    /// device resolution and the movie stage size.
     pub m_MovieScaleWidth: i32,
     /// The movie render rectangle's height; see [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth).
     pub m_MovieScaleHeight: i32,
     _field_3c: [u8; 4948],
     /// The Scaleform render buffer the UI HAL renders into, set up by
-    /// [`InitPlatformRT`](UIManager::InitPlatformRT). Pass it to [`RenderTargetData::UpdateData`] to
-    /// rebind where the HUD renders.
+    /// [`InitPlatformRT`](UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`] rebinds which
+    /// views it renders into.
     pub m_RenderBuffer: *mut crate::ui::ui_manager::RenderTargetData,
     _field_1398: [u8; 236],
     /// The movie stage's authored width (`m_CachedStageSize.x`), refreshed every frame from the loaded
     /// movie. The world-to-screen mapping ([`Convert3DCoords`](UIManager::Convert3DCoords)) maps NDC
-    /// into this. Read-only for the redirect.
+    /// into this.
     pub m_CachedStageWidth: f32,
     /// The movie stage's authored height; see [`m_CachedStageWidth`](UIManager::m_CachedStageWidth).
     pub m_CachedStageHeight: f32,
     _field_148c: [u8; 12],
     /// The cached viewport width (`m_CachedViewportSize.x`), refreshed every frame from the graphics
     /// device's display resolution. [`ComputeSafeArea`](UIManager::ComputeSafeArea) reads it to expand
-    /// the UI safe area to the viewport's aspect (the HUD's reflow mechanism), so the redirect
-    /// overrides it to the render target's dimensions before recomputing the safe area.
+    /// the UI safe area to the viewport's aspect.
     pub m_CachedViewportWidth: i32,
     /// The cached viewport height; see [`m_CachedViewportWidth`](UIManager::m_CachedViewportWidth).
     pub m_CachedViewportHeight: i32,
+    /// The cached viewport aspect ratio (`m_CachedViewportSize.y / .x`, i.e. device height / width),
+    /// refreshed every frame from the graphics device. [`Convert3DCoords`](UIManager::Convert3DCoords)
+    /// uses it -- not the width/height fields -- to aspect-correct world-to-screen.
+    pub m_CachedViewportRatio: f32,
+    _field_14a4: [u8; 4],
 }
 fn _UIManager_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x14A0], UIManager>([0u8; 0x14A0]);
+        ::std::mem::transmute::<[u8; 0x14A8], UIManager>([0u8; 0x14A8]);
     }
     unreachable!()
 }
@@ -146,10 +165,7 @@ impl UIManager {
     /// Recomputes the movie render rectangle ([`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth) /
     /// [`m_MovieScaleHeight`](UIManager::m_MovieScaleHeight)). It first refreshes the cached stage and
     /// viewport sizes from the live device resolution (via an internal `UpdateCachedValues`), then
-    /// sizes the movie rectangle from them -- so it always forces the device's aspect and cannot be
-    /// steered by writing the cached fields beforehand. The HUD redirect therefore avoids it and sets
-    /// the movie rectangle directly; it is used only by the restore path to return the rectangle to
-    /// the engine-native device size.
+    /// sizes the movie rectangle from them, so the rectangle always reflects the device aspect.
     pub unsafe fn ComputeMovieSizeOnViewSize(&mut self, a2: bool, a3: bool) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, a2: bool, a3: bool) = ::std::mem::transmute(
@@ -163,8 +179,7 @@ impl UIManager {
     /// [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth) x
     /// [`m_MovieScaleHeight`](UIManager::m_MovieScaleHeight)) within it at offset
     /// `((width - m_MovieScaleWidth) / 2, (height - m_MovieScaleHeight) / 2)`. This is the viewport the
-    /// Scaleform HAL uses for rendering, so it must match the render target's dimensions; passing the
-    /// movie rectangle's own dimensions yields a zero offset (the movie fills the target).
+    /// Scaleform HAL renders into.
     pub unsafe fn SetMovieViewport(&mut self, width: i32, height: i32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, width: i32, height: i32) = ::std::mem::transmute(

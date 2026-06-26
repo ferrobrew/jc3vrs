@@ -162,12 +162,6 @@ impl HudState {
         self.follow.rotation
     }
 
-    /// The HUD render target's pixel dimensions, or `None` if no target has been created. The panel
-    /// quad's aspect is derived from this so it always matches the texture.
-    pub fn target_size(&self) -> Option<(u32, u32)> {
-        self.target.as_ref().map(HudTarget::size)
-    }
-
     /// Compute the panel's world-space corners from the current camera and follow state, caching
     /// the result for both eyes. Call once per frame (eye 0); eye 1 reuses the cached corners.
     pub fn compute_world_corners(&mut self, params: &super::quad::PanelParams) {

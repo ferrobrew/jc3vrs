@@ -48,30 +48,46 @@ use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 /// engine binding while disabled. Called from the render-thread post-draw hook.
 ///
 /// `back_buffer_width`/`back_buffer_height` are the game window's back-buffer dimensions, used both
-/// to size the square HUD texture (via [`hud_target_size`]) and to restore the engine binding on a
-/// toggle-off. The HUD texture's aspect is 1:1, independent of the per-eye render aspect.
+/// to size the HUD texture (via [`hud_target_size`], which scales the longer axis and applies the
+/// configured aspect) and to restore the engine binding on a toggle-off. The HUD texture's aspect is
+/// independent of the per-eye render aspect.
 pub fn tick(device: &Device, back_buffer_width: u32, back_buffer_height: u32) {
     let mut hud = HUD_STATE.lock();
     let cfg = crate::config::Config::lock_query(|c| c.hud);
     if cfg.redirect {
-        let hud_size = hud_target_size(cfg.render_scale, back_buffer_width, back_buffer_height);
-        hud.ensure_redirected(
-            device,
-            hud_size,
-            hud_size,
+        let (width, height) = hud_target_size(
+            cfg.render_scale,
+            cfg.aspect,
             back_buffer_width,
             back_buffer_height,
         );
+        hud.ensure_redirected(device, width, height, back_buffer_width, back_buffer_height);
     } else {
         hud.restore(back_buffer_width, back_buffer_height);
     }
 }
 
-/// Compute the square HUD texture side from the render scale and the back buffer's largest axis.
-/// Clamped to at least 1 pixel so a zero-sized back buffer never reaches texture creation.
-fn hud_target_size(render_scale: f32, back_buffer_width: u32, back_buffer_height: u32) -> u32 {
-    let largest = back_buffer_width.max(back_buffer_height) as f32;
-    (render_scale * largest).round().max(1.0) as u32
+/// Compute the HUD texture dimensions from the render scale, the configured aspect (width / height),
+/// and the back buffer's largest axis. The longer axis is `render_scale * largest_back_buffer_axis`;
+/// the shorter follows from the aspect. Both axes are clamped to at least 1 pixel so a zero-sized
+/// back buffer or a degenerate aspect never reaches texture creation.
+fn hud_target_size(
+    render_scale: f32,
+    aspect: f32,
+    back_buffer_width: u32,
+    back_buffer_height: u32,
+) -> (u32, u32) {
+    let base = render_scale * back_buffer_width.max(back_buffer_height) as f32;
+    let aspect = aspect.max(f32::EPSILON);
+    let (width, height) = if aspect >= 1.0 {
+        (base, base / aspect)
+    } else {
+        (base * aspect, base)
+    };
+    (
+        width.round().max(1.0) as u32,
+        height.round().max(1.0) as u32,
+    )
 }
 
 /// Draw the redirected HUD as a floating quad for `eye` over `target` (the eye's linear back buffer),
@@ -95,12 +111,8 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
     if eye == 0 {
         let head_rotation = extract_head_rotation();
         let follow_rotation = hud.update_follow(head_rotation, &cfg.follow);
-        // The panel aspect comes from the HUD texture's own dimensions (1:1 by construction). If
-        // no target exists yet the quad won't draw either, so the corners are moot.
-        let (width, height) = hud.target_size().unwrap_or((1, 1));
         hud.compute_world_corners(&quad::PanelParams {
-            width,
-            height,
+            aspect: cfg.aspect,
             distance: cfg.distance,
             panel_height: cfg.panel_height,
             follow_rotation,
@@ -145,6 +157,7 @@ fn extract_head_rotation() -> Quat {
 /// correct position on the panel surface, compensating for the follow-damping lag.
 pub fn compute_panel_vp() -> Option<(Matrix4, Matrix4)> {
     let follow_rotation = HUD_STATE.lock().follow_rotation();
+    let aspect = crate::config::Config::lock_query(|c| c.hud.aspect);
 
     let (transform, projection) = unsafe {
         let cm = CameraManager::get()?;
@@ -170,7 +183,21 @@ pub fn compute_panel_vp() -> Option<(Matrix4, Matrix4)> {
     // View = inverse(world transform). VP = P * V (glam column-vector convention).
     // The Matrix4 ↔ Mat4 From impls transpose, so the engine-format result is correct.
     let panel_view = panel_transform.inverse();
-    let glam_proj = Mat4::from(*projection);
+    let mut glam_proj = Mat4::from(*projection);
+
+    // Re-aspect the projection to the panel. The game's projection bakes in the render aspect
+    // (`x_axis.x = cot(fovY/2) / render_aspect`, `y_axis.y = cot(fovY/2)`); rewrite the horizontal
+    // mapping so it matches the panel's aspect (`x_axis.x = cot(fovY/2) / aspect`) instead, otherwise
+    // markers are stretched by the render aspect when drawn onto the panel. `z_axis.x` carries any
+    // off-center frustum shear (asymmetric per-eye VR projections), so it scales by the same factor.
+    // The marker pass also sets `m_CachedViewportRatio = 1 / aspect` so `Convert3DCoords` does not
+    // re-apply the device aspect on top of this (see `hooks::ui`).
+    if glam_proj.x_axis.x != 0.0 && aspect > 0.0 {
+        let horizontal_scale = (glam_proj.y_axis.y / aspect) / glam_proj.x_axis.x;
+        glam_proj.x_axis.x *= horizontal_scale;
+        glam_proj.z_axis.x *= horizontal_scale;
+    }
+
     let glam_vp = glam_proj * panel_view;
 
     let engine_vp = Matrix4::from(glam_vp);

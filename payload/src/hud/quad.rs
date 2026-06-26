@@ -250,10 +250,10 @@ impl HudQuad {
 /// Geometry + follow parameters for computing the panel's world-space corners. Bundled into a
 /// struct to keep the argument list under `clippy::too_many_arguments`.
 pub(crate) struct PanelParams {
-    /// HUD texture dimensions in pixels; the panel aspect is `width / height` so it matches the
-    /// texture and the HUD is never distorted.
-    pub width: u32,
-    pub height: u32,
+    /// Panel aspect ratio (width / height), from [`HudConfig::aspect`](crate::hud::HudConfig::aspect)
+    /// -- the single source of truth shared with the render target and marker projection, so the
+    /// panel always matches the texture and the HUD is never distorted.
+    pub aspect: f32,
     pub distance: f32,
     pub panel_height: f32,
     pub follow_rotation: Quat,
@@ -270,10 +270,10 @@ pub(crate) struct PanelParams {
 /// panel offscreen on large turns. The camera contributes only its position (the anchor point);
 /// the panel's orientation comes entirely from the damped quaternion.
 pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4]> {
-    if params.width == 0 || params.height == 0 {
+    if params.aspect <= 0.0 {
         return None;
     }
-    let aspect = params.width as f32 / params.height as f32;
+    let aspect = params.aspect;
 
     let transform = unsafe {
         let cm = jc3gi::camera::camera_manager::CameraManager::get()?;

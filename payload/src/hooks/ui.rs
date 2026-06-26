@@ -39,14 +39,39 @@ fn get_2d_info(
     a10: bool,
     offset: Vector2,
 ) {
-    let panel = Config::lock_query(|c| c.hud.redirect && c.hud.quad)
-        .then(crate::hud::compute_panel_vp)
-        .flatten();
+    let (panel_enabled, aspect) =
+        Config::lock_query(|c| (c.hud.redirect && c.hud.quad, c.hud.aspect));
+    let panel = panel_enabled.then(crate::hud::compute_panel_vp).flatten();
     let (vp, camera) = panel
         .as_ref()
         .map(|(v, c)| (v as *const Matrix4, c as *const Matrix4))
         .unwrap_or((vp_orig, camera_orig));
+
+    // For the panel pass, retarget `Convert3DCoords`' aspect correction to the panel: it reads
+    // `m_CachedViewportRatio` (the window height/width, refreshed every frame), which would skew
+    // markers off the panel on top of the already-re-aspected panel VP. Set it to the panel's
+    // `height / width` (= `1 / aspect`) for the call and restore it afterwards so other
+    // world-to-screen consumers in the same frame are unaffected.
+    let restore_ratio = panel
+        .is_some()
+        .then(|| unsafe {
+            this.as_mut().map(|manager| {
+                let previous = manager.m_CachedViewportRatio;
+                manager.m_CachedViewportRatio = 1.0 / aspect.max(f32::EPSILON);
+                previous
+            })
+        })
+        .flatten();
+
     GET_2D_INFO.get().unwrap().call(
         this, world, vp, camera, a5, out_x, out_y, out_pos, margin, a10, offset,
     );
+
+    if let Some(previous) = restore_ratio {
+        unsafe {
+            if let Some(manager) = this.as_mut() {
+                manager.m_CachedViewportRatio = previous;
+            }
+        }
+    }
 }

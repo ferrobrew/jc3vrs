@@ -11,13 +11,14 @@ static HUD_PREVIEW_WIDTH: Mutex<f32> = Mutex::new(512.0);
 pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
     // Redirect toggle and the quad placement/follow parameters. The CONFIG lock is scoped to this
     // block and dropped before HUD_STATE is locked for the preview.
-    let redirect = {
+    let (redirect, aspect) = {
         let mut cfg = config::CONFIG.lock();
         ui.checkbox(
             &mut cfg.hud.redirect,
             "Redirect HUD into our texture (drops it from the scene composite)",
         );
         ui.add_enabled_ui(cfg.hud.redirect, |ui| {
+            ui.add(egui::Slider::new(&mut cfg.hud.aspect, 0.5..=2.5).text("Aspect (w/h)"));
             ui.add(
                 egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0).text("Render scale (x)"),
             );
@@ -42,7 +43,7 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 });
             });
         });
-        cfg.hud.redirect
+        (cfg.hud.redirect, cfg.hud.aspect)
     };
 
     if redirect {
@@ -56,8 +57,8 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
             .default_open(false)
             .show(ui, |ui| match hud.preview_id(renderer) {
                 Some(id) => {
-                    // The HUD texture is square (1:1), so the preview is too.
-                    let size = egui::vec2(preview_width, preview_width);
+                    // The preview matches the HUD aspect (width / height).
+                    let size = egui::vec2(preview_width, preview_width / aspect.max(f32::EPSILON));
                     ui.add(egui::Image::new(egui::ImageSource::Texture(
                         egui::load::SizedTexture { id, size },
                     )));

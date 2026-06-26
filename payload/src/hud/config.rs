@@ -10,13 +10,18 @@ pub struct HudConfig {
     pub redirect: bool,
     /// Draw the redirected HUD back into the scene as a floating quad, per eye. Requires `redirect`.
     pub quad: bool,
-    /// HUD render-target scale relative to the game's largest back-buffer axis. The texture is square
-    /// (1:1), with each side `render_scale * max(back_buffer_width, back_buffer_height)` pixels, so the
-    /// HUD is decoupled from the per-eye render aspect. Lower trades sharpness for fill rate.
+    /// HUD aspect ratio (width / height); `1.0` is square. This is the single source of truth for
+    /// the HUD's aspect: the render-target dimensions, the floating panel's shape, the marker
+    /// projection ([`compute_panel_vp`](crate::hud::compute_panel_vp)), and the Scaleform viewport
+    /// all derive from it, so they cannot drift out of sync.
+    pub aspect: f32,
+    /// HUD render-target scale relative to the game's largest back-buffer axis. The texture's longer
+    /// axis is `render_scale * max(back_buffer_width, back_buffer_height)` pixels; the shorter axis
+    /// follows from [`aspect`](HudConfig::aspect). Lower trades sharpness for fill rate.
     pub render_scale: f32,
     /// Distance from the eye to the panel, in meters. Comfort band: 1.5-2.5m.
     pub distance: f32,
-    /// Panel height in meters; the panel is square (1:1 aspect).
+    /// Panel height in meters; the width follows from [`aspect`](HudConfig::aspect).
     pub panel_height: f32,
     /// Lazy-follow damping parameters for the floating panel.
     pub follow: FollowConfig,
@@ -26,6 +31,7 @@ impl HudConfig {
         Self {
             redirect: true,
             quad: true,
+            aspect: 1.0,
             render_scale: 1.0,
             distance: 3.0,
             panel_height: 5.0,

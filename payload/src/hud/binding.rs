@@ -56,12 +56,17 @@ pub(super) fn redirect_to(target: &HudTarget, width: u32, height: u32) -> bool {
         // 3. Viewport = movie rectangle, so the centering offset is zero.
         manager.SetMovieViewport(w, h);
 
-        // 4. Rebuild the RenderBuffer and swap its views to our texture.
+        // 4. Rebuild the RenderBuffer and swap its views to our texture. InitPlatformRT builds the
+        //    render target square (side = width), so patch its height for a non-square texture --
+        //    otherwise the HAL's viewport/scissor would not match the actual target. At aspect 1.0
+        //    this is a no-op (width == height).
         manager.InitPlatformRT(w);
         let Some(render_buffer) = manager.m_RenderBuffer.as_mut() else {
             tracing::warn!("hud redirect: m_RenderBuffer null after InitPlatformRT");
             return false;
         };
+        render_buffer.m_BufferHeight = h;
+        render_buffer.m_ViewRectBottom = h;
         render_buffer.UpdateData(
             target.color_rtv().as_raw(),
             std::ptr::null_mut(),
