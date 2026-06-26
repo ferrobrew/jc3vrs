@@ -50,15 +50,28 @@ use jc3gi::{
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 
 /// Which presentation the HUD is in this frame. Drives both the panel's aspect (gameplay vs
-/// full-screen UI) and its placement (head-following vs world-static).
+/// full-screen UI) and its placement (head-following vs world-static, gated by
+/// [`WORLD_STATIC_MOVIE_PANEL`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HudMode {
     /// Gameplay HUD: rendered at [`HudConfig::hud_aspect`], head-following.
     Hud,
     /// Full-screen UI -- movies, loading screens, and menus: rendered at
-    /// [`HudConfig::movie_aspect`], world-static (does not move with the head).
+    /// [`HudConfig::movie_aspect`].
     Movie,
 }
+
+/// Whether the full-screen-UI panel ([`HudMode::Movie`]) is world-static (latched in place so the
+/// head can look away) rather than head-following.
+///
+/// Currently disabled: the latch captures the render camera's pose on movie entry, but during
+/// loading screens and the frontend the render camera has no valid pose (the camera hook positions
+/// it from the player's head bone, which doesn't exist there), so the panel latches a degenerate
+/// transform and is stuck off-screen (black screen / invisible menu). Re-enabling needs a head pose
+/// that is valid even outside gameplay, which is what driving the head directly from the player's
+/// pose gives us -- revisit once https://github.com/ferrobrew/jc3vrs/issues/5 lands. Until then, the
+/// full-screen panel head-follows like the gameplay HUD (only the aspect differs).
+pub(crate) const WORLD_STATIC_MOVIE_PANEL: bool = false;
 
 /// Determine the current [`HudMode`] from the game state and UI. Any state other than in-game play
 /// ([`GameState::E_GAME_RUN`] -- so loading screens, the frontend, and install/startup) is

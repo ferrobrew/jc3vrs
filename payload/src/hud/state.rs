@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CLEAR_DEPTH, D3D11_CLEAR_STENCIL, ID3D11DeviceContext,
 };
 
-use super::{binding, quad::HudQuad, target::HudTarget};
+use super::{HudMode, binding, quad::HudQuad, target::HudTarget};
 
 /// Global HUD state. Locked briefly on the render thread.
 pub static HUD_STATE: Mutex<HudState> = Mutex::new(HudState::new());
@@ -159,23 +159,25 @@ impl HudState {
     /// [`HudMode`](crate::hud::HudMode), caching it for the marker projection to reuse.
     ///
     /// In [`HudMode::Hud`](crate::hud::HudMode::Hud) the panel tracks the head: the position is the
-    /// live head position and the rotation is the damped follow quaternion. In
-    /// [`HudMode::Movie`](crate::hud::HudMode::Movie) the panel is world-static: the pose is latched
-    /// on the first movie-mode frame and held, so head movement no longer moves it (the latch is
-    /// cleared whenever `Hud` mode resumes).
+    /// live head position and the rotation is the damped follow quaternion.
+    /// [`HudMode::Movie`](crate::hud::HudMode::Movie) is world-static -- the pose is latched on the
+    /// first movie-mode frame and held, so head movement no longer moves it (the latch is cleared
+    /// whenever `Hud` mode resumes) -- but only while
+    /// [`WORLD_STATIC_MOVIE_PANEL`](crate::hud::WORLD_STATIC_MOVIE_PANEL) is enabled. While it is
+    /// disabled the panel head-follows in both modes (see that constant for why).
     pub fn update_pose(
         &mut self,
-        mode: super::HudMode,
+        mode: HudMode,
         head_pos: Vec3,
         head_rotation: Quat,
         follow: &super::config::FollowConfig,
     ) -> (Vec3, Quat) {
-        let pose = match mode {
-            super::HudMode::Movie => *self.latched_pose.get_or_insert((head_pos, head_rotation)),
-            super::HudMode::Hud => {
-                self.latched_pose = None;
-                (head_pos, self.follow.update(head_rotation, follow))
-            }
+        let world_static = super::WORLD_STATIC_MOVIE_PANEL && mode == HudMode::Movie;
+        let pose = if world_static {
+            *self.latched_pose.get_or_insert((head_pos, head_rotation))
+        } else {
+            self.latched_pose = None;
+            (head_pos, self.follow.update(head_rotation, follow))
         };
         self.current_pose = Some(pose);
         pose
