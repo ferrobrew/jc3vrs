@@ -3,6 +3,9 @@
 /debug
 /target
 
+# env
+.env
+
 # cargo-xwin cross-compilation cache (Windows SDK + CRT)
 .xwin
 
