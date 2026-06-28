@@ -4,6 +4,8 @@ Reverse-engineered from the 2025 Denuvo-less Steam build of Just Cause 3 (Apex e
 
 Data layout (struct/field offsets, singletons, globals) is byte-stable across the Denuvo / Denuvoless / debug builds — only `.text` (function addresses) moved. So the offsets are valid on every build; only the function addresses are build-specific.
 
+For the shader side — extracting the DXBC from the bundles, disassembling it, finding a specific effect, and how the mod patches shaders in memory — see [`shaders.md`](shaders.md).
+
 Key singletons (this build):
 - `GraphicsEngine` instance: the `RenderEngine` singleton aliases the same pointer (both `qword_142ED0E18` and `qword_142E2B6F0` appear for it).
 - `CameraManager` (engine-side) instance.
