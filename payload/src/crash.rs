@@ -28,7 +28,7 @@
 
 use std::{
     os::windows::ffi::OsStrExt,
-    sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 use windows::{
@@ -84,6 +84,26 @@ const STACK_SCAN_WORDS: usize = 1024;
 /// Probable frames logged per thread.
 const MAX_FRAMES_PER_THREAD: usize = 24;
 
+/// Off-stack scratch for [`dump_thread`]: the suspended thread's `CONTEXT` (~1.2 KiB) and the
+/// stack-scan array (8 KiB). Kept out of the stack frame because the handler may run on a nearly
+/// exhausted stack -- when the original fault is a stack overflow, a multi-KiB local in the handler
+/// blows the guard page and faults the handler itself, masking the real crash. `dump_other_threads`
+/// calls `dump_thread` sequentially under the [`IN_HANDLER`] guard, so a single shared static is safe.
+#[repr(C, align(16))]
+struct ThreadScratch {
+    ctx: CONTEXT,
+    stack: [usize; STACK_SCAN_WORDS],
+}
+struct ThreadScratchCell(std::cell::UnsafeCell<ThreadScratch>);
+// SAFETY: only ever accessed from `dump_thread`, which runs single-threaded under the `IN_HANDLER`
+// re-entrancy guard; there is no concurrent access to synchronise.
+unsafe impl Sync for ThreadScratchCell {}
+static THREAD_SCRATCH: ThreadScratchCell = ThreadScratchCell(std::cell::UnsafeCell::new(
+    // SAFETY: `CONTEXT` and `[usize; N]` are plain POD with no validity requirement violated by an
+    // all-zero bit pattern, so a zeroed initializer is sound and gives a `const` for the static.
+    unsafe { std::mem::zeroed() },
+));
+
 /// The raw file handle for crash-handler writes, opened once at [`install`] and never closed (the
 /// process is dying). `0` means "not opened". Stored as an `isize` so it lives in an atomic without a
 /// lock -- the handler must not touch `parking_lot` or `std::io`.
@@ -102,6 +122,78 @@ static IN_HANDLER: AtomicBool = AtomicBool::new(false);
 static LAST_CODE: AtomicU32 = AtomicU32::new(0);
 static LAST_ADDR: AtomicU64 = AtomicU64::new(0);
 static REPEAT_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// A frame-loop milestone, recorded into the [`BREADCRUMBS`] ring by [`mark`]. When a crash's stack is
+/// unreliable (COMDAT-folded generics, a smashed stack, an unwind that can't cross the exception
+/// frame), the ordered ring of recent phases still says *where in the frame* execution was -- which the
+/// backtrace alone often cannot. Reading it in the handler is a plain array load, so it can never
+/// itself fault.
+#[derive(Clone, Copy)]
+#[repr(u32)]
+pub enum Phase {
+    UpdateRenderEnter = 1,
+    OriginalUpdateRender,
+    Eye0Snapshot,
+    Eye0Draw,
+    Eye0Drain,
+    Eye0Post,
+    BetweenEyesRestore,
+    Eye1Draw,
+    Eye1Drain,
+    Eye1Post,
+    Present,
+    NonStereoDraw,
+    FrameEnd,
+}
+
+const BREADCRUMB_COUNT: usize = 24;
+static BREADCRUMBS: [AtomicU32; BREADCRUMB_COUNT] = [const { AtomicU32::new(0) }; BREADCRUMB_COUNT];
+static BREADCRUMB_POS: AtomicUsize = AtomicUsize::new(0);
+
+/// Record a frame-loop milestone. A single relaxed store into a ring -- no I/O, no lock, cheap enough
+/// to call on every phase transition each frame. The handler dumps the ring on a crash.
+pub fn mark(phase: Phase) {
+    let pos = BREADCRUMB_POS.fetch_add(1, Ordering::Relaxed);
+    BREADCRUMBS[pos % BREADCRUMB_COUNT].store(phase as u32, Ordering::Relaxed);
+}
+
+fn phase_name(code: u32) -> &'static str {
+    match code {
+        1 => "UpdateRenderEnter",
+        2 => "OriginalUpdateRender",
+        3 => "Eye0Snapshot",
+        4 => "Eye0Draw",
+        5 => "Eye0Drain",
+        6 => "Eye0Post",
+        7 => "BetweenEyesRestore",
+        8 => "Eye1Draw",
+        9 => "Eye1Drain",
+        10 => "Eye1Post",
+        11 => "Present",
+        12 => "NonStereoDraw",
+        13 => "FrameEnd",
+        _ => "?",
+    }
+}
+
+/// Dump the breadcrumb ring, newest first (so truncation drops the oldest, never the crash point).
+fn log_breadcrumbs() {
+    let pos = BREADCRUMB_POS.load(Ordering::Relaxed);
+    if pos == 0 {
+        return;
+    }
+    let count = pos.min(BREADCRUMB_COUNT);
+    let mut line = Line::new();
+    line.str("recent phases (newest first): ");
+    for i in 0..count {
+        let code = BREADCRUMBS[(pos - 1 - i) % BREADCRUMB_COUNT].load(Ordering::Relaxed);
+        line.str(phase_name(code));
+        if i + 1 < count {
+            line.str(" <- ");
+        }
+    }
+    line.flush();
+}
 
 pub fn install() {
     // Open the log file with a raw handle, sharing the same `jc3vrs.log` the tracing subscriber
@@ -484,6 +576,7 @@ unsafe fn log_record(rec: &EXCEPTION_RECORD, ctx: *mut CONTEXT) {
         log_context(ctx);
         log_frame("fault", rec.ExceptionAddress as usize);
         log_backtrace();
+        log_breadcrumbs();
         dump_other_threads();
     }
 }
@@ -533,23 +626,19 @@ unsafe fn dump_thread(tid: u32) {
             return;
         };
 
-        // CONTEXT must be 16-byte aligned for GetThreadContext.
-        #[repr(C, align(16))]
-        struct Aligned(CONTEXT);
-        let mut ctx = Aligned(CONTEXT {
-            ContextFlags: CONTEXT_FLAGS(CONTEXT_AMD64_CONTROL_INTEGER),
-            ..Default::default()
-        });
-
-        let mut stack = [0usize; STACK_SCAN_WORDS];
+        // The CONTEXT (16-byte aligned for GetThreadContext) and the stack-scan array live in a shared
+        // static rather than on the stack -- see THREAD_SCRATCH for why. Reset only the fields used.
+        let scratch = &mut *THREAD_SCRATCH.0.get();
+        scratch.ctx.ContextFlags = CONTEXT_FLAGS(CONTEXT_AMD64_CONTROL_INTEGER);
+        let stack = &mut scratch.stack;
         let mut stack_words = 0usize;
         let mut rip = 0u64;
         let mut rsp = 0u64;
 
         let suspended = SuspendThread(handle) != u32::MAX;
-        if suspended && GetThreadContext(handle, &mut ctx.0).is_ok() {
-            rip = ctx.0.Rip;
-            rsp = ctx.0.Rsp;
+        if suspended && GetThreadContext(handle, &mut scratch.ctx).is_ok() {
+            rip = scratch.ctx.Rip;
+            rsp = scratch.ctx.Rsp;
             // Copy a bounded, in-bounds slice of the stack while the thread is frozen. VirtualQuery
             // bounds the read to the committed region so the copy never faults.
             let mut mbi = MEMORY_BASIC_INFORMATION::default();

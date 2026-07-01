@@ -12,6 +12,7 @@ use jc3gi::{
 use re_utilities::hook_library::HookLibrary;
 
 use crate::{
+    crash::Phase,
     debug::trace::{TraceEvent, TraceState},
     stereo::STEREO_STATE,
 };
@@ -40,8 +41,10 @@ fn game_update(game: *const Game) -> bool {
 #[detour(address = jc3gi::game::Game::UpdateRender_ADDRESS)]
 fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
     unsafe {
+        crate::crash::mark(Phase::UpdateRenderEnter);
         let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
 
+        crate::crash::mark(Phase::OriginalUpdateRender);
         GAME_UPDATE_RENDER
             .get()
             .unwrap()
@@ -63,6 +66,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         STEREO_STATE.lock().active = stereo;
 
         if stereo {
+            crate::crash::mark(Phase::Eye0Snapshot);
             // Snapshot the reflection-proxy depth-history before eye 0 and restore it before eye 1,
             // so both dispatches make the same per-slot decisions -- the state then advances once
             // per real frame instead of once per dispatch, otherwise water reflections flicker.
@@ -93,18 +97,22 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             STEREO_STATE.lock().draw_index = 0;
             BLOCK_FLIP.store(present_eye != 0, Ordering::Relaxed);
             tracing::trace!(target: "frameloop", "game_update_render: eye 0 Draw");
+            crate::crash::mark(Phase::Eye0Draw);
             game.Draw(spf);
             tracing::trace!(target: "frameloop", "game_update_render: eye 0 WaitForCPUDrawToFinish");
+            crate::crash::mark(Phase::Eye0Drain);
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
             }
             tracing::trace!(target: "frameloop", "game_update_render: eye 0 done");
+            crate::crash::mark(Phase::Eye0Post);
             crate::debug::camera::capture_render_camera(0);
             TraceState::record(TraceEvent::DrawEnd {
                 eye: 0,
                 counts: super::draw_count::DRAW_COUNTS.snapshot(),
             });
 
+            crate::crash::mark(Phase::BetweenEyesRestore);
             if let Some(state) = &effect_info {
                 restore_effect_info(state);
             }
@@ -121,12 +129,15 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             STEREO_STATE.lock().draw_index = 1;
             BLOCK_FLIP.store(present_eye != 1, Ordering::Relaxed);
             tracing::trace!(target: "frameloop", "game_update_render: eye 1 Draw");
+            crate::crash::mark(Phase::Eye1Draw);
             game.Draw(spf);
             tracing::trace!(target: "frameloop", "game_update_render: eye 1 WaitForCPUDrawToFinish");
+            crate::crash::mark(Phase::Eye1Drain);
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
             }
             tracing::trace!(target: "frameloop", "game_update_render: eye 1 done");
+            crate::crash::mark(Phase::Eye1Post);
             crate::debug::camera::capture_render_camera(1);
             TraceState::record(TraceEvent::DrawEnd {
                 eye: 1,
@@ -142,6 +153,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 restore_counters: None,
             });
             STEREO_STATE.lock().draw_index = 0;
+            crate::crash::mark(Phase::NonStereoDraw);
             game.Draw(spf);
             crate::debug::camera::capture_render_camera(0);
             TraceState::end_frame();
@@ -149,7 +161,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
         // Drive the F10 stereo capture composite after the frame's draws are done (both eyes
         // captured in stereo, eye 0 in non-stereo). No-op when capture is inactive.
+        crate::crash::mark(Phase::Present);
         crate::capture::present_frame();
+        crate::crash::mark(Phase::FrameEnd);
     }
 }
 
