@@ -3,7 +3,7 @@ use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     UI::{
-        Input::KeyboardAndMouse::VK_F10,
+        Input::KeyboardAndMouse::{VK_F10, VK_F11},
         WindowsAndMessaging::{WM_KEYDOWN, WM_SYSKEYDOWN},
     },
 };
@@ -29,6 +29,26 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 egui_state.toggle_game_input_capture();
             }
             crate::capture::toggle();
+        }
+        return LRESULT(0);
+    }
+
+    // F11 flips the sun-shadow PCF patch and reloads the shaders, for a live in-headset A/B of the
+    // patch without reaching for the debug overlay. Edge-detected like F10; consumed so the game does
+    // not also act on it.
+    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F11.0 as usize {
+        let previous_down = (lparam.0 & 0x4000_0000) != 0;
+        if !previous_down {
+            let now_on = {
+                let mut cfg = crate::config::CONFIG.lock();
+                cfg.stereo.patch_shadow_pcf_hash = !cfg.stereo.patch_shadow_pcf_hash;
+                cfg.stereo.patch_shadow_pcf_hash
+            };
+            crate::hooks::graphics_engine::shader::request_reload();
+            tracing::info!(
+                "F11: sun-shadow PCF patch {}; reloading shaders to apply",
+                if now_on { "ON" } else { "OFF" }
+            );
         }
         return LRESULT(0);
     }

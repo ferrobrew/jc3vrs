@@ -10,6 +10,8 @@ use re_utilities::hook_library::HookLibrary;
 pub mod graphics_engine;
 mod post_effects;
 mod render_pass;
+// `shader` is public so the debug UI can read its patched-shader count.
+pub mod shader;
 // `ssao` is crate-visible so hooks::game can read the recorded CSSAOPass pointer for the between-eye
 // history-index restore.
 pub(crate) mod ssao;
@@ -24,6 +26,7 @@ pub(crate) fn hook_library() -> HookLibrary {
         tone_mapping::extend,
         post_effects::extend,
         ssao::extend,
+        shader::extend,
     ]
     .into_iter()
     .fold(HookLibrary::new(), |library, extend| extend(library))

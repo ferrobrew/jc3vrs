@@ -108,7 +108,11 @@ the bytecode, so a hook can substitute a patched copy that only has to outlive t
 The mod uses this to patch shaders in memory (`payload/src/hooks/graphics_engine/shader.rs`):
 
 1. **Hook `CreateFragmentProgram`** — scan `params.m_Code` for the target byte pattern; if present,
-   point `m_Code` at a patched copy for the duration of the call, then restore it.
+   point `m_Code` at a patched copy for the duration of the call, then restore it. After editing the
+   bytecode, **recompute the DXBC container checksum** (a modified MD5 over everything past the 20-byte
+   header, stored at offset `0x4`) and write it back — the D3D stack under Proton validates it and
+   rejects a blob whose stored hash no longer matches, so a patch that skips this step silently fails to
+   create the shader. See `refresh_dxbc_checksum` / `dxbc_hash` in `shader.rs`.
 2. **Force a reload** — because injection happens after the game has built its shaders, the hook only
    sees them when they are re-created. `CGraphicsEngine::LoadShaderBundle(name)` reloads a bundle (and
    re-creates every shader holder through `CreateFragmentProgram`), but only if `name` differs from the
@@ -148,10 +152,12 @@ immediate `39 d6 4f 41 4c 77 9c 42 00 00 00 00 00 00 00 00` to leading zeros. Th
 change is negligible. The mod does this in the `CreateFragmentProgram` hook above
 (`stereo.patch_shadow_pcf_hash`), applied via the "Reload shaders" button.
 
-> A raw byte-patch invalidates the DXBC container hash; `D3DDisassemble` then rejects the blob
-> (`hr=0x80004005`), but the D3D11 runtime does not validate that hash, so a patched shader loads and
-> runs fine. (The mod patches a transient copy anyway, so the question only arises if you patch a blob
-> on disk to inspect it.)
+> A raw byte-patch invalidates the DXBC container hash; `D3DDisassemble` rejects the blob
+> (`hr=0x80004005`), and — contrary to an earlier assumption that only the disassembler cares — the D3D
+> stack under Proton rejects it too: the patched shadow shaders fail to create and the scene renders
+> near-black with speckle. The mod therefore recomputes the checksum after patching
+> (`refresh_dxbc_checksum`), which makes the blob valid for every consumer; recomputing it on a blob you
+> patch on disk likewise makes `D3DDisassemble` accept it again.
 
 **What this does *not* explain.** A rotated disk changes the noise, not the mean, so it does not make a
 shadow uniformly stronger or longer in one eye. That residual is **inherent view-dependence** in

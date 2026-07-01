@@ -47,6 +47,11 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         crate::crash::mark(Phase::UpdateRenderEnter);
         let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
 
+        // Apply a requested shader reload here, on the game thread before this frame's draws, so the
+        // PCF-patch hook re-creates the already-loaded shaders (injection is normally after the game
+        // has built them).
+        super::graphics_engine::shader::process_reload_request();
+
         crate::crash::mark(Phase::OriginalUpdateRender);
         GAME_UPDATE_RENDER
             .get()

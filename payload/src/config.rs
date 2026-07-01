@@ -131,6 +131,11 @@ pub struct StereoConfig {
     /// half of the per-eye MainColor divergence. Snapshot before eye 0, restore before eye 1 so eye 1
     /// refreshes the same cascade. **Default off pending validation.**
     pub restore_gi_cascade: bool,
+    /// Patch the screen-space PCF rotation hash out of the sun-shadow shaders at creation, so both
+    /// eyes use the same unrotated 38-tap PCF (removes the per-eye shadow shimmer + foliage grain).
+    /// Applies only to shaders created after the hook installs; trigger a shader reload (e.g. change
+    /// shadow quality) if injected mid-session. See [`crate::hooks::graphics_engine::shader`].
+    pub patch_shadow_pcf_hash: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -155,6 +160,7 @@ impl StereoConfig {
             skip_gi: false,
             restore_ssao_history: false,
             restore_gi_cascade: false,
+            patch_shadow_pcf_hash: true,
         }
     }
 }
