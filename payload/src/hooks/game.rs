@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use detours_macro::detour;
 use jc3gi::{
     clock::Clock,
+    cpu_fragment::{CpuFragmentWaitUntilSignalIsNonZero, CpuPrimaryCount},
     game::{Game, GameState, UpdateContexts},
     graphics_engine::{
         graphics_engine::{GraphicsEngine, RenderFrameCounters, get_render_frame_counters},
@@ -103,6 +104,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             crate::crash::mark(Phase::Eye0Drain);
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
+                drain_draw_thread_fragment(ge);
             }
             tracing::trace!(target: "frameloop", "game_update_render: eye 0 done");
             crate::crash::mark(Phase::Eye0Post);
@@ -135,6 +137,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             crate::crash::mark(Phase::Eye1Drain);
             if let Some(ge) = GraphicsEngine::get() {
                 ge.WaitForCPUDrawToFinish();
+                drain_draw_thread_fragment(ge);
             }
             tracing::trace!(target: "frameloop", "game_update_render: eye 1 done");
             crate::crash::mark(Phase::Eye1Post);
@@ -164,6 +167,25 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         crate::crash::mark(Phase::Present);
         crate::capture::present_frame();
         crate::crash::mark(Phase::FrameEnd);
+    }
+}
+
+/// Wait for the engine's draw-dispatch CPU fragment to finish, the drain `WaitForCPUDrawToFinish`
+/// omits. `DispatchDraw` runs the render passes on an async fragment signalled at
+/// [`GraphicsEngine::m_DrawThreadWorkSignal`], and the engine itself only waits on it at the next
+/// `Draw`'s entry (gated by `CpuPrimaryCount() > 1`). In stereo we mutate the shared render-frame state
+/// between the eyes' Draws, so eye 0's fragment must be drained here first -- otherwise it reads a torn
+/// per-camera context and faults (the intermittent open-world crash). Mirrors the engine's own guard so
+/// it cannot spin on a build that draws inline.
+unsafe fn drain_draw_thread_fragment(ge: &mut GraphicsEngine) {
+    if !crate::config::Config::lock_query(|c| c.stereo.drain_draw_fragment) {
+        return;
+    }
+    unsafe {
+        if CpuPrimaryCount() <= 1 {
+            return;
+        }
+        CpuFragmentWaitUntilSignalIsNonZero(&raw const ge.m_DrawThreadWorkSignal);
     }
 }
 

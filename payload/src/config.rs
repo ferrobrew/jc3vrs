@@ -72,6 +72,17 @@ pub struct StereoConfig {
     pub gate_hand_back_buffers: bool,
     /// Zero the post-effect dt on eye 1 (so once-per-frame accumulators do not double-step).
     pub gate_eye1_dt: bool,
+    /// Drain the engine's draw-dispatch CPU fragment (`GraphicsEngine+0x30`, `m_DrawThreadWorkSignal`)
+    /// after each eye's `Draw`, which `WaitForCPUDrawToFinish` does not. `DispatchDraw` kicks that
+    /// fragment to run the render passes asynchronously, and the engine only waits on it at the *next*
+    /// `Draw`'s entry -- so without this, eye 0's fragment is still in flight when the between-eye
+    /// snapshot/restore mutates the shared render-frame state, and the fragment reads a torn per-camera
+    /// context (wild `this`) and faults. The fix for the intermittent open-world crash, IDB-verified
+    /// (the barrier address is disassembled from the engine's own entry wait). Default on: a wrong
+    /// barrier fails on frame 1, which is the wanted behaviour during development -- crash fast and
+    /// deterministically rather than mask a latent fault. Toggle off to reproduce the original crash for
+    /// an A/B.
+    pub drain_draw_fragment: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -86,6 +97,7 @@ impl StereoConfig {
             gate_setup_render_frame_data: false,
             gate_hand_back_buffers: false,
             gate_eye1_dt: true,
+            drain_draw_fragment: true,
         }
     }
 }
