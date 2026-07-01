@@ -458,6 +458,54 @@ unsafe fn log_backtrace() {
     }
 }
 
+/// Log a heuristic backtrace of the *faulting* thread by scanning its stack upward from `rsp` for values
+/// that point into executable memory (probable return addresses). Unlike `RtlCaptureStackBackTrace`, it
+/// never invokes the unwinder, so it cannot fault on a smashed or foreign-code stack -- exactly the case
+/// where the real crash most needs a backtrace and Wine's unwinder itself faults, masking it. `rsp`
+/// comes from the exception `CONTEXT`. Reuses the shared `THREAD_SCRATCH` stack buffer, which is safe:
+/// the handler is serialized by `IN_HANDLER`, and this runs before `dump_other_threads` reuses it.
+unsafe fn log_faulting_stack(rsp: u64) {
+    unsafe {
+        if rsp == 0 {
+            return;
+        }
+        let stack = &mut (*THREAD_SCRATCH.0.get()).stack;
+        let mut mbi = MEMORY_BASIC_INFORMATION::default();
+        if VirtualQuery(
+            Some(rsp as *const std::ffi::c_void),
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        ) == 0
+        {
+            return;
+        }
+        let region_end = mbi.BaseAddress as usize + mbi.RegionSize;
+        let words = (region_end.saturating_sub(rsp as usize) / 8).min(STACK_SCAN_WORDS);
+        for (i, slot) in stack[..words].iter_mut().enumerate() {
+            *slot = *((rsp as usize + i * 8) as *const usize);
+        }
+        let mut frames = 0usize;
+        for &value in &stack[..words] {
+            if frames >= MAX_FRAMES_PER_THREAD {
+                break;
+            }
+            if is_executable(value) {
+                let mut line = Line::new();
+                line.str("  bt[");
+                if frames < 10 {
+                    line.byte(b'0');
+                }
+                line.dec(frames as u64).str("]: ");
+                if append_module(&mut line, value) {
+                    line.str("addr=").hex(value as u64, 16);
+                    line.flush();
+                    frames += 1;
+                }
+            }
+        }
+    }
+}
+
 /// Dump key x86-64 registers from the exception context. These are essential for diagnosing the
 /// faulting instruction: the write target register, calling-convention arguments, and stack frame
 /// pointers narrow down which code path crashed and what it was operating on.
@@ -575,7 +623,11 @@ unsafe fn log_record(rec: &EXCEPTION_RECORD, ctx: *mut CONTEXT) {
         // fault there can't lose the primary information.
         log_context(ctx);
         log_frame("fault", rec.ExceptionAddress as usize);
-        log_backtrace();
+        // Scan the faulting thread's own stack heuristically rather than calling
+        // RtlCaptureStackBackTrace on it: under Wine the unwinder walks a foreign/smashed stack and
+        // faults itself, masking the very crash we are reporting (dump_other_threads excludes the
+        // current thread, so this is the only place the faulting stack is recovered).
+        log_faulting_stack(ctx.as_ref().map_or(0, |c| c.Rsp));
         log_breadcrumbs();
         dump_other_threads();
     }
