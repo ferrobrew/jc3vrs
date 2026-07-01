@@ -65,6 +65,66 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         &mut cfg.stereo.present_eye_0,
         "Present eye 0 (else eye 1) -- flip to compare each eye live",
     );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_rt_hashes,
+        "Hash engine RTs per eye into the trace (run with cameras off to find doubled buffers)",
+    );
+    ui.collapsing("Shadow / AO experiments (issue #10)", |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut cfg.stereo.patch_shadow_pcf_hash,
+                "Patch sun-shadow PCF screen-hash (kills per-eye shimmer + foliage grain)",
+            );
+            let patched = crate::hooks::graphics_engine::shader::patched_count();
+            ui.label(if patched == 0 {
+                "(0 patched -- click Reload shaders)".to_string()
+            } else {
+                format!("({patched} sites patched)")
+            });
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Reload shaders").clicked() {
+                crate::hooks::graphics_engine::shader::request_reload();
+            }
+            ui.label("re-creates all shaders so the patch above (or its absence) takes effect (F11 toggles + reloads in-headset)");
+        });
+        ui.checkbox(
+            &mut cfg.stereo.disable_ssao,
+            "Disable SSAO in stereo (diagnostic: does the 'stronger in one eye' darkening vanish?)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.ssao_eye0_only,
+            "SSAO on eye 0 only (experiment: drop the second eye's screen AO)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_cb_ring,
+            "Restore CB ring between eyes (pin RenderEngine +0x16C0; both eyes share CB slots)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.skip_ssr,
+            "Skip SSR (drops screen-space reflections; tests the per-eye prev-scene feedback)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.skip_gi,
+            "Skip GI (drops global illumination; isolates the residual per-eye MainColor divergence)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.drain_draw_fragment,
+            "Drain draw-dispatch fragment between eyes (open-world crash fix, on by default; off = reproduce)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_ssao_history,
+            "Restore SSAO history between eyes (fix: pin the AO temporal slot so both eyes match)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_gi_cascade,
+            "Restore GI cascade between eyes (fix: pin the LPV cascade so both eyes match)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.fix_shadow_cascade_anchor,
+            "Fix sun-shadow cascade anchor (the visible per-eye shadow mismatch; A/B via present_eye_0)",
+        );
+    });
     ui.horizontal(|ui| {
         if ui.button("Dump render trace (4 frames)").clicked() {
             start_trace = true;
