@@ -1,5 +1,5 @@
-//! The Debug tab: the rarely-used stereo/exposure/post-FX bisection toggles and the render-trace
-//! dump. Only locks CONFIG.
+//! The Debug tab: the render-trace dump, the stereo render fixes, the per-eye diagnostics/bisection
+//! levers, and the engine post-FX gates. Only locks CONFIG. (FSR lives in the Render tab.)
 
 use crate::{config, debug::trace};
 
@@ -9,122 +9,9 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     // manifest) while this guard is held -- parking_lot is not reentrant, so that self-deadlocks.
     let mut start_trace = false;
 
-    ui.checkbox(
-        &mut cfg.fsr.enabled,
-        "FSR anti-aliasing (replaces the engine SMAA)",
-    );
-    ui.checkbox(
-        &mut cfg.fsr.jitter,
-        "FSR temporal jitter (off = FSR blurs; A/B to confirm the jitter)",
-    );
-    ui.horizontal(|ui| {
-        let mut sharpen = cfg.fsr.sharpness.is_some();
-        ui.checkbox(&mut sharpen, "FSR sharpening");
-        match (sharpen, cfg.fsr.sharpness) {
-            (true, None) => cfg.fsr.sharpness = Some(0.5),
-            (false, Some(_)) => cfg.fsr.sharpness = None,
-            _ => {}
-        }
-        if let Some(s) = cfg.fsr.sharpness.as_mut() {
-            ui.add(egui::Slider::new(s, 0.0..=1.0).text("strength"));
-        }
-    });
-    ui.checkbox(
-        &mut cfg.fsr.motion_vectors,
-        "FSR motion vectors (off = ghosts moving objects; A/B the decode)",
-    );
-    ui.horizontal(|ui| {
-        ui.label("MV sign:");
-        let (sx, sy) = &mut cfg.fsr.mv_sign;
-        if ui.selectable_label(*sx > 0.0, "x+").clicked() {
-            *sx = 1.0;
-        }
-        if ui.selectable_label(*sx < 0.0, "x-").clicked() {
-            *sx = -1.0;
-        }
-        if ui.selectable_label(*sy > 0.0, "y+").clicked() {
-            *sy = 1.0;
-        }
-        if ui.selectable_label(*sy < 0.0, "y-").clicked() {
-            *sy = -1.0;
-        }
-    });
-    ui.checkbox(
-        &mut cfg.stereo.force_smaa_1x,
-        "Force SMAA 1x in stereo (T2X ghosts across eyes)",
-    );
-    ui.checkbox(
-        &mut cfg.stereo.force_ssao_first_pass,
-        "Force SSAO first-pass per eye in stereo (stops cross-eye AO history blend)",
-    );
-    ui.checkbox(
-        &mut cfg.stereo.restore_frame_counters,
-        "Restore frame counters between eyes (fixes jitter/parity flicker)",
-    );
-    ui.checkbox(
-        &mut cfg.stereo.present_eye_0,
-        "Present eye 0 (else eye 1) -- flip to compare each eye live",
-    );
-    ui.checkbox(
-        &mut cfg.stereo.diagnose_rt_hashes,
-        "Hash engine RTs per eye into the trace (run with cameras off to find doubled buffers)",
-    );
-    ui.collapsing("Shadow / AO experiments (issue #10)", |ui| {
-        ui.horizontal(|ui| {
-            ui.checkbox(
-                &mut cfg.stereo.patch_shadow_pcf_hash,
-                "Patch sun-shadow PCF screen-hash (kills per-eye shimmer + foliage grain)",
-            );
-            let patched = crate::hooks::graphics_engine::shader::patched_count();
-            ui.label(if patched == 0 {
-                "(0 patched -- click Reload shaders)".to_string()
-            } else {
-                format!("({patched} sites patched)")
-            });
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Reload shaders").clicked() {
-                crate::hooks::graphics_engine::shader::request_reload();
-            }
-            ui.label("re-creates all shaders so the patch above (or its absence) takes effect (F11 toggles + reloads in-headset)");
-        });
-        ui.checkbox(
-            &mut cfg.stereo.disable_ssao,
-            "Disable SSAO in stereo (diagnostic: does the 'stronger in one eye' darkening vanish?)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.ssao_eye0_only,
-            "SSAO on eye 0 only (experiment: drop the second eye's screen AO)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.restore_cb_ring,
-            "Restore CB ring between eyes (pin RenderEngine +0x16C0; both eyes share CB slots)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.skip_ssr,
-            "Skip SSR (drops screen-space reflections; tests the per-eye prev-scene feedback)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.skip_gi,
-            "Skip GI (drops global illumination; isolates the residual per-eye MainColor divergence)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.drain_draw_fragment,
-            "Drain draw-dispatch fragment between eyes (open-world crash fix, on by default; off = reproduce)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.restore_ssao_history,
-            "Restore SSAO history between eyes (fix: pin the AO temporal slot so both eyes match)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.restore_gi_cascade,
-            "Restore GI cascade between eyes (fix: pin the LPV cascade so both eyes match)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.fix_shadow_cascade_anchor,
-            "Fix sun-shadow cascade anchor (the visible per-eye shadow mismatch; A/B via present_eye_0)",
-        );
-    });
+    // Render trace at the top -- it dumps the next few frames' render events under whatever every
+    // option below is set to (writes next to the DLL). `diagnose_rt_hashes` adds per-eye render-target
+    // hashes to the dump.
     ui.horizontal(|ui| {
         if ui.button("Dump render trace (4 frames)").clicked() {
             start_trace = true;
@@ -137,6 +24,91 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         } else {
             ui.label("(writes next to the DLL)");
         }
+    });
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_rt_hashes,
+        "Hash engine RTs per eye into the trace (run with cameras off)",
+    );
+    ui.separator();
+
+    // The stereo render corrections -- normally on; toggle off to reproduce the artifact each fixes.
+    egui::CollapsingHeader::new("Stereo fixes")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.checkbox(
+                &mut cfg.stereo.fix_shadow_cascade_anchor,
+                "Sun-shadow cascade anchor (the visible per-eye shadow mismatch; A/B via Present eye 0)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.drain_draw_fragment,
+                "Drain draw-dispatch fragment between eyes (open-world crash fix)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.restore_frame_counters,
+                "Restore frame counters between eyes (fixes jitter/parity flicker)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.force_smaa_1x,
+                "Force SMAA 1x (T2X's shared history ghosts across eyes)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.force_ssao_first_pass,
+                "Force SSAO first-pass per eye (stops cross-eye AO history blend)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.restore_ssao_history,
+                "Restore SSAO history between eyes (pin the AO temporal slot so both eyes match)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.restore_gi_cascade,
+                "Restore GI cascade between eyes (pin the LPV cascade so both eyes match)",
+            );
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut cfg.stereo.patch_shadow_pcf_hash,
+                    "Patch sun-shadow PCF screen-hash (kills per-eye shimmer + foliage grain)",
+                );
+                let patched = crate::hooks::graphics_engine::shader::patched_count();
+                ui.label(if patched == 0 {
+                    "(0 patched -- click Reload shaders)".to_string()
+                } else {
+                    format!("({patched} sites patched)")
+                });
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Reload shaders").clicked() {
+                    crate::hooks::graphics_engine::shader::request_reload();
+                }
+                ui.label("re-creates all shaders so the PCF patch takes effect (F11 toggles + reloads)");
+            });
+        });
+
+    // Investigation levers -- normally off; used to isolate what differs between the eyes.
+    ui.collapsing("Per-eye diagnostics", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.present_eye_0,
+            "Present eye 0 (else eye 1) -- flip to compare each eye live",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.skip_ssr,
+            "Skip SSR (drops screen-space reflections; tests the per-eye prev-scene feedback)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.skip_gi,
+            "Skip GI (drops global illumination; isolates the residual per-eye MainColor divergence)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.disable_ssao,
+            "Disable SSAO (does the 'stronger in one eye' darkening vanish?)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.ssao_eye0_only,
+            "SSAO on eye 0 only (drop the second eye's screen AO)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_cb_ring,
+            "Restore CB ring between eyes (pin RenderEngine +0x16C0; both eyes share CB slots)",
+        );
     });
 
     ui.collapsing("Eye-1 gates (skip on second Draw)", |ui| {

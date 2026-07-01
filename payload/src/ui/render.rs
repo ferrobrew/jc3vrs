@@ -430,6 +430,51 @@ pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
         )
         .on_hover_text("Offset the active camera per eye so the two draws diverge");
         ui.add(egui::Slider::new(&mut cfg.stereo.ipd, 0.0..=100.0).text("IPD (m)"));
+
+        egui::CollapsingHeader::new("FSR")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.checkbox(
+                    &mut cfg.fsr.enabled,
+                    "Anti-aliasing (replaces the engine SMAA)",
+                );
+                ui.checkbox(
+                    &mut cfg.fsr.jitter,
+                    "Temporal jitter (off = FSR blurs; A/B to confirm the jitter)",
+                );
+                ui.horizontal(|ui| {
+                    let mut sharpen = cfg.fsr.sharpness.is_some();
+                    ui.checkbox(&mut sharpen, "Sharpening");
+                    match (sharpen, cfg.fsr.sharpness) {
+                        (true, None) => cfg.fsr.sharpness = Some(0.5),
+                        (false, Some(_)) => cfg.fsr.sharpness = None,
+                        _ => {}
+                    }
+                    if let Some(s) = cfg.fsr.sharpness.as_mut() {
+                        ui.add(egui::Slider::new(s, 0.0..=1.0).text("strength"));
+                    }
+                });
+                ui.checkbox(
+                    &mut cfg.fsr.motion_vectors,
+                    "Motion vectors (off = ghosts moving objects; A/B the decode)",
+                );
+                ui.horizontal(|ui| {
+                    ui.label("MV sign:");
+                    let (sx, sy) = &mut cfg.fsr.mv_sign;
+                    if ui.selectable_label(*sx > 0.0, "x+").clicked() {
+                        *sx = 1.0;
+                    }
+                    if ui.selectable_label(*sx < 0.0, "x-").clicked() {
+                        *sx = -1.0;
+                    }
+                    if ui.selectable_label(*sy > 0.0, "y+").clicked() {
+                        *sy = 1.0;
+                    }
+                    if ui.selectable_label(*sy < 0.0, "y-").clicked() {
+                        *sy = -1.0;
+                    }
+                });
+            });
     }
 
     let preview_width = {
