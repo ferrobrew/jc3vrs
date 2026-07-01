@@ -13,12 +13,19 @@ pub struct StereoState {
     pub active: bool,
     /// The eye currently being drawn: 0 = first, 1 = second.
     pub draw_index: usize,
+    /// The current eye's world-space camera offset from the center camera (`offset * right`, in
+    /// metres), set by the `SetupRenderCamera` hook. The sun-shadow cascade correction adds
+    /// `M * shadow_anchor_delta` to the cascade transform translation so the shadow lookup stays
+    /// anchored at the (center-fit) shadow map instead of shifting with the per-eye camera. Zero when
+    /// no per-eye offset is applied, making the correction a no-op.
+    pub shadow_anchor_delta: [f32; 3],
 }
 impl StereoState {
     const fn new() -> Self {
         Self {
             active: false,
             draw_index: 0,
+            shadow_anchor_delta: [0.0; 3],
         }
     }
 }

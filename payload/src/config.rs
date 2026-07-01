@@ -83,6 +83,13 @@ pub struct StereoConfig {
     /// deterministically rather than mask a latent fault. Toggle off to reproduce the original crash for
     /// an A/B.
     pub drain_draw_fragment: bool,
+    /// Correct the sun-shadow cascade anchor per eye. The cascaded shadow map is fit to the shared
+    /// center camera, but the material shaders anchor the cascade lookup at the *per-eye* camera
+    /// position (`cb0[4]`), so each eye's shadow is shifted by `M * (eyePos - centerPos)` -- the visible
+    /// per-eye sun-shadow mismatch (edge/length/strength differing between eyes, only with disparity).
+    /// This adds `M * delta` to the cascade transform translation to re-anchor the lookup at center. The
+    /// directly visible stereo-shadow fix; A/B by flipping `present_eye_0` with it on/off.
+    pub fix_shadow_cascade_anchor: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -98,6 +105,7 @@ impl StereoConfig {
             gate_hand_back_buffers: false,
             gate_eye1_dt: true,
             drain_draw_fragment: true,
+            fix_shadow_cascade_anchor: false,
         }
     }
 }

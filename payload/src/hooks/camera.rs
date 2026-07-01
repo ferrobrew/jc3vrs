@@ -38,6 +38,9 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     };
     if is_render_camera {
         TraceState::record_eye(TraceEvent::SetupRenderCamera);
+        // Clear the shadow-anchor delta; the parallax block below sets it when disparity is on, so a
+        // stale value can't leak into the sun-shadow cascade correction when disparity is off.
+        crate::stereo::STEREO_STATE.lock().shadow_anchor_delta = [0.0; 3];
     }
 
     // Snapshot the stereo + FSR config once; drop the lock before the engine call below.
@@ -93,9 +96,17 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 // left (OpenXR convention). Previously reversed, which made the debug pair fuse
                 // cross-eyed when the "parallel" toggle was off.
                 let offset = if eye1 { half_ipd } else { -half_ipd };
-                camera.m_TransformF.data[12] += offset * camera.m_TransformF.data[0];
-                camera.m_TransformF.data[13] += offset * camera.m_TransformF.data[1];
-                camera.m_TransformF.data[14] += offset * camera.m_TransformF.data[2];
+                let delta = [
+                    offset * camera.m_TransformF.data[0],
+                    offset * camera.m_TransformF.data[1],
+                    offset * camera.m_TransformF.data[2],
+                ];
+                camera.m_TransformF.data[12] += delta[0];
+                camera.m_TransformF.data[13] += delta[1];
+                camera.m_TransformF.data[14] += delta[2];
+                // Publish this eye's world offset for the sun-shadow cascade correction (see
+                // SetGlobalShaderConstants hook / stereo::StereoState::shadow_anchor_delta).
+                crate::stereo::STEREO_STATE.lock().shadow_anchor_delta = delta;
 
                 // Also offset the view so the parallax reaches full-m_ViewProjection shaders
                 // (transparents/sky/water), not just the camera-relative opaque path. m_View ==

@@ -11,6 +11,7 @@
 use std::ffi::c_void;
 
 use detours_macro::detour;
+use jc3gi::graphics_engine::graphics_engine::RenderContext;
 use re_utilities::hook_library::HookLibrary;
 
 use crate::{
@@ -23,6 +24,7 @@ pub(super) fn extend(library: HookLibrary) -> HookLibrary {
     library
         .with_static_binder(&SETUP_RENDER_FRAME_DATA_BINDER)
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
+        .with_static_binder(&SET_GLOBAL_SHADER_CONSTANTS_BINDER)
 }
 
 // RenderPass::SetupRenderFrameData -- the per-batch list *build*: appends `count` render-block-items
@@ -52,4 +54,34 @@ fn hand_back_buffers(this: *mut c_void) {
         return;
     }
     HAND_BACK_BUFFERS.get().unwrap().call(this);
+}
+
+// RenderEngine::SetGlobalShaderConstants -- stages the per-eye render context into the cb0 GlobalConstants
+// (the shadow-cascade transform among them). The cascade transform is baked center-camera-relative, but
+// the material shader anchors the shadow lookup at the per-eye camera position (cb0[4]), shifting each
+// eye's shadow by `M * (eyePos - centerPos)` -- the per-eye sun-shadow mismatch. Adding `M * delta` to the
+// transform's translation (with `delta = eyePos - centerPos`, the offset the camera hook applies)
+// re-anchors the lookup to center while leaving stereo geometry untouched. Patched before the original
+// stages the constants; a zero delta (no per-eye offset) makes it a no-op.
+#[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::SetGlobalShaderConstants_ADDRESS)]
+fn set_global_shader_constants(this: *mut c_void, ctx: *mut c_void) {
+    if Config::lock_query(|c| c.stereo.fix_shadow_cascade_anchor)
+        && let Some(ctx) = unsafe { ctx.cast::<RenderContext>().as_mut() }
+    {
+        let delta = crate::stereo::STEREO_STATE.lock().shadow_anchor_delta;
+        apply_shadow_cascade_anchor_fix(ctx, delta);
+    }
+    SET_GLOBAL_SHADER_CONSTANTS.get().unwrap().call(this, ctx);
+}
+
+/// Add `M * delta` to the cascade transform translation row (`m_Transform` row 3), where `M`'s columns
+/// are the transform's three linear rows (row 0/1/2 -- cb0[45..47] in the shader). Re-anchors the
+/// sun-shadow lookup from the per-eye camera back to the center camera the cascade map was fit to. The
+/// full `float4` add is used; the linear rows' `.w` are 0 for the affine cascade transform, so the
+/// translation's `.w` is unchanged.
+fn apply_shadow_cascade_anchor_fix(ctx: &mut RenderContext, delta: [f32; 3]) {
+    let m = &mut ctx.m_ShadowCascades.m_Transform.data;
+    for i in 0..4 {
+        m[12 + i] += delta[0] * m[i] + delta[1] * m[4 + i] + delta[2] * m[8 + i];
+    }
 }
