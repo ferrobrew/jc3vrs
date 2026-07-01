@@ -179,6 +179,30 @@ pub enum TraceEvent {
     CopySurfaceToTexture { dst: u64, src: u64 },
     #[serde(rename = "ResolveSurface")]
     ResolveSurface,
+    /// A content hash of one engine render target, captured per eye after that eye's Draw completes
+    /// (see [`crate::debug::rt_hash`]). With `stereo.cameras` off (both eyes share one camera) the two
+    /// eyes' hashes for a given RT must match; any mismatch means that RT is written twice without a
+    /// per-dispatch reset -- the "stronger in one eye" accumulation bug.
+    #[serde(rename = "rt_hash")]
+    RtHash { rt: RtKind, hash: u64 },
+}
+
+/// The engine render targets hashed by the per-eye RT-doubling diagnostic. The colour/material buffers
+/// are where a doubled darkening term (shadow / AO) surfaces; velocity is included to localise where
+/// the per-eye divergence first enters (with identical cameras, the geometry-pass outputs --
+/// GBuffer1/2/3 -- stay identical, so a divergent velocity points upstream of lighting at the
+/// previous-frame view-projection, while a divergent GBuffer0/MainColor alone points at a screen-space
+/// resolve or scratch reuse). Depth targets are excluded -- they are awkward and fault-prone to read
+/// back on the CPU and track the geometry pass anyway.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RtKind {
+    MainColor,
+    GBuffer0,
+    GBuffer1,
+    GBuffer2,
+    GBuffer3,
+    Velocity,
+    BackBufferLinear,
 }
 
 /// Whether a render trace is currently collecting. Lock-free; lets hooks skip readback work when off.

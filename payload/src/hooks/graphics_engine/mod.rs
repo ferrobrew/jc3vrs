@@ -10,7 +10,9 @@ use re_utilities::hook_library::HookLibrary;
 pub mod graphics_engine;
 mod post_effects;
 mod render_pass;
-mod ssao;
+// `ssao` is crate-visible so hooks::game can read the recorded CSSAOPass pointer for the between-eye
+// history-index restore.
+pub(crate) mod ssao;
 mod tone_mapping;
 
 /// Bundle every CGraphicsEngine-area detour into one hook library, mirroring how the game groups

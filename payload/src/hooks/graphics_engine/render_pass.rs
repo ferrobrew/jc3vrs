@@ -24,6 +24,7 @@ pub(super) fn extend(library: HookLibrary) -> HookLibrary {
     library
         .with_static_binder(&SETUP_RENDER_FRAME_DATA_BINDER)
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
+        .with_static_binder(&DRAW_RENDER_PASS_RANGE_BINDER)
         .with_static_binder(&SET_GLOBAL_SHADER_CONSTANTS_BINDER)
 }
 
@@ -54,6 +55,56 @@ fn hand_back_buffers(this: *mut c_void) {
         return;
     }
     HAND_BACK_BUFFERS.get().unwrap().call(this);
+}
+
+const RP_SCREEN_SPACE_REFLECTIONS: i32 = 89;
+const RP_GLOBAL_ILLUMINATION: i32 = 90;
+
+// RenderEngine::DrawRenderPassRange -- draws the half-open pass-index range [first, last). The
+// per-eye-divergence diagnostics drop individual passes by splitting the range around them, so every
+// other pass runs untouched: SSR (reads a previous-frame scene capture regenerated each Draw) and GI
+// (may carry a per-eye temporal/probe history) are the suspects for the residual per-eye MainColor
+// divergence, dropped on both eyes to test whether either is the source.
+#[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::DrawRenderPassRange_ADDRESS)]
+fn draw_render_pass_range(
+    this: *mut c_void,
+    ctx: *mut c_void,
+    setup: *mut c_void,
+    first: i32,
+    last: i32,
+) {
+    let original = DRAW_RENDER_PASS_RANGE.get().unwrap();
+    let (skip_ssr, skip_gi) = Config::lock_query(|c| (c.stereo.skip_ssr, c.stereo.skip_gi));
+
+    // Gather the requested skips that fall inside this range, ascending. The set is tiny and fixed.
+    let mut skips = [0i32; 2];
+    let mut n = 0;
+    for (enabled, pass) in [
+        (skip_ssr, RP_SCREEN_SPACE_REFLECTIONS),
+        (skip_gi, RP_GLOBAL_ILLUMINATION),
+    ] {
+        if enabled && first <= pass && pass < last {
+            skips[n] = pass;
+            n += 1;
+        }
+    }
+    if n == 0 {
+        original.call(this, ctx, setup, first, last);
+        return;
+    }
+    skips[..n].sort_unstable();
+
+    // Draw each gap between the skipped passes, omitting the passes themselves.
+    let mut lo = first;
+    for &pass in &skips[..n] {
+        if lo < pass {
+            original.call(this, ctx, setup, lo, pass);
+        }
+        lo = pass + 1;
+    }
+    if lo < last {
+        original.call(this, ctx, setup, lo, last);
+    }
 }
 
 // RenderEngine::SetGlobalShaderConstants -- stages the per-eye render context into the cb0 GlobalConstants

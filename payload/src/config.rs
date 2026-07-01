@@ -90,6 +90,47 @@ pub struct StereoConfig {
     /// This adds `M * delta` to the cascade transform translation to re-anchor the lookup at center. The
     /// directly visible stereo-shadow fix; A/B by flipping `present_eye_0` with it on/off.
     pub fix_shadow_cascade_anchor: bool,
+    /// Diagnostic: hash a curated set of engine render targets after each eye's Draw and record the
+    /// per-eye hashes into the active render trace. Run with `cameras` off (both eyes share one
+    /// camera) so any RT whose two eyes' hashes differ is being accumulated across the two Draws --
+    /// the "stronger in one eye" bug. See [`crate::debug::rt_hash`].
+    pub diagnose_rt_hashes: bool,
+    /// Diagnostic: skip the SSAO pass on both eyes in stereo, to confirm whether SSAO drives the
+    /// "stronger in one eye" darkening. (Equivalent to lowering the in-game AO setting, but toggleable
+    /// live.)
+    pub disable_ssao: bool,
+    /// Experiment: skip the SSAO pass on the second eye only, so the first eye's screen AO is absent
+    /// from the second. A crude test of whether the AO asymmetry is the artifact (a real shared-AO fix
+    /// needs reprojection, not omission).
+    pub ssao_eye0_only: bool,
+    /// Diagnostic: restore the `RenderEngine` per-Draw constant-buffer ring index (`+0x16C0`) between
+    /// the two stereo eyes. This ring advances once per `Draw` and is *not* one of the engine frame
+    /// counters [`restore_frame_counters`](Self::restore_frame_counters) rewinds, so the two eyes
+    /// otherwise land on different constant-buffer pool slots -- any pass that reads the previous slot
+    /// (reprojection / previous-frame matrices) then sees different data per eye. Test whether pinning
+    /// it converges the per-eye MainColor.
+    pub restore_cb_ring: bool,
+    /// Diagnostic: skip the screen-space reflections pass (`RP_SCREEN_SPACE_REFLECTIONS`) on both eyes.
+    /// SSR reads a previous-frame scene-color capture that is regenerated every `Draw`, so eye 1 reads
+    /// what eye 0 just wrote -- a content-based per-eye divergence no counter restore can fix. If
+    /// dropping SSR converges the per-eye MainColor, the SSR feedback is the source.
+    pub skip_ssr: bool,
+    /// Diagnostic: skip the global-illumination pass (`RP_GLOBAL_ILLUMINATION`) on both eyes. GI can
+    /// carry a temporal/probe history that differs per eye; a companion to [`skip_ssr`](Self::skip_ssr)
+    /// for isolating the residual per-eye MainColor divergence that survives SSR-off and SSAO-off.
+    pub skip_gi: bool,
+    /// Restore the SSAO temporal history index (`CSSAOPass +0x9A0`/`+0x9A4`) between the two stereo
+    /// eyes. The index advances once per SSAO draw and is *not* reset by the `m_FirstPass` force, so the
+    /// two eyes resolve against different history slots -- half the per-eye MainColor divergence. Pinning
+    /// it (snapshot before eye 0, restore before eye 1) makes both eyes sample the same slot. **Default
+    /// off pending validation** of the byte offsets against the RT-hash diagnostic.
+    pub restore_ssao_history: bool,
+    /// Restore the global-illumination cascade index (`CGISolver::m_CascadeToUpdate`, reached via the
+    /// `CLightManager` singleton) between the two stereo eyes. It toggles which LPV cascade is refreshed
+    /// each GI draw, so eye 0 and eye 1 leave the two cascades in different freshness states -- the other
+    /// half of the per-eye MainColor divergence. Snapshot before eye 0, restore before eye 1 so eye 1
+    /// refreshes the same cascade. **Default off pending validation.**
+    pub restore_gi_cascade: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -106,6 +147,14 @@ impl StereoConfig {
             gate_eye1_dt: true,
             drain_draw_fragment: true,
             fix_shadow_cascade_anchor: false,
+            diagnose_rt_hashes: false,
+            disable_ssao: false,
+            ssao_eye0_only: false,
+            restore_cb_ring: false,
+            skip_ssr: false,
+            skip_gi: false,
+            restore_ssao_history: false,
+            restore_gi_cascade: false,
         }
     }
 }

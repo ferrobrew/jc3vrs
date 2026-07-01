@@ -13,6 +13,11 @@
 //! from its own depth, with the apply still running. Each eye packs and reads its own current
 //! depth-buffer slot, so the still-advancing index causes no cross-eye depth contamination.
 
+use std::{
+    ptr,
+    sync::atomic::{AtomicPtr, Ordering},
+};
+
 use detours_macro::detour;
 use jc3gi::graphics_engine::ssao::SSAOPass;
 use re_utilities::hook_library::HookLibrary;
@@ -23,6 +28,16 @@ use crate::{
     stereo,
 };
 
+/// The live `CSSAOPass` instance, captured from [`ssao_draw`]. The between-eye SSAO history-index
+/// restore in `game.rs` needs this pointer but has no singleton path to it, so the pass records itself
+/// here each time it draws. Null until the first SSAO draw (so the first frame's restore is a no-op).
+static SSAO_PASS: AtomicPtr<SSAOPass> = AtomicPtr::new(ptr::null_mut());
+
+/// The last-seen `CSSAOPass` instance, or null before the pass has drawn once.
+pub(crate) fn ssao_pass() -> *mut SSAOPass {
+    SSAO_PASS.load(Ordering::Relaxed)
+}
+
 pub(super) fn extend(library: HookLibrary) -> HookLibrary {
     library.with_static_binder(&SSAO_DRAW_BINDER)
 }
@@ -32,7 +47,29 @@ pub(super) fn extend(library: HookLibrary) -> HookLibrary {
 // eye while stereo is active. The apply still runs; only the cross-eye temporal blend is suppressed.
 #[detour(address = jc3gi::graphics_engine::ssao::SSAOPass::Draw_ADDRESS)]
 fn ssao_draw(this: *mut SSAOPass) {
-    let force = stereo::active() && Config::lock_query(|c| c.stereo.force_ssao_first_pass);
+    // Record the pass instance for the between-eye history-index restore in `game.rs`.
+    SSAO_PASS.store(this, Ordering::Relaxed);
+
+    let stereo = stereo::active();
+    let (force_first_pass, disable, eye0_only) = Config::lock_query(|c| {
+        (
+            c.stereo.force_ssao_first_pass,
+            c.stereo.disable_ssao,
+            c.stereo.ssao_eye0_only,
+        )
+    });
+
+    // Diagnostic levers: skipping the pass leaves that eye's GBuffer-alpha AO untouched (material AO
+    // only, no screen AO) and is fully reversible -- toggling off resumes the pass next dispatch with
+    // no engine state clobbered. `disable_ssao` drops both eyes; `ssao_eye0_only` drops just the second.
+    if stereo && (disable || (eye0_only && stereo::is_second_eye())) {
+        TraceState::record_eye(TraceEvent::SsaoDraw {
+            forced_first_pass: false,
+        });
+        return;
+    }
+
+    let force = stereo && force_first_pass;
     if let Some(pass) = unsafe { this.as_mut() } {
         pass.m_FirstPass |= force;
     }
