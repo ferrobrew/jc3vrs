@@ -149,6 +149,14 @@ these. `pyxis.toml` sets `pointer_size = 8` (x86_64).
 - **Docs.** `///` doc comments become the docs. Explain *why* and the non-obvious
   *what*; follow the repo's documentation conventions (periods, sentence case,
   Oxford comma, no narrative comments in function bodies).
+- **Use-case-neutral.** pyxis-defs is a shared, multi-game RE database that
+  describes the engine as it is, independent of any consumer. Every definition and
+  doc comment must be use-case-neutral: describe *engine* behaviour only, and never
+  the downstream project's use of it. No references to the mod, to stereo / VR
+  rendering, "per eye", between-eye snapshot/restore, or any consumer-specific
+  framing — say what a field/function *is* and how the engine itself uses it, and
+  leave why a consumer cares to the consumer's own code. When promoting a raw offset
+  from consumer code into a definition, strip the consumer rationale from the doc.
 
 When you record a function or field, add a `///` doc comment capturing what you
 established: what the function does, the semantic meaning of a field, or the
