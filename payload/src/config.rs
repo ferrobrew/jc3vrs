@@ -151,7 +151,7 @@ impl StereoConfig {
             gate_hand_back_buffers: false,
             gate_eye1_dt: true,
             drain_draw_fragment: true,
-            fix_shadow_cascade_anchor: false,
+            fix_shadow_cascade_anchor: true,
             diagnose_rt_hashes: false,
             disable_ssao: false,
             ssao_eye0_only: false,
