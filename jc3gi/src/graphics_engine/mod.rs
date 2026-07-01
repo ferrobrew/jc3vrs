@@ -1,6 +1,7 @@
 #![cfg_attr(any(), rustfmt::skip)]
 pub mod device;
 pub mod draw;
+pub mod gi;
 pub mod graphics_engine;
 pub mod post_effects;
 pub mod render_engine;

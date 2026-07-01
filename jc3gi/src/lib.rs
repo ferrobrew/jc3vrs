@@ -102,6 +102,7 @@ pub mod audio;
 pub mod camera;
 pub mod character;
 pub mod clock;
+pub mod cpu_fragment;
 pub mod environment;
 pub mod game;
 pub mod graphics_engine;

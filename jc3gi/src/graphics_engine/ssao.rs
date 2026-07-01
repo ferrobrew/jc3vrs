@@ -4,25 +4,29 @@
 ///
 /// It maintains a two-slot temporal AO history, blended in when `m_EnableTemporalFilter` is set. The
 /// history index advances once per render-block draw (an inlined `SetNextHistoryBuffer` at the end of
-/// the apply), not in the per-frame list rotation, so a twice-per-frame stereo render double-steps the
-/// history and blends each eye's AO against the other's.
+/// the apply), not in the per-frame list rotation.
 ///
 /// The render block's final composite draw lives inside the `m_EnableTemporalFilter` branch, so
-/// clearing that flag disables the whole apply (no AO at all). The per-eye reset lever is instead
-/// `m_FirstPass`: the engine uses it to mean "no valid history, compute fresh", weighting the temporal
-/// shader fully toward the current AO. Forcing it on before each stereo eye keeps the apply running
-/// while making each eye compute AO from its own depth.
+/// clearing that flag disables the whole apply (no AO at all). `m_FirstPass` is the engine's "no valid
+/// history, compute fresh" lever: it skips the history resolve and weights the temporal shader fully
+/// toward the current AO. The render block clears it after the first apply.
 pub struct SSAOPass {
-    _field_0: [u8; 2480],
+    _field_0: [u8; 2464],
+    /// The previously-resolved slot of the two-slot temporal AO history; the resolve samples it. It
+    /// advances once per draw (the inlined `SetNextHistoryBuffer`), independent of `m_FirstPass`.
+    pub m_PrevFrameIndex: u32,
+    /// The current slot the resolve writes and the final composite samples; advances with
+    /// [`m_PrevFrameIndex`](SSAOPass::m_PrevFrameIndex).
+    pub m_CurrFrameIndex: u32,
+    _field_9a8: [u8; 8],
     /// Enables the temporal filter, blending the current AO against the previous frame's result
     /// through the history ping-pong. Defaults on. Also gates the render block's final composite draw,
-    /// so clearing it disables AO entirely -- prefer `m_FirstPass` for per-eye reset.
+    /// so clearing it disables AO entirely -- prefer `m_FirstPass` to reset the history.
     pub m_EnableTemporalFilter: bool,
     pub m_EnableDisocclusionTest: bool,
     pub m_EnableDeltaWeighting: bool,
-    /// The per-eye reset lever. When set, it skips the history resolve and weights the temporal shader
-    /// fully toward the current AO; the render block clears it after the first apply. Forcing it back
-    /// on before each eye makes every dispatch compute fresh AO with no cross-eye history blend.
+    /// The "no valid history" lever. When set, it skips the history resolve and weights the temporal
+    /// shader fully toward the current AO; the render block clears it after the first apply.
     pub m_FirstPass: bool,
     _field_9b4: [u8; 236],
 }

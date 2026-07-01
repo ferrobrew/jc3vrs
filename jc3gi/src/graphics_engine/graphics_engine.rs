@@ -64,7 +64,15 @@ impl std::convert::AsMut<EffectInfo> for EffectInfo {
 pub struct GraphicsEngine {
     _field_0: [u8; 24],
     pub m_CPUFinishedDrawingEvent: u32,
-    _field_1c: [u8; 268],
+    _field_1c: [u8; 20],
+    /// Completion signal for the async draw-dispatch CPU fragment that
+    /// [`DispatchDraw`](GraphicsEngine::DispatchDraw) kicks to run the render passes. The fragment sets
+    /// it non-zero on completion; the engine waits on it (via
+    /// `cpu_fragment::CpuFragmentWaitUntilSignalIsNonZero`, gated by `CpuPrimaryCount() > 1`) only at the
+    /// *next* [`Draw`](GraphicsEngine::Draw)'s entry.
+    /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) does *not* wait on it.
+    pub m_DrawThreadWorkSignal: u32,
+    _field_34: [u8; 244],
     pub m_ActiveCursor: crate::graphics_engine::graphics_engine::ActiveCursor,
     _field_12c: [u8; 3460],
     pub m_Device: *mut crate::graphics_engine::device::Device,
@@ -187,6 +195,21 @@ impl GraphicsEngine {
             f(self as *mut Self as _, ctx, dt)
         }
     }
+    pub const LoadShaderBundle_ADDRESS: usize = 0x1400DE9A0;
+    /// Loads (or reloads) the named shader bundle and re-creates every shader holder from it, but only
+    /// if `name` differs from the currently-loaded bundle name (an `std::string` at `+0x1300`, its
+    /// length at `+0x1310`). Re-creating the holders routes every shader through
+    /// `Graphics::CreateFragmentProgram`. The bundle names are `"Shaders"` / `"ShadersLowShadows"`
+    /// (and the Intel `"ShadersConstMath*"` variants), selected by shadow quality in
+    /// `CSettingsManager::UpdateSettings`. `name` is a NUL-terminated C string.
+    pub unsafe fn LoadShaderBundle(&mut self, name: *const u8) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, name: *const u8) -> bool = ::std::mem::transmute(
+                Self::LoadShaderBundle_ADDRESS,
+            );
+            f(self as *mut Self as _, name)
+        }
+    }
 }
 impl std::convert::AsRef<GraphicsEngine> for GraphicsEngine {
     fn as_ref(&self) -> &GraphicsEngine {
@@ -298,7 +321,22 @@ pub use windows::Win32::Foundation::HWND as HWND;
 /// The per-view render context the render passes read: the camera matrices (view, projection, the
 /// translation-free offset view-projection, and the separate camera world position), shadow data, and
 /// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].
-pub struct RenderContext {}
+pub struct RenderContext {
+    _field_0: [u8; 1108],
+    /// The 8 cascade shadow matrices -- an alternate center-relative shadow transform set some
+    /// terrain/deferred sun-shadow shaders sample instead of [`m_ShadowCascades`](RenderContext::m_ShadowCascades).
+    pub m_ShadowMatrices: [crate::types::math::Matrix4; 8],
+    /// The forward-material cascaded sun-shadow transform + cascade box-test parameters.
+    pub m_ShadowCascades: crate::graphics_engine::graphics_engine::ShadowCascades,
+    /// The number of active cascades this frame.
+    pub m_ActiveCascadeCount: u32,
+}
+fn _RenderContext_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x778], RenderContext>([0u8; 0x778]);
+    }
+    unreachable!()
+}
 impl RenderContext {}
 impl std::convert::AsRef<RenderContext> for RenderContext {
     fn as_ref(&self) -> &RenderContext {
@@ -334,6 +372,40 @@ impl std::convert::AsRef<RenderFrameCounters> for RenderFrameCounters {
 }
 impl std::convert::AsMut<RenderFrameCounters> for RenderFrameCounters {
     fn as_mut(&mut self) -> &mut RenderFrameCounters {
+        self
+    }
+}
+#[repr(C, align(4))]
+/// The cascaded sun-shadow constants for the forward-material resolve: the cascade transform plus the
+/// per-cascade box-test parameters, staged into cb0 by `RenderEngine::SetGlobalShaderConstants`.
+pub struct ShadowCascades {
+    /// Maps a camera-relative world position into cascade/texture space (row-major, row-vector; its
+    /// columns are `cb0[45..47]` in the GlobalConstants, the translation `cb0[48]`). The
+    /// forward-material shadow resolve evaluates `(worldPos - cameraPos) * M + translation`, with the
+    /// camera position from `cb0[4]`; `CShadowManager::UpdateCascade` bakes the transform relative to
+    /// the active camera's position.
+    pub m_Transform: crate::types::math::Matrix4,
+    pub m_TextureSize: crate::types::math::Vector4,
+    pub m_Params: crate::types::math::Vector4,
+    /// Per-cascade scale + blend-band (`.w`), one per cascade.
+    pub m_ScaleBlend: [crate::types::math::Vector4; 6],
+    /// Per-cascade offset + texture-array slice (`.w`), one per cascade.
+    pub m_OffsetRadius: [crate::types::math::Vector4; 6],
+}
+fn _ShadowCascades_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x120], ShadowCascades>([0u8; 0x120]);
+    }
+    unreachable!()
+}
+impl ShadowCascades {}
+impl std::convert::AsRef<ShadowCascades> for ShadowCascades {
+    fn as_ref(&self) -> &ShadowCascades {
+        self
+    }
+}
+impl std::convert::AsMut<ShadowCascades> for ShadowCascades {
+    fn as_mut(&mut self) -> &mut ShadowCascades {
         self
     }
 }

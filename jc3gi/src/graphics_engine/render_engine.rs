@@ -13,7 +13,12 @@ pub struct RenderEngine {
     pub m_RenderPasses: [crate::types::std_vector::Vector<
         *mut crate::graphics_engine::render_pass::RenderPass,
     >; 157],
-    _field_1420: [u8; 3584],
+    _field_1420: [u8; 672],
+    /// The per-Draw constant-buffer ring index (feeding `CalculateConstantBufferIndices`): each `Draw`
+    /// selects a constant-buffer pool slot from this and advances it, wrapping at the limit in the `u32`
+    /// immediately after. It advances independently of the engine frame counters.
+    pub m_ConstantBufferRingIndex: u32,
+    _field_16c4: [u8; 2908],
 }
 fn _RenderEngine_size_check() {
     unsafe {

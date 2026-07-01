@@ -1,4 +1,29 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[repr(C, align(8))]
+/// Parameters to [`CreateFragmentProgram`]: the compiled DXBC bytecode (`m_Code`) and its byte length
+/// (`m_Size`), passed straight through to `ID3D11Device::CreatePixelShader`. `m_Size` is read as a
+/// pointer-width value (the bytecode length argument to `CreatePixelShader`).
+pub struct CreateFragmentProgramParams {
+    pub m_Code: *const u8,
+    pub m_Size: u64,
+}
+fn _CreateFragmentProgramParams_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x10], CreateFragmentProgramParams>([0u8; 0x10]);
+    }
+    unreachable!()
+}
+impl CreateFragmentProgramParams {}
+impl std::convert::AsRef<CreateFragmentProgramParams> for CreateFragmentProgramParams {
+    fn as_ref(&self) -> &CreateFragmentProgramParams {
+        self
+    }
+}
+impl std::convert::AsMut<CreateFragmentProgramParams> for CreateFragmentProgramParams {
+    fn as_mut(&mut self) -> &mut CreateFragmentProgramParams {
+        self
+    }
+}
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
 /// The primitive topology passed to the draw wrappers. The patchlist variants are tessellation
@@ -282,5 +307,24 @@ pub unsafe fn GetDSVFromSurface(
             surface: *mut ::std::ffi::c_void,
         ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(GetDSVFromSurface_ADDRESS);
         f(surface)
+    }
+}
+pub const CreateFragmentProgram_ADDRESS: usize = 0x141953470;
+/// The leaf fragment-program creator: it wraps `ID3D11Device::CreatePixelShader` over
+/// `params.m_Code`/`params.m_Size`. `CreatePixelShader` copies the bytecode, so a hook may substitute a
+/// patched copy that only has to outlive the call. Static (no `this`); the first argument is the
+/// graphics device.
+pub unsafe fn CreateFragmentProgram(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    params: *mut crate::graphics_engine::draw::CreateFragmentProgramParams,
+) -> *mut ::std::ffi::c_void {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+            params: *mut crate::graphics_engine::draw::CreateFragmentProgramParams,
+        ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(
+            CreateFragmentProgram_ADDRESS,
+        );
+        f(device, params)
     }
 }
