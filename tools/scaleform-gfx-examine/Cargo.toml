@@ -1,0 +1,8 @@
+[package]
+name = "scaleform-gfx-examine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+flate2 = "1"

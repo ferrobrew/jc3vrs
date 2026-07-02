@@ -328,13 +328,132 @@ to per-element-depth rendering without Scaleform authoring tools.
 
 | Approach | Difficulty | New `.gfx`? | Per-element depth? |
 |---|---|---|---|
-| **Multi-pass: toggle visibility + re-render** | **Medium** | **No** | **Full — separate textures per pass** |
+| **Multi-pass: toggle visibility + re-render** | **Medium-high** | **No** | **Full — separate textures per pass** |
 | Suppress + mod-drawn quads | Medium | No | Full — mod draws at any depth |
 | Near/far panel distance presets | Medium | No | Panel-level only |
 | Intercept `Get2DInfo` for world markers | Medium | No | Partial — markers only |
 | Second `CreateInstance` of `root.gfx` | Medium-high | No | No — renders whole HUD |
 | Load `hud.gfx`/`overlay.gfx` standalone | Medium-high | No (shipped files) | Partial — if standalone |
 | Author custom `.gfx` files | High | Yes | Full — per-group movies |
+
+## GFX file inspection findings
+
+We extracted the shipped `.gfx` files from the game archives using a Python
+script (the Gibbed tools require .NET/Wine, which isn't available; the `.tab`/
+`.arc` format is simple — Jenkins-hashed entries pointing at offsets in the
+`.arc`). The files use the **CFX** magic (zlib-compressed Scaleform GFX,
+essentially SWF with Scaleform extensions).
+
+A Rust tool (`tools/scaleform-gfx-examine`) was built to parse and dump the
+GFX tag structure, SymbolClass mappings, DoABC string pools, and DefineSprite
+depth tables. Full ABC body parsing (instances, classes, method bodies) was
+not completed — Scaleform's GFX uses a non-standard GenericName multiname
+encoding that desynchronizes the AVM2 parser. The string pool and multiname
+names are extracted successfully, covering the most useful data.
+
+### `root.gfx` — the UI movie registry
+
+`root.gfx` contains `CSharedLibUI`, the base class that manages the UI movie
+registry. Each UI movie is registered as a class-to-filename pair:
+
+| AS3 class | Movie file | Purpose |
+|---|---|---|
+| `COverlayUI` | `overlay` | Overlay elements |
+| `CHUDUI` | `hud` | HUD |
+| `CMainUI` | `main` | Main menu |
+| `CPauseUI` | `pause` | Pause menu |
+| `CIntroUI` | `intro` | Intro |
+| `CTitleUI` | `title` | Title |
+| `CTutorialsUI` | `tutorials` | Tutorials |
+| `CCreditsUI` | `credits` | Credits |
+| `CLobbyUI` | `lobby` | Lobby |
+| `CCommLinkUI` | `comm_link` | Comm link |
+| `CCommCollectiblesUI` | `comm_collectibles` | Collectibles |
+| `CCommCommunityUI` | `comm_community` | Community |
+| `CCommMapUI` | `comm_map` | Map |
+| `CCommSkillUI` | `comm_skill` | Skill |
+| `CCommStatsUI` | `comm_stats` | Stats |
+| `CCommBragsFeatsUI` | `comm_brags_feats` | Brags/feats |
+| `CCommStoreUI` | `comm_store` | Store |
+| `CRewardUI` | `reward` | Rewards |
+| `CROMUI` | — | ROM (challenges) |
+| `CSharedLibUI` | `shared_lib` | Shared library |
+
+It also exposes the full set of `ExternalInterface.call` method names the
+engine invokes on the root movie: `activate`, `deactivate`, `:tween_pos`,
+`:tween_alpha_visibility`, `:delay_call`, `:get_localized_string`,
+`:set_setting_value`, `:get_setting_value`, `:get_sku`, `:hash`, etc.
+
+### `hud.gfx` — SymbolClass and element inventory
+
+The HUD movie contains 1649 tags: 546 DefineSprites, 357 DefineShapes, 159
+DefineEditText fields, one DoABC block (395 KB), one SymbolClass, and 58
+DefineFont4 entries. The SymbolClass maps tag IDs to AS3 class names:
+
+**Full-screen overlay elements (to suppress, #8):**
+
+| Tag ID | AS3 class | C++ Invoke method | What it does |
+|---|---|---|---|
+| 985 | `hud_code.health.omni_damage` | `OnOmniDamage` | Screen-wide damage flash |
+| 984 | `hud_code.health.hud_health_damage_manager` | — | Manages health paint layers |
+| 979 | `hud_code.health.hud_health_paint_container` | — | Container for paint layers |
+| 978 | `hud_code.health.hud_health_paint` | `UpdateHealth` | Near-death screen-edge paint (4 corners × 5 layers) |
+| 986 | `hud_fla.drown_4` | `ShowDrowning`/`HideDrowning` | Full-screen drowning overlay |
+| 265 | `hud_code.CharacterHitIndicator` | `UpdateCharacterDmgIndicators` | Directional damage arrows |
+| 53 | `VehicleHitIndicator` | `UpdateMechDmgIndicators` | Vehicle damage arrows |
+| 1041 | `hud_fla.inflict_damage_57` | `OnPlayerDogeDamage` | Damage type indicator |
+| 417 | `bomb_warning` | `ShowWarning`/`HideWarning` | Warning message |
+| 1496 | `hud_fla.warning_426` | `ShowWarning`/`HideWarning` | Warning visual container |
+| — | (dynamic) | `ShowSniperOverlay`/`HideSniperOverlay` | Sniper scope vignette |
+
+The sniper overlay has no static SymbolClass entry in `hud.gfx` — it's likely
+created dynamically by ActionScript or lives in `overlay.gfx` (which is in the
+patch archive, not yet extracted due to a hash mismatch).
+
+**Elements to keep on the panel (#14):**
+
+| Tag ID | AS3 class | What it does |
+|---|---|---|
+| 0 | `hud` | Root HUD container |
+| 494 | `hud_code.life_bar_group` | Health bar group |
+| 785 | `hud_code.nitro_meter` | Nitro/boost meter |
+| 739 | `hud_code.bavarium_meter` | Bavarium meter |
+| 610 | `hud_code.jump_meter` | Jump meter |
+| 252 | `DualTether` | Tether UI |
+| 235 | `hud_code.poi` | Points of interest |
+| 601 | `hud_code.live_leaderboard.live_leaderboard` | Leaderboard |
+| 552 | `hud_code.hud_challenge_timer` | Challenge timer |
+| 834 | `hud_code.c_chaos_award` | Chaos award |
+| 859 | `hud_code.notifications.hud_notification_manager` | Notifications |
+| 415 | `hud_code.timer_big` | Big timer |
+
+### Per-element depth separation: a new concern
+
+The multi-pass approach (toggle `_visible` per clip between `HAL::Draw` passes)
+assumes we can address each element by a clip path string
+(e.g., `root.hud_mc.health_paint_container`). The GFX inspection reveals a
+structural obstacle:
+
+- There are only **10 PlaceObject2 tags** on the root timeline but **546
+  DefineSprites**. Most elements are not statically placed — they're created
+  and parented dynamically by ActionScript code (`addChild`, `addChildAt`).
+- The SymbolClass gives us class names, and DefineSprite tables give us static
+  depth placement *within* each sprite, but the *runtime* parent-child
+  relationships are established by AS3 code we can't fully decompile (the
+  GenericName parsing issue blocks full ABC body recovery).
+- Even if we trace the static sprite hierarchy, the runtime clip paths may
+  differ from the static tag structure. Elements like `omni_damage` might be
+  added to a container that's itself dynamically created and named.
+
+**Implication:** Clip-path discovery from static `.gfx` analysis alone is
+insufficient for the multi-pass approach. Runtime probing (`GetVariable` on
+candidate paths) or hooking `addChild`/`addChildAt` calls would be needed to
+map the runtime display tree. This raises the difficulty of the multi-pass
+approach from "medium" to "medium-high".
+
+However, **coarse suppression** (filtering Invoke method names to prevent
+overlay elements from being driven) does not need clip paths at all — it works
+purely at the C++ → AS3 call boundary.
 
 ## Recommended approach
 
@@ -349,9 +468,11 @@ to per-element-depth rendering without Scaleform authoring tools.
 
 3. **For per-element depth (stretch goal, both issues):** The multi-pass
    approach — hook `CUIManager::Render`, toggle `_visible` per clip between
-   `HAL::Draw` passes to separate textures. Requires clip-path discovery
-   (extract the `.gfx` files with JPEXS FFDec or the Gibbed tools — a
-   one-time RE effort).
+   `HAL::Draw` passes to separate textures. Requires **runtime** clip-path
+   discovery (static `.gfx` analysis is insufficient — most elements are
+   dynamically parented by ActionScript). Probe at runtime via `GetVariable`
+   on candidate paths, or hook `addChild`/`addChildAt` to map the display
+   tree. Difficulty is now assessed as medium-high.
 
 4. **For alternative feedback (#8):** Hook `CPlayerHealthEffects::OnDamage`
    for directional damage data. Render directional indicators as world-space
