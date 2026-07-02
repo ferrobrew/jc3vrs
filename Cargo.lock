@@ -1366,6 +1366,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "scaleform-gfx-examine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flate2",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
