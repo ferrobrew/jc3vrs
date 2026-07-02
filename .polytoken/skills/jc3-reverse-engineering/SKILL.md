@@ -29,9 +29,10 @@ portable. Resolve them once at the start of an RE session:
 
 ```sh
 echo "IDB=$JC3_RELEASE_IDB"; echo "DUMP=$JC3_DEBUG_BUILD_WITH_SYMBOLS_DUMP"
+echo "GAME=$JC3_GAME_DIR"; echo "TOOLS=$JC3_GIBBED_TOOLS"
 ```
 
-Both must be non-empty before you proceed. If either is empty, direnv has not
+The first two must be non-empty before you proceed; the last two are only needed for shipped-data digs (see "Inspecting shipped game data"). If either is empty, direnv has not
 loaded `.env`; tell the user and stop. Otherwise remember the resolved values
 for the rest of the session and use them directly in tool calls.
 
@@ -190,6 +191,102 @@ Do **not** auto-commit `pyxis-defs` after every RE finding. Stage and verify
 your `.pyxis` edits locally, and only run the push/submodule-pointer workflow
 when you are ready to move on to whatever consumes the new definitions. Until
 then, leave the changes uncommitted in the working tree.
+
+## Inspecting shipped game data with the Gibbed tools
+
+The IDB and dump tell you about *code*. To answer questions about the *shipped
+data* — what animations, state machines, property containers, or textures the
+game actually ships — use the Gibbed Just Cause 3 tools fork at
+`$JC3_GIBBED_TOOLS`. The game archives live under
+`$JC3_GAME_DIR/archives_win64/` (base `gameN.tab`/`gameN.arc` pairs) and
+`$JC3_GAME_DIR/patch_win64/` (patch archives that override the base). Both
+variables come from `.env` like the IDB/dump paths; resolve them before a data
+dig and stop if they are empty.
+
+The general shape of a data question is: **search the file lists, extract
+selectively, convert, then grep/diff the converted output.** Do not extract
+whole archives — the full set is tens of gigabytes.
+
+### Search before you extract
+
+The tools ship resolved file lists — a hash-to-name database — under
+`$JC3_GIBBED_TOOLS/bin/projects/Just Cause 3/files/**/*.filelist`
+(per-archive, plus `patch.filelist`). Grepping these answers most "does the
+game ship an X?" questions without touching the archives at all. Names appear
+with both forward and backslashes, so normalize with `tr '\\' '/'` before
+sorting. Only files whose hashes have been reversed appear here; absence from
+the lists is suggestive, not proof.
+
+### Building the tools (NixOS / Linux)
+
+The projects are old .NET Framework 4.0 (`Client` profile), so build with mono
+and msbuild, not the dotnet SDK. From `$JC3_GIBBED_TOOLS`:
+
+1. Restore NuGet packages (the tools reference `NDesk.Options`):
+   `nix-shell -p mono --run 'mono .nuget/NuGet.exe restore "Just Cause 3.sln"'`.
+2. Build the tool project you need with the **x86** platform (the dependency
+   projects only define x86, so `AnyCPU` fails):
+   `nix-shell -p mono msbuild --run 'msbuild <Tool>/<Tool>.csproj /p:Configuration=Release /p:Platform=x86 /v:minimal'`.
+   Outputs land in `bin/`. `Gibbed.JustCause3.Unpack` extracts archives;
+   `Gibbed.JustCause3.ConvertProperty` and `ConvertAdf` convert the formats
+   below.
+
+### Working around the read-only registry crash
+
+The tools resolve the game install path from `install_locations` in
+`bin/projects/Just Cause 3.xml`, which use Windows-registry lookups. Under mono
+on NixOS the machine registry store maps into the read-only mono prefix, so
+`Registry.OpenBaseKey`/`OpenSubKey` throws `IOException: Read-only file system`
+before any archive is touched. Do **not** edit the repo copy. Instead:
+
+1. Copy `bin/` to a writable scratch dir (`cp -r bin "$SCRATCH/toolbin"`).
+2. In the copy's `projects/Just Cause 3.xml`, replace the whole
+   `<install_locations>` block with a single path action:
+   `<install_location><action type="path">$JC3_GAME_DIR</action></install_location>`
+   (substitute the expanded path — the XML is not shell-expanded).
+3. Run with `HOME` pointed at a writable dir (`export HOME="$SCRATCH/fakehome"`)
+   so mono's per-user stores are writable too.
+
+(The durable fix is to patch the fork itself to accept a plain-path override —
+an env var or a `path` action fallback — so steps 1–2 disappear; until that
+lands, use the workaround.)
+
+### Unpacking selectively
+
+`Gibbed.JustCause3.Unpack.exe [OPTIONS] input.tab [output_dir]` extracts an
+archive. Key options: `-f VALUE` filters by a substring/pattern of the resolved
+name (extract just what you need), `-v` is verbose, `-o` overwrites. Point it
+at the `.tab`; the tool reads the paired `.arc` next to it:
+
+```sh
+export HOME="$SCRATCH/fakehome"
+nix-shell -p mono --run "mono '$SCRATCH/toolbin/Gibbed.JustCause3.Unpack.exe' \
+  -v -f '<name-substring-from-the-filelists>' \
+  \"$JC3_GAME_DIR/patch_win64/game1.tab\" '$SCRATCH/extract'"
+```
+
+Run the same filter over every archive the file lists place it in. A file
+present in both a base archive and a patch archive should be taken from the
+**patch** — that is the version the game loads.
+
+### Reading the extracted files
+
+Many data files are property containers or ADF, and both keep plaintext string
+tables, so a first pass is just `grep -a`/`strings` over the extracted blob
+(e.g. `grep -aoE 'ACT_[A-Z_0-9]+'`). To get structure, convert:
+
+- **Property containers (RTPC)** — files starting with the `RTPC` magic (e.g.
+  animation state machines, `.afsmb`, and animation sets, `.asb`). Convert with
+  `Gibbed.JustCause3.ConvertProperty.exe <file>` to a readable `.xml`. Note the
+  output is named after the input *stem*, so two same-stem inputs (`x.afsmb`
+  and `x.asb`) overwrite each other's `x.xml` — convert and read one at a
+  time. In the JC3 animation graph, `.afsmb` holds the state machine (`ACT_*`
+  acts, `C_*` conditions, `S_*` states and their tuning), while `.asb` holds
+  the blend/leaf nodes (`ANIM_*`) and their bound `.ban` clip paths.
+- **ADF** — use `Gibbed.JustCause3.ConvertAdf.exe`.
+
+Copy freshly built exes/DLLs from `bin/` into your scratch `toolbin` before
+running so the converter and the patched project travel together.
 
 ## Workflow summary for an RE task
 
