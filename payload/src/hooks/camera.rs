@@ -38,9 +38,14 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     };
     if is_render_camera {
         TraceState::record_eye(TraceEvent::SetupRenderCamera);
+        let mut stereo = crate::stereo::STEREO_STATE.lock();
         // Clear the shadow-anchor delta; the parallax block below sets it when disparity is on, so a
         // stale value can't leak into the sun-shadow cascade correction when disparity is off.
-        crate::stereo::STEREO_STATE.lock().shadow_anchor_delta = [0.0; 3];
+        stereo.shadow_anchor_delta = [0.0; 3];
+        // Eye 0 opens a new real frame: last frame's view-projection snapshots become "previous".
+        if stereo.draw_index == 0 {
+            stereo.vp_history.rotate();
+        }
     }
 
     // Snapshot the stereo + FSR config once; drop the lock before the engine call below.
@@ -63,6 +68,15 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     let jitter = jitter && !fsr_enabled && !(stereo_active && force_smaa_1x);
     let result = SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter);
 
+    // Snapshot the center view-projection before the FSR-jitter and per-eye blocks below patch it.
+    // This is the value the engine's own sim-side previous-VP snapshot holds (un-offset, unjittered
+    // -- the engine jitter is disabled above whenever we patch), which the velocity pass reprojects
+    // with; the FSR motion-vector correction needs it as its "what the engine encoded" matrix.
+    if is_render_camera && let Some(camera) = unsafe { camera.as_ref() } {
+        crate::stereo::STEREO_STATE.lock().vp_history.cur_center =
+            Some(glam::Mat4::from(camera.m_ViewProjectionF));
+    }
+
     // FSR is a temporal reconstructor: it needs the camera jittered by its sequence, with the same
     // offset fed to the dispatch. Apply it to the render camera's projections after SetupRenderCamera
     // has built them (reverse-Z done), then rebuild the view-projections from the jittered proj.
@@ -75,6 +89,12 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 let (w, h) = (u32::from(mc.m_Width), u32::from(mc.m_Height));
                 crate::fsr::apply_jitter_to_projection(&mut camera.m_Projection, w, h);
                 crate::fsr::apply_jitter_to_projection(&mut camera.m_ProjectionF, w, h);
+                // Publish the UV-space shift this jitter applies to every projected position, for
+                // the motion-vector jitter cancellation (the velocity pass measures curUV under the
+                // jittered projection, so every vector carries this shift as a constant offset).
+                let jitter_uv = crate::fsr::current_camera_jitter_ndc(w, h)
+                    .map_or((0.0, 0.0), |(x, y)| (0.5 * x, -0.5 * y));
+                crate::stereo::STEREO_STATE.lock().vp_history.cur_jitter_uv = jitter_uv;
                 let view = &camera.m_View as *const Matrix4;
                 let proj = &camera.m_Projection as *const Matrix4;
                 let proj_f = &camera.m_ProjectionF as *const Matrix4;
@@ -123,6 +143,15 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 Matrix4::Multiply4x4(view, proj_f, &mut camera.m_ViewProjectionF);
             }
         }
+    }
+
+    // Snapshot the final view-projection this dispatch rasterizes with (jitter and eye offset
+    // applied). The FSR motion-vector correction inverts it to reconstruct each pixel's position and
+    // re-anchor the velocity reprojection at this eye's own previous pose.
+    if is_render_camera && let Some(camera) = unsafe { camera.as_ref() } {
+        let mut stereo = crate::stereo::STEREO_STATE.lock();
+        let index = stereo.draw_index;
+        stereo.vp_history.cur_eye[index] = Some(glam::Mat4::from(camera.m_ViewProjectionF));
     }
 
     result

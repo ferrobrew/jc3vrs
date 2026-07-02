@@ -246,6 +246,17 @@ pub struct FsrConfig {
     /// Apply the temporal sub-pixel jitter (camera projection + dispatch). FSR needs this to
     /// reconstruct detail; without it FSR just blurs. A debug toggle to confirm the jitter's effect.
     pub jitter: bool,
+    /// The sign convention of the *camera-side* jitter (the clip-space translation on the
+    /// projection); the dispatch side always reports FSR's canonical offset. The two sides must
+    /// agree or FSR de-jitters in the wrong direction and high-contrast detail pulses at the Halton
+    /// cadence (the localised one-frame flicker of issue #10) -- a runtime knob so the convention can
+    /// be settled live, like [`mv_sign`](Self::mv_sign). Default `(1, 1)` (the FSR-documented
+    /// `(2*jx/w, -2*jy/h)` mapping).
+    pub jitter_sign: (f32, f32),
+    /// Scale on the jitter amplitude (0..1), applied consistently to the camera and the dispatch. A
+    /// diagnostic lever: if no [`jitter_sign`](Self::jitter_sign) fixes the pulse but halving the
+    /// amplitude softens it, the cause is FSR's own lock dynamics rather than a convention mismatch.
+    pub jitter_scale: f32,
     /// Optional RCAS sharpening strength (0..1); `None` disables the sharpening pass.
     pub sharpness: Option<f32>,
     /// Feed motion vectors to FSR. Off makes FSR reproject with zero motion (ghosts moving objects) --
@@ -256,15 +267,32 @@ pub struct FsrConfig {
     /// is visually obvious (trails point backwards). Defaults to `(1, -1)` (UV is Y-down; FSR's
     /// convention TBD against on-screen motion).
     pub mv_sign: (f32, f32),
+    /// Correct the motion vectors for stereo in the decode pass. The engine's velocity encodes
+    /// `curUV - prevUV` with the *per-eye* current view-projection but the single sim-side *center*
+    /// previous view-projection, so every static pixel carries a spurious depth-dependent parallax
+    /// vector of opposite sign per eye, and FSR mis-reprojects each eye's temporal history -- the
+    /// per-eye shadow-edge flicker under head motion (issue #10). The correction re-anchors each
+    /// vector at the eye's own previous pose ([`crate::stereo::VpHistory`]); a no-op without stereo
+    /// disparity.
+    pub mv_stereo_correction: bool,
+    /// Cancel the camera jitter from the motion vectors in the decode pass. The engine measures
+    /// `curUV` under the jittered projection, so every stored vector carries the frame's sub-pixel
+    /// jitter as a constant offset, while FSR expects jitter-free motion. A correctness fix for
+    /// whenever [`jitter`](Self::jitter) is on; a no-op while jitter is off.
+    pub mv_jitter_cancel: bool,
 }
 impl FsrConfig {
     pub const fn new() -> Self {
         Self {
             enabled: true,
             jitter: true,
+            jitter_sign: (1.0, 1.0),
+            jitter_scale: 1.0,
             sharpness: Some(0.2),
             motion_vectors: true,
             mv_sign: (1.0, -1.0),
+            mv_stereo_correction: true,
+            mv_jitter_cancel: true,
         }
     }
 }
