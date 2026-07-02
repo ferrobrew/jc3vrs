@@ -303,8 +303,12 @@ impl CameraConfig {
 pub struct FsrConfig {
     /// Master switch: run FSR and suppress the engine AA. Off = engine SMAA as normal, FSR idle.
     pub enabled: bool,
-    /// Apply the temporal sub-pixel jitter (camera projection + dispatch). FSR needs this to
-    /// reconstruct detail; without it FSR just blurs. A debug toggle to confirm the jitter's effect.
+    /// Apply the temporal sub-pixel jitter (camera projection + dispatch). FSR needs it to
+    /// reconstruct sub-pixel detail, but it also excites a blob-scale shadow-term flicker whose
+    /// mechanism resisted a long bisection (issue #10) -- every identified jitter coupling was
+    /// fixed or ruled out (motion vectors, the post-chain double-run, the LOD dissolve, the shadow
+    /// fit) and the flicker still tracked the jitter, so it ships off: stability over sharpness.
+    /// Enable to trade back.
     pub jitter: bool,
     /// The sign convention of the *camera-side* jitter (the clip-space translation on the
     /// projection); the dispatch side always reports FSR's canonical offset. The two sides must
@@ -338,14 +342,15 @@ pub struct FsrConfig {
     /// Cancel the camera jitter from the motion vectors in the decode pass. The engine measures
     /// `curUV` under the jittered projection, so every stored vector carries the frame's sub-pixel
     /// jitter as a constant offset, while FSR expects jitter-free motion. A correctness fix for
-    /// whenever [`jitter`](Self::jitter) is on; a no-op while jitter is off.
+    /// whenever [`jitter`](Self::jitter) is on (it was not the issue-10 flicker); a no-op while
+    /// jitter is off.
     pub mv_jitter_cancel: bool,
 }
 impl FsrConfig {
     pub const fn new() -> Self {
         Self {
             enabled: true,
-            jitter: true,
+            jitter: false,
             jitter_sign: (1.0, 1.0),
             jitter_scale: 1.0,
             sharpness: Some(0.2),
