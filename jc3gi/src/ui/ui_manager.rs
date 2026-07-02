@@ -95,7 +95,17 @@ pub struct UIManager {
     pub m_MovieScaleWidth: i32,
     /// The movie render rectangle's height; see [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth).
     pub m_MovieScaleHeight: i32,
-    _field_3c: [u8; 4948],
+    _field_3c: [u8; 4748],
+    /// The Scaleform `GFx::Loader`, created in `InitializeSystem`. Loads `.gfx` files via
+    /// `Loader::CreateMovie`.
+    pub m_Loader: *mut ::std::ffi::c_void,
+    /// The `GFx::MovieDef` for `ui/root.gfx` -- the definition object, not the live instance.
+    pub m_MovieDef: *mut ::std::ffi::c_void,
+    /// The live `GFx::Movie` instance (a `MovieRoot` under the hood), created by
+    /// `MovieDef::CreateInstance` in `InitializeSystem`. All `CUIBase` subclasses share this
+    /// single movie.
+    pub m_Movie: *mut crate::ui::scaleform::Movie,
+    _field_12e0: [u8; 176],
     /// The Scaleform render buffer the UI HAL renders into, set up by
     /// [`InitPlatformRT`](UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`] rebinds which
     /// views it renders into.

@@ -2,6 +2,22 @@
 #[allow(unused_imports)]
 use crate::character::character::AimState;
 #[repr(C, align(8))]
+/// `SCharacterMovementSettings`: the per-character movement tuning block. Only passed through
+/// opaquely so far; its first float is the walk/run speed threshold the start-act selection
+/// compares against.
+pub struct CharacterMovementSettings {}
+impl CharacterMovementSettings {}
+impl std::convert::AsRef<CharacterMovementSettings> for CharacterMovementSettings {
+    fn as_ref(&self) -> &CharacterMovementSettings {
+        self
+    }
+}
+impl std::convert::AsMut<CharacterMovementSettings> for CharacterMovementSettings {
+    fn as_mut(&mut self) -> &mut CharacterMovementSettings {
+        self
+    }
+}
+#[repr(C, align(8))]
 pub struct InstanceProperties {}
 impl InstanceProperties {}
 impl std::convert::AsRef<InstanceProperties> for InstanceProperties {
@@ -284,19 +300,41 @@ impl NStateTask_LocoUtil {
         }
     }
     pub const EvaluateCharacterSpeed_ADDRESS: usize = 0x14081AB10;
-    /// Computes this frame's movement speed for the character (from the movement settings and the
-    /// blackboard speed value, not the animation), multiplied onto the normalized displacement
-    /// direction by the movement task.
+    /// Computes this frame's movement speed for the character: the magnitude of the animation
+    /// control's raw root velocity -- so the speed envelope, including the ramp-up through the
+    /// start acts, comes from the animation clips themselves. With `use_blackboard_override` set,
+    /// the blackboard float id `1707123197` replaces the result when present. Multiplied onto the
+    /// normalized displacement direction by the movement task.
     pub unsafe fn EvaluateCharacterSpeed(
         character: *mut crate::character::character::Character,
-        p2: bool,
+        use_blackboard_override: bool,
     ) -> f32 {
         unsafe {
             let f: unsafe extern "system" fn(
                 character: *mut crate::character::character::Character,
-                p2: bool,
+                use_blackboard_override: bool,
             ) -> f32 = ::std::mem::transmute(Self::EvaluateCharacterSpeed_ADDRESS);
-            f(character, p2)
+            f(character, use_blackboard_override)
+        }
+    }
+    pub const QueueStarts_ADDRESS: usize = 0x14081BF00;
+    /// Queues the directional run-start (wind-up) acts: measures the XZ angle from the body
+    /// forward to the blackboard move direction, writes the residual angle correction, and queues
+    /// the matching start act (forward/left/right/180, with stunt variants), choosing the
+    /// walk-versus-run flavor by comparing `speed` against the settings' threshold. The start
+    /// clips' root velocity ramping from zero is the on-foot acceleration.
+    pub unsafe fn QueueStarts(
+        character: *mut crate::character::character::Character,
+        settings: *const crate::input::locomotion::CharacterMovementSettings,
+        speed: f32,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                character: *mut crate::character::character::Character,
+                settings: *const crate::input::locomotion::CharacterMovementSettings,
+                speed: f32,
+            ) -> bool = ::std::mem::transmute(Self::QueueStarts_ADDRESS);
+            f(character, settings, speed)
         }
     }
     pub const QueueStops_ADDRESS: usize = 0x140818C90;

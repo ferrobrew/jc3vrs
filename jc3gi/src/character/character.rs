@@ -30,7 +30,21 @@ fn _AnimatedModel_size_check() {
     }
     unreachable!()
 }
-impl AnimatedModel {}
+impl AnimatedModel {
+    pub const TryAct_ADDRESS: usize = 0x1404B2E00;
+    /// Tests whether the animation state machine would accept the act from its current state,
+    /// without queuing it. `CCharacter`'s vtable slot 37 forwards to this on
+    /// [`Character::m_AnimatedModel`]; the game's own act dispatchers call it before
+    /// [`Character::QueueAct`] to pick a supported act.
+    pub unsafe fn TryAct(&mut self, act: *const u32) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, act: *const u32) -> bool = ::std::mem::transmute(
+                Self::TryAct_ADDRESS,
+            );
+            f(self as *mut Self as _, act)
+        }
+    }
+}
 impl std::convert::AsRef<AnimatedModel> for AnimatedModel {
     fn as_ref(&self) -> &AnimatedModel {
         self
