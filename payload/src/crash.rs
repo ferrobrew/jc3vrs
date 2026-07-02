@@ -27,6 +27,7 @@
 //! handler retries the faulting instruction.
 
 use std::{
+    any::Any,
     os::windows::ffi::OsStrExt,
     sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
@@ -228,34 +229,74 @@ pub fn install() {
     unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
     // Rust panics unwind/abort instead of raising an SEH exception, so the VEH handler above never
     // sees them. Log the message + a backtrace ourselves before the process dies. The same
-    // re-entrancy guard the VEH handler uses covers this hook.
+    // re-entrancy guard the VEH handler uses covers this hook. Each piece is flushed as its own
+    // line, most-reliable first, so a fault while extracting a later piece cannot lose the earlier
+    // ones -- the sentinel and location touch nothing heap-derived.
     std::panic::set_hook(Box::new(|info| {
         if IN_HANDLER.swap(true, Ordering::SeqCst) {
             return;
         }
+        Line::new().str("rust panic").flush();
         let mut line = Line::new();
-        line.str("rust panic");
-        if let Some(loc) = info.location() {
-            line.str(" at ")
-                .str(loc.file())
-                .str(":")
-                .dec(loc.line() as u64);
-        }
-        // Extract the message without `core::fmt` (which would format the whole `PanicHookInfo`):
-        // the payload is a `&str` or `String` for the overwhelming majority of panics.
-        let payload = info.payload();
-        let msg = payload
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
-        if let Some(msg) = msg {
-            line.str(": ").str(msg);
+        line.str("  at ");
+        match info.location() {
+            Some(loc) => {
+                line.str(loc.file()).str(":").dec(loc.line() as u64);
+            }
+            None => {
+                line.str("<unknown location>");
+            }
         }
         line.flush();
+        if let Some(msg) = panic_message_bytes(info.payload()) {
+            Line::new().str("  message: ").bytes(msg).flush();
+        }
         unsafe { log_backtrace() };
         IN_HANDLER.store(false, Ordering::SeqCst);
     }));
     tracing::info!("Crash handler installed");
+}
+
+/// Extract the panic message payload as bytes without `core::fmt`, probing every heap pointer
+/// before it is dereferenced. The payload `Box` and (for `String`s) the backing buffer live on the
+/// heap, and a panic raised *because of* heap corruption can hand the hook a payload whose
+/// pointers are garbage -- dereferencing them would fault the handler and mask the panic (std
+/// itself has been observed dying this way *before* the hook, formatting the message into a
+/// corrupted heap; when the allocation survives but the bytes are bad, this probing is what keeps
+/// the hook alive). The type checks are safe without probing: `is`/`downcast_ref` only read the
+/// vtable, which lives in this module's read-only image. Returns raw bytes rather than `&str`
+/// because a corrupted buffer need not hold valid UTF-8, and [`Line`] only copies bytes anyway.
+fn panic_message_bytes(payload: &dyn Any) -> Option<&[u8]> {
+    let data = payload as *const dyn Any as *const u8 as usize;
+    let (ptr, len) = if payload.is::<&str>() {
+        if !unsafe { readable(data, std::mem::size_of::<&str>()) } {
+            return None;
+        }
+        let s: &str = payload.downcast_ref::<&str>()?;
+        (s.as_ptr(), s.len())
+    } else if payload.is::<String>() {
+        if !unsafe { readable(data, std::mem::size_of::<String>()) } {
+            return None;
+        }
+        // `as_ptr`/`len` only read the `String` header, which the probe above covered; the buffer
+        // itself is probed below.
+        let s: &String = payload.downcast_ref::<String>()?;
+        (s.as_ptr(), s.len())
+    } else {
+        return None;
+    };
+    if len == 0 {
+        return Some(&[]);
+    }
+    // Clamp to the line capacity before probing: `readable` requires the span to fit one region,
+    // and `Line` truncates past its buffer anyway.
+    let len = len.min(512);
+    if !unsafe { readable(ptr as usize, len) } {
+        return None;
+    }
+    // SAFETY: probed readable just above; the lifetime is tied to `payload`, which outlives the
+    // hook body that consumes the slice.
+    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
 }
 
 /// A fixed-capacity line builder that formats directly into a stack buffer, with no heap allocation
@@ -274,13 +315,17 @@ impl Line {
         }
     }
 
-    /// Append the bytes of `s`, truncating at capacity.
-    fn str(&mut self, s: &str) -> &mut Self {
-        let bytes = s.as_bytes();
+    /// Append raw bytes, truncating at capacity.
+    fn bytes(&mut self, bytes: &[u8]) -> &mut Self {
         let n = bytes.len().min(self.buf.len() - self.len);
         self.buf[self.len..self.len + n].copy_from_slice(&bytes[..n]);
         self.len += n;
         self
+    }
+
+    /// Append the bytes of `s`, truncating at capacity.
+    fn str(&mut self, s: &str) -> &mut Self {
+        self.bytes(s.as_bytes())
     }
 
     /// Append a single byte, dropping it at capacity.
