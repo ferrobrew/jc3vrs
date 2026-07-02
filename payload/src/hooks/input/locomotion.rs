@@ -19,7 +19,10 @@ use jc3gi::{
     blackboard::ObjectBlackboard,
     camera::game_camera_manager::GameCameraManager,
     character::character::{AimState, Character},
-    input::input_action_map::{Action, LocalPlayerActionMap},
+    input::{
+        input_action_map::{Action, LocalPlayerActionMap},
+        locomotion::{CharacterMovementSettings, get_NCharacter_ActMoveNoAim},
+    },
     state::StateContext,
     types::math::{Matrix4, Vector3},
 };
@@ -36,6 +39,8 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&EVALUATE_CHARACTER_ORIENTATION_MS_BINDER)
         .with_static_binder(&EVALUATE_CHARACTER_DISPLACEMENT_BINDER)
         .with_static_binder(&SETUP_TARGET_DIR_BINDER)
+        .with_static_binder(&QUEUE_STARTS_BINDER)
+        .with_static_binder(&EVALUATE_CHARACTER_SPEED_BINDER)
 }
 
 /// Diagnostic counters for the Game tab, so hook liveness and the shim's activity are visible
@@ -46,6 +51,8 @@ pub static AIM_RELATIVE_TASK_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static SHIMMED_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static FACE_CAMERA_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static SLIDE_CALLS: AtomicU64 = AtomicU64::new(0);
+pub static SKIPPED_STARTS: AtomicU64 = AtomicU64::new(0);
+pub static INSTANT_SPEED_FLOORS: AtomicU64 = AtomicU64::new(0);
 
 #[detour(
     address = jc3gi::input::locomotion::NStateTask_InputLocoMoveTask::Update_ADDRESS
@@ -362,6 +369,65 @@ fn setup_target_dir(character: *mut Character, target_dir: *mut c_void, props: *
     *REAL_MOVE_DIR.lock() = real_dir;
 
     result
+}
+
+/// While sliding, replace the directional run-start (wind-up) acts with the plain forward move
+/// act, so the legs pop straight into the run cycle. The start clips' lean reads poorly from a
+/// first-person viewpoint, and their ramping root velocity is the on-foot acceleration (see
+/// [`evaluate_character_speed`]). Guarded by the game's own act pre-flight
+/// (`AnimatedModel::TryAct`), exactly as the game's dispatchers guard their queues: when the
+/// animation state machine will not accept the move act from the current state, the native starts
+/// run instead.
+#[detour(address = jc3gi::input::locomotion::NStateTask_LocoUtil::QueueStarts_ADDRESS)]
+fn queue_starts(
+    character: *mut Character,
+    settings: *const CharacterMovementSettings,
+    speed: f32,
+) -> bool {
+    if Config::lock_query(|c| c.movement.slide_skip_starts)
+        && slide_move_dir(character).is_some()
+        && let Some(character) = unsafe { character.as_mut() }
+    {
+        let act: *const u32 = unsafe { get_NCharacter_ActMoveNoAim() };
+        if unsafe { character.m_AnimatedModel.TryAct(act) } {
+            unsafe { character.QueueAct(act) };
+            SKIPPED_STARTS.fetch_add(1, Ordering::Relaxed);
+            return true;
+        }
+    }
+    QUEUE_STARTS.get().unwrap().call(character, settings, speed)
+}
+
+/// While sliding, floor the movement speed to the blackboard target speed. The native speed
+/// envelope is the magnitude of the animation's root velocity, so the start clips ramp the
+/// character up from zero across the wind-up; flooring to the target makes the motion uniform
+/// from the first frame. The slide engagement drops as soon as the input is released, so stops
+/// keep the native decaying envelope.
+#[detour(
+    address = jc3gi::input::locomotion::NStateTask_LocoUtil::EvaluateCharacterSpeed_ADDRESS
+)]
+fn evaluate_character_speed(character: *mut Character, use_blackboard_override: bool) -> f32 {
+    let speed = EVALUATE_CHARACTER_SPEED
+        .get()
+        .unwrap()
+        .call(character, use_blackboard_override);
+    if !Config::lock_query(|c| c.movement.slide_instant_speed)
+        || slide_move_dir(character).is_none()
+    {
+        return speed;
+    }
+    let Some(character) = (unsafe { character.as_mut() }) else {
+        return speed;
+    };
+    let Some(target) = read_float(character_blackboard(character), SPEED_BLACKBOARD_ID) else {
+        return speed;
+    };
+    if target > speed {
+        INSTANT_SPEED_FLOORS.fetch_add(1, Ordering::Relaxed);
+        target
+    } else {
+        speed
+    }
 }
 
 // The parameter list is the game function's ABI, not a designable API, so the parameter-struct

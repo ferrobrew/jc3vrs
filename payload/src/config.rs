@@ -344,6 +344,17 @@ pub struct MovementConfig {
     /// have not yet pinned down (candidates disagreed between runs), so it is a live dial: adjust
     /// until W slides away from the camera and D slides right.
     pub slide_rotation_deg: f32,
+    /// Reach the target speed instantly while sliding. The native on-foot speed envelope is the
+    /// animation's root velocity, so the run-start clips ramp the character up from zero; this
+    /// floors `NStateTask_LocoUtil::EvaluateCharacterSpeed`'s result to the blackboard target
+    /// speed while input is held, making the motion uniform from the first frame -- the wind-up
+    /// stops affecting the movement, which reads much better from a first-person viewpoint.
+    pub slide_instant_speed: bool,
+    /// Skip the run-start wind-up acts while sliding: when the input tasks would queue a
+    /// directional start act, queue the plain forward move act instead -- guarded by the game's
+    /// own `TryAct` pre-flight, with the native starts as the fallback when the animation state
+    /// machine refuses it. The legs pop straight into the run cycle with no wind-up lean.
+    pub slide_skip_starts: bool,
 }
 impl MovementConfig {
     pub const fn new() -> Self {
@@ -359,6 +370,8 @@ impl MovementConfig {
             // With the world-to-local transform in place this is only the local frame's forward
             // convention; dial live from the Game tab until W slides away from the camera.
             slide_rotation_deg: 0.0,
+            slide_instant_speed: true,
+            slide_skip_starts: true,
         }
     }
 }

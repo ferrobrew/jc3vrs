@@ -12,7 +12,8 @@ use crate::{
     hooks::{
         self,
         input::locomotion::{
-            AIM_RELATIVE_TASK_CALLS, FACE_CAMERA_CALLS, MOVE_TASK_CALLS, SHIMMED_CALLS, SLIDE_CALLS,
+            AIM_RELATIVE_TASK_CALLS, FACE_CAMERA_CALLS, INSTANT_SPEED_FLOORS, MOVE_TASK_CALLS,
+            SHIMMED_CALLS, SKIPPED_STARTS, SLIDE_CALLS,
         },
     },
 };
@@ -80,6 +81,24 @@ pub fn egui_debug_game(ui: &mut egui::Ui) {
                 "Yaw correction applied to the slide direction. Dial until W slides away from \
                  the camera and D slides right; the consuming frame's convention is unpinned.",
             );
+            ui.checkbox(
+                &mut cfg.movement.slide_instant_speed,
+                "Instant speed (skip the ramp-up while sliding)",
+            )
+            .on_hover_text(
+                "Floor the movement speed to the blackboard target while sliding. The native \
+                 speed is the animation's root velocity, so the run-start clips ramp it from \
+                 zero; the floor makes the motion uniform from the first frame.",
+            );
+            ui.checkbox(
+                &mut cfg.movement.slide_skip_starts,
+                "Skip start wind-up (queue the run cycle directly)",
+            )
+            .on_hover_text(
+                "Replace the directional run-start acts with the plain forward move act while \
+                 sliding, when the animation state machine accepts it (the game's own TryAct \
+                 pre-flight guards the swap; the native starts run as the fallback).",
+            );
         }
         // The game's own relaxed (no-aim) strafe support, left in release from the dev menu:
         // while enabled, `QueueMoveActions` queues `ACT_MOVE_NO_AIM_STRAFE` -- a neutral-stance
@@ -105,12 +124,15 @@ pub fn egui_debug_game(ui: &mut egui::Ui) {
             0.0..=180.0,
         );
         ui.label(format!(
-            "Loco task calls: move {}  aim-relative {}  shimmed {}  face-camera {}  slide {}",
+            "Loco task calls: move {}  aim-relative {}  shimmed {}  face-camera {}  slide {}  \
+             starts-skipped {}  speed-floors {}",
             MOVE_TASK_CALLS.load(Ordering::Relaxed),
             AIM_RELATIVE_TASK_CALLS.load(Ordering::Relaxed),
             SHIMMED_CALLS.load(Ordering::Relaxed),
             FACE_CAMERA_CALLS.load(Ordering::Relaxed),
             SLIDE_CALLS.load(Ordering::Relaxed),
+            SKIPPED_STARTS.load(Ordering::Relaxed),
+            INSTANT_SPEED_FLOORS.load(Ordering::Relaxed),
         ));
         match hooks::input::locomotion::debug_blackboard_snapshot() {
             Some(snapshot) => {
