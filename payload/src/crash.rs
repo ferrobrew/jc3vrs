@@ -356,15 +356,78 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         return EXCEPTION_CONTINUE_SEARCH;
     }
     unsafe {
-        if let Some(ep) = info.as_ref()
-            && let Some(rec) = ep.ExceptionRecord.as_ref()
-            && FATAL_CODES.contains(&(rec.ExceptionCode.0 as u32))
-        {
-            log_record(rec, ep.ContextRecord);
+        // Snapshot everything needed from the exception record in one tight window, after probing
+        // that the record memory is actually committed and readable. Under Wine, records for
+        // exceptions raised on dying worker threads (RPC) have been observed to be torn or already
+        // unmapped by the time the handler reads them: a re-read of the code mid-logging returned
+        // float bit patterns, and a late dereference faulted inside the handler itself -- an AV in
+        // a vectored handler escalates otherwise-handled exception traffic into process death. The
+        // probe-then-read window is still racy in principle, but a single read can no longer
+        // disagree with itself, and nothing dereferences the record after this block.
+        if let Some(ep) = info.as_ref() {
+            let rec_ptr = ep.ExceptionRecord;
+            if !rec_ptr.is_null()
+                && readable(rec_ptr as usize, std::mem::size_of::<EXCEPTION_RECORD>())
+            {
+                let rec_ref = &*rec_ptr;
+                let record = FaultRecord {
+                    code: rec_ref.ExceptionCode.0 as u32,
+                    address: rec_ref.ExceptionAddress as usize,
+                    parameter_count: rec_ref.NumberParameters,
+                    info0: rec_ref.ExceptionInformation[0],
+                    info1: rec_ref.ExceptionInformation[1],
+                };
+                if FATAL_CODES.contains(&record.code) {
+                    let ctx = ep.ContextRecord;
+                    let ctx = if readable(ctx as usize, std::mem::size_of::<CONTEXT>()) {
+                        ctx
+                    } else {
+                        std::ptr::null_mut()
+                    };
+                    log_record(record, ctx);
+                }
+            }
         }
     }
     IN_HANDLER.store(false, Ordering::SeqCst);
     EXCEPTION_CONTINUE_SEARCH
+}
+
+/// The fields of an `EXCEPTION_RECORD` the logger uses, copied out by value in [`handler`] so no
+/// code path dereferences the record after its one probed read window.
+#[derive(Clone, Copy)]
+struct FaultRecord {
+    code: u32,
+    address: usize,
+    parameter_count: u32,
+    info0: usize,
+    info1: usize,
+}
+
+/// Whether `[addr, addr + len)` starts in committed, readable memory. A `VirtualQuery` probe, so it
+/// is allocation-free and safe to call from the handler; it cannot fully close the race against a
+/// concurrent unmap, but it filters the already-dead records observed under Wine.
+unsafe fn readable(addr: usize, len: usize) -> bool {
+    if addr == 0 {
+        return false;
+    }
+    unsafe {
+        let mut mbi = MEMORY_BASIC_INFORMATION::default();
+        if VirtualQuery(
+            Some(addr as *const std::ffi::c_void),
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        ) == 0
+        {
+            return false;
+        }
+        const READABLE_PROTECTIONS: u32 = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
+        let protect = mbi.Protect.0;
+        mbi.State.0 == 0x1000 // MEM_COMMIT.
+            && (protect & READABLE_PROTECTIONS) != 0
+            && (protect & 0x100) == 0 // PAGE_GUARD.
+            && addr + len <= mbi.BaseAddress as usize + mbi.RegionSize
+    }
 }
 
 /// Append `module=NAME offset=0xNN ` for `addr` if it lies in a loaded module; returns whether it
@@ -564,10 +627,10 @@ unsafe fn log_context(ctx: *mut CONTEXT) {
     }
 }
 
-unsafe fn log_record(rec: &EXCEPTION_RECORD, ctx: *mut CONTEXT) {
+unsafe fn log_record(rec: FaultRecord, ctx: *mut CONTEXT) {
     unsafe {
-        let code = rec.ExceptionCode.0 as u32;
-        let fault_addr = rec.ExceptionAddress as usize as u64;
+        let code = rec.code;
+        let fault_addr = rec.address as u64;
 
         // Deduplicate: if this is the same exception at the same instruction, just count it.
         // The first occurrence is logged in full; repeats are summarised every 100.
@@ -597,14 +660,14 @@ unsafe fn log_record(rec: &EXCEPTION_RECORD, ctx: *mut CONTEXT) {
         LAST_CODE.store(code, Ordering::Relaxed);
         LAST_ADDR.store(fault_addr, Ordering::Relaxed);
 
-        let (access_kind, access_addr) = if rec.NumberParameters >= 2 {
-            let kind = match rec.ExceptionInformation[0] {
+        let (access_kind, access_addr) = if rec.parameter_count >= 2 {
+            let kind = match rec.info0 {
                 0 => "read",
                 1 => "write",
                 8 => "exec",
                 _ => "?",
             };
-            (kind, rec.ExceptionInformation[1] as u64)
+            (kind, rec.info1 as u64)
         } else {
             ("n/a", 0)
         };
@@ -622,7 +685,7 @@ unsafe fn log_record(rec: &EXCEPTION_RECORD, ctx: *mut CONTEXT) {
         // essential record. The other-thread dump (riskier: it suspends threads) runs last, so a
         // fault there can't lose the primary information.
         log_context(ctx);
-        log_frame("fault", rec.ExceptionAddress as usize);
+        log_frame("fault", rec.address);
         // Scan the faulting thread's own stack heuristically rather than calling
         // RtlCaptureStackBackTrace on it: under Wine the unwinder walks a foreign/smashed stack and
         // faults itself, masking the very crash we are reporting (dump_other_threads excludes the
