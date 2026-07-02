@@ -1,4 +1,6 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::graphics_engine::shadow_manager::ShadowManager;
 #[repr(C, align(8))]
 /// The per-frame constant-buffer ring.
 pub struct ConstantBufferPool {}
@@ -111,10 +113,15 @@ pub struct RenderPass {
     /// [`SaveRenderFrameData`](RenderPass::SaveRenderFrameData) re-points it at the new parity's list
     /// and zeroes its count; zeroing that count is how a pass's draw-time additions are reset.
     pub m_CurrentAddList: *mut crate::graphics_engine::render_pass::RBILists,
+    _field_30: [u8; 94],
+    /// Pass state flags. [`m_Enabled`](RenderPassState::m_Enabled) gates whether the pass draws;
+    /// [`ShadowManager::CommitRenderPassSettings`](graphics_engine::shadow_manager::ShadowManager::CommitRenderPassSettings)
+    /// drives it per dispatch for the shadow passes.
+    pub m_StateFlags: crate::graphics_engine::render_pass::RenderPassState,
 }
 fn _RenderPass_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x30], RenderPass>([0u8; 0x30]);
+        ::std::mem::transmute::<[u8; 0x90], RenderPass>([0u8; 0x90]);
     }
     unreachable!()
 }
@@ -195,6 +202,17 @@ impl std::convert::AsMut<RenderPass> for RenderPass {
     fn as_mut(&mut self) -> &mut RenderPass {
         self
     }
+}
+crate::__bitflags! {
+    #[doc =
+    " Render-pass state flags. Only the draw gate is identified; the remaining bits are unmapped."]
+    pub struct RenderPassState : u16 { const m_Enabled = 8usize as _; }
+}
+fn _RenderPassState_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x2], RenderPassState>([0u8; 0x2]);
+    }
+    unreachable!()
 }
 pub unsafe fn get_current_add_buffer() -> &'static mut u32 {
     unsafe { &mut *(0x142ED7680 as *mut u32) }

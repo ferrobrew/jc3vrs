@@ -1,8 +1,13 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::graphics_engine::shadow_manager::ShadowManager;
 #[repr(C, align(8))]
 pub struct CameraManager {
     _field_0: [u8; 16],
     pub m_DefaultCamera: crate::camera::camera::Camera,
+    /// The camera gameplay drives. Sim-side systems read it -- the sun-shadow fit
+    /// ([`ShadowManager::UpdateRender`](graphics_engine::shadow_manager::ShadowManager::UpdateRender))
+    /// among them.
     pub m_ActiveCamera: *mut crate::camera::camera::Camera,
     pub m_RenderCamera: *mut crate::camera::camera::Camera,
     pub m_AspectRatio: f32,

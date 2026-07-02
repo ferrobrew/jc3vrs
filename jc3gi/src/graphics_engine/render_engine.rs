@@ -186,8 +186,9 @@ impl std::convert::AsMut<RenderEngine> for RenderEngine {
 /// post-effects at `RP_POSTEFFECTS`. Named [`RenderPassId`] to avoid clashing with the [`RenderPass`]
 /// type.
 ///
-/// **Unverified:** this dump numbers `RP_POSTEFFECTS` and `RP_LAST_MAIN` one lower than the retail
-/// range comments below describe; a one-pass build delta or comment drift, pending a `.text` check.
+/// Verified against the retail pass-name switch ([`GetRenderPassName`]): relative to the 2016 dump,
+/// retail inserts `RP_VEGETATION_TRANSPARENT_AOIT` at `0x74` (shifting everything above by one) and
+/// removes the dump-era `RP_PARTICLE_RIBBON`, leaving `0x82` unnamed.
 pub enum RenderPassId {
     RP_NONE = 0isize as _,
     RP_TERRAINPATCH_CLEAR = 1isize as _,
@@ -305,51 +306,64 @@ pub enum RenderPassId {
     RP_LENSFLARE = 113isize as _,
     RP_POST_CLOUDS = 114isize as _,
     RP_APPLY_CLOUDS = 115isize as _,
-    RP_FOG_VOLUME_GENERATE = 116isize as _,
-    RP_FOG_VOLUME_UPSAMPLE = 117isize as _,
-    RP_FOG_VOLUME_APPLY = 118isize as _,
-    RP_MASK_WATER = 119isize as _,
-    RP_MODELS_TRANSPARENT = 120isize as _,
-    RP_VEGETATION_TRANSPARENT = 121isize as _,
-    RP_VEGETATION_POST_DRAW = 122isize as _,
-    RP_BB_RAIN = 123isize as _,
-    RP_MODELS_GLINT = 124isize as _,
-    RP_WATER_GODRAYS = 125isize as _,
-    RP_BULLETS = 126isize as _,
-    RP_CONTRAILS = 127isize as _,
-    RP_GROUNDHAZE = 128isize as _,
-    RP_PARTICLE_RIBBON = 129isize as _,
-    RP_MODEL_HALO_POST = 130isize as _,
-    RP_PARTICLE_LOWRES = 131isize as _,
-    RP_SPOTLIGHT_VOLUMETRICS = 132isize as _,
-    RP_WINDOW_DECALS = 133isize as _,
-    RP_MODELS_REFRACT = 134isize as _,
-    RP_PARTICLE_GENERAL = 135isize as _,
-    RP_PARTICLE_DISTORT = 136isize as _,
-    RP_PARTICLE_LOWRES_OVERLAY = 137isize as _,
-    RP_SCENE_CAPTURE = 138isize as _,
-    RP_Z_FINAL_TRANSPARENT = 139isize as _,
-    RP_CLEAR_SCREEN_SPACE_SUBSURFACE_SKIN = 140isize as _,
-    RP_CLEAR_STENCIL = 141isize as _,
-    RP_GHOST_EFFECT = 142isize as _,
-    RP_OUTLINE_MASK = 143isize as _,
-    RP_OUTLINE_EFFECT = 144isize as _,
-    RP_OUTLINE_EFFECT_NO_DEPTH = 145isize as _,
-    RP_OUTLINE_EFFECT_BLUR = 146isize as _,
-    RP_FINAL_TRANSPARENT = 147isize as _,
-    RP_PARTICLE_ONSCREEN = 148isize as _,
-    RP_POSTEFFECTS = 149isize as _,
-    RP_LAST_MAIN = 150isize as _,
-    POST_RP_FULLSCREEN_VIDEO = 151isize as _,
-    RP_VEGETATION_SAMPLING = 152isize as _,
-    POST_RP_POSTEFFECTS_GLOBAL = 153isize as _,
-    POST_RP_UI = 154isize as _,
-    POST_RP_DEBUG_GFX = 155isize as _,
-    RP_RENDERPASS_COUNT = 156isize as _,
+    RP_VEGETATION_TRANSPARENT_AOIT = 116isize as _,
+    RP_FOG_VOLUME_GENERATE = 117isize as _,
+    RP_FOG_VOLUME_UPSAMPLE = 118isize as _,
+    RP_FOG_VOLUME_APPLY = 119isize as _,
+    RP_MASK_WATER = 120isize as _,
+    RP_MODELS_TRANSPARENT = 121isize as _,
+    RP_VEGETATION_TRANSPARENT = 122isize as _,
+    RP_VEGETATION_POST_DRAW = 123isize as _,
+    RP_BB_RAIN = 124isize as _,
+    RP_MODELS_GLINT = 125isize as _,
+    RP_WATER_GODRAYS = 126isize as _,
+    RP_BULLETS = 127isize as _,
+    RP_CONTRAILS = 128isize as _,
+    RP_GROUNDHAZE = 129isize as _,
+    RP_MODEL_HALO_POST = 131isize as _,
+    RP_PARTICLE_LOWRES = 132isize as _,
+    RP_SPOTLIGHT_VOLUMETRICS = 133isize as _,
+    RP_WINDOW_DECALS = 134isize as _,
+    RP_MODELS_REFRACT = 135isize as _,
+    RP_PARTICLE_GENERAL = 136isize as _,
+    RP_PARTICLE_DISTORT = 137isize as _,
+    RP_PARTICLE_LOWRES_OVERLAY = 138isize as _,
+    RP_SCENE_CAPTURE = 139isize as _,
+    RP_Z_FINAL_TRANSPARENT = 140isize as _,
+    RP_CLEAR_SCREEN_SPACE_SUBSURFACE_SKIN = 141isize as _,
+    RP_CLEAR_STENCIL = 142isize as _,
+    RP_GHOST_EFFECT = 143isize as _,
+    RP_OUTLINE_MASK = 144isize as _,
+    RP_OUTLINE_EFFECT = 145isize as _,
+    RP_OUTLINE_EFFECT_NO_DEPTH = 146isize as _,
+    RP_OUTLINE_EFFECT_BLUR = 147isize as _,
+    RP_FINAL_TRANSPARENT = 148isize as _,
+    RP_PARTICLE_ONSCREEN = 149isize as _,
+    RP_POSTEFFECTS = 150isize as _,
+    RP_LAST_MAIN = 151isize as _,
+    POST_RP_FULLSCREEN_VIDEO = 152isize as _,
+    RP_VEGETATION_SAMPLING = 153isize as _,
+    POST_RP_POSTEFFECTS_GLOBAL = 154isize as _,
+    POST_RP_UI = 155isize as _,
+    POST_RP_DEBUG_GFX = 156isize as _,
+    RP_RENDERPASS_COUNT = 157isize as _,
 }
 fn _RenderPassId_size_check() {
     unsafe {
         ::std::mem::transmute::<[u8; 0x4], RenderPassId>([0u8; 0x4]);
     }
     unreachable!()
+}
+pub const GetRenderPassName_ADDRESS: usize = 0x140175080;
+/// The debug name for a render-pass id, from the engine's pass-name switch (the ground truth the
+/// [`RenderPassId`] values are verified against). Returns `"NONE"` for unnamed indices.
+pub unsafe fn GetRenderPassName(
+    pass: crate::graphics_engine::render_engine::RenderPassId,
+) -> *const u8 {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            pass: crate::graphics_engine::render_engine::RenderPassId,
+        ) -> *const u8 = ::std::mem::transmute(GetRenderPassName_ADDRESS);
+        f(pass)
+    }
 }

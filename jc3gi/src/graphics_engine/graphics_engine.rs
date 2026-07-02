@@ -74,7 +74,10 @@ pub struct GraphicsEngine {
     pub m_DrawThreadWorkSignal: u32,
     _field_34: [u8; 244],
     pub m_ActiveCursor: crate::graphics_engine::graphics_engine::ActiveCursor,
-    _field_12c: [u8; 3460],
+    _field_12c: [u8; 44],
+    /// The cascaded sun-shadow system.
+    pub m_ShadowManager: *mut crate::graphics_engine::shadow_manager::ShadowManager,
+    _field_160: [u8; 3408],
     pub m_Device: *mut crate::graphics_engine::device::Device,
     _field_eb8: [u8; 16],
     /// Deferred-shading render targets ("GBuffer0".."GBuffer3").
@@ -323,13 +326,18 @@ pub use windows::Win32::Foundation::HWND as HWND;
 /// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].
 pub struct RenderContext {
     _field_0: [u8; 1108],
-    /// The 8 cascade shadow matrices -- an alternate center-relative shadow transform set some
-    /// terrain/deferred sun-shadow shaders sample instead of [`m_ShadowCascades`](RenderContext::m_ShadowCascades).
+    /// The 8 per-atlas-slice projective shadow transforms, copied per dispatch from the shadow
+    /// manager's parity storage. The deferred lighting shaders index them dynamically by a light's
+    /// packed slice index (`cb0[63 + 4*slice .. 66 + 4*slice]` in the GlobalConstants) to project a
+    /// light-relative position into its shadow-atlas slice; the sun resolve uses
+    /// [`m_ShadowCascades`](RenderContext::m_ShadowCascades) instead.
     pub m_ShadowMatrices: [crate::types::math::Matrix4; 8],
     /// The forward-material cascaded sun-shadow transform + cascade box-test parameters.
     pub m_ShadowCascades: crate::graphics_engine::graphics_engine::ShadowCascades,
-    /// The number of active cascades this frame.
-    pub m_ActiveCascadeCount: u32,
+    /// The number of active cascades this frame, copied per dispatch from the shadow manager's
+    /// parity storage (a byte store in [`RenderPass::SetRenderContextCamera`]).
+    pub m_ActiveCascadeCount: u8,
+    _field_775: [u8; 3],
 }
 fn _RenderContext_size_check() {
     unsafe {

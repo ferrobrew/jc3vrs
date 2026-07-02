@@ -1,4 +1,23 @@
 #![cfg_attr(any(), rustfmt::skip)]
+crate::__bitflags! {
+    #[doc = " The character's aiming state, written each frame by"] #[doc =
+    " [`HandleAimingInputPlayer`](Character::HandleAimingInputPlayer) for the player. The locomotion"]
+    #[doc =
+    " state machine reads it to choose aim-relative (strafe) movement over run/steer:"]
+    #[doc =
+    " `m_AimingWeapon` (or `m_AimingGrapple`) is the switch that makes the body face the aim direction"]
+    #[doc =
+    " and turns the directional keys into strafes. `m_WasAiming` reflects the state as of the start of"]
+    #[doc = " this frame. Bits `0x01`/`0x02` and `0x40`/`0x80` are unmapped."] pub struct
+    AimState : u8 { const m_AimingEnabled = 4usize as _; const m_AimingWeapon = 8usize as
+    _; const m_AimingGrapple = 16usize as _; const m_WasAiming = 32usize as _; }
+}
+fn _AimState_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x1], AimState>([0u8; 0x1]);
+    }
+    unreachable!()
+}
 #[repr(C, align(8))]
 pub struct AnimatedModel {
     _field_0: [u8; 376],
@@ -94,12 +113,22 @@ impl std::convert::AsMut<AnimationController> for AnimationController {
 pub struct Character {
     _field_0: [u8; 6016],
     pub m_AnimatedModel: crate::character::character::AnimatedModel,
-    _field_19c0: [u8; 3178],
+    _field_19c0: [u8; 1841],
+    /// Packed aiming-state bit-flags; see [`AimState`].
+    pub m_AimFlags: crate::character::character::AimState,
+    _field_20f2: [u8; 1336],
     pub m_IsLocalCharacter: bool,
     _field_262b: [u8; 453],
     pub m_WorldMatrixT0: crate::types::math::Matrix4,
     pub m_WorldMatrixT1: crate::types::math::Matrix4,
-    _field_2870: [u8; 3280],
+    _field_2870: [u8; 400],
+    /// The weapon-aim countdown timer, in seconds. It is refreshed while an aim input is held and
+    /// decremented by the frame delta otherwise; a positive value keeps
+    /// [`m_AimingWeapon`](AimState::m_AimingWeapon) set in [`m_AimFlags`](Character::m_AimFlags),
+    /// so the character stays in aim/strafe locomotion for a short tail after the aim button is
+    /// released.
+    pub m_AimTimer: f32,
+    _field_2a04: [u8; 2876],
 }
 fn _Character_size_check() {
     unsafe {
@@ -168,6 +197,44 @@ impl Character {
                 Self::UpdatePropEffects_ADDRESS,
             );
             f(self as *mut Self as _, dt)
+        }
+    }
+    pub const HandleAimingInputPlayer_ADDRESS: usize = 0x1407F0530;
+    /// The per-frame player aiming-input update. Resolves whether the player is aiming a weapon or
+    /// grapple from the equipped weapon and [`m_AimTimer`](Character::m_AimTimer), then writes the
+    /// result into [`m_AimFlags`](Character::m_AimFlags)
+    /// ([`m_AimingWeapon`](AimState::m_AimingWeapon) / [`m_AimingGrapple`](AimState::m_AimingGrapple)).
+    /// The locomotion tasks read those flags to select aim-relative (strafe) movement. NPCs use a
+    /// separate `HandleAimingInputNPC`; this variant is player-only and is the single point that
+    /// decides the on-foot aim/strafe state.
+    pub unsafe fn HandleAimingInputPlayer(&mut self, dt: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
+                Self::HandleAimingInputPlayer_ADDRESS,
+            );
+            f(self as *mut Self as _, dt)
+        }
+    }
+    pub const IsAimingWeaponPossible_ADDRESS: usize = 0x1407F2B90;
+    /// Whether the character is currently permitted to aim a weapon (an aimable weapon is equipped
+    /// and the character state allows it). Gates the aim path in the locomotion tasks.
+    pub unsafe fn IsAimingWeaponPossible(&self) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
+                Self::IsAimingWeaponPossible_ADDRESS,
+            );
+            f(self as *const Self as _)
+        }
+    }
+    pub const IsPlayer_ADDRESS: usize = 0x14075FA60;
+    /// Whether the character is the local player. Used by the locomotion queue helpers to restrict
+    /// the aim-relative movement path to the player.
+    pub unsafe fn IsPlayer(&self) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
+                Self::IsPlayer_ADDRESS,
+            );
+            f(self as *const Self as _)
         }
     }
 }
