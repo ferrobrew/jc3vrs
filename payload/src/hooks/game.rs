@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use detours_macro::detour;
 use jc3gi::{
+    camera::camera::Camera,
     clock::Clock,
     cpu_fragment::{CpuFragmentWaitUntilSignalIsNonZero, CpuPrimaryCount},
     game::{Game, GameState, UpdateContexts},
@@ -46,6 +47,12 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
     unsafe {
         crate::crash::mark(Phase::UpdateRenderEnter);
         let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
+
+        // Apply the sun-shadow diagnostic override before the original runs, so this frame's
+        // sim-side CShadowManager::UpdateRender sees it and drives the engine's own SetEnabled path.
+        apply_sun_shadow_override(crate::config::Config::lock_query(|c| {
+            c.stereo.disable_sun_shadows
+        }));
 
         // Apply a requested shader reload here, on the game thread before this frame's draws, so the
         // PCF-patch hook re-creates the already-loaded shaders (injection is normally after the game
@@ -208,6 +215,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             TraceState::end_frame();
         }
 
+        // Restore the render camera's pristine (center, unjittered) matrices now that the eye
+        // dispatches are done, so the sim-side consumers that read it before the next Draw -- the
+        // sun-shadow cascade fit above all -- see the engine-built state rather than the last eye's
+        // jittered, offset projection (the Halton wobble otherwise flips the cascade texel snap and
+        // the shadows blob-flicker; issue #10).
+        restore_pristine_render_camera();
+
         // Drive the F10 stereo capture composite after the frame's draws are done (both eyes
         // captured in stereo, eye 0 in non-stereo). No-op when capture is inactive.
         crate::crash::mark(Phase::Present);
@@ -316,6 +330,66 @@ fn restore_gi_cascade_index(saved: u32) {
     unsafe {
         if let Some(s) = gi_solver() {
             (*s).m_CascadeToUpdate = saved;
+        }
+    }
+}
+
+/// Write the pristine render-camera snapshot (taken by the `SetupRenderCamera` hook before the
+/// mod's jitter and eye patches) back onto the render camera, once the frame's dispatches are done.
+/// The engine rebuilds the camera from the active camera during the next Draw anyway; this restore
+/// covers the window in between, when the sim reads it -- most critically the sun-shadow cascade
+/// fit, whose texel snapping flip-flops if it sees the jittered projection.
+fn restore_pristine_render_camera() {
+    if !crate::config::Config::lock_query(|c| c.stereo.restore_render_camera) {
+        return;
+    }
+    let Some(pristine) = STEREO_STATE.lock().pristine_render_camera.take() else {
+        return;
+    };
+    // SAFETY: the render camera is the engine-owned copy at GraphicsEngine+0x170; the address check
+    // ensures a stale snapshot is never written onto a reallocated engine.
+    unsafe {
+        let Some(ge) = GraphicsEngine::get() else {
+            return;
+        };
+        let camera = ((ge as *mut GraphicsEngine as usize) + 0x170) as *mut Camera;
+        if camera as usize != pristine.camera {
+            return;
+        }
+        let camera = &mut *camera;
+        camera.m_Projection.data = pristine.matrices[0];
+        camera.m_ProjectionF.data = pristine.matrices[1];
+        camera.m_View.data = pristine.matrices[2];
+        camera.m_TransformF.data = pristine.matrices[3];
+        camera.m_ViewProjection.data = pristine.matrices[4];
+        camera.m_ViewProjectionF.data = pristine.matrices[5];
+    }
+}
+
+/// The pre-override value of the shadow manager's settings-side enabled flag, captured when the
+/// diagnostic engages so releasing it restores whatever the game's own settings had. `u8::MAX` =
+/// no override active.
+static SAVED_SHADOWS_ENABLED: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(u8::MAX);
+
+/// Force the sun-shadow system off (or restore it) through the engine's own settings path:
+/// `ShadowManager::m_Enabled`, which the sim-side `UpdateRender` syncs the engine to via
+/// `SetEnabled` -- the same route the graphics menu takes, so resources are torn down and recreated
+/// cleanly.
+fn apply_sun_shadow_override(disable: bool) {
+    // SAFETY: the graphics-engine singleton and its shadow manager are live once the engine is
+    // initialised; both are null-checked, and the flag is a plain settings toggle.
+    unsafe {
+        let Some(manager) = GraphicsEngine::get().and_then(|ge| ge.m_ShadowManager.as_mut()) else {
+            return;
+        };
+        let saved = SAVED_SHADOWS_ENABLED.load(Ordering::Relaxed);
+        if disable && saved == u8::MAX {
+            SAVED_SHADOWS_ENABLED.store(u8::from(manager.m_Enabled), Ordering::Relaxed);
+            manager.m_Enabled = false;
+        } else if !disable && saved != u8::MAX {
+            manager.m_Enabled = saved != 0;
+            SAVED_SHADOWS_ENABLED.store(u8::MAX, Ordering::Relaxed);
         }
     }
 }

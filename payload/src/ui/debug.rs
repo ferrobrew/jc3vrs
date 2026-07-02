@@ -7,14 +7,18 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
     // Deferred so the trace button's start() doesn't re-lock CONFIG (it snapshots the config for the
     // manifest) while this guard is held -- parking_lot is not reentrant, so that self-deadlocks.
-    let mut start_trace = false;
+    let mut start_trace: Option<i32> = None;
 
     // Render trace at the top -- it dumps the next few frames' render events under whatever every
     // option below is set to (writes next to the DLL). `diagnose_rt_hashes` adds per-eye render-target
-    // hashes to the dump.
+    // hashes to the dump. The long capture exists for periodic artifacts whose cadence exceeds the
+    // short window (e.g. the one-frame exposure/shadow pulses of issue #10).
     ui.horizontal(|ui| {
         if ui.button("Dump render trace (4 frames)").clicked() {
-            start_trace = true;
+            start_trace = Some(4);
+        }
+        if ui.button("120 frames").clicked() {
+            start_trace = Some(120);
         }
         let remaining = trace::active_frames();
         if remaining > 0 {
@@ -42,6 +46,14 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
             ui.checkbox(
                 &mut cfg.stereo.dedupe_post_block,
                 "Dedupe world post block (eye 1 otherwise runs the post chain + FSR twice)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.restore_render_camera,
+                "Restore pristine render camera after draws (hygiene; no observed effect)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.unjitter_shadow_fit,
+                "Unjitter shadow fit (defensive; the fit reads the unjittered active camera)",
             );
             ui.checkbox(
                 &mut cfg.stereo.drain_draw_fragment,
@@ -114,6 +126,35 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         ui.checkbox(
             &mut cfg.stereo.skip_gi,
             "Skip GI (drops global illumination; isolates the residual per-eye MainColor divergence)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.skip_ao_volumes,
+            "Skip AO volumes (depth-tested darkening volumes; suspect for the blob shadow flicker)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.disable_sun_shadows,
+            "Disable sun shadows (engine SetEnabled path; does the flicker survive with none?)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.freeze_shadow_maps,
+            "Freeze shadow maps (atlas keeps last contents; dies = content, survives = sampling)",
+        );
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut cfg.stereo.skip_pass_range_enabled, "Skip pass range");
+            // The bounds stay editable while disarmed, so a target range can be preset and then
+            // armed in one step instead of dragging through unsafe intermediate ranges live.
+            let (lo, hi) = &mut cfg.stereo.skip_pass_range;
+            // Each end clamps to the other so the range can never invert mid-drag.
+            let hi_cap = *hi;
+            ui.add(egui::DragValue::new(lo).range(0..=hi_cap).hexadecimal(2, false, false));
+            ui.label("..=");
+            let lo_cap = *lo;
+            ui.add(egui::DragValue::new(hi).range(lo_cap..=156).hexadecimal(2, false, false));
+        })
+        .response
+        .on_hover_text(
+            "Bisect which render pass an artifact originates in (inclusive hex indices; \
+             jc3gi's RenderPassId maps every index)",
         );
         ui.checkbox(
             &mut cfg.stereo.disable_ssao,
@@ -198,7 +239,7 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
 
     // Release CONFIG before start(), whose manifest snapshot re-locks it.
     drop(cfg);
-    if start_trace {
-        trace::TraceState::start(4);
+    if let Some(frames) = start_trace {
+        trace::TraceState::start(frames);
     }
 }

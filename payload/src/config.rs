@@ -119,6 +119,22 @@ pub struct StereoConfig {
     /// carry a temporal/probe history that differs per eye; a companion to [`skip_ssr`](Self::skip_ssr)
     /// for isolating the residual per-eye MainColor divergence that survives SSR-off and SSAO-off.
     pub skip_gi: bool,
+    /// Diagnostic: skip the AO-volumes pass (`RP_AO_VOLUMES`) on both eyes. AO volumes are
+    /// artist-placed darkening volumes rendered as depth-tested proxy geometry; a volume whose proxy
+    /// faces are borderline against nearby geometry can flip its entire contribution on a sub-pixel
+    /// depth shift, so the temporal jitter cycles it -- the prime suspect for the blob-scale
+    /// "shadows flicker in and out" artifact in MainColor (issue #10's residual flicker).
+    pub skip_ao_volumes: bool,
+    /// Diagnostic: skip the [`skip_pass_range`](Self::skip_pass_range) passes on both eyes. A
+    /// separate flag (rather than an `Option` around the range) so the range can be preset while
+    /// disarmed -- dragging the bounds live sweeps through intermediate ranges, some of which are
+    /// unsafe to skip.
+    pub skip_pass_range_enabled: bool,
+    /// Diagnostic: the inclusive render-pass index range `[start, end]` to skip while
+    /// [`skip_pass_range_enabled`](Self::skip_pass_range_enabled), for bisecting which pass an
+    /// artifact originates in ([`RenderPassId`](jc3gi::graphics_engine::render_engine::RenderPassId)
+    /// maps every index; GBuffer 0x2F..0x55, lighting/main 0x56..0x96).
+    pub skip_pass_range: (i32, i32),
     /// Restore the SSAO temporal history index (`CSSAOPass +0x9A0`/`+0x9A4`) between the two stereo
     /// eyes. The index advances once per SSAO draw and is *not* reset by the `m_FirstPass` force, so the
     /// two eyes resolve against different history slots -- half the per-eye MainColor divergence. Pinning
@@ -131,6 +147,22 @@ pub struct StereoConfig {
     /// half of the per-eye MainColor divergence. Snapshot before eye 0, restore before eye 1 so eye 1
     /// refreshes the same cascade. **Default off pending validation.**
     pub restore_gi_cascade: bool,
+    /// Patch the screen-space PCF rotation hash out of the sun-shadow shaders at creation, so both
+    /// eyes use the same unrotated 38-tap PCF (removes the per-eye shadow shimmer + foliage grain).
+    /// Applies only to shaders created after the hook installs; trigger a shader reload (e.g. change
+    /// shadow quality) if injected mid-session. See [`crate::hooks::graphics_engine::shader`].
+    pub patch_shadow_pcf_hash: bool,
+    /// Strip the jitter translation from the fit camera's projection for the duration of
+    /// `ShadowManager::UpdateRender`, so the fit frustum can never ingest a sub-pixel jitter. The
+    /// fit reads the active camera, which the mod does not jitter, so this showed no effect on the
+    /// issue-10 flicker; default off, kept as a defensive A/B.
+    pub unjitter_shadow_fit: bool,
+    /// Restore the render camera's pristine (center, unjittered) matrices after the frame's eye
+    /// dispatches, so anything reading it before the next Draw sees the engine-built state rather
+    /// than the last eye's jittered, offset projection. Showed no effect on the issue-10 flicker
+    /// (the suspected sim-side reader uses the active camera instead); default off, kept as a
+    /// hygiene A/B.
+    pub restore_render_camera: bool,
     /// Patch the jitter-unstable material LOD dissolve out of the vegetation shaders at creation.
     /// Their screen-door dissolve pattern is keyed to the interpolated clip-space position (not
     /// `SV_Position`), so a camera jitter slides the whole pattern sub-pixel every frame and
@@ -140,16 +172,21 @@ pub struct StereoConfig {
     /// transitions pop instead of dissolving); same reload caveat as
     /// [`patch_shadow_pcf_hash`](Self::patch_shadow_pcf_hash).
     pub patch_lod_dissolve: bool,
+    /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
+    /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
+    /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
+    /// cannot be shadow data.
+    pub disable_sun_shadows: bool,
+    /// Diagnostic: freeze the sun-shadow atlas by re-clearing the pass-enable flags after
+    /// `CommitRenderPassSettings` sets them, so no shadow pass renders and the atlas keeps its last
+    /// contents. Shadows stay visible but stop updating: an artifact that survives the freeze is in
+    /// the shadow *sampling*; one that dies with it is in the atlas *contents*.
+    pub freeze_shadow_maps: bool,
     /// Deduplicate the world post-effects block to once per dispatch. `ApplyWorldFilters` enqueues
     /// the block into the pass's *draw* list at draw time, which the between-eye list-parity restore
     /// cannot zero -- so eye 1 draws eye 0's stale entry plus its own, running the whole post chain
     /// (and FSR) twice. The double-stepped FSR history is the residual per-eye flicker of issue #10.
     pub dedupe_post_block: bool,
-    /// Patch the screen-space PCF rotation hash out of the sun-shadow shaders at creation, so both
-    /// eyes use the same unrotated 38-tap PCF (removes the per-eye shadow shimmer + foliage grain).
-    /// Applies only to shaders created after the hook installs; trigger a shader reload (e.g. change
-    /// shadow quality) if injected mid-session. See [`crate::hooks::graphics_engine::shader`].
-    pub patch_shadow_pcf_hash: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -172,10 +209,17 @@ impl StereoConfig {
             restore_cb_ring: false,
             skip_ssr: false,
             skip_gi: false,
+            skip_ao_volumes: false,
+            skip_pass_range_enabled: false,
+            skip_pass_range: (0x56, 0x56),
             restore_ssao_history: false,
             restore_gi_cascade: false,
             patch_shadow_pcf_hash: true,
+            unjitter_shadow_fit: false,
+            restore_render_camera: false,
             patch_lod_dissolve: false,
+            disable_sun_shadows: false,
+            freeze_shadow_maps: false,
             dedupe_post_block: true,
         }
     }

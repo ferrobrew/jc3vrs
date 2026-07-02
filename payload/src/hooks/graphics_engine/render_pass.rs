@@ -11,7 +11,10 @@
 use std::ffi::c_void;
 
 use detours_macro::detour;
-use jc3gi::graphics_engine::graphics_engine::RenderContext;
+use jc3gi::graphics_engine::{
+    graphics_engine::RenderContext, render_engine::RenderPassId, render_pass::RenderPassState,
+    shadow_manager::ShadowManager,
+};
 use re_utilities::hook_library::HookLibrary;
 
 use crate::{
@@ -26,6 +29,8 @@ pub(super) fn extend(library: HookLibrary) -> HookLibrary {
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
         .with_static_binder(&DRAW_RENDER_PASS_RANGE_BINDER)
         .with_static_binder(&SET_GLOBAL_SHADER_CONSTANTS_BINDER)
+        .with_static_binder(&COMMIT_RENDER_PASS_SETTINGS_BINDER)
+        .with_static_binder(&SHADOW_MANAGER_UPDATE_RENDER_BINDER)
 }
 
 // RenderPass::SetupRenderFrameData -- the per-batch list *build*: appends `count` render-block-items
@@ -57,14 +62,17 @@ fn hand_back_buffers(this: *mut c_void) {
     HAND_BACK_BUFFERS.get().unwrap().call(this);
 }
 
-const RP_SCREEN_SPACE_REFLECTIONS: i32 = 89;
-const RP_GLOBAL_ILLUMINATION: i32 = 90;
+const RP_AO_VOLUMES: i32 = RenderPassId::RP_AO_VOLUMES as i32;
+const RP_SCREEN_SPACE_REFLECTIONS: i32 = RenderPassId::RP_SCREEN_SPACE_REFLECTIONS as i32;
+const RP_GLOBAL_ILLUMINATION: i32 = RenderPassId::RP_GLOBAL_ILLUMINATION as i32;
 
 // RenderEngine::DrawRenderPassRange -- draws the half-open pass-index range [first, last). The
-// per-eye-divergence diagnostics drop individual passes by splitting the range around them, so every
-// other pass runs untouched: SSR (reads a previous-frame scene capture regenerated each Draw) and GI
-// (may carry a per-eye temporal/probe history) are the suspects for the residual per-eye MainColor
-// divergence, dropped on both eyes to test whether either is the source.
+// per-eye-divergence and flicker diagnostics drop passes by splitting the range around them, so
+// every other pass runs untouched: SSR (reads a previous-frame scene capture regenerated each Draw)
+// and GI (may carry a per-eye temporal/probe history) for the per-eye MainColor divergence, AO
+// volumes (depth-tested proxy geometry whose whole contribution can flip on a sub-pixel jitter
+// shift) for the blob-scale shadow flicker, and an arbitrary range for bisecting whichever pass an
+// artifact lives in.
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::DrawRenderPassRange_ADDRESS)]
 fn draw_render_pass_range(
     this: *mut c_void,
@@ -74,36 +82,99 @@ fn draw_render_pass_range(
     last: i32,
 ) {
     let original = DRAW_RENDER_PASS_RANGE.get().unwrap();
-    let (skip_ssr, skip_gi) = Config::lock_query(|c| (c.stereo.skip_ssr, c.stereo.skip_gi));
+    let (skip_ssr, skip_gi, skip_ao_volumes, skip_range) = Config::lock_query(|c| {
+        (
+            c.stereo.skip_ssr,
+            c.stereo.skip_gi,
+            c.stereo.skip_ao_volumes,
+            c.stereo
+                .skip_pass_range_enabled
+                .then_some(c.stereo.skip_pass_range),
+        )
+    });
 
-    // Gather the requested skips that fall inside this range, ascending. The set is tiny and fixed.
-    let mut skips = [0i32; 2];
-    let mut n = 0;
-    for (enabled, pass) in [
-        (skip_ssr, RP_SCREEN_SPACE_REFLECTIONS),
-        (skip_gi, RP_GLOBAL_ILLUMINATION),
-    ] {
-        if enabled && first <= pass && pass < last {
-            skips[n] = pass;
-            n += 1;
-        }
-    }
-    if n == 0 {
-        original.call(this, ctx, setup, first, last);
-        return;
-    }
-    skips[..n].sort_unstable();
+    let skipped = |pass: i32| {
+        (skip_ssr && pass == RP_SCREEN_SPACE_REFLECTIONS)
+            || (skip_gi && pass == RP_GLOBAL_ILLUMINATION)
+            || (skip_ao_volumes && pass == RP_AO_VOLUMES)
+            || skip_range.is_some_and(|(lo, hi)| lo <= pass && pass <= hi)
+    };
 
-    // Draw each gap between the skipped passes, omitting the passes themselves.
+    // Draw maximal runs of non-skipped passes, omitting the skipped ones.
     let mut lo = first;
-    for &pass in &skips[..n] {
-        if lo < pass {
-            original.call(this, ctx, setup, lo, pass);
+    for pass in first..last {
+        if skipped(pass) {
+            if lo < pass {
+                original.call(this, ctx, setup, lo, pass);
+            }
+            lo = pass + 1;
         }
-        lo = pass + 1;
     }
     if lo < last {
         original.call(this, ctx, setup, lo, last);
+    }
+}
+
+// ShadowManager::UpdateRender -- the sim-side sun-shadow update, which fits the scheduled cascades to
+// the active camera (the fit frustum comes from its m_ProjectionF). If that projection ever carries a
+// sub-pixel jitter translation, the fit frustum wobbles every frame and the cascade texel snapping
+// flips back and forth, re-fitting cascades mid-transition. The toggle strips the projection's
+// translation terms for the duration of the call (jitter is a pure clip-space translation; the
+// projection is otherwise symmetric), restoring them after. The active camera is not jittered by the
+// mod, so this showed no effect on the issue-10 flicker; kept as a defensive A/B.
+#[detour(
+    address = jc3gi::graphics_engine::shadow_manager::ShadowManager::UpdateRender_ADDRESS
+)]
+fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
+    let original = SHADOW_MANAGER_UPDATE_RENDER.get().unwrap();
+    if !Config::lock_query(|c| c.stereo.unjitter_shadow_fit) {
+        return original.call(this, dt, dtf);
+    }
+    // SAFETY: the camera-manager singleton and the active camera are live on the game thread for
+    // the duration of this call; the projection writes are scoped save/restore.
+    unsafe {
+        let camera = jc3gi::camera::camera_manager::CameraManager::get()
+            .map(|cm| cm.m_ActiveCamera)
+            .unwrap_or(std::ptr::null_mut());
+        let Some(camera) = camera.as_mut() else {
+            return original.call(this, dt, dtf);
+        };
+        let saved = [camera.m_ProjectionF.data[12], camera.m_ProjectionF.data[13]];
+        camera.m_ProjectionF.data[12] = 0.0;
+        camera.m_ProjectionF.data[13] = 0.0;
+        let result = original.call(this, dt, dtf);
+        camera.m_ProjectionF.data[12] = saved[0];
+        camera.m_ProjectionF.data[13] = saved[1];
+        result
+    }
+}
+
+// ShadowManager::CommitRenderPassSettings -- the per-dispatch gate that enables this frame's
+// scheduled shadow passes (the update round-robin) and re-points their targets by parity. With the
+// freeze diagnostic on, the pass-enable flags the original just set are cleared again (mirroring its
+// own prologue), so no shadow pass renders and the atlas keeps its last contents -- shadows stay
+// visible but stop updating, splitting "atlas content pulses" from "shadow sampling pulses".
+#[detour(
+    address = jc3gi::graphics_engine::shadow_manager::ShadowManager::CommitRenderPassSettings_ADDRESS
+)]
+fn commit_render_pass_settings(this: *mut ShadowManager, ctx: *mut c_void) {
+    COMMIT_RENDER_PASS_SETTINGS.get().unwrap().call(this, ctx);
+    if !Config::lock_query(|c| c.stereo.freeze_shadow_maps) {
+        return;
+    }
+    // SAFETY: `this` is the live shadow manager; each cascade's pass pointers are engine-owned and
+    // null-checked, and the flag write mirrors the original's own prologue stores.
+    unsafe {
+        let Some(manager) = this.as_mut() else {
+            return;
+        };
+        for cascade in &mut manager.m_Cascades {
+            for pass in cascade.m_Passes {
+                if let Some(pass) = pass.as_mut() {
+                    pass.m_StateFlags.remove(RenderPassState::m_Enabled);
+                }
+            }
+        }
     }
 }
 
@@ -116,13 +187,35 @@ fn draw_render_pass_range(
 // stages the constants; a zero delta (no per-eye offset) makes it a no-op.
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::SetGlobalShaderConstants_ADDRESS)]
 fn set_global_shader_constants(this: *mut c_void, ctx: *mut c_void) {
-    if Config::lock_query(|c| c.stereo.fix_shadow_cascade_anchor)
-        && let Some(ctx) = unsafe { ctx.cast::<RenderContext>().as_mut() }
-    {
+    if let Some(ctx) = unsafe { ctx.cast::<RenderContext>().as_mut() } {
         let delta = crate::stereo::STEREO_STATE.lock().shadow_anchor_delta;
-        apply_shadow_cascade_anchor_fix(ctx, delta);
+        record_shadow_state(ctx, delta);
+        if Config::lock_query(|c| c.stereo.fix_shadow_cascade_anchor) {
+            apply_shadow_cascade_anchor_fix(ctx, delta);
+        }
     }
     SET_GLOBAL_SHADER_CONSTANTS.get().unwrap().call(this, ctx);
+}
+
+/// Record the staged sun-shadow constants into the active render trace (no-op outside a trace) --
+/// the raw parity-slot values, read before the anchor correction mutates them. See
+/// [`TraceEvent::ShadowState`] for how the series is analysed.
+fn record_shadow_state(ctx: &RenderContext, anchor_delta: [f32; 3]) {
+    if !crate::debug::trace::tracing_active() {
+        return;
+    }
+    // SAFETY: the render-frame counters live for the process.
+    let counters = unsafe { *jc3gi::graphics_engine::graphics_engine::get_render_frame_counters() };
+    let t = &ctx.m_ShadowCascades.m_Transform.data;
+    TraceState::record_eye(TraceEvent::ShadowState {
+        counter: counters.m_Counter,
+        frame_index: counters.m_FrameIndex,
+        translation: [t[12], t[13], t[14], t[15]],
+        scale_blend: std::array::from_fn(|i| ctx.m_ShadowCascades.m_ScaleBlend[i].data),
+        offset_radius: std::array::from_fn(|i| ctx.m_ShadowCascades.m_OffsetRadius[i].data),
+        active_cascades: u32::from(ctx.m_ActiveCascadeCount),
+        anchor_delta,
+    });
 }
 
 /// Add `M * delta` to the cascade transform translation row (`m_Transform` row 3), where `M`'s columns

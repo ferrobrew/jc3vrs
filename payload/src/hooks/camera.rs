@@ -71,10 +71,24 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // Snapshot the center view-projection before the FSR-jitter and per-eye blocks below patch it.
     // This is the value the engine's own sim-side previous-VP snapshot holds (un-offset, unjittered
     // -- the engine jitter is disabled above whenever we patch), which the velocity pass reprojects
-    // with; the FSR motion-vector correction needs it as its "what the engine encoded" matrix.
+    // with; the FSR motion-vector correction needs it as its "what the engine encoded" matrix. The
+    // full pristine matrix set is kept alongside it so the Draw driver can restore the render camera
+    // after the eye loop -- the sim-side sun-shadow fit reads this camera and must see the center,
+    // unjittered state or its cascade texel snap flip-flops (issue #10's blob flicker).
     if is_render_camera && let Some(camera) = unsafe { camera.as_ref() } {
-        crate::stereo::STEREO_STATE.lock().vp_history.cur_center =
-            Some(glam::Mat4::from(camera.m_ViewProjectionF));
+        let mut stereo = crate::stereo::STEREO_STATE.lock();
+        stereo.vp_history.cur_center = Some(glam::Mat4::from(camera.m_ViewProjectionF));
+        stereo.pristine_render_camera = Some(crate::stereo::PristineRenderCamera {
+            camera: camera as *const Camera as usize,
+            matrices: [
+                camera.m_Projection.data,
+                camera.m_ProjectionF.data,
+                camera.m_View.data,
+                camera.m_TransformF.data,
+                camera.m_ViewProjection.data,
+                camera.m_ViewProjectionF.data,
+            ],
+        });
     }
 
     // FSR is a temporal reconstructor: it needs the camera jittered by its sequence, with the same

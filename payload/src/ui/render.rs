@@ -18,6 +18,8 @@ use windows::{
     core::Interface,
 };
 
+use jc3gi::camera::camera::CameraState;
+
 use crate::debug::camera::{CAMERA_SNAPSHOTS, CameraSnapshot};
 
 use crate::config;
@@ -679,18 +681,21 @@ fn show_camera_snapshot(
     }
     ui.label(format!("cam ptr: {:#x}", snap.camera_ptr));
 
-    const FLAG_NAMES: [(u8, &str); 6] = [
-        (0x01, "OffCenter"),
-        (0x02, "ScreenshotSeries"),
-        (0x04, "Ortho"),
-        (0x08, "ComputeView"),
-        (0x10, "DirtyProj"),
-        (0x20, "IsRenderCam"),
+    // The flag values come from the generated bitflags, so the table's bits can never drift from
+    // the pyxis definition; only the display labels are local.
+    const FLAG_NAMES: [(CameraState, &str); 6] = [
+        (CameraState::m_UseOffCenter, "OffCenter"),
+        (CameraState::m_ScreenshotSeriesRunning, "ScreenshotSeries"),
+        (CameraState::m_Ortho, "Ortho"),
+        (CameraState::m_ComputeView, "ComputeView"),
+        (CameraState::m_DirtyProjection, "DirtyProj"),
+        (CameraState::m_IsRenderCamera, "IsRenderCam"),
     ];
+    let state = CameraState::from_bits_truncate(snap.state_bits);
     let active: Vec<&str> = FLAG_NAMES
         .iter()
-        .filter(|(b, _)| snap.state_bits & b != 0)
-        .map(|(_, n)| *n)
+        .filter(|(flag, _)| state.contains(*flag))
+        .map(|(_, name)| *name)
         .collect();
     let flag_text = format!("flags {:#04x}: {}", snap.state_bits, active.join(" | "));
     if other.valid && snap.state_bits != other.state_bits {

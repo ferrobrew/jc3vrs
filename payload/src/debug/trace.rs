@@ -109,6 +109,31 @@ pub enum TraceEvent {
     /// non-repeat per dispatch.
     #[serde(rename = "PostEffectsBlockDraw")]
     PostEffectsBlockDraw { repeat: bool, skip: bool },
+    /// The sun-shadow constants staged for this dispatch, read in `SetGlobalShaderConstants` before
+    /// the anchor correction mutates them -- i.e. the raw parity-slot data the engine produced. For
+    /// diagnosing the one-frame shadow-boundary jumps (issue #10's residual flicker): across a trace,
+    /// `translation`/`scale_blend0` should evolve smoothly with the camera and match between the two
+    /// eyes of a frame; a value that alternates between consecutive frames indicts the parity slots
+    /// (even/odd frames reading diverged fits), while a smooth series clears the constants and points
+    /// downstream (atlas contents or the temporal resolve).
+    #[serde(rename = "ShadowState")]
+    ShadowState {
+        /// `render_frame_counters.m_Counter` at stage time (the sim-side shadow write selector).
+        counter: u32,
+        /// `render_frame_counters.m_FrameIndex` (the draw-side parity selector; parity = bit 0).
+        frame_index: u32,
+        /// The cascade transform's translation row, straight from the parity slot (pre-correction).
+        translation: [f32; 4],
+        /// All six cascades' scale + blend band (`m_ScaleBlend`). Cascade 0 refreshes every frame;
+        /// the higher cascades are round-robined, so a per-parity vintage mismatch (the freeze
+        /// diagnostic's artifact class) shows here as values alternating between consecutive frames.
+        scale_blend: [[f32; 4]; 6],
+        /// All six cascades' offset + texture-array slice (`m_OffsetRadius`).
+        offset_radius: [[f32; 4]; 6],
+        active_cascades: u32,
+        /// The anchor-fix delta about to be applied (zero when disparity is off).
+        anchor_delta: [f32; 3],
+    },
     #[serde(rename = "SetupRenderFrameData")]
     SetupRenderFrameData { gated: bool },
     #[serde(rename = "HandBackBuffers")]
