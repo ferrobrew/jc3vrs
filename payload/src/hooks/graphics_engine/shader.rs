@@ -41,7 +41,29 @@ const SEED: [u8; 16] = [
     0x00, 0x00, 0x00, 0x00, // 0.0
 ];
 
+/// The 8-byte `dp2` immediate prefix `l(0.467944, -0.703648, ...)` -- the material LOD-dissolve
+/// screen-door pattern seed (119 shaders per bundle carry it exactly once). Most key the pattern to
+/// `SV_Position` (raster pixels, temporally stable); the vegetation family instead keys it to the
+/// interpolated clip-space position, which carries the FSR camera jitter -- the whole dissolve
+/// pattern then slides sub-pixel every frame and each mid-fade region flips coverage coherently,
+/// the blob-scale scene flicker of issue #10. The two families are told apart by the `dp2` source
+/// operand: a TEMP register (the perspective-divided interpolant) marks the unstable one.
+const DISSOLVE_SEED: [u8; 8] = [
+    0x5b, 0x96, 0xef, 0x3e, // 0.467944
+    0x46, 0x22, 0x34, 0xbf, // -0.703648
+];
+/// Offset from the dissolve seed to the fade `add`'s `l(1.0)` immediate (`add r#, -v#.#, l(1.0)`,
+/// two instructions after the `dp2`; byte-identical placement across the unstable family).
+const DISSOLVE_FADE_OFFSET: usize = 64;
+/// `1.0f`, the fade immediate the unstable family carries at [`DISSOLVE_FADE_OFFSET`].
+const F32_ONE: [u8; 4] = [0x00, 0x00, 0x80, 0x3f];
+/// `-3.0e38f`. Replacing the fade immediate with it drives the dissolve sum hugely positive, so the
+/// discard can never fire: the dissolve is disabled and the mesh draws fully (LOD transitions pop
+/// instead of dissolving -- stable under jitter).
+const DISSOLVE_NEVER: [u8; 4] = [0xe6, 0xb1, 0x61, 0xff];
+
 static PATCHED: AtomicUsize = AtomicUsize::new(0);
+static DISSOLVE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// The `m_CurrentBundleName` `std::string` on the engine: data/SSO buffer at `+0x1300`, length at
@@ -58,25 +80,33 @@ fn create_fragment_program(
     device: *mut c_void,
     params: *mut CreateFragmentProgramParams,
 ) -> *mut c_void {
-    // When enabled and the shadow seed is present, point the params at a patched copy of the bytecode
+    // When enabled and a target site is present, point the params at a patched copy of the bytecode
     // for the duration of the (bytecode-copying) CreatePixelShader call, then restore the caller's
     // pointer. `saved` keeps the patched copy alive across the call.
     let mut saved: Option<(*const u8, Vec<u8>)> = None;
-    if Config::lock_query(|c| c.stereo.patch_shadow_pcf_hash)
+    let (patch_pcf, patch_dissolve) =
+        Config::lock_query(|c| (c.stereo.patch_shadow_pcf_hash, c.stereo.patch_lod_dissolve));
+    if (patch_pcf || patch_dissolve)
         && let Some(p) = unsafe { params.as_mut() }
     {
         let size = p.m_Size as usize;
         if !p.m_Code.is_null() && size >= SEED.len() {
             let code = unsafe { std::slice::from_raw_parts(p.m_Code, size) };
-            if contains_seed(code) {
-                let mut copy = code.to_vec();
-                let n = zero_seeds(&mut copy);
+            let mut copy = code.to_vec();
+            let pcf = if patch_pcf { zero_seeds(&mut copy) } else { 0 };
+            let dissolve = if patch_dissolve {
+                neutralize_unstable_dissolves(&mut copy)
+            } else {
+                0
+            };
+            if pcf + dissolve > 0 {
                 // A raw byte-patch leaves the DXBC container checksum stale; D3D consumers that
                 // validate it (the translation layers under Proton do) reject the blob, so the
                 // shadow shaders fail to create and the scene renders broken. Refresh the checksum
                 // so the patched bytecode is a valid container.
                 refresh_dxbc_checksum(&mut copy);
-                PATCHED.fetch_add(n, Ordering::Relaxed);
+                PATCHED.fetch_add(pcf, Ordering::Relaxed);
+                DISSOLVE_PATCHED.fetch_add(dissolve, Ordering::Relaxed);
                 saved = Some((p.m_Code, copy));
                 p.m_Code = saved.as_ref().expect("just set").1.as_ptr();
             }
@@ -93,8 +123,29 @@ fn create_fragment_program(
     result
 }
 
-fn contains_seed(haystack: &[u8]) -> bool {
-    haystack.windows(SEED.len()).any(|w| w == SEED)
+/// Disable the jitter-unstable LOD dissolve: for each [`DISSOLVE_SEED`] site whose `dp2` reads a
+/// TEMP register (the clip-interpolant family; the stable `SV_Position` family reads an INPUT), the
+/// fade immediate at [`DISSOLVE_FADE_OFFSET`] is replaced with [`DISSOLVE_NEVER`], making the
+/// dissolve's discard unreachable. Returns the number of sites patched.
+fn neutralize_unstable_dissolves(code: &mut [u8]) -> usize {
+    let mut count = 0;
+    let mut i = 12;
+    while i + DISSOLVE_FADE_OFFSET + 4 <= code.len() {
+        if code[i..i + DISSOLVE_SEED.len()] != DISSOLVE_SEED {
+            i += 1;
+            continue;
+        }
+        // The `dp2` source operand token precedes its immediate operand: [token, index] at i-12,
+        // with the operand type in bits 12..20 (0 = TEMP, 1 = INPUT).
+        let token = u32::from_le_bytes(code[i - 12..i - 8].try_into().expect("4 bytes"));
+        let fade = i + DISSOLVE_FADE_OFFSET;
+        if (token >> 12) & 0xFF == 0 && code[fade..fade + 4] == F32_ONE {
+            code[fade..fade + 4].copy_from_slice(&DISSOLVE_NEVER);
+            count += 1;
+        }
+        i += DISSOLVE_SEED.len();
+    }
+    count
 }
 
 /// Zero the two seed constants (the first eight bytes of each `l(12.9898, 78.233, 0, 0)` immediate),
@@ -227,6 +278,12 @@ fn md5_transform(state: &mut [u32; 4], block: &[u8; 64]) {
 /// so a shader reload is needed.
 pub fn patched_count() -> usize {
     PATCHED.load(Ordering::Relaxed)
+}
+
+/// The number of jitter-unstable LOD-dissolve sites patched since injection. Surfaced in the debug
+/// UI alongside [`patched_count`] for the same is-the-hook-catching-anything visibility.
+pub fn dissolve_patched_count() -> usize {
+    DISSOLVE_PATCHED.load(Ordering::Relaxed)
 }
 
 /// Request a shader reload (from the debug UI). Performed at the next [`process_reload_request`] on the

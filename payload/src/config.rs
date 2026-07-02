@@ -131,6 +131,15 @@ pub struct StereoConfig {
     /// half of the per-eye MainColor divergence. Snapshot before eye 0, restore before eye 1 so eye 1
     /// refreshes the same cascade. **Default off pending validation.**
     pub restore_gi_cascade: bool,
+    /// Patch the jitter-unstable material LOD dissolve out of the vegetation shaders at creation.
+    /// Their screen-door dissolve pattern is keyed to the interpolated clip-space position (not
+    /// `SV_Position`), so a camera jitter slides the whole pattern sub-pixel every frame and
+    /// mid-fade geometry flips coverage coherently. Bytecode-real, but it was not the issue-10
+    /// flicker and only matters while [`FsrConfig::jitter`](FsrConfig::jitter) is on, so it
+    /// defaults off with the jitter. The patch makes the dissolve's discard unreachable (LOD
+    /// transitions pop instead of dissolving); same reload caveat as
+    /// [`patch_shadow_pcf_hash`](Self::patch_shadow_pcf_hash).
+    pub patch_lod_dissolve: bool,
     /// Deduplicate the world post-effects block to once per dispatch. `ApplyWorldFilters` enqueues
     /// the block into the pass's *draw* list at draw time, which the between-eye list-parity restore
     /// cannot zero -- so eye 1 draws eye 0's stale entry plus its own, running the whole post chain
@@ -166,6 +175,7 @@ impl StereoConfig {
             restore_ssao_history: false,
             restore_gi_cascade: false,
             patch_shadow_pcf_hash: true,
+            patch_lod_dissolve: false,
             dedupe_post_block: true,
         }
     }

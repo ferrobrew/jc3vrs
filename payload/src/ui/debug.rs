@@ -80,10 +80,24 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                 });
             });
             ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut cfg.stereo.patch_lod_dissolve,
+                    "Patch jitter-unstable LOD dissolve (only matters with FSR jitter on)",
+                );
+                let patched = crate::hooks::graphics_engine::shader::dissolve_patched_count();
+                ui.label(if patched == 0 {
+                    "(0 patched -- click Reload shaders)".to_string()
+                } else {
+                    format!("({patched} sites patched)")
+                });
+            });
+            ui.horizontal(|ui| {
                 if ui.button("Reload shaders").clicked() {
                     crate::hooks::graphics_engine::shader::request_reload();
                 }
-                ui.label("re-creates all shaders so the PCF patch takes effect (F11 toggles + reloads)");
+                ui.label(
+                    "re-creates all shaders so the shader patches take effect (F11 toggles + reloads)",
+                );
             });
         });
 
