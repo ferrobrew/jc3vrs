@@ -131,6 +131,11 @@ pub struct StereoConfig {
     /// half of the per-eye MainColor divergence. Snapshot before eye 0, restore before eye 1 so eye 1
     /// refreshes the same cascade. **Default off pending validation.**
     pub restore_gi_cascade: bool,
+    /// Deduplicate the world post-effects block to once per dispatch. `ApplyWorldFilters` enqueues
+    /// the block into the pass's *draw* list at draw time, which the between-eye list-parity restore
+    /// cannot zero -- so eye 1 draws eye 0's stale entry plus its own, running the whole post chain
+    /// (and FSR) twice. The double-stepped FSR history is the residual per-eye flicker of issue #10.
+    pub dedupe_post_block: bool,
     /// Patch the screen-space PCF rotation hash out of the sun-shadow shaders at creation, so both
     /// eyes use the same unrotated 38-tap PCF (removes the per-eye shadow shimmer + foliage grain).
     /// Applies only to shaders created after the hook installs; trigger a shader reload (e.g. change
@@ -161,6 +166,7 @@ impl StereoConfig {
             restore_ssao_history: false,
             restore_gi_cascade: false,
             patch_shadow_pcf_hash: true,
+            dedupe_post_block: true,
         }
     }
 }

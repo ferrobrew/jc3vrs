@@ -8,7 +8,9 @@ use re_utilities::hook_library::HookLibrary;
 // its own module), hence the module_inception allow.
 #[allow(clippy::module_inception)]
 pub mod graphics_engine;
-mod post_effects;
+// `post_effects` is crate-visible so hooks::game can re-arm the once-per-dispatch world post-block
+// gate at each dispatch begin.
+pub(crate) mod post_effects;
 mod render_pass;
 // `shader` is public so the debug UI can read its patched-shader count.
 pub mod shader;

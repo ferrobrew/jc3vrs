@@ -103,6 +103,12 @@ pub enum TraceEvent {
     DrawEnd { eye: usize, counts: DrawCounts },
     #[serde(rename = "SetupRenderCamera")]
     SetupRenderCamera,
+    /// One `RenderBlockPostEffects::Draw` invocation. `repeat` marks a second-or-later invocation
+    /// within one dispatch (the stale draw-list entry the between-eye parity restore cannot zero);
+    /// `skip` whether the dedupe gate suppressed it. A healthy stereo frame shows exactly one
+    /// non-repeat per dispatch.
+    #[serde(rename = "PostEffectsBlockDraw")]
+    PostEffectsBlockDraw { repeat: bool, skip: bool },
     #[serde(rename = "SetupRenderFrameData")]
     SetupRenderFrameData { gated: bool },
     #[serde(rename = "HandBackBuffers")]

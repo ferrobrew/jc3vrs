@@ -40,6 +40,10 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                 "Sun-shadow cascade anchor (the visible per-eye shadow mismatch; A/B via Present eye 0)",
             );
             ui.checkbox(
+                &mut cfg.stereo.dedupe_post_block,
+                "Dedupe world post block (eye 1 otherwise runs the post chain + FSR twice)",
+            );
+            ui.checkbox(
                 &mut cfg.stereo.drain_draw_fragment,
                 "Drain draw-dispatch fragment between eyes (open-world crash fix)",
             );

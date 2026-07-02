@@ -126,6 +126,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             });
 
             super::draw_count::DRAW_COUNTS.clear();
+            super::graphics_engine::post_effects::reset_post_block_gate();
             TraceState::record(TraceEvent::DrawBegin { eye: 0 });
             STEREO_STATE.lock().draw_index = 0;
             BLOCK_FLIP.store(present_eye != 0, Ordering::Relaxed);
@@ -169,6 +170,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             *get_current_add_buffer() = saved_add_buffer;
 
             super::draw_count::DRAW_COUNTS.clear();
+            super::graphics_engine::post_effects::reset_post_block_gate();
             TraceState::record(TraceEvent::DrawBegin { eye: 1 });
             STEREO_STATE.lock().draw_index = 1;
             BLOCK_FLIP.store(present_eye != 1, Ordering::Relaxed);
@@ -199,6 +201,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 restore_counters: None,
             });
             STEREO_STATE.lock().draw_index = 0;
+            super::graphics_engine::post_effects::reset_post_block_gate();
             crate::crash::mark(Phase::NonStereoDraw);
             game.Draw(spf);
             crate::debug::camera::capture_render_camera(0);

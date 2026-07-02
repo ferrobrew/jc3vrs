@@ -8,7 +8,10 @@
 //! (`ApplyWorldFilters` / `ApplyGlobalFilters`) step dt-driven accumulators that must only advance
 //! once per real frame, so their `dt` is zeroed on eye 1.
 
-use std::ffi::c_void;
+use std::{
+    ffi::c_void,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use detours_macro::detour;
 use jc3gi::graphics_engine::post_effects::{
@@ -24,6 +27,7 @@ use crate::{
 
 pub(super) fn extend(library: HookLibrary) -> HookLibrary {
     library
+        .with_static_binder(&RENDER_BLOCK_POST_EFFECTS_DRAW_BINDER)
         .with_static_binder(&APPLY_WORLD_FILTERS_BINDER)
         .with_static_binder(&APPLY_GLOBAL_FILTERS_BINDER)
         .with_static_binder(&MOTION_BLUR_APPLY_BINDER)
@@ -73,6 +77,42 @@ fn fsr_dispatch(mgr: *mut c_void, slot: u32, sharpness: Option<f32>) -> bool {
     };
     TraceState::record_eye(TraceEvent::FsrDispatch { input: slot, ran });
     ran
+}
+
+/// Whether the world post-effects block has already drawn during the current dispatch. Reset by the
+/// Draw driver at each dispatch begin ([`reset_post_block_gate`]).
+static WORLD_POST_BLOCK_RAN: AtomicBool = AtomicBool::new(false);
+
+/// Re-arm the once-per-dispatch world post-effects block gate. Called by the Draw driver
+/// (`hooks::game`) at the start of every dispatch.
+pub(crate) fn reset_post_block_gate() {
+    WORLD_POST_BLOCK_RAN.store(false, Ordering::Relaxed);
+}
+
+// RenderBlockPostEffects::Draw -- the world post-effect chain (histogram, blur, glare, DoF, motion
+// blur, tonemap, AA/FSR, sun halo, fade). `ApplyWorldFilters` enqueues the block into pass
+// RP_POSTEFFECTS's *draw* list at draw time, and the between-eye list-parity restore only zeroes the
+// *add* lists -- so eye 0's entry survives into eye 1's list and eye 1 draws the block twice
+// (confirmed by the render trace: three chains per real frame). The second run double-steps every
+// temporal consumer in the chain -- most visibly FSR, whose eye-1 history then oscillates (the
+// residual per-eye flicker of issue #10) -- and advances the post slot ring an extra step. Gate the
+// block to once per dispatch: the duplicate entries reference the same stateless block object, and
+// the chain's per-eye behaviour (histogram gates, FSR eye index) is decided live at run time, so
+// running the first entry and skipping the repeat is exact.
+#[detour(
+    address = jc3gi::graphics_engine::post_effects::RenderBlockPostEffects::Draw_ADDRESS
+)]
+fn render_block_post_effects_draw(this: *mut c_void, ctx: *mut c_void, info: *mut c_void) -> u64 {
+    let repeat = WORLD_POST_BLOCK_RAN.swap(true, Ordering::Relaxed);
+    let skip = repeat && Config::lock_query(|c| c.stereo.dedupe_post_block);
+    TraceState::record_eye(TraceEvent::PostEffectsBlockDraw { repeat, skip });
+    if skip {
+        return 0;
+    }
+    RENDER_BLOCK_POST_EFFECTS_DRAW
+        .get()
+        .unwrap()
+        .call(this, ctx, info)
 }
 
 // PostEffectsManager::ApplyWorldFilters -- enqueues the world post block and steps the world-fade
