@@ -139,24 +139,111 @@ fn dump_place_object(tag: &Tag, code: u16) -> anyhow::Result<()> {
 
     let _has_clip_actions = flags & 0x80 != 0;
     let _has_clip_depth = flags & 0x40 != 0;
-    let _has_name = flags & 0x20 != 0;
-    let _has_ratio = flags & 0x10 != 0;
-    let _has_cxform = flags & 0x08 != 0;
-    let _has_matrix = flags & 0x04 != 0;
+    let has_name = flags & 0x20 != 0;
+    let has_ratio = flags & 0x10 != 0;
+    let has_cxform = flags & 0x08 != 0;
+    let has_matrix = flags & 0x04 != 0;
     let has_character = flags & 0x02 != 0;
     let move_flag = flags & 0x01 != 0;
 
     let depth = read_u16_le(&tag.data, &mut pos);
 
+    let mut char_id_str = String::new();
     if has_character {
         let char_id = read_u16_le(&tag.data, &mut pos);
-        println!("  Place depth={depth} char={char_id}",);
-    } else if move_flag {
-        println!("  Place depth={depth} (move)",);
+        char_id_str = format!("char={char_id} ");
     }
-    // We don't fully parse matrix/cxform/etc, but the depth and character
-    // placement is the key info for z-ordering
+
+    // Skip matrix (if present): 6 floats as fixed-point — variable size, but
+    // we only need the name. Skip by reading until we find it.
+    // Matrix: nbits(5) + 6 fields of nbits each, plus optional scale/rotate
+    if has_matrix {
+        // Read the matrix: scale + rotate + translate
+        // The matrix starts with a HasScale bit, then optional HasRotate
+        // For simplicity, skip by reading all fields we know the format of
+        skip_matrix(&tag.data, &mut pos);
+    }
+
+    if has_cxform {
+        skip_cxform(&tag.data, &mut pos);
+    }
+
+    let mut name_str = String::new();
+    if has_name {
+        let name = read_string(&tag.data, &mut pos);
+        name_str = format!("name=\"{name}\" ");
+    }
+
+    if has_ratio {
+        let _ratio = read_u16_le(&tag.data, &mut pos);
+    }
+
+    if !name_str.is_empty() || has_character {
+        println!(
+            "  Place depth={depth} {char_id_str}{name_str}{}",
+            if move_flag { "(move)" } else { "" }
+        );
+    }
+
     Ok(())
+}
+
+/// Skip a SWF MATRIX record, advancing pos past it.
+fn skip_matrix(data: &[u8], pos: &mut usize) {
+    if *pos >= data.len() {
+        return;
+    }
+    // HasScale (1 bit)
+    let has_scale = (data[*pos] >> 7) & 1;
+    let mut bit_pos = 1;
+    if has_scale == 1 {
+        let nbits = read_ubits(data, pos, &mut bit_pos, 5) as usize;
+        bit_pos += nbits * 2; // scaleX, scaleY
+    }
+    // HasRotate (1 bit)
+    let has_rotate = read_ubits(data, pos, &mut bit_pos, 1);
+    if has_rotate == 1 {
+        let nbits = read_ubits(data, pos, &mut bit_pos, 5) as usize;
+        bit_pos += nbits * 2; // rotateSkew0, rotateSkew1
+    }
+    // Translate (always present): nbits(5) + translateX + translateY
+    let nbits = read_ubits(data, pos, &mut bit_pos, 5) as usize;
+    bit_pos += nbits * 2; // translateX, translateY
+
+    // Advance byte position past the consumed bits
+    *pos += bit_pos.div_ceil(8);
+}
+
+/// Skip a SWF CXFORM record, advancing pos past it.
+fn skip_cxform(data: &[u8], pos: &mut usize) {
+    if *pos >= data.len() {
+        return;
+    }
+    // HasAddTerms (1 bit) + HasMultTerms (1 bit) + Nbits (4 bits)
+    let has_add = (data[*pos] >> 7) & 1;
+    let has_mult = (data[*pos] >> 6) & 1;
+    let nbits = ((data[*pos] >> 2) & 0x0F) as usize;
+    let bit_pos = 6;
+    let terms = (has_add as usize + has_mult as usize) * 3; // r, g, b per type
+    let total_bits = bit_pos + nbits * terms;
+    *pos += total_bits.div_ceil(8);
+}
+
+/// Read `count` bits from data starting at byte `*pos`, bit offset `bit_pos`.
+/// Does NOT advance `pos`; the caller must update both.
+fn read_ubits(data: &[u8], pos: &usize, bit_pos: &mut usize, count: usize) -> u32 {
+    let mut result = 0u32;
+    for i in 0..count {
+        let byte_idx = *pos + (*bit_pos + i) / 8;
+        if byte_idx >= data.len() {
+            break;
+        }
+        let bit_idx = 7 - ((*bit_pos + i) % 8);
+        let bit = (data[byte_idx] >> bit_idx) & 1;
+        result = (result << 1) | bit as u32;
+    }
+    *bit_pos += count;
+    result
 }
 
 fn dump_define_sprite(tag: &Tag) -> anyhow::Result<()> {
@@ -168,29 +255,60 @@ fn dump_define_sprite(tag: &Tag) -> anyhow::Result<()> {
     // Parse sub-tags to find PlaceObject entries with depth info
     let sub_tags = parse_sub_tags(&tag.data[pos..])?;
 
-    let mut placements: Vec<(u16, u16)> = Vec::new(); // (depth, char_id)
+    let mut placements: Vec<(u16, u16, Option<String>)> = Vec::new(); // (depth, char_id, name)
     for st in &sub_tags {
         if st.code == 26 || st.code == 70 {
-            // Parse PlaceObject depth from the sub-tag
-            let offset = if st.code == 70 { 2 } else { 1 }; // skip flags
-            if offset + 2 <= st.data.len() {
-                let depth = u16::from_le_bytes(st.data[offset..offset + 2].try_into().unwrap());
-                let flags = st.data[0];
-                let has_character = flags & 0x02 != 0;
-                let char_id = if has_character && offset + 4 <= st.data.len() {
-                    u16::from_le_bytes(st.data[offset + 2..offset + 4].try_into().unwrap())
-                } else {
-                    0
-                };
-                placements.push((depth, char_id));
+            // Parse PlaceObject depth + name from the sub-tag
+            let (flags, mut sp) = if st.code == 70 {
+                (st.data[0], 2usize)
+            } else {
+                (st.data[0], 1usize)
+            };
+            let has_character = flags & 0x02 != 0;
+            let has_name = flags & 0x20 != 0;
+            let has_matrix = flags & 0x04 != 0;
+            let has_cxform = flags & 0x08 != 0;
+            let has_ratio = flags & 0x10 != 0;
+
+            if sp + 2 > st.data.len() {
+                continue;
             }
+            let depth = u16::from_le_bytes(st.data[sp..sp + 2].try_into().unwrap());
+            sp += 2;
+
+            let mut char_id = 0u16;
+            if has_character && sp + 2 <= st.data.len() {
+                char_id = u16::from_le_bytes(st.data[sp..sp + 2].try_into().unwrap());
+                sp += 2;
+            }
+
+            // Skip matrix and cxform to get to the name
+            if has_matrix {
+                skip_matrix(&st.data, &mut sp);
+            }
+            if has_cxform {
+                skip_cxform(&st.data, &mut sp);
+            }
+
+            let mut name = None;
+            if has_name && sp < st.data.len() {
+                name = Some(read_string(&st.data, &mut sp));
+            }
+
+            let _ = has_ratio;
+            placements.push((depth, char_id, name));
         }
     }
 
     if !placements.is_empty() {
+        // Look up the sprite's class name from the SymbolClass
         println!("=== DefineSprite id={sprite_id} frames={frame_count} ===");
-        for (depth, char_id) in &placements {
-            println!("  depth={depth} char={char_id}");
+        for (depth, char_id, name) in &placements {
+            let name_part = name
+                .as_ref()
+                .map(|n| format!(" name=\"{n}\""))
+                .unwrap_or_default();
+            println!("  depth={depth} char={char_id}{name_part}");
         }
         println!();
     }
