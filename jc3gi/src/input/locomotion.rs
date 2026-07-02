@@ -1,4 +1,6 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::character::character::AimState;
 #[repr(C, align(8))]
 pub struct InstanceProperties {}
 impl InstanceProperties {}
@@ -56,7 +58,8 @@ pub struct NStateTask_InputLocoMoveTask {}
 impl NStateTask_InputLocoMoveTask {
     pub const Update_ADDRESS: usize = 0x1408125E0;
     /// The per-frame update. Reads the blackboard move direction and speed, then branches on
-    /// [`Character::m_AimFlags`] bits `0x08`/`0x10`: with neither set it queues
+    /// [`Character::m_AimFlags`] ([`m_AimingWeapon`](character::character::AimState::m_AimingWeapon) /
+    /// [`m_AimingGrapple`](character::character::AimState::m_AimingGrapple)): with neither set it queues
     /// [`QueueMoveActions`](NStateTask_LocoUtil::QueueMoveActions) (run — the body steers toward the
     /// movement vector), otherwise it queues the aim-relative (strafe) acts. This branch is the
     /// concrete point where on-foot movement becomes third-person steer instead of FPS-style strafe.
@@ -144,7 +147,8 @@ impl NStateTask_LocoUtil {
     }
     pub const QueueAimRelativeMoveActions_ADDRESS: usize = 0x1408326B0;
     /// Queues the aim-relative (strafe) acts. It derives the facing reference from the weapon-aim
-    /// target when [`Character::m_AimFlags`] bit `0x08` is set (or the grapple target for `0x10`),
+    /// target when [`m_AimingWeapon`](character::character::AimState::m_AimingWeapon) is set (or the
+    /// grapple target for [`m_AimingGrapple`](character::character::AimState::m_AimingGrapple)),
     /// and falls back to the character's own current forward when neither is set — so this alone
     /// does not turn the body toward the camera without an aim reference.
     pub unsafe fn QueueAimRelativeMoveActions(
