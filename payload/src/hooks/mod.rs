@@ -9,6 +9,7 @@ pub mod clock;
 pub mod draw_count;
 pub mod game;
 pub mod graphics_engine;
+pub mod input;
 pub mod ui;
 pub mod wndproc;
 
@@ -31,6 +32,7 @@ pub(super) fn install() {
             camera::hook_library(),
             wndproc::hook_library(),
             character::hook_library(),
+            input::hook_library(),
             ui::hook_library(),
         ])
         .enable(&mut patcher)?)

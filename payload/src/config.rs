@@ -24,6 +24,7 @@ pub struct Config {
     pub exposure: ExposureConfig,
     pub post_fx: PostFxConfig,
     pub camera: CameraConfig,
+    pub movement: MovementConfig,
     pub fsr: FsrConfig,
     pub hud: HudConfig,
 }
@@ -34,6 +35,7 @@ impl Config {
             exposure: ExposureConfig::new(),
             post_fx: PostFxConfig::new(),
             camera: CameraConfig::new(),
+            movement: MovementConfig::new(),
             fsr: FsrConfig::new(),
             hud: HudConfig::new(),
         }
@@ -293,6 +295,70 @@ impl CameraConfig {
             use_eye_matrices: true,
             blurs_enabled: false,
             always_use_t1: false,
+        }
+    }
+}
+
+/// On-foot movement settings.
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub struct MovementConfig {
+    /// Force the aim-relative (strafe) locomotion acts on foot, instead of the third-person run
+    /// mode where the directional keys rotate the whole body (nauseating in VR). Implemented as a
+    /// scoped shim (see [`crate::hooks::input::locomotion`]): the local player's aim flags are
+    /// forced to the aim-relative state only while each locomotion task's update runs, and
+    /// restored afterwards, so the aim *system* (reticle, auto-aim, ADS) never sees the forced
+    /// state. Two known gaps, in-game verified: the aim-loco acts are combat-stance animations
+    /// (arms raised, body bladed -- the pose is baked into the animations, not layered by the aim
+    /// system), and the continuous body-yaw-tracks-camera behaviour of real aiming is driven by a
+    /// separate aim-gated system this shim does not activate, so the body heading is not steered
+    /// (reversed-camera backpedal tank-turns). Kept as the acts half of the eventual solution.
+    pub force_fps_movement: bool,
+    /// Continuously yaw the body toward the camera on foot -- the heading half of FPS movement.
+    /// Implemented by writing the camera's ground-plane forward to the character's target-face-dir
+    /// blackboard value and forcing the game's own orientation executor
+    /// (`NStateTask_LocoUtil::EvaluateCharacterOrientation`) into its face-dir-tracking mode for
+    /// the local player, so the native rate-limited turn code does the rotating in every on-foot
+    /// state, holstered included. See `crate::hooks::input::locomotion`.
+    pub face_camera: bool,
+    /// The tracking turn rate: the maximum yaw step, in degrees per orientation update (one per
+    /// frame), passed to the orientation executor while [`face_camera`](Self::face_camera) forces
+    /// tracking. Must stay positive; the executor divides by it.
+    pub face_camera_turn_step: f32,
+    /// The half-angle, in degrees, of the input cone around camera-forward within which the
+    /// face-camera pin applies while moving (it always applies while idle). At the default 180
+    /// the pin always applies; lower it to hand lateral/backward input back to the native steer
+    /// (turn-and-run) instead of [`slide_strafe`](Self::slide_strafe).
+    pub face_camera_input_cone_deg: f32,
+    /// Make lateral and backward input actually translate the character while the body is pinned
+    /// to the camera, instead of fighting the turn animations in place. Two overrides for the
+    /// local player: the movement task's displacement direction is redirected along the input move
+    /// direction after `NStateTask_LocoUtil::EvaluateCharacterDisplacement` computes it (the task
+    /// then scales it by the native speed envelope), and `QueueMoveActions` is replaced to always
+    /// queue the plain forward move act so the legs play a clean forward run rather than
+    /// half-cancelled turn acts. The legs do not match the movement direction (the game ships no
+    /// neutral strafe animations) -- deliberate animationless sliding.
+    pub slide_strafe: bool,
+    /// The yaw correction, in degrees, applied to the input move direction before it is written as
+    /// the displacement direction. The direction is consumed in a frame whose ground axes are
+    /// rotated from the blackboard move direction's world frame by an amount that in-game tests
+    /// have not yet pinned down (candidates disagreed between runs), so it is a live dial: adjust
+    /// until W slides away from the camera and D slides right.
+    pub slide_rotation_deg: f32,
+}
+impl MovementConfig {
+    pub const fn new() -> Self {
+        Self {
+            // Off by default: the aim-loco acts it forces are combat-stance animations, which
+            // obscures assessing the face-camera heading on its own. Turn it on (with a weapon
+            // wielded) for the full directional-legs FPS movement.
+            force_fps_movement: false,
+            face_camera: true,
+            face_camera_turn_step: 10.0,
+            face_camera_input_cone_deg: 180.0,
+            slide_strafe: true,
+            // With the world-to-local transform in place this is only the local frame's forward
+            // convention; dial live from the Game tab until W slides away from the camera.
+            slide_rotation_deg: 0.0,
         }
     }
 }
