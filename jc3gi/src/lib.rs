@@ -99,6 +99,7 @@ macro_rules! __bitflags {
 pub mod aim;
 pub mod animation;
 pub mod audio;
+pub mod blackboard;
 pub mod camera;
 pub mod character;
 pub mod clock;

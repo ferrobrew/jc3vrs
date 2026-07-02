@@ -237,6 +237,18 @@ impl Character {
             f(self as *const Self as _)
         }
     }
+    pub const QueueAct_ADDRESS: usize = 0x14075DF10;
+    /// Queues an animation act by id (`act` points at the runtime `idstring` value, e.g. the
+    /// `ACT_*` id globals initialized at startup). Acts drive the animation state machine's
+    /// transitions; unmatched acts are dropped at the end of the frame.
+    pub unsafe fn QueueAct(&mut self, act: *const u32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, act: *const u32) = ::std::mem::transmute(
+                Self::QueueAct_ADDRESS,
+            );
+            f(self as *mut Self as _, act)
+        }
+    }
 }
 impl std::convert::AsRef<Character> for Character {
     fn as_ref(&self) -> &Character {
@@ -331,6 +343,9 @@ fn _SafeBoneIndex_size_check() {
         ::std::mem::transmute::<[u8; 0x4], SafeBoneIndex>([0u8; 0x4]);
     }
     unreachable!()
+}
+pub unsafe fn get_Character_EnableLocoStrafing() -> &'static mut bool {
+    unsafe { &mut *(0x142F2F300 as *mut bool) }
 }
 pub unsafe fn get_Character_GoreEnabled() -> &'static mut bool {
     unsafe { &mut *(0x142F2F301 as *mut bool) }

@@ -84,6 +84,19 @@ impl GameCameraManager {
             f(self as *const Self as _)
         }
     }
+    pub const GetInputMatrix_ADDRESS: usize = 0x14075C7A0;
+    /// Writes the camera matrix used for mapping player input to world space — the same matrix the
+    /// locomotion input task reads to make the move direction camera-relative (its negated third
+    /// row is the camera forward on the ground plane).
+    pub unsafe fn GetInputMatrix(&self, matrix: *mut crate::types::math::Matrix4) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                matrix: *mut crate::types::math::Matrix4,
+            ) = ::std::mem::transmute(Self::GetInputMatrix_ADDRESS);
+            f(self as *const Self as _, matrix)
+        }
+    }
     pub const UpdateRender_ADDRESS: usize = 0x1407F4560;
     /// The per-frame render update: runs the camera tree via
     /// [`CameraTree::UpdateRenderContexts`], pushes the render context, then updates the lighting and

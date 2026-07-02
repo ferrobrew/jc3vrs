@@ -408,6 +408,26 @@ impl LocalPlayerActionMap {
     }
 }
 impl LocalPlayerActionMap {
+    pub const GetActionEffector_ADDRESS: usize = 0x1402F43C0;
+    /// The single-argument `CInputActionMap::GetActionEffector(int)` overload the wrapper's own
+    /// setters use: resolves an action to its effector without a device index. The singleton
+    /// pointer is the underlying `CInputActionMap` itself (established from `ForceSetPressed`,
+    /// which passes it straight to the map's effector lookup), so the read-side lookup is exposed
+    /// here. Returns the shared null-effector sentinel for invalid ids; callers null-check anyway.
+    pub unsafe fn GetActionEffector(
+        &mut self,
+        action: crate::input::input_action_map::Action,
+    ) -> *mut crate::input::input_action_map::InputDeviceEffector {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                action: crate::input::input_action_map::Action,
+            ) -> *mut crate::input::input_action_map::InputDeviceEffector = ::std::mem::transmute(
+                Self::GetActionEffector_ADDRESS,
+            );
+            f(self as *mut Self as _, action)
+        }
+    }
     pub const ForceSetPressed_ADDRESS: usize = 0x140C124B0;
     /// Drives an analog or held action: sets the effector's value and presses it.
     pub unsafe fn ForceSetPressed(

@@ -90,25 +90,30 @@ impl std::convert::AsMut<NStateTask_InputLocoMoveTask> for NStateTask_InputLocoM
 }
 #[repr(C, align(8))]
 /// The locomotion task that reads the movement effectors and writes the move direction to the
-/// character blackboard.
+/// character blackboard. Like the other `NStateTask` functions, `self` is the *character* -- the
+/// task types are namespaces over free functions that take the character as `this` (the blackboard
+/// at `+0x2060` and the body forward at `+0x2850` are read straight off it).
 pub struct NStateTask_InputLocoSetTargetDirTask {}
 impl NStateTask_InputLocoSetTargetDirTask {
     pub const SetupTargetDir_ADDRESS: usize = 0x14081E130;
     /// Reads the move effectors via the action-map effector lookup, rotates the raw vector
-    /// camera-relative, and writes both the raw and camera-relative move directions to the character
-    /// blackboard.
+    /// camera-relative (via the camera input matrix), and writes the previous and new move
+    /// directions to the character blackboard. `target_dir` is in/out: the previous direction on
+    /// entry, the new one on return. Below the input deadzone the *previous* direction (or the
+    /// body forward) is re-written -- the blackboard move direction is always a unit vector and
+    /// carries no input-held information.
     pub unsafe fn SetupTargetDir(
         &mut self,
-        character: *mut crate::character::character::Character,
+        target_dir: *mut crate::types::math::Vector3,
         props: *mut crate::input::locomotion::InstanceProperties,
     ) -> f64 {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *mut Self,
-                character: *mut crate::character::character::Character,
+                target_dir: *mut crate::types::math::Vector3,
                 props: *mut crate::input::locomotion::InstanceProperties,
             ) -> f64 = ::std::mem::transmute(Self::SetupTargetDir_ADDRESS);
-            f(self as *mut Self as _, character, props)
+            f(self as *mut Self as _, target_dir, props)
         }
     }
 }
@@ -176,6 +181,150 @@ impl NStateTask_LocoUtil {
             f(character)
         }
     }
+    pub const EvaluateCharacterOrientation_ADDRESS: usize = 0x14081F8C0;
+    /// Computes the character's new orientation for this frame; the body-yaw executor, called from
+    /// [`NStateTask_MovementLocomotionTask::Update`]. With `track_face_dir` clear (and outside a
+    /// gating animation segment) the rotation comes from the animation root motion
+    /// (`CAnimationControl::GetDeltaRotation`) — the run-mode steer. With it set, the target face
+    /// direction is read from the character blackboard (id `736589998`) and the body is yawed
+    /// toward it: snapped directly when `snap_to_face_dir` is set (gated on the blend being
+    /// finished when `wait_for_blend` is also set), otherwise rate-limited to `max_step_deg`
+    /// degrees per call — the aim-mode camera tracking. `max_step_deg` must be positive on the
+    /// tracking path (it divides by it). `dt` is only used for the attached-to-vehicle up-vector
+    /// lerp.
+    pub unsafe fn EvaluateCharacterOrientation(
+        out: *mut crate::types::math::Matrix4,
+        character: *mut crate::character::character::Character,
+        track_face_dir: bool,
+        snap_to_face_dir: bool,
+        wait_for_blend: bool,
+        max_step_deg: f32,
+        dt: f32,
+    ) -> *mut crate::types::math::Matrix4 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                out: *mut crate::types::math::Matrix4,
+                character: *mut crate::character::character::Character,
+                track_face_dir: bool,
+                snap_to_face_dir: bool,
+                wait_for_blend: bool,
+                max_step_deg: f32,
+                dt: f32,
+            ) -> *mut crate::types::math::Matrix4 = ::std::mem::transmute(
+                Self::EvaluateCharacterOrientation_ADDRESS,
+            );
+            f(
+                out,
+                character,
+                track_face_dir,
+                snap_to_face_dir,
+                wait_for_blend,
+                max_step_deg,
+                dt,
+            )
+        }
+    }
+    pub const EvaluateCharacterOrientationMS_ADDRESS: usize = 0x14081F490;
+    /// The model-space variant of
+    /// [`EvaluateCharacterOrientation`](NStateTask_LocoUtil::EvaluateCharacterOrientation), also
+    /// called from the movement task and from the grapple reel-in controller. The bools are
+    /// believed to match the world-space variant minus the blend gate; unverified.
+    pub unsafe fn EvaluateCharacterOrientationMS(
+        out: *mut crate::types::math::Matrix4,
+        character: *mut crate::character::character::Character,
+        track_face_dir: bool,
+        snap_to_face_dir: bool,
+        max_step_deg: f32,
+        dt: f32,
+    ) -> *mut crate::types::math::Matrix4 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                out: *mut crate::types::math::Matrix4,
+                character: *mut crate::character::character::Character,
+                track_face_dir: bool,
+                snap_to_face_dir: bool,
+                max_step_deg: f32,
+                dt: f32,
+            ) -> *mut crate::types::math::Matrix4 = ::std::mem::transmute(
+                Self::EvaluateCharacterOrientationMS_ADDRESS,
+            );
+            f(out, character, track_face_dir, snap_to_face_dir, max_step_deg, dt)
+        }
+    }
+    pub const EvaluateCharacterDisplacement_ADDRESS: usize = 0x14081AB90;
+    /// Computes this frame's movement direction from the animation root motion and the new body
+    /// orientation. Called from [`NStateTask_MovementLocomotionTask::Update`], which normalizes
+    /// `out_direction`, scales it by
+    /// [`EvaluateCharacterSpeed`](NStateTask_LocoUtil::EvaluateCharacterSpeed), and writes the
+    /// result as the character's physics velocity -- so overriding `out_direction` after the call
+    /// redirects the movement without touching the speed envelope. The bools and `out_secondary`
+    /// are unmapped.
+    pub unsafe fn EvaluateCharacterDisplacement(
+        character: *mut crate::character::character::Character,
+        orientation: *const crate::types::math::Matrix4,
+        p3: bool,
+        p4: bool,
+        p5: bool,
+        p6: f32,
+        out_secondary: *mut crate::types::math::Vector3,
+        out_direction: *mut crate::types::math::Vector3,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                character: *mut crate::character::character::Character,
+                orientation: *const crate::types::math::Matrix4,
+                p3: bool,
+                p4: bool,
+                p5: bool,
+                p6: f32,
+                out_secondary: *mut crate::types::math::Vector3,
+                out_direction: *mut crate::types::math::Vector3,
+            ) = ::std::mem::transmute(Self::EvaluateCharacterDisplacement_ADDRESS);
+            f(character, orientation, p3, p4, p5, p6, out_secondary, out_direction)
+        }
+    }
+    pub const EvaluateCharacterSpeed_ADDRESS: usize = 0x14081AB10;
+    /// Computes this frame's movement speed for the character (from the movement settings and the
+    /// blackboard speed value, not the animation), multiplied onto the normalized displacement
+    /// direction by the movement task.
+    pub unsafe fn EvaluateCharacterSpeed(
+        character: *mut crate::character::character::Character,
+        p2: bool,
+    ) -> f32 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                character: *mut crate::character::character::Character,
+                p2: bool,
+            ) -> f32 = ::std::mem::transmute(Self::EvaluateCharacterSpeed_ADDRESS);
+            f(character, p2)
+        }
+    }
+    pub const QueueStops_ADDRESS: usize = 0x140818C90;
+    /// Queues the stop acts for run-mode locomotion; taken by the input tasks when the blackboard
+    /// speed is not positive or the stop validation triggers.
+    pub unsafe fn QueueStops(
+        character: *mut crate::character::character::Character,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                character: *mut crate::character::character::Character,
+            ) -> bool = ::std::mem::transmute(Self::QueueStops_ADDRESS);
+            f(character)
+        }
+    }
+    pub const QueueStopTurns_ADDRESS: usize = 0x140832060;
+    /// The aim-mode variant of [`QueueStops`](NStateTask_LocoUtil::QueueStops): stop-and-turn acts
+    /// that settle the body toward the aim.
+    pub unsafe fn QueueStopTurns(
+        character: *mut crate::character::character::Character,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                character: *mut crate::character::character::Character,
+            ) -> bool = ::std::mem::transmute(Self::QueueStopTurns_ADDRESS);
+            f(character)
+        }
+    }
 }
 impl std::convert::AsRef<NStateTask_LocoUtil> for NStateTask_LocoUtil {
     fn as_ref(&self) -> &NStateTask_LocoUtil {
@@ -186,4 +335,49 @@ impl std::convert::AsMut<NStateTask_LocoUtil> for NStateTask_LocoUtil {
     fn as_mut(&mut self) -> &mut NStateTask_LocoUtil {
         self
     }
+}
+#[repr(C, align(8))]
+/// The movement actuator task: applies this frame's locomotion to the character, computing the
+/// body orientation via
+/// [`EvaluateCharacterOrientation`](NStateTask_LocoUtil::EvaluateCharacterOrientation) (or the MS
+/// variant) and the translation from the animation root motion.
+pub struct NStateTask_MovementLocomotionTask {}
+impl NStateTask_MovementLocomotionTask {
+    pub const Update_ADDRESS: usize = 0x140829E80;
+    /// The per-frame update.
+    pub unsafe fn Update(
+        ctx: *mut crate::state::StateContext,
+        p1: *mut ::std::ffi::c_void,
+        p2: *mut ::std::ffi::c_void,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                ctx: *mut crate::state::StateContext,
+                p1: *mut ::std::ffi::c_void,
+                p2: *mut ::std::ffi::c_void,
+            ) = ::std::mem::transmute(Self::Update_ADDRESS);
+            f(ctx, p1, p2)
+        }
+    }
+}
+impl std::convert::AsRef<NStateTask_MovementLocomotionTask>
+for NStateTask_MovementLocomotionTask {
+    fn as_ref(&self) -> &NStateTask_MovementLocomotionTask {
+        self
+    }
+}
+impl std::convert::AsMut<NStateTask_MovementLocomotionTask>
+for NStateTask_MovementLocomotionTask {
+    fn as_mut(&mut self) -> &mut NStateTask_MovementLocomotionTask {
+        self
+    }
+}
+pub unsafe fn get_LocoUtil_NoAimStrafeMaxAngle() -> &'static mut f32 {
+    unsafe { &mut *(0x142D65F90 as *mut f32) }
+}
+pub unsafe fn get_LocoUtil_NoAimStrafeMaxAngleAlt() -> &'static mut f32 {
+    unsafe { &mut *(0x142D65F94 as *mut f32) }
+}
+pub unsafe fn get_NCharacter_ActMoveNoAim() -> &'static mut u32 {
+    unsafe { &mut *(0x142F2FB64 as *mut u32) }
 }
