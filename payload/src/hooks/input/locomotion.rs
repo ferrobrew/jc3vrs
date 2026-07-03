@@ -225,8 +225,10 @@ const CHARACTER_BLACKBOARD_OFFSET: usize = 0x2060;
 /// own turn acts in place rather than strafing.
 ///
 /// The headpose sim layers on top: its latch target takes priority over the camera pin (the body
-/// follows the head once past the latch threshold), and while the headpose drives the view on
-/// foot, the idle pin is suppressed so the head can decouple from the body within the latch cone.
+/// follows the head once past the latch threshold), and while the head is decoupled on foot (idle,
+/// not really aiming), the executor is forced *out* of face-dir tracking entirely — the
+/// aim-relative family otherwise tracks the game's own face dir, which derives from the aim
+/// reference (the head), turning the body with the head regardless of the pin.
 fn force_face_camera(
     character: *mut Character,
     track_face_dir: bool,
@@ -265,6 +267,16 @@ fn force_face_camera(
         return (true, step.max(0.1));
     }
 
+    // While the head is decoupled, force the executor *out* of face-dir tracking rather than
+    // passing through: in the aim-relative family the game itself passes track_face_dir with its
+    // own blackboard face dir, which derives from the aim reference — the head — so a passthrough
+    // still yaws the body with the head continuously. The act-level suppression in
+    // [`get_aim_move_angle`] stops the turn *acts*; this stops the executor's continuous yaw.
+    // Applies regardless of the face_camera toggle, like the latch.
+    if head_decoupled_idle(character) {
+        return (false, max_step_deg);
+    }
+
     if !face_camera {
         return passthrough;
     }
@@ -273,16 +285,9 @@ fn force_face_camera(
     };
 
     match read_move_dir(blackboard) {
-        // Idle with the headpose driving the view: the camera forward *is* the head forward (the
-        // context transform the input matrix reads is patched from the headpose), so the idle pin
-        // would make the body track the head at any offset and the decoupled cone could never
-        // open. The latch above owns idle body turning instead.
-        None if crate::headpose::is_active()
-            && crate::headpose::sim::mode() == HeadMode::OnFoot =>
-        {
-            return passthrough;
-        }
-        // Idle without the headpose: pin, so turning the camera turns the body.
+        // Idle: pin, so turning the camera turns the body. (With the headpose active, idle
+        // reaches here only when really aiming — the decoupled-idle case returned above — and the
+        // camera forward is the head forward, which is exactly the aim-tracking behavior.)
         None => {}
         // Moving: pin only within the configured cone around camera-forward (outside it, the
         // native steer runs; see the function docs).
@@ -300,6 +305,20 @@ fn force_face_camera(
     }
     FACE_CAMERA_CALLS.fetch_add(1, Ordering::Relaxed);
     (true, step.max(0.1))
+}
+
+/// Whether the headpose currently holds the local player's head decoupled from the body on foot:
+/// headpose active, on-foot mode, latch disengaged, no movement input, and not really aiming. In
+/// this state the body must not chase the head — the latch owns body turning — so both the
+/// orientation executor's face-dir tracking and the aim-relative turn acts are suppressed.
+fn head_decoupled_idle(character: &Character) -> bool {
+    crate::headpose::is_active()
+        && crate::headpose::sim::mode() == HeadMode::OnFoot
+        && crate::headpose::sim::latch_state() == LatchState::Decoupled
+        && !character
+            .m_AimFlags
+            .intersects(AimState::m_AimingWeapon | AimState::m_AimingGrapple)
+        && !move_input_magnitude().is_some_and(|magnitude| magnitude >= INPUT_DEADZONE)
 }
 
 fn character_blackboard(character: &mut Character) -> *mut ObjectBlackboard {
@@ -454,28 +473,12 @@ fn queue_starts(
 /// head, and the game's own turn machinery performs the latch catch-up natively.
 #[detour(address = jc3gi::input::locomotion::NStateTask_LocoUtil::GetAimMoveAngle_ADDRESS)]
 fn get_aim_move_angle(character: *mut Character, move_dir: *const Vector3) -> f32 {
-    let original = || GET_AIM_MOVE_ANGLE.get().unwrap().call(character, move_dir);
-    let Some(character) = (unsafe { character.as_ref() }).filter(|c| c.m_IsLocalCharacter) else {
-        return original();
-    };
-    if !crate::headpose::is_active()
-        || crate::headpose::sim::mode() != HeadMode::OnFoot
-        || crate::headpose::sim::latch_state() != LatchState::Decoupled
+    if (unsafe { character.as_ref() })
+        .is_some_and(|c| c.m_IsLocalCharacter && head_decoupled_idle(c))
     {
-        return original();
+        return 0.0;
     }
-    // Really aiming: the body must track the aim reference — the game's own aim behavior.
-    if character
-        .m_AimFlags
-        .intersects(AimState::m_AimingWeapon | AimState::m_AimingGrapple)
-    {
-        return original();
-    }
-    // Moving: the angle drives directional act selection; leave it untouched.
-    if move_input_magnitude().is_some_and(|magnitude| magnitude >= INPUT_DEADZONE) {
-        return original();
-    }
-    0.0
+    GET_AIM_MOVE_ANGLE.get().unwrap().call(character, move_dir)
 }
 
 /// While sliding, floor the movement speed to the blackboard target speed. The native speed
