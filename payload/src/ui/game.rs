@@ -41,6 +41,14 @@ pub fn egui_debug_game(ui: &mut egui::Ui) {
                  holstered legs stay forward-run.",
             );
             ui.checkbox(
+                &mut cfg.movement.suppress_reverse_look,
+                "Suppress reverse look-behind (vehicles)",
+            )
+            .on_hover_text(
+                "Drop the ACT_REVERSE acts so Rico keeps facing forward while reversing; looking \
+                 behind is the player's job with a player-driven head.",
+            );
+            ui.checkbox(
                 &mut cfg.movement.face_camera,
                 "Face camera (drive the body yaw from the camera)",
             )

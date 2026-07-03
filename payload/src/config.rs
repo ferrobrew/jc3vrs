@@ -362,6 +362,12 @@ pub struct MovementConfig {
     /// own `TryAct` pre-flight, with the native starts as the fallback when the animation state
     /// machine refuses it. The legs pop straight into the run cycle with no wind-up lean.
     pub slide_skip_starts: bool,
+    /// Suppress the vehicle reversing look-behind animation (`ACT_REVERSE` /
+    /// `ACT_REVERSE_MOTORBIKE` into the `S_REVERSE_*` states): the acts are dropped at
+    /// `Character::QueueAct` for the local player, so Rico keeps facing forward while reversing --
+    /// with a player-driven head, looking behind is the player's job, and the forced body turn is
+    /// discomforting.
+    pub suppress_reverse_look: bool,
 }
 impl MovementConfig {
     pub const fn new() -> Self {
@@ -379,6 +385,7 @@ impl MovementConfig {
             slide_rotation_deg: 0.0,
             slide_instant_speed: true,
             slide_skip_starts: true,
+            suppress_reverse_look: true,
         }
     }
 }

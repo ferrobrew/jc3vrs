@@ -1,12 +1,19 @@
+use std::sync::LazyLock;
+
 use detours_macro::detour;
 use jc3gi::{
+    animation::symbol_table::EventIdSymbolTable,
     character::character::{Character, Joint, SafeBoneIndex},
     hash::hashlittle,
 };
 use re_utilities::hook_library::HookLibrary;
 
+use crate::config::Config;
+
 pub(super) fn hook_library() -> HookLibrary {
-    HookLibrary::new().with_static_binder(&CHARACTER_UPDATE_PROP_EFFECTS_BINDER)
+    HookLibrary::new()
+        .with_static_binder(&CHARACTER_UPDATE_PROP_EFFECTS_BINDER)
+        .with_static_binder(&CHARACTER_QUEUE_ACT_BINDER)
 }
 
 #[detour(address = jc3gi::character::character::Character::UpdatePropEffects_ADDRESS)]
@@ -117,3 +124,35 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         }
     }
 }
+
+/// Drop the vehicle reversing look-behind acts for the local player: `ACT_REVERSE` (cars) and
+/// `ACT_REVERSE_MOTORBIKE` drive the `S_REVERSE_*` states in `rico_base.afsmb`, where Rico turns
+/// to look over his shoulder. With a player-driven head, looking behind is the player's job, so
+/// the act is swallowed and the driving pose stays forward; the state machine's rule system
+/// drops the matching return transitions on its own (they only fire from the reverse states).
+#[detour(address = jc3gi::character::character::Character::QueueAct_ADDRESS)]
+fn character_queue_act(character: *mut Character, act: *const u32) {
+    if Config::lock_query(|c| c.movement.suppress_reverse_look)
+        && (unsafe { character.as_ref() }).is_some_and(|c| c.m_IsLocalCharacter)
+        && let Some(&id) = (unsafe { act.as_ref() })
+        && REVERSE_ACT_IDS.contains(&(id as i32))
+    {
+        return;
+    }
+    CHARACTER_QUEUE_ACT.get().unwrap().call(character, act);
+}
+
+/// The runtime ids of the reversing acts, resolved lazily from the event-id symbol table: act ids
+/// are sequential registration indices, not name hashes, so they cannot be computed offline. The
+/// singleton is unconditionally live by first use — the game creates the table during executable
+/// initialization (the `ACT_*` id globals' dynamic initializers already resolve through it), and
+/// the payload injects into a long-running process — so a missing table is a programming error
+/// worth panicking on. Both names are registered by loaded animation data long before gameplay
+/// queues acts, so the lookups are pure reads.
+static REVERSE_ACT_IDS: LazyLock<[i32; 2]> = LazyLock::new(|| unsafe {
+    let table = EventIdSymbolTable::get().expect("the animation event-id symbol table is not live");
+    [
+        table.string_to_id(c"ACT_REVERSE".as_ptr() as *const u8),
+        table.string_to_id(c"ACT_REVERSE_MOTORBIKE".as_ptr() as *const u8),
+    ]
+});
