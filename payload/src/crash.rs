@@ -4,7 +4,10 @@
 //! backtrace of the faulting thread, and a backtrace of every other thread the moment a fatal
 //! exception is *raised* -- before any handler unwinds. This covers the case where the game catches a
 //! fault itself and turns it into a clean exit: Wine prints no backtrace and the window just
-//! vanishes, but the record still lands in `jc3vrs.log`. A panic hook does the same for Rust panics,
+//! vanishes, but the record still lands in `jc3vrs-crash.log` -- a dedicated file that, unlike the
+//! per-run-truncated `jc3vrs.log`, is only ever appended to, so records accumulate across sessions
+//! and recurring crashes can be correlated (each session writes a timestamped start marker, and
+//! each record head carries a UTC timestamp matching the tracing log's). A panic hook does the same for Rust panics,
 //! which don't raise an SEH exception and so are invisible to the VEH handler. Each address is
 //! resolved to its containing module + offset (`module+0xoff`) via `VirtualQuery`, which works under
 //! Wine where `std::backtrace` usually can't symbolize.
@@ -52,6 +55,7 @@ use windows::{
             },
             LibraryLoader::GetModuleFileNameW,
             Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
+            SystemInformation::GetSystemTime,
             Threading::{
                 GetCurrentProcessId, GetCurrentThreadId, OpenThread, ResumeThread, SuspendThread,
                 THREAD_GET_CONTEXT, THREAD_SUSPEND_RESUME,
@@ -197,13 +201,16 @@ fn log_breadcrumbs() {
 }
 
 pub fn install() {
-    // Open the log file with a raw handle, sharing the same `jc3vrs.log` the tracing subscriber
-    // writes to. FILE_APPEND_DATA makes every WriteFile append, and the share flags let the tracing
-    // subscriber keep its own handle open.
+    // Open the crash log with a raw handle. This is a *separate* file from `jc3vrs.log`: the
+    // tracing subscriber truncates that one every run, which silently discarded every past crash
+    // record. `jc3vrs-crash.log` is opened append-only and never truncated, so records accumulate
+    // across sessions and recurring crashes can be correlated. Each session writes a timestamped
+    // start marker, and each record is timestamped, to line records up with the (UTC-stamped)
+    // tracing log of the run that produced them.
     if let Some(path) = crate::module::get_path()
         .as_ref()
         .and_then(|path| path.parent())
-        .map(|parent| parent.join("jc3vrs.log"))
+        .map(|parent| parent.join("jc3vrs-crash.log"))
     {
         let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
         wide.push(0);
@@ -223,6 +230,10 @@ pub fn install() {
             && !handle.is_invalid()
         {
             CRASH_LOG.store(handle.0 as isize, Ordering::Relaxed);
+            let mut line = Line::new();
+            line.str("=== session start ");
+            stamp(&mut line);
+            line.str("===").flush();
         }
     }
 
@@ -236,7 +247,9 @@ pub fn install() {
         if IN_HANDLER.swap(true, Ordering::SeqCst) {
             return;
         }
-        Line::new().str("rust panic").flush();
+        let mut head = Line::new();
+        stamp(&mut head);
+        head.str("rust panic").flush();
         let mut line = Line::new();
         line.str("  at ");
         match info.location() {
@@ -360,6 +373,20 @@ impl Line {
         self
     }
 
+    /// Append `value` as decimal, zero-padded to at least `width` digits.
+    fn dec_pad(&mut self, value: u64, width: usize) -> &mut Self {
+        let mut digits = 1;
+        let mut v = value;
+        while v >= 10 {
+            digits += 1;
+            v /= 10;
+        }
+        for _ in digits..width {
+            self.byte(b'0');
+        }
+        self.dec(value)
+    }
+
     /// Append `value` as decimal.
     fn dec(&mut self, value: u64) -> &mut Self {
         let mut digits = [0u8; 20];
@@ -394,6 +421,27 @@ impl Line {
             let _ = WriteFile(handle, Some(&self.buf[..self.len]), None, None);
         }
     }
+}
+
+/// Append the current UTC wall-clock time as `YYYY-MM-DD HH:MM:SS.mmm UTC `. `GetSystemTime`
+/// fills a plain struct with no allocation or locking, so this is safe from the handler, and the
+/// UTC base matches the tracing subscriber's timestamps in `jc3vrs.log` for cross-correlation.
+fn stamp(line: &mut Line) {
+    let time = unsafe { GetSystemTime() };
+    line.dec_pad(time.wYear as u64, 4)
+        .byte(b'-')
+        .dec_pad(time.wMonth as u64, 2)
+        .byte(b'-')
+        .dec_pad(time.wDay as u64, 2)
+        .byte(b' ')
+        .dec_pad(time.wHour as u64, 2)
+        .byte(b':')
+        .dec_pad(time.wMinute as u64, 2)
+        .byte(b':')
+        .dec_pad(time.wSecond as u64, 2)
+        .byte(b'.')
+        .dec_pad(time.wMilliseconds as u64, 3)
+        .str(" UTC ");
 }
 
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
@@ -684,11 +732,10 @@ unsafe fn log_record(rec: FaultRecord, ctx: *mut CONTEXT) {
         {
             let n = REPEAT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             if n.is_multiple_of(100) {
-                Line::new()
-                    .str("  ... repeated ")
-                    .dec(n as u64)
-                    .str(" times")
-                    .flush();
+                let mut line = Line::new();
+                line.str("  ... repeated ").dec(n as u64).str(" times, at ");
+                stamp(&mut line);
+                line.flush();
             }
             return;
         }
@@ -717,8 +764,9 @@ unsafe fn log_record(rec: FaultRecord, ctx: *mut CONTEXT) {
             ("n/a", 0)
         };
 
-        Line::new()
-            .str("fatal exception: code=")
+        let mut head = Line::new();
+        stamp(&mut head);
+        head.str("fatal exception: code=")
             .hex(code as u64, 8)
             .str(" access=")
             .str(access_kind)
