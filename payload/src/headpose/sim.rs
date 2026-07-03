@@ -1,8 +1,9 @@
 //! The flatscreen headpose simulation: a latching mouse-look scheme.
 //!
-//! This module owns everything that is *simulation-specific*: mouse-look input accumulation, the
-//! latch state machine, mode detection, body-yaw target computation, and the per-frame [`update`]
-//! that produces a [`HeadPose`](super::HeadPose) and publishes it via [`super::set_pose`].
+//! This module owns everything that is *simulation-specific*: mouse-look input handling, the
+//! latch state machine, mode detection, body-yaw target computation, and the per-tick
+//! [`on_input_tick`] that produces a [`HeadPose`](super::HeadPose) and publishes it via
+//! [`super::set_pose`].
 //!
 //! The key insight: in VR, the player's head and body are independent — the head moves freely (HMD),
 //! and the body is yawed via a stick. In flatscreen, we don't have independent head/body controls,
@@ -20,10 +21,13 @@
 //! world direction.
 //!
 //! Input arrives on the engine's fixed-rate sim tick (the device poll in
-//! `InputDeviceManager::Update`), not per rendered frame, so deltas come in tick-sized bursts. The
-//! sim integrates once per tick and rotates the published pose pair ([`super::snapshot_prev`]) at
-//! the same cadence, so the camera hook can hand the engine a previous/current pair to interpolate
-//! across the frames between ticks.
+//! `InputDeviceManager::Update`), not per rendered frame. The whole sim step ([`on_input_tick`])
+//! runs inside that hook, on the engine's own tick timeline: the published pose pair
+//! ([`super::snapshot_prev`]) rotates at the exact moment the engine resets its sub-frame
+//! interpolation fraction, so the camera hook's previous/current pair is phase-aligned with the
+//! `dtf` lerp that smooths it across the frames between ticks. (Deferring the step to the next
+//! frame's update left the render lerping a stale pair at `dtf ≈ 0` on every tick frame — a
+//! per-tick jerk.)
 
 use std::sync::atomic::Ordering;
 
@@ -50,14 +54,88 @@ pub enum HeadMode {
     Other,
 }
 
-/// Accumulate look-effector deltas from the `InputDeviceManager::Update` hook (on the game thread).
-/// Each call marks one input tick — the engine polls devices once per fixed-rate sim tick, so the
-/// tick count tells [`update`] whether new input state arrived since the last frame.
-pub fn accumulate_look_delta(look_x: f32, look_y: f32) {
+/// Handle one engine input tick, called from the `InputDeviceManager::Update` hook (on the game
+/// thread, inside the engine's fixed-rate sim tick): detect the mode, rotate the published pose
+/// pair, integrate the look deltas, update the latch, and publish the headpose.
+pub fn on_input_tick(look_x: f32, look_y: f32) {
+    let config = crate::config::Config::lock_query(|c| c.headpose);
+    if !config.enabled {
+        return;
+    }
+
     let mut s = SIM.lock();
-    s.pending_look.0 += look_x;
-    s.pending_look.1 += look_y;
-    s.pending_ticks += 1;
+
+    // Mode detection, once per input tick: the locomotion orientation evaluator runs once per sim
+    // tick while on foot (including idle — the move/aim task counters stop while idle), and never
+    // in vehicles. This hook fires on the same sim-tick cadence, so between ticks the counter
+    // advances exactly when the player is on foot. Comparing per rendered frame instead flickered
+    // to `Other` on every frame without a sim tick, resetting the latch and letting the idle
+    // camera pin leak through (the body tracked the head immediately).
+    let evals = crate::hooks::input::locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
+    s.mode = detect_mode(s.last_orientation_evals, evals);
+    s.last_orientation_evals = evals;
+
+    let body_rotation = read_body_rotation();
+    let body_yaw = body_rotation.map(body_yaw_of);
+
+    // Rotate the published pose pair on the engine's own tick timeline, phase-aligned with its
+    // dtf reset (see the module docs).
+    super::snapshot_prev();
+
+    // Negated: a positive net LOOK_RIGHT delta must turn the head clockwise from above, which is
+    // a negative rotation about +Y (established in-game; the unnegated form turned the wrong way).
+    let yaw_delta = -(look_x * config.mouse_sensitivity).to_radians();
+    let pitch_delta =
+        (if config.invert_y { -look_y } else { look_y } * config.mouse_sensitivity).to_radians();
+
+    match s.mode {
+        HeadMode::OnFoot => {
+            // Keep the head world-anchored while the body turns underneath it: remove the body's
+            // rotation since the last tick from the body-relative offset. Without this, the offset
+            // rides the turning body and the latch never converges.
+            if let (Some(now), Some(then)) = (body_yaw, s.last_body_yaw) {
+                s.yaw = wrap_angle(s.yaw - wrap_angle(now - then));
+            }
+            s.yaw = wrap_angle(s.yaw + yaw_delta);
+        }
+        HeadMode::Other => {
+            let yaw_limit = config.free_look_yaw_limit_deg.to_radians();
+            s.yaw = (s.yaw + yaw_delta).clamp(-yaw_limit, yaw_limit);
+        }
+    }
+    // The pitch is clamped in every mode: a real head cannot pitch past vertical, and letting the
+    // euler pitch cross ±90° flips the yaw/roll decomposition.
+    let pitch_limit = config.free_look_pitch_limit_deg.to_radians();
+    s.pitch = (s.pitch + pitch_delta).clamp(-pitch_limit, pitch_limit);
+    s.last_body_yaw = body_yaw;
+
+    match s.mode {
+        HeadMode::OnFoot => {
+            s.latch = update_latch(s.latch, s.yaw.to_degrees(), s.mode, &config);
+            s.body_yaw_target = (s.latch == LatchState::BodyFollowing)
+                .then(|| body_yaw.map(|b| yaw_forward(b + s.yaw)))
+                .flatten();
+        }
+        HeadMode::Other => {
+            s.latch = LatchState::Decoupled;
+            s.body_yaw_target = None;
+        }
+    }
+
+    // Publish: the head orientation rides the full body frame — the body-relative offset composed
+    // onto the body's world rotation. On foot the body is upright and this reduces to a yaw
+    // composition; in vehicles and the wingsuit it carries the body's pitch and roll too, so a
+    // banking wingsuit rolls the view with it. The position anchors to the animated head bone
+    // (published by the character hook pre-override) plus the configured roomscale-testing offset.
+    let head_offset = Quat::from_euler(glam::EulerRot::YXZ, s.yaw, s.pitch, s.roll);
+    let orientation = body_rotation.unwrap_or(Quat::IDENTITY) * head_offset;
+    let anchor = super::anchor().unwrap_or(Vec3::ZERO);
+    let position = anchor + orientation * config.position_offset;
+    drop(s);
+    super::set_pose(HeadPose {
+        position,
+        orientation,
+    });
 }
 
 /// The current latch state, for UI display and the body-yaw hook.
@@ -89,99 +167,8 @@ pub fn reset() {
     s.yaw = 0.0;
     s.pitch = 0.0;
     s.roll = 0.0;
-    s.pending_look = (0.0, 0.0);
     s.latch = LatchState::Decoupled;
     s.body_yaw_target = None;
-}
-
-/// The per-frame step: detects the mode, integrates any input ticks, updates the latch, and
-/// publishes the headpose via [`super::set_pose`]. Called from `lib::update()`.
-pub fn update() {
-    let config = crate::config::Config::lock_query(|c| c.headpose);
-    if !config.enabled {
-        return;
-    }
-
-    let mut s = SIM.lock();
-
-    // Mode detection: the locomotion orientation evaluator runs every on-foot frame for the local
-    // player (including idle), and never in vehicles. The move/aim task counters are unsuitable
-    // here — those tasks stop running while idle, which read as "not on foot" and clamped the head
-    // to the free-look cone whenever the player stood still.
-    let evals = crate::hooks::input::locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
-    s.mode = detect_mode(s.last_orientation_evals, evals);
-    s.last_orientation_evals = evals;
-
-    let body_rotation = read_body_rotation();
-    let body_yaw = body_rotation.map(body_yaw_of);
-
-    let (look_x, look_y) = s.pending_look;
-    let ticks = s.pending_ticks;
-    s.pending_look = (0.0, 0.0);
-    s.pending_ticks = 0;
-
-    if ticks > 0 {
-        // A new input tick: rotate the published pose pair so the previous/current pair spans
-        // exactly one tick for the engine's T0 → T1 interpolation.
-        super::snapshot_prev();
-
-        // Negated: a positive net LOOK_RIGHT delta must turn the head clockwise from above, which
-        // is a negative rotation about +Y (established in-game; the unnegated form turned the
-        // wrong way).
-        let yaw_delta = -(look_x * config.mouse_sensitivity).to_radians();
-        let pitch_delta = (if config.invert_y { -look_y } else { look_y }
-            * config.mouse_sensitivity)
-            .to_radians();
-
-        match s.mode {
-            HeadMode::OnFoot => {
-                // Keep the head world-anchored while the body turns underneath it: remove the
-                // body's rotation since the last tick from the body-relative offset. Without this,
-                // the offset rides the turning body and the latch never converges.
-                if let (Some(now), Some(then)) = (body_yaw, s.last_body_yaw) {
-                    s.yaw = wrap_angle(s.yaw - wrap_angle(now - then));
-                }
-                s.yaw = wrap_angle(s.yaw + yaw_delta);
-            }
-            HeadMode::Other => {
-                let yaw_limit = config.free_look_yaw_limit_deg.to_radians();
-                s.yaw = (s.yaw + yaw_delta).clamp(-yaw_limit, yaw_limit);
-            }
-        }
-        // The pitch is clamped in every mode: a real head cannot pitch past vertical, and letting
-        // the euler pitch cross ±90° flips the yaw/roll decomposition.
-        let pitch_limit = config.free_look_pitch_limit_deg.to_radians();
-        s.pitch = (s.pitch + pitch_delta).clamp(-pitch_limit, pitch_limit);
-        s.last_body_yaw = body_yaw;
-    }
-
-    match s.mode {
-        HeadMode::OnFoot => {
-            s.latch = update_latch(s.latch, s.yaw.to_degrees(), s.mode, &config);
-            s.body_yaw_target = (s.latch == LatchState::BodyFollowing)
-                .then(|| body_yaw.map(|b| yaw_forward(b + s.yaw)))
-                .flatten();
-        }
-        HeadMode::Other => {
-            s.latch = LatchState::Decoupled;
-            s.body_yaw_target = None;
-        }
-    }
-
-    // Publish: the head orientation rides the full body frame — the body-relative offset composed
-    // onto the body's world rotation. On foot the body is upright and this reduces to a yaw
-    // composition; in vehicles and the wingsuit it carries the body's pitch and roll too, so a
-    // banking wingsuit rolls the view with it. The position anchors to the animated head bone
-    // (published by the character hook pre-override) plus the configured roomscale-testing offset.
-    let head_offset = Quat::from_euler(glam::EulerRot::YXZ, s.yaw, s.pitch, s.roll);
-    let orientation = body_rotation.unwrap_or(Quat::IDENTITY) * head_offset;
-    let anchor = super::anchor().unwrap_or(Vec3::ZERO);
-    let position = anchor + orientation * config.position_offset;
-    drop(s);
-    super::set_pose(HeadPose {
-        position,
-        orientation,
-    });
 }
 
 struct SimState {
@@ -191,10 +178,6 @@ struct SimState {
     pitch: f32,
     /// Accumulated roll (radians).
     roll: f32,
-    /// Pending look-effector deltas, accumulated from the input hook and consumed by [`update`].
-    pending_look: (f32, f32),
-    /// Input ticks since the last [`update`]: how many times the engine's device poll ran.
-    pending_ticks: u32,
     /// The latch state (on-foot only).
     latch: LatchState,
     /// The current head mode.
@@ -211,8 +194,6 @@ const SIM_DEFAULT: SimState = SimState {
     yaw: 0.0,
     pitch: 0.0,
     roll: 0.0,
-    pending_look: (0.0, 0.0),
-    pending_ticks: 0,
     latch: LatchState::Decoupled,
     mode: HeadMode::Other,
     last_orientation_evals: 0,

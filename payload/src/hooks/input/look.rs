@@ -21,11 +21,13 @@ pub(super) fn input_device_manager_update(manager: *mut InputDeviceManager, dt: 
     if !headpose::is_active() {
         return;
     }
-    // When egui captures input, skip — the game's input is already disabled.
+    // When egui captures input, publish a zero-delta tick — the game's input is already disabled,
+    // but the sim's tick cadence (mode detection, pose-pair rotation) must keep running.
     if crate::egui_impl::EguiState::get()
         .as_ref()
         .is_some_and(|s| s.is_input_captured())
     {
+        headpose::sim::on_input_tick(0.0, 0.0);
         return;
     }
 
@@ -41,7 +43,7 @@ pub(super) fn input_device_manager_update(manager: *mut InputDeviceManager, dt: 
         clear_effector(map, Action::LOOK_UP);
         clear_effector(map, Action::LOOK_DOWN);
 
-        headpose::sim::accumulate_look_delta(look_x, look_y);
+        headpose::sim::on_input_tick(look_x, look_y);
     }
 }
 

@@ -213,58 +213,67 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
                 return;
             }
 
-            let headpose_active = crate::headpose::is_active();
-            // With the headpose active, the head bone (and its eye-bone children) is
-            // player-driven, and the eye average no longer lands where the eyes render; place the
-            // camera from the head bone plus the configured offsets instead.
-            let use_eye_matrices = camera_settings.use_eye_matrices && !headpose_active;
-
-            let head_matrix = head_matrix(local_character);
-            let (left_eye_matrix, right_eye_matrix) = eye_matrices(local_character);
-            let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
-            let head_position = calculate_head_position(
-                character_t1_matrix,
-                head_matrix,
-                left_eye_matrix,
-                right_eye_matrix,
-                use_eye_matrices,
-                &camera_settings,
-            );
+            // The headpose path needs a valid anchor; until one exists (loading screens), fall
+            // back to the translation-only bone-derived placement below.
+            let headpose_active =
+                crate::headpose::is_active() && crate::headpose::anchor().is_some();
 
             if headpose_active {
+                // Both position and orientation come from the tick-spaced pose pair, so the
+                // engine's dtf Lerp smooths the whole camera placement — the bone reads
+                // (`GetSafeBoneMatrix`) only carry the finalized sim-rate pose, and placing T0/T1
+                // from them stepped the camera at the tick rate even though the mesh itself
+                // interpolates via the skinning-palette pose pair.
+                let cur = crate::headpose::query();
+                let prev = crate::headpose::query_prev();
+                let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
                 write_camera_transform(
                     &mut camera.m_TransformT1,
-                    crate::headpose::query().orientation,
-                    head_position,
+                    cur.orientation,
+                    camera_position(&cur, character_t1_matrix, &camera_settings),
                 );
                 // Republish the transform for the sim-phase readers (see the GetCameraMatrix
                 // hook below).
                 *LAST_CAMERA_WORLD.lock() = Some(camera.m_TransformT1.data);
-            } else {
-                camera.m_TransformT1.data[12] = head_position.x;
-                camera.m_TransformT1.data[13] = head_position.y;
-                camera.m_TransformT1.data[14] = head_position.z;
-            }
 
-            if camera_settings.always_use_t1 {
-                camera.m_TransformT0 = camera.m_TransformT1;
+                if camera_settings.always_use_t1 {
+                    camera.m_TransformT0 = camera.m_TransformT1;
+                } else {
+                    let character_t0_matrix = glam::Mat4::from(local_character.m_WorldMatrixT0);
+                    write_camera_transform(
+                        &mut camera.m_TransformT0,
+                        prev.orientation,
+                        camera_position(&prev, character_t0_matrix, &camera_settings),
+                    );
+                }
             } else {
-                let character_t0_matrix = glam::Mat4::from(local_character.m_WorldMatrixT0);
-                let head_position_t0 = calculate_head_position(
-                    character_t0_matrix,
+                let head_matrix = head_matrix(local_character);
+                let (left_eye_matrix, right_eye_matrix) = eye_matrices(local_character);
+                let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
+                let head_position = calculate_head_position(
+                    character_t1_matrix,
                     head_matrix,
                     left_eye_matrix,
                     right_eye_matrix,
-                    use_eye_matrices,
+                    camera_settings.use_eye_matrices,
                     &camera_settings,
                 );
-                if headpose_active {
-                    write_camera_transform(
-                        &mut camera.m_TransformT0,
-                        crate::headpose::query_prev().orientation,
-                        head_position_t0,
-                    );
+                camera.m_TransformT1.data[12] = head_position.x;
+                camera.m_TransformT1.data[13] = head_position.y;
+                camera.m_TransformT1.data[14] = head_position.z;
+
+                if camera_settings.always_use_t1 {
+                    camera.m_TransformT0 = camera.m_TransformT1;
                 } else {
+                    let character_t0_matrix = glam::Mat4::from(local_character.m_WorldMatrixT0);
+                    let head_position_t0 = calculate_head_position(
+                        character_t0_matrix,
+                        head_matrix,
+                        left_eye_matrix,
+                        right_eye_matrix,
+                        camera_settings.use_eye_matrices,
+                        &camera_settings,
+                    );
                     camera.m_TransformT0.data[12] = head_position_t0.x;
                     camera.m_TransformT0.data[13] = head_position_t0.y;
                     camera.m_TransformT0.data[14] = head_position_t0.z;
@@ -274,6 +283,20 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
     }
 
     CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
+}
+
+/// The camera position for a headpose: the pose position (the animated head bone anchor plus the
+/// roomscale offset) plus the configured head-frame and body-frame offsets. The body-frame offset
+/// uses the character matrix matching the pose's side of the T0/T1 pair.
+fn camera_position(
+    pose: &crate::headpose::HeadPose,
+    character_matrix: glam::Mat4,
+    camera_settings: &crate::config::CameraConfig,
+) -> glam::Vec3 {
+    let (_, character_rotation, _) = character_matrix.to_scale_rotation_translation();
+    pose.position
+        + pose.orientation * camera_settings.head_offset
+        + character_rotation * camera_settings.body_offset
 }
 
 /// Write a full world transform (rotation + translation) into a camera transform slot.
@@ -342,9 +365,6 @@ fn camera_tree_update_render_contexts(
             return;
         }
 
-        let head_matrix = head_matrix(local_character);
-        let (left_eye_matrix, right_eye_matrix) = eye_matrices(local_character);
-
         let character_t0_matrix = glam::Mat4::from(if camera_settings.always_use_t1 {
             local_character.m_WorldMatrixT1
         } else {
@@ -352,78 +372,66 @@ fn camera_tree_update_render_contexts(
         });
         let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
 
-        // With the headpose active, place the contexts from the head bone plus offsets, matching
-        // `camera_update_render` (the player-driven eye bones no longer average correctly).
-        let use_eye_matrices = camera_settings.use_eye_matrices && !crate::headpose::is_active();
-
-        // The previous contexts get the previous-tick headpose orientation and the next contexts
-        // the current one, mirroring the T0/T1 pair in `camera_update_render`.
-        let (previous_orientation, next_orientation) = if crate::headpose::is_active() {
-            (
-                Some(crate::headpose::query_prev().orientation),
-                Some(crate::headpose::query().orientation),
-            )
-        } else {
-            (None, None)
-        };
+        // The previous contexts get the previous-tick headpose placement and the next contexts
+        // the current one, mirroring the T0/T1 pair in `camera_update_render`; without the
+        // headpose (or before a valid anchor exists), the bone-derived positions apply.
+        let headpose_active = crate::headpose::is_active() && crate::headpose::anchor().is_some();
+        let (previous_position, next_position, previous_orientation, next_orientation) =
+            if headpose_active {
+                let cur = crate::headpose::query();
+                let prev = crate::headpose::query_prev();
+                (
+                    camera_position(&prev, character_t0_matrix, &camera_settings),
+                    camera_position(&cur, character_t1_matrix, &camera_settings),
+                    Some(prev.orientation),
+                    Some(cur.orientation),
+                )
+            } else {
+                let head_matrix = head_matrix(local_character);
+                let (left_eye_matrix, right_eye_matrix) = eye_matrices(local_character);
+                (
+                    calculate_head_position(
+                        character_t0_matrix,
+                        head_matrix,
+                        left_eye_matrix,
+                        right_eye_matrix,
+                        camera_settings.use_eye_matrices,
+                        &camera_settings,
+                    ),
+                    calculate_head_position(
+                        character_t1_matrix,
+                        head_matrix,
+                        left_eye_matrix,
+                        right_eye_matrix,
+                        camera_settings.use_eye_matrices,
+                        &camera_settings,
+                    ),
+                    None,
+                    None,
+                )
+            };
 
         patch_context(
             &mut ccc.m_PreviousCameraContext,
-            calculate_head_position(
-                if camera_settings.always_use_t1 {
-                    character_t1_matrix
-                } else {
-                    character_t0_matrix
-                },
-                head_matrix,
-                left_eye_matrix,
-                right_eye_matrix,
-                use_eye_matrices,
-                &camera_settings,
-            ),
+            previous_position,
             previous_orientation,
             camera_settings.blurs_enabled,
         );
         patch_context(
             &mut ccc.m_PreviousRenderContext,
-            calculate_head_position(
-                if camera_settings.always_use_t1 {
-                    character_t1_matrix
-                } else {
-                    character_t0_matrix
-                },
-                head_matrix,
-                left_eye_matrix,
-                right_eye_matrix,
-                use_eye_matrices,
-                &camera_settings,
-            ),
+            previous_position,
             previous_orientation,
             camera_settings.blurs_enabled,
         );
         patch_context(
             &mut ccc.m_NextCameraContext,
-            calculate_head_position(
-                character_t1_matrix,
-                head_matrix,
-                left_eye_matrix,
-                right_eye_matrix,
-                use_eye_matrices,
-                &camera_settings,
-            ),
+            next_position,
             next_orientation,
             camera_settings.blurs_enabled,
         );
         patch_context(
             &mut ccc.m_NextRenderContext,
-            calculate_head_position(
-                character_t1_matrix,
-                head_matrix,
-                left_eye_matrix,
-                right_eye_matrix,
-                use_eye_matrices,
-                &camera_settings,
-            ),
+            next_position,
             next_orientation,
             camera_settings.blurs_enabled,
         );

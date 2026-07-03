@@ -293,9 +293,9 @@ impl CameraConfig {
         Self {
             enabled: true,
             body_offset: glam::Vec3::new(0.0, 0.1, 0.0),
-            // Tuned in-game for the headpose path: the head bone origin sits above and behind the
-            // eyes, so the camera drops 5 cm and moves 5 cm forward in the head frame.
-            head_offset: glam::Vec3::new(0.0, -0.05, -0.05),
+            // Tuned in-game against the anchor-based headpose placement: the eyes sit above and
+            // forward of the animated head bone anchor in the head frame.
+            head_offset: glam::Vec3::new(0.0, 0.07, -0.05),
             use_eye_matrices: true,
             blurs_enabled: false,
             always_use_t1: false,
