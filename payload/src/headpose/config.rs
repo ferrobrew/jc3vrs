@@ -27,6 +27,25 @@ pub struct HeadPoseConfig {
     pub mouse_sensitivity: f32,
     /// Whether to invert the Y axis (pitch).
     pub invert_y: bool,
+    /// Fold the animation-driven body posture into the view. Hanging, ledge grabs, and similar
+    /// authored animations invert the body in the *bone pose* over a root matrix that stays
+    /// upright, so the body-frame composition alone never sees them (unlike the wingsuit, whose
+    /// bank rotates the root itself). The posture is measured as the animated neck axis's swing
+    /// away from body-up. Off by default: even smoothed and deadbanded, the single-axis
+    /// translation-derived measurement needs more dialling in (and likely a proper bone-basis
+    /// treatment) before it reads well outside of hangs — the view stays upright until then.
+    pub posture_enabled: bool,
+    /// Neck-axis deviations (degrees) below this are ignored, so idle sway and locomotion lean
+    /// never wobble the view.
+    pub posture_deadband_deg: f32,
+    /// The neck-axis deviation (degrees) at which the posture is applied in full; between the
+    /// deadband and this, the swing ramps in.
+    pub posture_full_deg: f32,
+    /// The posture low-pass time constant (seconds). The raw swing carries the walk cycle's torso
+    /// oscillation and, near full inversion, a tick-to-tick axis flap; the smoothing keeps only
+    /// the low-frequency component, so a hang settles into the inverted view over this constant
+    /// while animation-rate motion is attenuated away. `0` disables the smoothing.
+    pub posture_smoothing_s: f32,
     /// A head-local offset (metres) applied to the *whole* published headpose position — the head
     /// bone override, the camera, and the aim transform all shift together, simulating the player
     /// physically translating their head (leaning, roomscale movement). Distinct from the camera
@@ -44,6 +63,10 @@ impl HeadPoseConfig {
             free_look_pitch_limit_deg: 70.0,
             mouse_sensitivity: 7.5,
             invert_y: false,
+            posture_enabled: false,
+            posture_deadband_deg: 25.0,
+            posture_full_deg: 60.0,
+            posture_smoothing_s: 0.5,
             position_offset: Vec3::ZERO,
         }
     }

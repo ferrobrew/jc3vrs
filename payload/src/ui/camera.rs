@@ -92,6 +92,14 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
             .text("Mouse sensitivity (°/unit)"),
     );
     ui.checkbox(&mut hp.invert_y, "Invert Y");
+    ui.checkbox(&mut hp.posture_enabled, "Body posture (invert with hangs)")
+        .on_hover_text(
+            "Fold the animated neck axis's swing away from body-up into the view, so hanging \
+             upside down inverts the camera. Deadband keeps idle sway out.",
+        );
+    ui.add(Slider::new(&mut hp.posture_deadband_deg, 0.0..=90.0).text("Posture deadband (°)"));
+    ui.add(Slider::new(&mut hp.posture_full_deg, 0.0..=180.0).text("Posture full at (°)"));
+    ui.add(Slider::new(&mut hp.posture_smoothing_s, 0.0..=2.0).text("Posture smoothing (s)"));
     ui.add(Slider::new(&mut hp.position_offset.x, -1.0..=1.0).text("Roomscale offset X (m)"));
     ui.add(Slider::new(&mut hp.position_offset.y, -1.0..=1.0).text("Roomscale offset Y (m)"));
     ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Roomscale offset Z (m)"));

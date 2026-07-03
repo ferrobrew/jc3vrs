@@ -138,3 +138,52 @@ fn test_body_turn_compensation_keeps_head_world_anchored() {
     let compensated = wrap_angle(relative - wrap_angle(body_now - body_then));
     assert!(((body_now + compensated) - (body_then + relative)).abs() < 1e-5);
 }
+
+#[test]
+fn test_posture_swing_upright_is_identity() {
+    let q = posture_swing(glam::Vec3::Y, 25.0, 60.0);
+    assert!(q.angle_between(glam::Quat::IDENTITY) < 1e-5);
+}
+
+#[test]
+fn test_posture_swing_deadband_ignores_small_lean() {
+    // A 20° lean is inside the 25° deadband.
+    let up = glam::Quat::from_rotation_z(20.0_f32.to_radians()) * glam::Vec3::Y;
+    let q = posture_swing(up, 25.0, 60.0);
+    assert!(q.angle_between(glam::Quat::IDENTITY) < 1e-5);
+}
+
+#[test]
+fn test_posture_swing_full_inversion_is_pitch_flip() {
+    let q = posture_swing(-glam::Vec3::Y, 25.0, 60.0);
+    // Fully inverted: 180° about body X.
+    assert!((q.angle_between(glam::Quat::IDENTITY) - PI).abs() < 1e-4);
+    let rotated = q * glam::Vec3::Y;
+    assert!((rotated - (-glam::Vec3::Y)).length() < 1e-4);
+}
+
+#[test]
+fn test_posture_swing_past_full_maps_up_exactly() {
+    // A 90° sideways lean is past the 60° full-engagement point: the swing must take body-up
+    // exactly onto the measured axis.
+    let up = glam::Vec3::X;
+    let q = posture_swing(up, 25.0, 60.0);
+    assert!((q * glam::Vec3::Y - up).length() < 1e-4);
+}
+
+#[test]
+fn test_posture_swing_ramp_is_partial() {
+    // 40° deviation with deadband 25 and full 60: engagement is partial, so the swing is strictly
+    // between identity and the full deviation.
+    let up = glam::Quat::from_rotation_z(40.0_f32.to_radians()) * glam::Vec3::Y;
+    let q = posture_swing(up, 25.0, 60.0);
+    let angle = q.angle_between(glam::Quat::IDENTITY);
+    assert!(angle > 1e-3);
+    assert!(angle < 40.0_f32.to_radians());
+}
+
+#[test]
+fn test_posture_swing_zero_vector_is_identity() {
+    let q = posture_swing(glam::Vec3::ZERO, 25.0, 60.0);
+    assert!(q.angle_between(glam::Quat::IDENTITY) < 1e-5);
+}

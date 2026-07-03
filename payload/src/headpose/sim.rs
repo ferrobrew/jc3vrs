@@ -56,8 +56,9 @@ pub enum HeadMode {
 
 /// Handle one engine input tick, called from the `InputDeviceManager::Update` hook (on the game
 /// thread, inside the engine's fixed-rate sim tick): detect the mode, rotate the published pose
-/// pair, integrate the look deltas, update the latch, and publish the headpose.
-pub fn on_input_tick(look_x: f32, look_y: f32) {
+/// pair, integrate the look deltas, update the latch and the smoothed posture, and publish the
+/// headpose. `dt` is the engine's tick delta, used for the posture low-pass.
+pub fn on_input_tick(look_x: f32, look_y: f32, dt: f32) {
     let config = crate::config::Config::lock_query(|c| c.headpose);
     if !config.enabled {
         return;
@@ -125,10 +126,37 @@ pub fn on_input_tick(look_x: f32, look_y: f32) {
     // Publish: the head orientation rides the full body frame — the body-relative offset composed
     // onto the body's world rotation. On foot the body is upright and this reduces to a yaw
     // composition; in vehicles and the wingsuit it carries the body's pitch and roll too, so a
-    // banking wingsuit rolls the view with it. The position anchors to the animated head bone
-    // (published by the character hook pre-override) plus the configured roomscale-testing offset.
+    // banking wingsuit rolls the view with it. Animation-driven posture (hanging, ledge grabs)
+    // inverts the body in the *bone pose* over an upright root, which the root rotation alone
+    // never sees, so the animated neck axis's swing away from body-up is folded in as an extra
+    // posture factor — measured from the published anchors (joint translations, whose conventions
+    // are proven in-game), not from joint orientations (whose rest frames are not). The position
+    // anchors to the animated head bone plus the configured roomscale-testing offset.
+    let posture_target = if config.posture_enabled {
+        let up_body = body_rotation
+            .map(|rotation| rotation.inverse() * -super::neck_delta())
+            .unwrap_or(Vec3::Y);
+        posture_swing(
+            up_body,
+            config.posture_deadband_deg,
+            config.posture_full_deg,
+        )
+    } else {
+        Quat::IDENTITY
+    };
+    // Low-pass the posture toward its target: the raw per-tick swing carries the walk cycle's
+    // torso oscillation, and near full inversion its axis is derived from a near-zero cross
+    // product and flaps tick to tick (the view's yaw spun wildly while hanging). The exponential
+    // smoothing keeps only the low-frequency component — a hang settles into the inverted view
+    // over the time constant, while animation-rate motion is attenuated away.
+    let alpha = if config.posture_smoothing_s > f32::EPSILON {
+        1.0 - (-dt.max(0.0) / config.posture_smoothing_s).exp()
+    } else {
+        1.0
+    };
+    s.posture = s.posture.slerp(posture_target, alpha).normalize();
     let head_offset = Quat::from_euler(glam::EulerRot::YXZ, s.yaw, s.pitch, s.roll);
-    let orientation = body_rotation.unwrap_or(Quat::IDENTITY) * head_offset;
+    let orientation = body_rotation.unwrap_or(Quat::IDENTITY) * s.posture * head_offset;
     let anchor = super::anchor().unwrap_or(Vec3::ZERO);
     let position = anchor + orientation * config.position_offset;
     drop(s);
@@ -169,6 +197,7 @@ pub fn reset() {
     s.roll = 0.0;
     s.latch = LatchState::Decoupled;
     s.body_yaw_target = None;
+    s.posture = Quat::IDENTITY;
 }
 
 struct SimState {
@@ -186,6 +215,9 @@ struct SimState {
     last_orientation_evals: u64,
     /// The body yaw at the last processed input tick, for the on-foot compensation.
     last_body_yaw: Option<f32>,
+    /// The smoothed animation-posture swing (see [`posture_swing`] and the low-pass in
+    /// [`on_input_tick`]).
+    posture: Quat,
     /// The last computed body-yaw target, for [`body_yaw_target`].
     body_yaw_target: Option<Vec3>,
 }
@@ -198,6 +230,7 @@ const SIM_DEFAULT: SimState = SimState {
     mode: HeadMode::Other,
     last_orientation_evals: 0,
     last_body_yaw: None,
+    posture: Quat::IDENTITY,
     body_yaw_target: None,
 };
 
@@ -240,6 +273,31 @@ fn update_latch(
             }
         }
     }
+}
+
+/// The animation-posture swing: the rotation taking body-up to the animated neck axis, scaled by
+/// an engagement ramp. Deviations below the deadband return identity, so idle sway and locomotion
+/// lean never wobble the view; between the deadband and `full_deg`, the swing ramps in; past it,
+/// the full deviation applies (a hang reads as fully inverted). At exact inversion the swing axis
+/// is ambiguous; body X (a pitch flip) is chosen, the common way a body ends up upside down.
+fn posture_swing(up_body: Vec3, deadband_deg: f32, full_deg: f32) -> Quat {
+    let Some(up) = up_body.try_normalize() else {
+        return Quat::IDENTITY;
+    };
+    let deviation = up.dot(Vec3::Y).clamp(-1.0, 1.0).acos();
+    let deadband = deadband_deg.to_radians();
+    if deviation <= deadband {
+        return Quat::IDENTITY;
+    }
+    let full = full_deg.to_radians().max(deadband + 1e-3);
+    let engagement = ((deviation - deadband) / (full - deadband)).clamp(0.0, 1.0);
+    let axis = Vec3::Y.cross(up);
+    let axis = if axis.length_squared() > 1e-6 {
+        axis.normalize()
+    } else {
+        Vec3::X
+    };
+    Quat::from_axis_angle(axis, deviation * engagement)
 }
 
 /// Wrap an angle (radians) into `[-π, π]`.
