@@ -48,6 +48,10 @@ pub(super) fn hook_library() -> HookLibrary {
 /// and how often the orientation executor was forced into face-dir tracking.
 pub static MOVE_TASK_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static AIM_RELATIVE_TASK_CALLS: AtomicU64 = AtomicU64::new(0);
+/// How often the orientation evaluator ran for the local player. Unlike the task counters above,
+/// this advances every on-foot frame including idle (the move/aim tasks stop running while idle),
+/// which is what makes it usable as the headpose sim's on-foot signal.
+pub static ORIENTATION_EVAL_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static SHIMMED_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static FACE_CAMERA_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static SLIDE_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -215,34 +219,73 @@ const CHARACTER_BLACKBOARD_OFFSET: usize = 0x2060;
 /// Outside the cone the native steer runs instead -- the run animations only carry forward root
 /// motion, so pinning the yaw against lateral or backward input leaves the character fighting its
 /// own turn acts in place rather than strafing.
+///
+/// The headpose sim layers on top: its latch target takes priority over the camera pin (the body
+/// follows the head once past the latch threshold), and while the headpose drives the view on
+/// foot, the idle pin is suppressed so the head can decouple from the body within the latch cone.
 fn force_face_camera(
     character: *mut Character,
     track_face_dir: bool,
     max_step_deg: f32,
 ) -> (bool, f32) {
     let passthrough = (track_face_dir, max_step_deg);
-    let config = Config::lock_query(|c| {
-        c.movement.face_camera.then_some((
-            c.movement.face_camera_turn_step,
-            c.movement.face_camera_input_cone_deg,
-        ))
-    });
-    let Some((step, cone_deg)) = config else {
-        return passthrough;
-    };
     let Some(character) = (unsafe { character.as_mut() }).filter(|c| c.m_IsLocalCharacter) else {
         return passthrough;
     };
+    // The counter and snapshot run before any config gating: the headpose sim's mode detection and
+    // the Game tab readout must see every on-foot frame regardless of the toggles below.
+    ORIENTATION_EVAL_CALLS.fetch_add(1, Ordering::Relaxed);
     capture_snapshot(character);
+
+    let blackboard = character_blackboard(character);
+    let (face_camera, step, cone_deg) = Config::lock_query(|c| {
+        (
+            c.movement.face_camera,
+            c.movement.face_camera_turn_step,
+            c.movement.face_camera_input_cone_deg,
+        )
+    });
+
+    // If the sim's latch is active, the body should follow the head. This applies regardless of
+    // the face_camera toggle (reusing face_camera_turn_step as the turn rate) and intentionally
+    // bypasses the move-dir cone check: when the latch is active, body-follow takes priority over
+    // strafe.
+    if let Some(face_dir) = crate::headpose::sim::body_yaw_target() {
+        unsafe {
+            let value = Vector3 {
+                data: [face_dir.x, face_dir.y, face_dir.z],
+            };
+            (*blackboard).SetVector3(FACE_DIR_BLACKBOARD_ID, &value, 1, std::ptr::null());
+        }
+        FACE_CAMERA_CALLS.fetch_add(1, Ordering::Relaxed);
+        return (true, step.max(0.1));
+    }
+
+    if !face_camera {
+        return passthrough;
+    }
     let Some(face_dir) = camera_ground_forward() else {
         return passthrough;
     };
 
-    let blackboard = character_blackboard(character);
-    if let Some(move_dir) = read_move_dir(blackboard)
-        && move_dir.angle_between(face_dir).to_degrees() > cone_deg
-    {
-        return passthrough;
+    match read_move_dir(blackboard) {
+        // Idle with the headpose driving the view: the camera forward *is* the head forward (the
+        // context transform the input matrix reads is patched from the headpose), so the idle pin
+        // would make the body track the head at any offset and the decoupled cone could never
+        // open. The latch above owns idle body turning instead.
+        None if crate::headpose::is_active()
+            && crate::headpose::sim::mode() == crate::headpose::sim::HeadMode::OnFoot =>
+        {
+            return passthrough;
+        }
+        // Idle without the headpose: pin, so turning the camera turns the body.
+        None => {}
+        // Moving: pin only within the configured cone around camera-forward (outside it, the
+        // native steer runs; see the function docs).
+        Some(move_dir) if move_dir.angle_between(face_dir).to_degrees() > cone_deg => {
+            return passthrough;
+        }
+        Some(_) => {}
     }
 
     unsafe {

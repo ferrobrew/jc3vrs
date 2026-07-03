@@ -19,6 +19,7 @@ mod config;
 mod crash;
 mod debug;
 mod fsr;
+mod headpose;
 mod hooks;
 mod hud;
 mod lifecycle;
@@ -142,6 +143,9 @@ fn update() {
             shutdown();
             return;
         }
+
+        // Step the headpose simulation at the start of the frame, before the game's own update runs.
+        crate::headpose::sim::update();
 
         if let Some(egui_state) = EguiState::get().as_mut() {
             // While the F10 capture mode is active, keep input with the game (no egui capture

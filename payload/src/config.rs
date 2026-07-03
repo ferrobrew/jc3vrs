@@ -7,7 +7,7 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::hud::HudConfig;
+use crate::{headpose::HeadPoseConfig, hud::HudConfig};
 
 /// The global runtime configuration. Cheap to lock (uncontended `parking_lot::Mutex`); read it at the
 /// top of a hook and release before doing engine work.
@@ -27,6 +27,7 @@ pub struct Config {
     pub movement: MovementConfig,
     pub fsr: FsrConfig,
     pub hud: HudConfig,
+    pub headpose: HeadPoseConfig,
 }
 impl Config {
     pub const fn new() -> Self {
@@ -38,6 +39,7 @@ impl Config {
             movement: MovementConfig::new(),
             fsr: FsrConfig::new(),
             hud: HudConfig::new(),
+            headpose: HeadPoseConfig::new(),
         }
     }
 
@@ -291,7 +293,9 @@ impl CameraConfig {
         Self {
             enabled: true,
             body_offset: glam::Vec3::new(0.0, 0.1, 0.0),
-            head_offset: glam::Vec3::new(0.0, -0.1, 0.0),
+            // Tuned in-game for the headpose path: the head bone origin sits above and behind the
+            // eyes, so the camera drops 5 cm and moves 5 cm forward in the head frame.
+            head_offset: glam::Vec3::new(0.0, -0.05, -0.05),
             use_eye_matrices: true,
             blurs_enabled: false,
             always_use_t1: false,

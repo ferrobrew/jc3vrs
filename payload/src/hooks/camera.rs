@@ -1,4 +1,7 @@
-use std::ffi::c_void;
+use std::{
+    ffi::c_void,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use detours_macro::detour;
 use jc3gi::{
@@ -6,12 +9,14 @@ use jc3gi::{
         camera::Camera,
         camera_context::{CameraContext, CameraControlContext},
         camera_manager::CameraManager,
+        game_camera_manager::GameCameraManager,
     },
     character::character::{Character, SafeBoneIndex},
     graphics_engine::graphics_engine::GraphicsEngine,
     hash::hashlittle,
     types::math::Matrix4,
 };
+use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 
 use crate::{
@@ -24,6 +29,15 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&CAMERA_UPDATE_RENDER_BINDER)
         .with_static_binder(&CAMERA_TREE_UPDATE_RENDER_CONTEXTS_BINDER)
         .with_static_binder(&SETUP_RENDER_CAMERA_BINDER)
+        .with_static_binder(&GAME_CAMERA_MANAGER_GET_CAMERA_MATRIX_BINDER)
+}
+
+/// The last `dtf` the active camera's `UpdateRender` received, for the debug UI: the engine's
+/// sub-frame interpolation fraction (see `docs/issue-20-animation-judder.md`). If it sits at 0.0
+/// or 1.0 every frame, the engine's T0 → T1 lerp is inert and nothing smooths the sim-tick
+/// cadence.
+pub fn last_dtf() -> f32 {
+    f32::from_bits(LAST_DTF.load(Ordering::Relaxed))
 }
 
 /// The scene render camera is an engine-owned copy at `GraphicsEngine + 0x170`, rebuilt each Draw by
@@ -171,6 +185,18 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     result
 }
 
+/// The camera pipeline within a frame (see `docs/rendering.md` §2.2): `CameraTree::
+/// UpdateRenderContexts` fills the control contexts, `PushRenderContext` copies the next render
+/// context's transform into the active camera's `m_TransformT0` and `m_TransformT1` (running it
+/// through a rotation jitter filter that snaps sub-epsilon deltas), and `Camera::UpdateRender`
+/// lerps T0 → T1 by `dtf` into `m_TransformF` and derives `m_View = inverse(m_TransformF)`.
+///
+/// Both mod writes therefore happen *before* the original call: post-call writes land after the
+/// Lerp and view derivation, do nothing for the current frame, and are clobbered by the next
+/// frame's `PushRenderContext`. Writing pre-call also bypasses the jitter filter (which otherwise
+/// quantizes small headpose rotations into visible steps), and giving T0 the previous-tick pose
+/// and T1 the current one hands the engine's own dtf Lerp the pair it needs to smooth the
+/// tick-rate headpose across rendered frames.
 #[detour(address = jc3gi::camera::camera::Camera::UpdateRender_ADDRESS)]
 fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
     unsafe {
@@ -179,55 +205,119 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
             && let Some(cm) = CameraManager::get()
             && cm.m_ActiveCamera == camera
         {
+            LAST_DTF.store(dtf.to_bits(), Ordering::Relaxed);
+
             let camera_settings = Config::lock_query(|c| c.camera);
             if !camera_settings.enabled {
                 CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
                 return;
             }
 
+            let headpose_active = crate::headpose::is_active();
+            // With the headpose active, the head bone (and its eye-bone children) is
+            // player-driven, and the eye average no longer lands where the eyes render; place the
+            // camera from the head bone plus the configured offsets instead.
+            let use_eye_matrices = camera_settings.use_eye_matrices && !headpose_active;
+
             let head_matrix = head_matrix(local_character);
             let (left_eye_matrix, right_eye_matrix) = eye_matrices(local_character);
-
-            if !camera_settings.always_use_t1 {
-                let character_t0_matrix = glam::Mat4::from(if camera_settings.always_use_t1 {
-                    local_character.m_WorldMatrixT1
-                } else {
-                    local_character.m_WorldMatrixT0
-                });
-                let head_position = calculate_head_position(
-                    character_t0_matrix,
-                    head_matrix,
-                    left_eye_matrix,
-                    right_eye_matrix,
-                    camera_settings.use_eye_matrices,
-                    &camera_settings,
-                );
-                camera.m_TransformT0.data[12] = head_position.x;
-                camera.m_TransformT0.data[13] = head_position.y;
-                camera.m_TransformT0.data[14] = head_position.z;
-            }
-
             let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
             let head_position = calculate_head_position(
                 character_t1_matrix,
                 head_matrix,
                 left_eye_matrix,
                 right_eye_matrix,
-                camera_settings.use_eye_matrices,
+                use_eye_matrices,
                 &camera_settings,
             );
-            camera.m_TransformT1.data[12] = head_position.x;
-            camera.m_TransformT1.data[13] = head_position.y;
-            camera.m_TransformT1.data[14] = head_position.z;
+
+            if headpose_active {
+                write_camera_transform(
+                    &mut camera.m_TransformT1,
+                    crate::headpose::query().orientation,
+                    head_position,
+                );
+                // Republish the transform for the sim-phase readers (see the GetCameraMatrix
+                // hook below).
+                *LAST_CAMERA_WORLD.lock() = Some(camera.m_TransformT1.data);
+            } else {
+                camera.m_TransformT1.data[12] = head_position.x;
+                camera.m_TransformT1.data[13] = head_position.y;
+                camera.m_TransformT1.data[14] = head_position.z;
+            }
 
             if camera_settings.always_use_t1 {
                 camera.m_TransformT0 = camera.m_TransformT1;
+            } else {
+                let character_t0_matrix = glam::Mat4::from(local_character.m_WorldMatrixT0);
+                let head_position_t0 = calculate_head_position(
+                    character_t0_matrix,
+                    head_matrix,
+                    left_eye_matrix,
+                    right_eye_matrix,
+                    use_eye_matrices,
+                    &camera_settings,
+                );
+                if headpose_active {
+                    write_camera_transform(
+                        &mut camera.m_TransformT0,
+                        crate::headpose::query_prev().orientation,
+                        head_position_t0,
+                    );
+                } else {
+                    camera.m_TransformT0.data[12] = head_position_t0.x;
+                    camera.m_TransformT0.data[13] = head_position_t0.y;
+                    camera.m_TransformT0.data[14] = head_position_t0.z;
+                }
             }
         }
     }
 
     CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
 }
+
+/// Write a full world transform (rotation + translation) into a camera transform slot.
+fn write_camera_transform(target: &mut Matrix4, orientation: glam::Quat, position: glam::Vec3) {
+    let world = glam::Mat4::from_rotation_translation(orientation, position);
+    let m = world.to_cols_array();
+    // Write rotation + translation (data[0..=14]); leave the projective row untouched.
+    for (i, &v) in m.iter().enumerate().take(15) {
+        target.data[i] = v;
+    }
+}
+
+/// The sim-phase camera matrix reader: `m_NextCameraContext`'s transform, which the game's
+/// sim-phase camera update rewrites from its internal camera *after* the mod's render-phase
+/// context patch. With the look input consumed by the headpose, that internal camera's yaw is
+/// frozen, so every sim-side reader — the player aim control's raycasts and adjusted camera
+/// matrix, the weapon aim-target queries, melee and grapple tasks — aimed at a fixed world
+/// direction regardless of where the head looked. Overriding the getter's output hands them the
+/// same transform the render camera uses.
+#[detour(
+    address = jc3gi::camera::game_camera_manager::GameCameraManager::GetCameraMatrix_ADDRESS
+)]
+fn game_camera_manager_get_camera_matrix(manager: *const GameCameraManager, matrix: *mut Matrix4) {
+    GAME_CAMERA_MANAGER_GET_CAMERA_MATRIX
+        .get()
+        .unwrap()
+        .call(manager, matrix);
+    if !crate::headpose::is_active() {
+        return;
+    }
+    if let Some(data) = *LAST_CAMERA_WORLD.lock()
+        && let Some(matrix) = unsafe { matrix.as_mut() }
+    {
+        matrix.data = data;
+    }
+}
+
+/// The last `dtf` seen by the active camera's `UpdateRender`, as bits (see [`last_dtf`]).
+static LAST_DTF: AtomicU32 = AtomicU32::new(0);
+
+/// The camera world transform last written to the active camera's `m_TransformT1` with the
+/// headpose active, republished by [`game_camera_manager_get_camera_matrix`] so sim-phase readers
+/// see the headpose camera. `None` until the camera hook first runs with the headpose active.
+static LAST_CAMERA_WORLD: Mutex<Option<[f32; 16]>> = Mutex::new(None);
 
 #[detour(address = jc3gi::camera::camera_tree::CameraTree::UpdateRenderContexts_ADDRESS)]
 fn camera_tree_update_render_contexts(
@@ -262,6 +352,21 @@ fn camera_tree_update_render_contexts(
         });
         let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
 
+        // With the headpose active, place the contexts from the head bone plus offsets, matching
+        // `camera_update_render` (the player-driven eye bones no longer average correctly).
+        let use_eye_matrices = camera_settings.use_eye_matrices && !crate::headpose::is_active();
+
+        // The previous contexts get the previous-tick headpose orientation and the next contexts
+        // the current one, mirroring the T0/T1 pair in `camera_update_render`.
+        let (previous_orientation, next_orientation) = if crate::headpose::is_active() {
+            (
+                Some(crate::headpose::query_prev().orientation),
+                Some(crate::headpose::query().orientation),
+            )
+        } else {
+            (None, None)
+        };
+
         patch_context(
             &mut ccc.m_PreviousCameraContext,
             calculate_head_position(
@@ -273,9 +378,10 @@ fn camera_tree_update_render_contexts(
                 head_matrix,
                 left_eye_matrix,
                 right_eye_matrix,
-                camera_settings.use_eye_matrices,
+                use_eye_matrices,
                 &camera_settings,
             ),
+            previous_orientation,
             camera_settings.blurs_enabled,
         );
         patch_context(
@@ -289,9 +395,10 @@ fn camera_tree_update_render_contexts(
                 head_matrix,
                 left_eye_matrix,
                 right_eye_matrix,
-                camera_settings.use_eye_matrices,
+                use_eye_matrices,
                 &camera_settings,
             ),
+            previous_orientation,
             camera_settings.blurs_enabled,
         );
         patch_context(
@@ -301,9 +408,10 @@ fn camera_tree_update_render_contexts(
                 head_matrix,
                 left_eye_matrix,
                 right_eye_matrix,
-                camera_settings.use_eye_matrices,
+                use_eye_matrices,
                 &camera_settings,
             ),
+            next_orientation,
             camera_settings.blurs_enabled,
         );
         patch_context(
@@ -313,17 +421,31 @@ fn camera_tree_update_render_contexts(
                 head_matrix,
                 left_eye_matrix,
                 right_eye_matrix,
-                camera_settings.use_eye_matrices,
+                use_eye_matrices,
                 &camera_settings,
             ),
+            next_orientation,
             camera_settings.blurs_enabled,
         );
     }
 
-    fn patch_context(context: &mut CameraContext, head_position: glam::Vec3, blurs_enabled: bool) {
-        context.m_CameraTransform.data[12] = head_position.x;
-        context.m_CameraTransform.data[13] = head_position.y;
-        context.m_CameraTransform.data[14] = head_position.z;
+    fn patch_context(
+        context: &mut CameraContext,
+        head_position: glam::Vec3,
+        headpose_orientation: Option<glam::Quat>,
+        blurs_enabled: bool,
+    ) {
+        if let Some(orientation) = headpose_orientation {
+            let camera_world = glam::Mat4::from_rotation_translation(orientation, head_position);
+            let m = camera_world.to_cols_array();
+            for (i, &v) in m.iter().enumerate().take(15) {
+                context.m_CameraTransform.data[i] = v;
+            }
+        } else {
+            context.m_CameraTransform.data[12] = head_position.x;
+            context.m_CameraTransform.data[13] = head_position.y;
+            context.m_CameraTransform.data[14] = head_position.z;
+        }
         context.m_AlternateAimTransform = context.m_CameraTransform;
         context.m_ListenerTransform = context.m_CameraTransform;
         context.m_FOV = 90.0_f32.to_radians();

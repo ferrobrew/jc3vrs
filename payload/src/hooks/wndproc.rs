@@ -3,7 +3,7 @@ use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     UI::{
-        Input::KeyboardAndMouse::{VK_F10, VK_F11},
+        Input::KeyboardAndMouse::{VK_F7, VK_F10, VK_F11},
         WindowsAndMessaging::{WM_KEYDOWN, WM_SYSKEYDOWN},
     },
 };
@@ -14,6 +14,17 @@ pub(super) fn hook_library() -> HookLibrary {
 
 #[detour(address = jc3gi::window::WndProc_ADDRESS)]
 fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // F7 recenters the headpose: snapshots the current headpose as the neutral reference so
+    // subsequent poses are relative to it. Edge-detected like F10/F11.
+    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F7.0 as usize {
+        let previous_down = (lparam.0 & 0x4000_0000) != 0;
+        if !previous_down {
+            crate::headpose::recenter();
+            tracing::info!("Headpose recentered");
+        }
+        return LRESULT(0);
+    }
+
     // F10 toggles the fullscreen stereo capture mode. Intercept it before egui or the game sees it:
     // F10 is a system key (it activates the menu bar via WM_SYSKEYDOWN), so consuming it here also
     // suppresses that default behaviour. Edge-detect on the previous-state bit (lparam bit 30) so
