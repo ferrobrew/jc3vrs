@@ -87,13 +87,44 @@ impl GameCameraManager {
     pub const GetInputMatrix_ADDRESS: usize = 0x14075C7A0;
     /// Writes the camera matrix used for mapping player input to world space — the same matrix the
     /// locomotion input task reads to make the move direction camera-relative (its negated third
-    /// row is the camera forward on the ground plane).
+    /// row is the camera forward on the ground plane). Reads
+    /// [`CameraControlContext::m_NextRenderContext`](camera::camera_context::CameraControlContext::m_NextRenderContext)'s camera transform.
     pub unsafe fn GetInputMatrix(&self, matrix: *mut crate::types::math::Matrix4) {
         unsafe {
             let f: unsafe extern "system" fn(
                 this: *const Self,
                 matrix: *mut crate::types::math::Matrix4,
             ) = ::std::mem::transmute(Self::GetInputMatrix_ADDRESS);
+            f(self as *const Self as _, matrix)
+        }
+    }
+    pub const GetCameraMatrix_ADDRESS: usize = 0x14075C7C0;
+    /// Writes the sim-phase camera matrix: [`CameraControlContext::m_NextCameraContext`](camera::camera_context::CameraControlContext::m_NextCameraContext)'s camera
+    /// transform, as opposed to [`GetInputMatrix`](GameCameraManager::GetInputMatrix)'s next *render* context. Read by the player aim
+    /// control (raycast start position, adjusted camera matrix, target visibility casts), weapon
+    /// aim-target queries, melee and grapple state tasks, and other sim-side camera consumers.
+    pub unsafe fn GetCameraMatrix(&self, matrix: *mut crate::types::math::Matrix4) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                matrix: *mut crate::types::math::Matrix4,
+            ) = ::std::mem::transmute(Self::GetCameraMatrix_ADDRESS);
+            f(self as *const Self as _, matrix)
+        }
+    }
+    pub const GetAlternateAimMatrix_ADDRESS: usize = 0x14075C830;
+    /// Writes the alternate-aim (aim-down-sights) matrix:
+    /// [`CameraControlContext::m_NextRenderContext`](camera::camera_context::CameraControlContext::m_NextRenderContext)'s alternate aim transform. The player aim
+    /// control prefers it over [`GetCameraMatrix`](GameCameraManager::GetCameraMatrix) when [`IsAlternateAimTransformUsed`](GameCameraManager::IsAlternateAimTransformUsed) is set.
+    pub unsafe fn GetAlternateAimMatrix(
+        &self,
+        matrix: *mut crate::types::math::Matrix4,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                matrix: *mut crate::types::math::Matrix4,
+            ) = ::std::mem::transmute(Self::GetAlternateAimMatrix_ADDRESS);
             f(self as *const Self as _, matrix)
         }
     }
