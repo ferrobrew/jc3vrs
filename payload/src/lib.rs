@@ -47,6 +47,17 @@ pub extern "system" fn run(_: *mut c_void) {
 /// Called when the DLL is loaded
 fn initialize_startup() {
     std::panic::set_hook(Box::new(|info| {
+        // Log the location before touching the payload: for formatted panics, `payload()` runs the
+        // format arguments' Display impls, and one reading dead game memory faults — which
+        // previously killed the process before anything was logged. The location is plain static
+        // data and always safe.
+        let location = info.location().map(|l| l.to_string());
+        tracing::error!(
+            panic.location = location.as_deref(),
+            "A panic occurred; formatting the payload (a crash before the next record means the \
+             panic message itself faulted)",
+        );
+
         let payload = info.payload();
 
         #[allow(clippy::manual_map)]
@@ -58,7 +69,6 @@ fn initialize_startup() {
             None
         };
 
-        let location = info.location().map(|l| l.to_string());
         let backtrace = std::backtrace::Backtrace::capture();
 
         tracing::error!(
