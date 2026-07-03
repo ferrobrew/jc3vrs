@@ -13,6 +13,7 @@ pub mod module;
 pub mod ui;
 pub mod util;
 
+mod allocator;
 mod capture;
 mod config;
 mod crash;
