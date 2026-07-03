@@ -29,7 +29,10 @@ use jc3gi::{
 use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::{
+    config::Config,
+    headpose::sim::{HeadMode, LatchState},
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -41,6 +44,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&SETUP_TARGET_DIR_BINDER)
         .with_static_binder(&QUEUE_STARTS_BINDER)
         .with_static_binder(&EVALUATE_CHARACTER_SPEED_BINDER)
+        .with_static_binder(&GET_AIM_MOVE_ANGLE_BINDER)
 }
 
 /// Diagnostic counters for the Game tab, so hook liveness and the shim's activity are visible
@@ -274,7 +278,7 @@ fn force_face_camera(
         // would make the body track the head at any offset and the decoupled cone could never
         // open. The latch above owns idle body turning instead.
         None if crate::headpose::is_active()
-            && crate::headpose::sim::mode() == crate::headpose::sim::HeadMode::OnFoot =>
+            && crate::headpose::sim::mode() == HeadMode::OnFoot =>
         {
             return passthrough;
         }
@@ -439,6 +443,39 @@ fn queue_starts(
         }
     }
     QUEUE_STARTS.get().unwrap().call(character, settings, speed)
+}
+
+/// While the headpose decouples the head from the body on foot (idle, unlatched, and not really
+/// aiming), report the aim-move angle as zero. The aim-relative act dispatchers otherwise measure
+/// the angle to the player's aim target — which follows the head through the `GetCameraMatrix`
+/// override — and queue rotate-on-spot acts that turn the body toward the head long before the
+/// latch engages. Zero reads as "already aligned", so no turn acts are queued and the body stays
+/// put. When latched, really aiming, or moving, the original runs: the angle then points at the
+/// head, and the game's own turn machinery performs the latch catch-up natively.
+#[detour(address = jc3gi::input::locomotion::NStateTask_LocoUtil::GetAimMoveAngle_ADDRESS)]
+fn get_aim_move_angle(character: *mut Character, move_dir: *const Vector3) -> f32 {
+    let original = || GET_AIM_MOVE_ANGLE.get().unwrap().call(character, move_dir);
+    let Some(character) = (unsafe { character.as_ref() }).filter(|c| c.m_IsLocalCharacter) else {
+        return original();
+    };
+    if !crate::headpose::is_active()
+        || crate::headpose::sim::mode() != HeadMode::OnFoot
+        || crate::headpose::sim::latch_state() != LatchState::Decoupled
+    {
+        return original();
+    }
+    // Really aiming: the body must track the aim reference — the game's own aim behavior.
+    if character
+        .m_AimFlags
+        .intersects(AimState::m_AimingWeapon | AimState::m_AimingGrapple)
+    {
+        return original();
+    }
+    // Moving: the angle drives directional act selection; leave it untouched.
+    if move_input_magnitude().is_some_and(|magnitude| magnitude >= INPUT_DEADZONE) {
+        return original();
+    }
+    0.0
 }
 
 /// While sliding, floor the movement speed to the blackboard target speed. The native speed
