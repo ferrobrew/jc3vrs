@@ -293,9 +293,12 @@ impl CameraConfig {
         Self {
             enabled: true,
             body_offset: glam::Vec3::new(0.0, 0.1, 0.0),
-            // Tuned in-game against the anchor-based headpose placement: the eyes sit above and
-            // forward of the animated head bone anchor in the head frame.
-            head_offset: glam::Vec3::new(0.0, 0.07, -0.05),
+            // With use_eye_matrices on (the default), the headpose camera arm is the measured
+            // neck-to-eye arm from the animated eye bones and this is a correction on top of it;
+            // with it off, this is the whole arm from the neck pivot (the previous head-relative
+            // tuning (0.0, 0.07, -0.05) plus a nominal head-bone-to-neck drop is a starting
+            // point).
+            head_offset: glam::Vec3::ZERO,
             use_eye_matrices: true,
             blurs_enabled: false,
             always_use_t1: false,

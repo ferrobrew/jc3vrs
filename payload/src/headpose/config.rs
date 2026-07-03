@@ -27,8 +27,11 @@ pub struct HeadPoseConfig {
     pub mouse_sensitivity: f32,
     /// Whether to invert the Y axis (pitch).
     pub invert_y: bool,
-    /// The positional offset of the head from the head bone origin, for roomscale-style testing. In
-    /// metres, head-local space.
+    /// A head-local offset (metres) applied to the *whole* published headpose position — the head
+    /// bone override, the camera, and the aim transform all shift together, simulating the player
+    /// physically translating their head (leaning, roomscale movement). Distinct from the camera
+    /// config's `head_offset`, which only moves the camera relative to the head. Stands in for the
+    /// HMD's positional tracking until issue #12.
     pub position_offset: Vec3,
 }
 impl HeadPoseConfig {

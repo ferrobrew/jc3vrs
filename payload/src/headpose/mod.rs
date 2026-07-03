@@ -68,25 +68,63 @@ pub fn set_pose(pose: HeadPose) {
     state().lock().pose = pose;
 }
 
-/// Publish the animated head bone world position, captured by the character hook each frame
-/// *before* it overrides the bone. Non-finite or absurdly distant positions (loading screens,
-/// uninitialized bone data) are rejected, leaving the previous anchor in place. The pose position
+/// The animated bone positions the character hook captures each frame *before* it overrides the
+/// head bone, for [`set_anchors`].
+#[derive(Copy, Clone)]
+pub struct Anchors {
+    /// The head bone world position.
+    pub head: Vec3,
+    /// The neck bone world position (the camera's pitch pivot).
+    pub neck: Vec3,
+    /// The neck-to-eye-midpoint arm in the body frame: rotated by the published head orientation,
+    /// it places the eyes anatomically about the neck pivot.
+    pub eye_arm: Vec3,
+}
+
+/// Publish the animated bone anchors, captured by the character hook each frame *before* it
+/// overrides the head bone. Non-finite or absurdly distant positions (loading screens,
+/// uninitialized bone data) are rejected, leaving the previous anchors in place. The pose position
 /// is refreshed immediately so the character hook, which reads the pose right after publishing the
-/// anchor, sees a position anchored to this frame's animated pose.
-pub fn set_anchor(anchor: Vec3) {
-    if !anchor.is_finite() || anchor.length_squared() > MAX_ANCHOR_RADIUS * MAX_ANCHOR_RADIUS {
+/// anchors, sees a position anchored to this frame's animated pose.
+pub fn set_anchors(anchors: Anchors) {
+    if !anchors.head.is_finite()
+        || !anchors.neck.is_finite()
+        || anchors.head.length_squared() > MAX_ANCHOR_RADIUS * MAX_ANCHOR_RADIUS
+        || anchors.neck.length_squared() > MAX_ANCHOR_RADIUS * MAX_ANCHOR_RADIUS
+    {
         return;
     }
     let offset = crate::config::Config::lock_query(|c| c.headpose.position_offset);
     let mut s = state().lock();
-    s.anchor = Some(anchor);
-    s.pose.position = anchor + s.pose.orientation * offset;
+    s.anchor = Some(anchors.head);
+    s.neck_delta = anchors.neck - anchors.head;
+    // The eye arm has its own sanity bound: a neck-to-eye distance beyond a metre is garbage bone
+    // data (missing eye bones resolve to the model origin).
+    if anchors.eye_arm.is_finite() && anchors.eye_arm.length_squared() < 1.0 {
+        s.eye_arm = anchors.eye_arm;
+    }
+    s.pose.position = anchors.head + s.pose.orientation * offset;
 }
 
 /// The animated head bone world position, or `None` until the character hook has published a valid
 /// one (no local character yet, or only garbage bone data so far).
 pub fn anchor() -> Option<Vec3> {
     state().lock().anchor
+}
+
+/// The world-space vector from the head bone anchor to the neck bone: the camera pivots the
+/// configured eye offset about the neck rather than the head bone, so pitching the head swings
+/// the eyes forward over the chest instead of rotating in place at the skull base. Zero until the
+/// character hook has published anchors. Body-local and effectively constant between ticks, so
+/// consumers may apply the current value to both sides of the pose pair.
+pub fn neck_delta() -> Vec3 {
+    state().lock().neck_delta
+}
+
+/// The neck-to-eye-midpoint arm in the body frame (see [`Anchors::eye_arm`]). Zero until the
+/// character hook has published anchors.
+pub fn eye_arm() -> Vec3 {
+    state().lock().eye_arm
 }
 
 /// Recenter the headpose. The sim is body-relative and recenters by zeroing its accumulated
@@ -108,6 +146,10 @@ struct HeadPoseState {
     prev_pose: HeadPose,
     /// The animated head bone world position, published by the character hook.
     anchor: Option<Vec3>,
+    /// The world-space head-to-neck vector, published alongside the anchor (see [`neck_delta`]).
+    neck_delta: Vec3,
+    /// The body-frame neck-to-eye-midpoint arm (see [`Anchors::eye_arm`]).
+    eye_arm: Vec3,
 }
 
 static STATE: OnceLock<Mutex<HeadPoseState>> = OnceLock::new();

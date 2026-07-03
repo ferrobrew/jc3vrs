@@ -285,17 +285,29 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
     CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
 }
 
-/// The camera position for a headpose: the pose position (the animated head bone anchor plus the
-/// roomscale offset) plus the configured head-frame and body-frame offsets. The body-frame offset
-/// uses the character matrix matching the pose's side of the T0/T1 pair.
+/// The camera position for a headpose: a head-frame eye arm pivoted about the *neck* (the pose
+/// position shifted by the head-to-neck delta), plus the body-frame offset. Pivoting at the neck
+/// makes pitching the head swing the eyes forward over the chest — looking down clears the body
+/// instead of rotating in place at the skull base and staring into the neck.
+///
+/// With `use_eye_matrices` on, the arm's base is the *measured* neck-to-eye-midpoint arm from the
+/// animated eye bones, and `head_offset` is a correction on top of it; with it off, `head_offset`
+/// is the whole arm. The body-frame offset uses the character matrix matching the pose's side of
+/// the T0/T1 pair.
 fn camera_position(
     pose: &crate::headpose::HeadPose,
     character_matrix: glam::Mat4,
     camera_settings: &crate::config::CameraConfig,
 ) -> glam::Vec3 {
     let (_, character_rotation, _) = character_matrix.to_scale_rotation_translation();
-    pose.position
-        + pose.orientation * camera_settings.head_offset
+    let neck_pivot = pose.position + crate::headpose::neck_delta();
+    let eye_arm = if camera_settings.use_eye_matrices {
+        crate::headpose::eye_arm()
+    } else {
+        glam::Vec3::ZERO
+    };
+    neck_pivot
+        + pose.orientation * (eye_arm + camera_settings.head_offset)
         + character_rotation * camera_settings.body_offset
 }
 

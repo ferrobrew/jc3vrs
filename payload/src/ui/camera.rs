@@ -12,15 +12,20 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
     ui.checkbox(&mut cs.blurs_enabled, "Blurs");
     ui.checkbox(&mut cs.use_eye_matrices, "Use eye matrices");
 
-    ui.add_enabled_ui(!cs.use_eye_matrices, |ui| {
-        ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text("Head X"));
-        ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text("Head Y"));
-        ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text("Head Z"));
+    // With eye matrices on, the head sliders are a correction relative to the measured eye
+    // position; with them off, they are the whole arm from the neck pivot.
+    let head_label = if cs.use_eye_matrices {
+        "Head (from eyes)"
+    } else {
+        "Head (from neck)"
+    };
+    ui.add(Slider::new(&mut cs.head_offset.x, -1.0..=1.0).text(format!("{head_label} X")));
+    ui.add(Slider::new(&mut cs.head_offset.y, -1.0..=1.0).text(format!("{head_label} Y")));
+    ui.add(Slider::new(&mut cs.head_offset.z, -1.0..=1.0).text(format!("{head_label} Z")));
 
-        ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
-        ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
-        ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
-    });
+    ui.add(Slider::new(&mut cs.body_offset.x, -1.0..=1.0).text("Body X"));
+    ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
+    ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
 
     ui.separator();
     egui_debug_headpose(ui, &mut cfg.headpose);
@@ -51,6 +56,16 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
         ),
         None => "Anchor: none".to_string(),
     });
+    let neck_delta = headpose::neck_delta();
+    ui.label(format!(
+        "Head → neck: ({:+.2}, {:+.2}, {:+.2})",
+        neck_delta.x, neck_delta.y, neck_delta.z
+    ));
+    let eye_arm = headpose::eye_arm();
+    ui.label(format!(
+        "Neck → eyes (arm): ({:+.2}, {:+.2}, {:+.2})",
+        eye_arm.x, eye_arm.y, eye_arm.z
+    ));
     // The engine's sub-frame interpolation fraction (issue #20): stuck at 0 or 1 means the
     // engine's camera lerp is inert and the sim-tick cadence shows as judder.
     ui.label(format!("Camera dtf: {:.3}", hooks::camera::last_dtf()));
@@ -77,9 +92,9 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
             .text("Mouse sensitivity (°/unit)"),
     );
     ui.checkbox(&mut hp.invert_y, "Invert Y");
-    ui.add(Slider::new(&mut hp.position_offset.x, -1.0..=1.0).text("Position offset X"));
-    ui.add(Slider::new(&mut hp.position_offset.y, -1.0..=1.0).text("Position offset Y"));
-    ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Position offset Z"));
+    ui.add(Slider::new(&mut hp.position_offset.x, -1.0..=1.0).text("Roomscale offset X (m)"));
+    ui.add(Slider::new(&mut hp.position_offset.y, -1.0..=1.0).text("Roomscale offset Y (m)"));
+    ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Roomscale offset Z (m)"));
 }
 
 pub fn matrix_grid(
