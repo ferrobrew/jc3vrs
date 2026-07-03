@@ -363,6 +363,27 @@ impl NStateTask_LocoUtil {
             f(character)
         }
     }
+    pub const GetAimMoveAngle_ADDRESS: usize = 0x140831880;
+    /// The XZ angle (degrees) from `move_dir` to the aim reference direction: the vector from the
+    /// character to the player's aim-target position (or the camera forward while planting an
+    /// explosive), both rotated into the character's local frame when the relevant state flag is
+    /// set. Consumed by the aim-relative act dispatchers
+    /// ([`QueueAimRelativeMoveActions`](NStateTask_LocoUtil::QueueAimRelativeMoveActions),
+    /// [`QueueStopTurns`](NStateTask_LocoUtil::QueueStopTurns), and the on-spot turn queuers) to
+    /// select directional acts and on-spot turns. `move_dir` is a by-value `CVector3f` in the
+    /// source, passed by pointer under the x64 ABI.
+    pub unsafe fn GetAimMoveAngle(
+        character: *mut crate::character::character::Character,
+        move_dir: *const crate::types::math::Vector3,
+    ) -> f32 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                character: *mut crate::character::character::Character,
+                move_dir: *const crate::types::math::Vector3,
+            ) -> f32 = ::std::mem::transmute(Self::GetAimMoveAngle_ADDRESS);
+            f(character, move_dir)
+        }
+    }
 }
 impl std::convert::AsRef<NStateTask_LocoUtil> for NStateTask_LocoUtil {
     fn as_ref(&self) -> &NStateTask_LocoUtil {
