@@ -27,7 +27,14 @@
 //! Repeated identical exceptions (same code + faulting address) are deduplicated: the first
 //! occurrence gets a full log, subsequent ones are counted and summarised as a single line. This
 //! prevents the log from being flooded with hundreds of identical entries when the game's exception
-//! handler retries the faulting instruction.
+//! handler retries the faulting instruction. Storms that alternate between several addresses (and
+//! so slip past the dedup) are rate-limited instead: past a per-second budget of full dumps, each
+//! record shrinks to its head and fault lines.
+//!
+//! **A record here does not mean the process died.** The VEH observes exceptions first-chance,
+//! before any handler runs; the game — and internally-guarded probes like `lstrlen` — routinely
+//! catch and survive access violations (observed: Scaleform string probing). The record that
+//! killed the process is simply the last one written.
 
 use std::{
     any::Any,
@@ -55,7 +62,7 @@ use windows::{
             },
             LibraryLoader::GetModuleFileNameW,
             Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
-            SystemInformation::GetSystemTime,
+            SystemInformation::{GetSystemTime, GetTickCount64},
             Threading::{
                 GetCurrentProcessId, GetCurrentThreadId, OpenThread, ResumeThread, SuspendThread,
                 THREAD_GET_CONTEXT, THREAD_SUSPEND_RESUME,
@@ -74,6 +81,11 @@ const FATAL_CODES: &[u32] = &[
     0xC0000094, // INTEGER_DIVIDE_BY_ZERO
     0xC0000096, // PRIVILEGED_INSTRUCTION
     0xC00000FD, // STACK_OVERFLOW
+    // Genuinely process-killing conditions, added after a session died with no record at all:
+    // heap corruption is the likely end state of the observed Scaleform exception storms, and
+    // fail-fast may bypass handlers on real Windows but is visible under Wine's dispatch.
+    0xC0000374, // HEAP_CORRUPTION
+    0xC0000409, // STACK_BUFFER_OVERRUN / FAIL_FAST
 ];
 
 /// `CONTEXT_AMD64 | CONTEXT_CONTROL | CONTEXT_INTEGER`: the register groups [`dump_thread`] needs
@@ -127,6 +139,29 @@ static IN_HANDLER: AtomicBool = AtomicBool::new(false);
 static LAST_CODE: AtomicU32 = AtomicU32::new(0);
 static LAST_ADDR: AtomicU64 = AtomicU64::new(0);
 static REPEAT_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Storm throttle: the identical-repeat dedup above is defeated by exception storms that alternate
+/// between a handful of faulting addresses (observed: Scaleform probing garbage pointers every
+/// ~10 ms, each record writing a full thread dump — megabytes in a second, burying the record that
+/// actually killed the process). At most [`STORM_FULL_RECORDS`] records per [`STORM_WINDOW_MS`]
+/// window get the full dump; the rest still get their head and fault lines, so the death point
+/// stays findable, without the multi-hundred-line body.
+static STORM_WINDOW_START_MS: AtomicU64 = AtomicU64::new(0);
+static STORM_WINDOW_RECORDS: AtomicU32 = AtomicU32::new(0);
+
+/// Full records allowed per storm window before throttling kicks in.
+const STORM_FULL_RECORDS: u32 = 5;
+/// The storm-throttle window length in milliseconds.
+const STORM_WINDOW_MS: u64 = 1000;
+
+/// When the VEH guard was last taken (`GetTickCount64` milliseconds), for jam recovery: a handler
+/// entry that faulted mid-record never clears [`IN_HANDLER`], so a later entry finding the guard
+/// held longer than [`HANDLER_JAM_MS`] steals it rather than dropping every subsequent record.
+static HANDLER_TAKEN_AT_MS: AtomicU64 = AtomicU64::new(0);
+
+/// How long the VEH guard may be held before it is considered jammed. A healthy record (full
+/// thread dump included) completes in well under a second.
+const HANDLER_JAM_MS: u64 = 2000;
 
 /// A frame-loop milestone, recorded into the [`BREADCRUMBS`] ring by [`mark`]. When a crash's stack is
 /// unreliable (COMDAT-folded generics, a smashed stack, an unwind that can't cross the exception
@@ -446,8 +481,19 @@ fn stamp(line: &mut Line) {
 
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     if IN_HANDLER.swap(true, Ordering::SeqCst) {
-        return EXCEPTION_CONTINUE_SEARCH;
+        // Held by an earlier entry. If it has been held implausibly long, that entry faulted
+        // mid-record and never cleared the guard (an AV inside the handler cannot unwind back
+        // through it) — without recovery, every later exception in the process would be silently
+        // dropped, including the one that finally kills it. Steal the guard and record anyway.
+        let taken_ms = HANDLER_TAKEN_AT_MS.load(Ordering::Relaxed);
+        if unsafe { GetTickCount64() }.saturating_sub(taken_ms) < HANDLER_JAM_MS {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        Line::new()
+            .str("  (recovered a jammed handler guard: a previous record faulted mid-write)")
+            .flush();
     }
+    HANDLER_TAKEN_AT_MS.store(unsafe { GetTickCount64() }, Ordering::Relaxed);
     unsafe {
         // Snapshot everything needed from the exception record in one tight window, after probing
         // that the record memory is actually committed and readable. Under Wine, records for
@@ -764,21 +810,42 @@ unsafe fn log_record(rec: FaultRecord, ctx: *mut CONTEXT) {
             ("n/a", 0)
         };
 
+        // Storm throttle: cap the number of full dumps per window. The alternating-address storms
+        // that motivate this slip past the identical-repeat dedup above.
+        let now_ms = GetTickCount64();
+        if now_ms.saturating_sub(STORM_WINDOW_START_MS.load(Ordering::Relaxed)) > STORM_WINDOW_MS {
+            STORM_WINDOW_START_MS.store(now_ms, Ordering::Relaxed);
+            STORM_WINDOW_RECORDS.store(0, Ordering::Relaxed);
+        }
+        let full_record = STORM_WINDOW_RECORDS.fetch_add(1, Ordering::Relaxed) < STORM_FULL_RECORDS;
+
+        // "first-chance": the VEH sees the exception before any handler; the game (or an
+        // internally-guarded probe like lstrlen) frequently handles it and carries on, so a record
+        // here does not imply the process died. The record that killed the process is simply the
+        // last one that was ever written.
         let mut head = Line::new();
         stamp(&mut head);
-        head.str("fatal exception: code=")
+        head.str("exception (first-chance): code=")
             .hex(code as u64, 8)
             .str(" access=")
             .str(access_kind)
             .str(" access_addr=")
-            .hex(access_addr, 16)
-            .flush();
+            .hex(access_addr, 16);
+        if !full_record {
+            head.str(" (storm: dump throttled)");
+        }
+        head.flush();
 
-        // Register dump, the faulting instruction, and the faulting thread's stack first -- the
-        // essential record. The other-thread dump (riskier: it suspends threads) runs last, so a
-        // fault there can't lose the primary information.
-        log_context(ctx);
+        // The fault line is cheap and always written, so throttled records stay attributable.
         log_frame("fault", rec.address);
+        if !full_record {
+            return;
+        }
+
+        // Register dump and the faulting thread's stack first -- the essential record. The
+        // other-thread dump (riskier: it suspends threads) runs last, so a fault there can't lose
+        // the primary information.
+        log_context(ctx);
         // Scan the faulting thread's own stack heuristically rather than calling
         // RtlCaptureStackBackTrace on it: under Wine the unwinder walks a foreign/smashed stack and
         // faults itself, masking the very crash we are reporting (dump_other_threads excludes the
