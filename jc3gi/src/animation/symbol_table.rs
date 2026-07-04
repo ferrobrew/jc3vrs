@@ -29,6 +29,13 @@ impl EventIdSymbolTable {
         }
     }
 }
+impl EventIdSymbolTable {
+    /// The on-foot / land-vehicle reversing act: drives the `S_REVERSE_*` states in
+    /// `rico_base.afsmb`, where Rico turns to look over his shoulder while backing up.
+    pub const ACT_REVERSE: &str = "ACT_REVERSE";
+    /// The motorbike variant of [`ACT_REVERSE`](EventIdSymbolTable::ACT_REVERSE).
+    pub const ACT_REVERSE_MOTORBIKE: &str = "ACT_REVERSE_MOTORBIKE";
+}
 impl std::convert::AsRef<EventIdSymbolTable> for EventIdSymbolTable {
     fn as_ref(&self) -> &EventIdSymbolTable {
         self

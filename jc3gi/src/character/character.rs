@@ -50,6 +50,21 @@ impl AnimatedModel {
         }
     }
 }
+impl AnimatedModel {
+    /// The [`m_ModelInstances`](AnimatedModel::m_ModelInstances) slot holding the character's
+    /// *body* model -- the one whose skeleton the character's bone indices belong to. The other
+    /// slots are attachments with their own skeletons (the parachute among them), where the same
+    /// numeric indices land on arbitrary bones.
+    pub const BODY_MODEL_SLOT: u64 = 0;
+    /// The offset of a model instance's embedded render-block-instance info (`CRBIInfo`) within
+    /// `NModelSystem::CModelInstance` (`CModelInstance::AddToPass` passes `this + 0x50` to
+    /// `ForEachRb`); that pointer is the `info` every one of its block draws receives. A constant
+    /// rather than a field because the instance type itself is unmapped.
+    pub const MODEL_INSTANCE_RBI_INFO_OFFSET: u64 = 80;
+    /// The number of [`m_ModelInstances`](AnimatedModel::m_ModelInstances) slots. Keep in sync
+    /// with that array's length.
+    pub const MODEL_INSTANCE_SLOTS: u64 = 8;
+}
 impl std::convert::AsRef<AnimatedModel> for AnimatedModel {
     fn as_ref(&self) -> &AnimatedModel {
         self
@@ -132,7 +147,11 @@ impl std::convert::AsMut<AnimationController> for AnimationController {
 pub struct Character {
     _field_0: [u8; 6016],
     pub m_AnimatedModel: crate::character::character::AnimatedModel,
-    _field_19c0: [u8; 1841],
+    _field_19c0: [u8; 1696],
+    /// The character's embedded [`ObjectBlackboard`] (`lea rcx, [character+2060h]` at every
+    /// blackboard call site in the loco tasks).
+    pub m_Blackboard: crate::blackboard::ObjectBlackboard,
+    _field_2090: [u8; 97],
     /// Packed aiming-state bit-flags; see [`AimState`].
     pub m_AimFlags: crate::character::character::AimState,
     _field_20f2: [u8; 1336],

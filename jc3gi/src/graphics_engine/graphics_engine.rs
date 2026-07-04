@@ -1,8 +1,7 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[allow(unused_imports)]
 use crate::{
-    camera::camera::Camera, graphics_engine::render_block::RBIInfo,
-    graphics_engine::render_pass::RenderPass,
+    graphics_engine::render_block::RBIInfo, graphics_engine::render_pass::RenderPass,
 };
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
@@ -80,7 +79,14 @@ pub struct GraphicsEngine {
     _field_12c: [u8; 44],
     /// The cascaded sun-shadow system.
     pub m_ShadowManager: *mut crate::graphics_engine::shadow_manager::ShadowManager,
-    _field_160: [u8; 3408],
+    _field_160: [u8; 16],
+    /// The engine-owned scene render camera: a by-value copy rebuilt each
+    /// [`Draw`](GraphicsEngine::Draw) by `Camera::SetupRenderCamera` (reverse-Z + jitter, then the
+    /// view-projection products from `m_View`). This is the camera the render passes consume;
+    /// distinct from the `CameraManager`'s camera objects, which are pointers to the gameplay
+    /// cameras.
+    pub m_RenderCamera: crate::camera::camera::Camera,
+    _field_720: [u8; 1936],
     pub m_Device: *mut crate::graphics_engine::device::Device,
     _field_eb8: [u8; 16],
     /// Deferred-shading render targets ("GBuffer0".."GBuffer3").
@@ -112,7 +118,13 @@ pub struct GraphicsEngine {
     _field_12bf: [u8; 9],
     /// Index of the reflection-proxy slot picked this frame.
     pub m_EffectInfoIndex: u32,
-    _field_12cc: [u8; 3140],
+    _field_12cc: [u8; 52],
+    /// The currently-loaded shader bundle name, compared by
+    /// [`LoadShaderBundle`](GraphicsEngine::LoadShaderBundle) to skip a same-name reload. The
+    /// bundle names are `"Shaders"` / `"ShadersLowShadows"` (and the Intel `"ShadersConstMath*"`
+    /// variants).
+    pub m_CurrentBundleName: crate::types::std_string::String,
+    _field_1320: [u8; 3056],
 }
 fn _GraphicsEngine_size_check() {
     unsafe {
@@ -203,8 +215,8 @@ impl GraphicsEngine {
     }
     pub const LoadShaderBundle_ADDRESS: usize = 0x1400DE9A0;
     /// Loads (or reloads) the named shader bundle and re-creates every shader holder from it, but only
-    /// if `name` differs from the currently-loaded bundle name (an `std::string` at `+0x1300`, its
-    /// length at `+0x1310`). Re-creating the holders routes every shader through
+    /// if `name` differs from [`m_CurrentBundleName`](GraphicsEngine::m_CurrentBundleName).
+    /// Re-creating the holders routes every shader through
     /// `Graphics::CreateFragmentProgram`. The bundle names are `"Shaders"` / `"ShadersLowShadows"`
     /// (and the Intel `"ShadersConstMath*"` variants), selected by shadow quality in
     /// `CSettingsManager::UpdateSettings`. `name` is a NUL-terminated C string.

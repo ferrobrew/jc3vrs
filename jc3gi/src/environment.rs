@@ -173,11 +173,10 @@ impl std::convert::AsMut<Weather> for Weather {
 pub struct WeatherController {}
 impl WeatherController {
     pub const Init_ADDRESS: usize = 0x1403A24F0;
-    /// Subscribes the named weather events (`weather_sunny`, `weather_rain`, `weather_snow`,
-    /// `weather_restore`, `weather_instant`, plus `cloud_base` and `cloud_height`). Firing one via the
-    /// engine's event send is the robust way to hold a weather state, since the controller's per-frame
-    /// update otherwise overwrites the [`Weather`] scalars. Event severities: rain is severity `4.0` /
-    /// intensity `1.0` / snow `0`; snow is severity `4.0` / snow `1.0`; sunny is severity `0.1`.
+    /// Subscribes the named weather events (the `EVENT_*` constants, plus `cloud_base` and
+    /// `cloud_height`). Firing one via the engine's event send is the robust way to hold a weather
+    /// state, since the controller's per-frame update otherwise overwrites the [`Weather`]
+    /// scalars.
     pub unsafe fn Init(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -186,6 +185,18 @@ impl WeatherController {
             f(self as *mut Self as _)
         }
     }
+}
+impl WeatherController {
+    /// Applies the pinned state instantly rather than blending toward it.
+    pub const EVENT_INSTANT: &str = "weather_instant";
+    /// Pins rain (severity `4.0`, rain intensity `1.0`, snow `0`).
+    pub const EVENT_RAIN: &str = "weather_rain";
+    /// Hands control back to the ambient weather system.
+    pub const EVENT_RESTORE: &str = "weather_restore";
+    /// Pins snow (severity `4.0`, snow ratio `1.0`).
+    pub const EVENT_SNOW: &str = "weather_snow";
+    /// Pins clear weather (severity `0.1`).
+    pub const EVENT_SUNNY: &str = "weather_sunny";
 }
 impl std::convert::AsRef<WeatherController> for WeatherController {
     fn as_ref(&self) -> &WeatherController {
