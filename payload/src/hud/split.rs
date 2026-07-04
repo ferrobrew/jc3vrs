@@ -145,6 +145,19 @@ pub unsafe fn render_split(
         manager.m_CurrentCaptureThread = render_thread;
         movie_impl.SetCaptureThread(render_thread);
 
+        // Probe the display tree before doing anything: the HUD movie's clips only exist once
+        // the HUD is activated (they are absent at startup and during full-screen UI), and a
+        // wrong prefix never resolves. Splitting without working visibility writes would draw
+        // the full HUD into every layer (a triple-ghosted panel), so degrade to the normal
+        // single-texture render until the paths resolve.
+        if !paths_resolve(movie_root, prefix) {
+            manager.m_CurrentCaptureThread = previous_capture_thread;
+            movie_impl.SetCaptureThread(previous_capture_thread);
+            LeaveCriticalSection(lock as *mut _);
+            original(this, context);
+            return;
+        }
+
         // Snapshot each container's game-driven visibility: the game shows and hides these
         // (wingsuit HUD, state-driven groups) and only writes on state changes, so forcing them
         // visible would desync its bookkeeping. Each pass shows a container only if the game had
@@ -169,6 +182,37 @@ pub unsafe fn render_split(
 
         LeaveCriticalSection(lock as *mut _);
     }
+}
+
+/// Whether the layer containers currently resolve in the display tree, probing one
+/// representative path. Logs transitions in both directions (once each), so the log shows when
+/// the HUD movie's clips appeared and if they ever vanish again.
+unsafe fn paths_resolve(movie_root: &Movie, prefix: &str) -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    /// 0 = unknown, 1 = resolving, 2 = not resolving.
+    static STATE: AtomicU8 = AtomicU8::new(0);
+
+    let full = format!("{prefix}MCI_safe_area_center._visible\0");
+    let mut value = Value::new_boolean(true);
+    // SAFETY: NUL-terminated path bytes; an unmanaged stack value the movie fills in.
+    let ok = unsafe { movie_root.GetVariable(&mut value, full.as_ptr()) };
+
+    let new_state = if ok { 1 } else { 2 };
+    let old_state = STATE.swap(new_state, Ordering::Relaxed);
+    if old_state != new_state {
+        if ok {
+            tracing::info!(
+                "hud split: the HUD clip paths resolve (prefix {prefix:?}); splitting is active"
+            );
+        } else {
+            tracing::warn!(
+                "hud split: the HUD clip paths do not resolve (prefix {prefix:?}); rendering \
+                 single-texture until they do (expected before the HUD activates; otherwise set \
+                 the split path prefix from a display-tree dump)"
+            );
+        }
+    }
+    ok
 }
 
 /// The game-driven visibility snapshot: one flag per container (in [`LAYERS`]/
