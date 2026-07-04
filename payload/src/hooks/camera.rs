@@ -40,15 +40,14 @@ pub fn last_dtf() -> f32 {
     f32::from_bits(LAST_DTF.load(Ordering::Relaxed))
 }
 
-/// The scene render camera is an engine-owned copy at `GraphicsEngine + 0x170`, rebuilt each Draw by
-/// `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF` from
-/// `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye, *before*
-/// the rebuild, so the two dispatches diverge. See `docs/rendering.md` section 2.
+/// The scene render camera is the engine-owned copy (`GraphicsEngine::m_RenderCamera`), rebuilt
+/// each Draw by `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF`
+/// from `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye,
+/// *before* the rebuild, so the two dispatches diverge. See `docs/rendering.md` section 2.
 #[detour(address = jc3gi::camera::camera::Camera::SetupRenderCamera_ADDRESS)]
 fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     let is_render_camera = unsafe {
-        GraphicsEngine::get()
-            .is_some_and(|ge| (ge as *mut GraphicsEngine as usize) + 0x170 == camera as usize)
+        GraphicsEngine::get().is_some_and(|ge| std::ptr::eq(&raw const ge.m_RenderCamera, camera))
     };
     if is_render_camera {
         TraceState::record_eye(TraceEvent::SetupRenderCamera);

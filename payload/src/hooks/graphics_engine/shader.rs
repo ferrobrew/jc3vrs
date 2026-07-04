@@ -66,11 +66,6 @@ static PATCHED: AtomicUsize = AtomicUsize::new(0);
 static DISSOLVE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// The `m_CurrentBundleName` `std::string` on the engine: data/SSO buffer at `+0x1300`, length at
-/// `+0x1310` (MSVC layout). Read to learn the active bundle so a reload can switch away and back.
-const BUNDLE_NAME_DATA: usize = 0x1300;
-const BUNDLE_NAME_SIZE: usize = 0x1310;
-
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new().with_static_binder(&CREATE_FRAGMENT_PROGRAM_BINDER)
 }
@@ -308,18 +303,12 @@ pub fn process_reload_request() {
         let Some(ge) = GraphicsEngine::get() else {
             return;
         };
-        let base = (ge as *mut GraphicsEngine).cast::<u8>();
-        let size = *base.add(BUNDLE_NAME_SIZE).cast::<usize>();
+        let size = ge.m_CurrentBundleName.size;
         if size == 0 || size > 64 {
             tracing::warn!("shader reload: unexpected bundle-name length {size}; skipping");
             return;
         }
-        let data: *const u8 = if size <= 15 {
-            base.add(BUNDLE_NAME_DATA)
-        } else {
-            *base.add(BUNDLE_NAME_DATA).cast::<*const u8>()
-        };
-        let current = std::slice::from_raw_parts(data, size).to_vec();
+        let current = ge.m_CurrentBundleName.as_bytes().to_vec();
         let Ok(current_name) = std::str::from_utf8(&current) else {
             tracing::warn!("shader reload: bundle name is not UTF-8; skipping");
             return;

@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering}
 
 use detours_macro::detour;
 use jc3gi::{
+    character::character::AnimatedModel,
     graphics_engine::{
         graphics_engine::{HContext_t, RenderContext},
         render_block::{
@@ -73,8 +74,8 @@ pub fn publish_player_rbi_infos(infos: &[usize; PLAYER_MODEL_SLOTS]) {
     }
 }
 
-/// The number of model-instance slots on `CAnimatedModel`.
-pub const PLAYER_MODEL_SLOTS: usize = 8;
+/// The number of model-instance slots on `CAnimatedModel`, as a `usize` for array sizing.
+pub const PLAYER_MODEL_SLOTS: usize = AnimatedModel::MODEL_INSTANCE_SLOTS as usize;
 
 /// Publish the NECK bone's model-space position, from the character hook: the collapse target
 /// point. Collapsed vertices contract here (inside the collar) rather than to each bone's own
@@ -254,11 +255,6 @@ static PLAYER_ROOT: parking_lot::Mutex<Option<(glam::Vec3, glam::Vec3)>> =
 static PLAYER_RBI_INFOS: [AtomicUsize; PLAYER_MODEL_SLOTS] =
     [const { AtomicUsize::new(0) }; PLAYER_MODEL_SLOTS];
 
-/// The model-instance slot holding the character's *body* model — the one whose skeleton the
-/// collapse bone indices belong to. The other slots are attachments with their own skeletons
-/// (the parachute among them), where the same numeric indices land on arbitrary bones.
-const BODY_MODEL_SLOT: usize = 0;
-
 /// Whether this draw belongs to the local player's body model in a non-shadow pass with the hide
 /// enabled. Ownership is pointer identity: the draw's `info` is the owning model instance's
 /// embedded `CRBIInfo`, matched against the body slot's published pointer. Fail-safe: any missing
@@ -274,7 +270,7 @@ unsafe fn should_hide_facial(rc: *mut RenderContext, info: *const RBIInfo) -> bo
     if rc_ref.m_RenderStatus & 6 != 0 {
         return false;
     }
-    let body = PLAYER_RBI_INFOS[BODY_MODEL_SLOT].load(Ordering::Relaxed);
+    let body = PLAYER_RBI_INFOS[AnimatedModel::BODY_MODEL_SLOT as usize].load(Ordering::Relaxed);
     body != 0 && info as usize == body
 }
 

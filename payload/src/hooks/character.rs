@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use detours_macro::detour;
 use jc3gi::{
     animation::symbol_table::EventIdSymbolTable,
-    character::character::{Character, Joint, SafeBoneIndex},
+    character::character::{AnimatedModel, Character, Joint, SafeBoneIndex},
     hash::hashlittle,
 };
 use re_utilities::hook_library::HookLibrary;
@@ -40,17 +40,14 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         // plus the facial bones, so every vertex weighted anywhere on the head (face, eyes, ears,
         // and the hair riding HEAD) collapses. Invalid lookups are filtered by the publish (a
         // missing name must not collapse the root).
-        // The instance-info pointers for exact draw ownership: each model instance embeds its
-        // CRBIInfo at instance + 0x50 (`CModelInstance::AddToPass` passes `this + 0x50` to
-        // `ForEachRb`), and that pointer is the `info` every one of its block draws receives. A
-        // payload-side constant because pyxis cannot embed an opaque unsized field at an offset.
-        const MODEL_INSTANCE_RBI_INFO_OFFSET: usize = 0x50;
-        let rbi_infos: [usize; crate::hooks::graphics_engine::render_block::PLAYER_MODEL_SLOTS] =
+        // The instance-info pointers for exact draw ownership: each model instance's embedded
+        // CRBIInfo is the `info` every one of its block draws receives.
+        let rbi_infos: [usize; AnimatedModel::MODEL_INSTANCE_SLOTS as usize] =
             character.m_AnimatedModel.m_ModelInstances.map(|instance| {
                 if instance == 0 {
                     0
                 } else {
-                    instance as usize + MODEL_INSTANCE_RBI_INFO_OFFSET
+                    instance as usize + AnimatedModel::MODEL_INSTANCE_RBI_INFO_OFFSET as usize
                 }
             });
         crate::hooks::graphics_engine::render_block::publish_player_rbi_infos(&rbi_infos);
@@ -258,7 +255,11 @@ fn character_queue_act(character: *mut Character, act: *const u32) {
 static REVERSE_ACT_IDS: LazyLock<[i32; 2]> = LazyLock::new(|| unsafe {
     let table = EventIdSymbolTable::get().expect("the animation event-id symbol table is not live");
     [
-        table.string_to_id(c"ACT_REVERSE".as_ptr() as *const u8),
-        table.string_to_id(c"ACT_REVERSE_MOTORBIKE".as_ptr() as *const u8),
+        EventIdSymbolTable::ACT_REVERSE,
+        EventIdSymbolTable::ACT_REVERSE_MOTORBIKE,
     ]
+    .map(|name| {
+        let name = std::ffi::CString::new(name).expect("an act name contains a NUL");
+        table.string_to_id(name.as_ptr() as *const u8)
+    })
 });

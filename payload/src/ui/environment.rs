@@ -5,7 +5,7 @@
 //! this is open, so each value is re-read every frame and the raw scalars drift back unless held
 //! (speed 0 freezes the clock; the event buttons pin the weather).
 
-use jc3gi::environment::{LandscapeManager, Weather, WorldTime};
+use jc3gi::environment::{LandscapeManager, Weather, WeatherController, WorldTime};
 
 /// Render the Environment tab body.
 pub(crate) fn render(ui: &mut egui::Ui) {
@@ -37,7 +37,9 @@ pub(crate) fn render(ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             for (label, event) in WEATHER_EVENTS {
                 if ui.button(*label).clicked() {
-                    jc3gi::event::send_event_msg(event);
+                    let event = std::ffi::CString::new(*event)
+                        .expect("a weather event name contains a NUL");
+                    jc3gi::event::send_event_msg(&event);
                 }
             }
         });
@@ -68,15 +70,14 @@ pub(crate) fn render(ui: &mut egui::Ui) {
     weather_ui(ui);
 }
 
-/// The named weather events the `WeatherController` subscribes in its `Init`, as button label and
-/// event name. Rain and snow set full severity with their precipitation scalar; sunny drops the
-/// severity to clear; restore hands control back to the ambient weather system.
-const WEATHER_EVENTS: &[(&str, &std::ffi::CStr)] = &[
-    ("Sunny", c"weather_sunny"),
-    ("Rain", c"weather_rain"),
-    ("Snow", c"weather_snow"),
-    ("Restore", c"weather_restore"),
-    ("Instant", c"weather_instant"),
+/// The named weather events the [`WeatherController`] subscribes in its `Init`, as button label
+/// and event name (see the `WeatherController::EVENT_*` docs for what each pins).
+const WEATHER_EVENTS: &[(&str, &str)] = &[
+    ("Sunny", WeatherController::EVENT_SUNNY),
+    ("Rain", WeatherController::EVENT_RAIN),
+    ("Snow", WeatherController::EVENT_SNOW),
+    ("Restore", WeatherController::EVENT_RESTORE),
+    ("Instant", WeatherController::EVENT_INSTANT),
 ];
 
 /// Resolve the live `Weather`: `LandscapeManager` -> `m_Atmosphere` -> `GetWeather`.

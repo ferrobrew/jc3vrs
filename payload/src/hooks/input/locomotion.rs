@@ -193,25 +193,9 @@ fn evaluate_character_orientation_ms(
     )
 }
 
-/// The blackboard id of the target face direction (`CVector3f`): the desired body facing the
-/// orientation executor yaws toward in its tracking mode. Written per-state by the game's
-/// `SetUpTargetFaceDir` tasks; overwritten here with the camera forward just before the executor
-/// reads it, which guarantees ordering against the game's own writers.
-const FACE_DIR_BLACKBOARD_ID: u32 = 736_589_998;
-
-/// The blackboard id of the camera-relative world-space move direction (`CVector3f`), written each
-/// frame by `NStateTask_InputLocoSetTargetDirTask::SetupTargetDir`. Read here to gate the
-/// face-camera pin on the input direction.
-const MOVE_DIR_BLACKBOARD_ID: u32 = 2_113_030_792;
-
 /// Move-direction magnitudes below this are treated as no input (idle), where the pin always
 /// applies so that turning the camera turns the body.
 const MOVE_DIR_IDLE_THRESHOLD: f32 = 0.1;
-
-/// The offset of the character's embedded [`ObjectBlackboard`] (`lea rcx, [character+2060h]` at
-/// every blackboard call site in the loco tasks). A payload-side constant because pyxis cannot yet
-/// embed an opaque unsized field at a fixed offset.
-const CHARACTER_BLACKBOARD_OFFSET: usize = 0x2060;
 
 /// The heading half of FPS movement: for the local player, write the camera's ground-plane forward
 /// to the target-face-dir blackboard value and force the orientation executor's tracking mode with
@@ -261,7 +245,12 @@ fn force_face_camera(
             let value = Vector3 {
                 data: [face_dir.x, face_dir.y, face_dir.z],
             };
-            (*blackboard).SetVector3(FACE_DIR_BLACKBOARD_ID, &value, 1, std::ptr::null());
+            (*blackboard).SetVector3(
+                ObjectBlackboard::TARGET_FACE_DIR_ID,
+                &value,
+                1,
+                std::ptr::null(),
+            );
         }
         FACE_CAMERA_CALLS.fetch_add(1, Ordering::Relaxed);
         return (true, step.max(0.1));
@@ -301,7 +290,12 @@ fn force_face_camera(
         let value = Vector3 {
             data: [face_dir.x, face_dir.y, face_dir.z],
         };
-        (*blackboard).SetVector3(FACE_DIR_BLACKBOARD_ID, &value, 1, std::ptr::null());
+        (*blackboard).SetVector3(
+            ObjectBlackboard::TARGET_FACE_DIR_ID,
+            &value,
+            1,
+            std::ptr::null(),
+        );
     }
     FACE_CAMERA_CALLS.fetch_add(1, Ordering::Relaxed);
     (true, step.max(0.1))
@@ -322,9 +316,7 @@ fn head_decoupled_idle(character: &Character) -> bool {
 }
 
 fn character_blackboard(character: &mut Character) -> *mut ObjectBlackboard {
-    (character as *mut Character as *mut u8)
-        .wrapping_add(CHARACTER_BLACKBOARD_OFFSET)
-        .cast()
+    &raw mut character.m_Blackboard
 }
 
 /// The current move direction on the ground plane, or `None` while idle (no meaningful input) or
@@ -332,7 +324,7 @@ fn character_blackboard(character: &mut Character) -> *mut ObjectBlackboard {
 fn read_move_dir(blackboard: *mut ObjectBlackboard) -> Option<glam::Vec3> {
     let mut value = Vector3::default();
     unsafe {
-        if !(*blackboard).GetVector3(MOVE_DIR_BLACKBOARD_ID, &mut value) {
+        if !(*blackboard).GetVector3(ObjectBlackboard::MOVE_DIR_ID, &mut value) {
             return None;
         }
     }
@@ -428,7 +420,12 @@ fn setup_target_dir(character: *mut Character, target_dir: *mut c_void, props: *
                 data: [spoof.x, 0.0, spoof.z],
             };
             unsafe {
-                (*blackboard).SetVector3(MOVE_DIR_BLACKBOARD_ID, &value, 1, std::ptr::null());
+                (*blackboard).SetVector3(
+                    ObjectBlackboard::MOVE_DIR_ID,
+                    &value,
+                    1,
+                    std::ptr::null(),
+                );
             }
         }
     }
@@ -502,7 +499,8 @@ fn evaluate_character_speed(character: *mut Character, use_blackboard_override: 
     let Some(character) = (unsafe { character.as_mut() }) else {
         return speed;
     };
-    let Some(target) = read_float(character_blackboard(character), SPEED_BLACKBOARD_ID) else {
+    let Some(target) = read_float(character_blackboard(character), ObjectBlackboard::SPEED_ID)
+    else {
         return speed;
     };
     if target > speed {
@@ -589,9 +587,9 @@ fn evaluate_character_displacement(
         let blackboard = character_blackboard(character);
         let mut existing = Vector3::default();
         unsafe {
-            if (*blackboard).GetVector3(CONSTRAINED_DIR_BLACKBOARD_ID, &mut existing) {
+            if (*blackboard).GetVector3(ObjectBlackboard::CONSTRAINED_DIR_ID, &mut existing) {
                 (*blackboard).SetVector3(
-                    CONSTRAINED_DIR_BLACKBOARD_ID,
+                    ObjectBlackboard::CONSTRAINED_DIR_ID,
                     &world_value,
                     1,
                     std::ptr::null(),
@@ -602,11 +600,6 @@ fn evaluate_character_displacement(
         SLIDE_CALLS.fetch_add(1, Ordering::Relaxed);
     }
 }
-
-/// The blackboard id of the constrained-ground movement direction, present on slopes (and other
-/// surface-constrained locomotion): when set, the movement task blends its displacement direction
-/// toward it instead of using the primary displacement output.
-const CONSTRAINED_DIR_BLACKBOARD_ID: u32 = 2_485_695_409;
 
 fn read_float(blackboard: *mut ObjectBlackboard, id: u32) -> Option<f32> {
     let mut value = 0.0f32;
@@ -638,20 +631,13 @@ pub fn debug_blackboard_snapshot() -> Option<BlackboardSnapshot> {
 fn capture_snapshot(character: &mut Character) {
     let blackboard = character_blackboard(character);
     let mut move_dir = Vector3::default();
-    let move_dir = unsafe { (*blackboard).GetVector3(MOVE_DIR_BLACKBOARD_ID, &mut move_dir) }
-        .then(|| glam::Vec3::new(move_dir.data[0], move_dir.data[1], move_dir.data[2]));
+    let move_dir =
+        unsafe { (*blackboard).GetVector3(ObjectBlackboard::MOVE_DIR_ID, &mut move_dir) }
+            .then(|| glam::Vec3::new(move_dir.data[0], move_dir.data[1], move_dir.data[2]));
     *SNAPSHOT.lock() = Some(BlackboardSnapshot {
         input_magnitude: move_input_magnitude(),
         move_dir,
-        speed: read_float(blackboard, SPEED_BLACKBOARD_ID),
-        aux_float: read_float(blackboard, AUX_FLOAT_BLACKBOARD_ID),
+        speed: read_float(blackboard, ObjectBlackboard::SPEED_ID),
+        aux_float: read_float(blackboard, ObjectBlackboard::AUX_FLOAT_ID),
     });
 }
-
-/// The blackboard id of the float speed value the input locomotion tasks branch on (`<= 0` routes
-/// into the stop acts).
-const SPEED_BLACKBOARD_ID: u32 = 3_396_837_917;
-
-/// The second float the input move task reads alongside the speed; semantics unmapped, shown in
-/// the readout as a candidate input-strength signal.
-const AUX_FLOAT_BLACKBOARD_ID: u32 = 2_217_900_102;

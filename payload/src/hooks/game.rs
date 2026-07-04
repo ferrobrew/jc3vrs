@@ -2,7 +2,6 @@ use std::sync::atomic::Ordering;
 
 use detours_macro::detour;
 use jc3gi::{
-    camera::camera::Camera,
     clock::Clock,
     cpu_fragment::{CpuFragmentWaitUntilSignalIsNonZero, CpuPrimaryCount},
     game::{Game, GameState, UpdateContexts},
@@ -346,13 +345,13 @@ fn restore_pristine_render_camera() {
     let Some(pristine) = STEREO_STATE.lock().pristine_render_camera.take() else {
         return;
     };
-    // SAFETY: the render camera is the engine-owned copy at GraphicsEngine+0x170; the address check
-    // ensures a stale snapshot is never written onto a reallocated engine.
+    // SAFETY: the address check ensures a stale snapshot is never written onto a reallocated
+    // engine.
     unsafe {
         let Some(ge) = GraphicsEngine::get() else {
             return;
         };
-        let camera = ((ge as *mut GraphicsEngine as usize) + 0x170) as *mut Camera;
+        let camera = &raw mut ge.m_RenderCamera;
         if camera as usize != pristine.camera {
             return;
         }
