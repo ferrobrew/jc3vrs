@@ -35,12 +35,51 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
 
         let head_index = character.GetSafeIndex(SafeBoneIndex::HEAD);
 
-        // Publish the facial classification bones for the render-block head-hide (the draws run
-        // on the render thread and only load these).
-        crate::hooks::graphics_engine::render_block::publish_facial_bones([
-            animation_controller.GetBoneIndex(hashlittle(b"fJaw") as u32) as u32,
-            animation_controller.GetBoneIndex(hashlittle(b"fLeftEye") as u32) as u32,
-            animation_controller.GetBoneIndex(hashlittle(b"fRightEye") as u32) as u32,
+        // Publish the render-block head-hide inputs (the draws run on the render thread and only
+        // load these): the player root pair for ownership, and the collapse set — the HEAD bone
+        // plus the facial bones, so every vertex weighted anywhere on the head (face, eyes, ears,
+        // and the hair riding HEAD) collapses. Invalid lookups are filtered by the publish (a
+        // missing name must not collapse the root).
+        // The instance-info pointers for exact draw ownership: each model instance embeds its
+        // CRBIInfo at instance + 0x50 (`CModelInstance::AddToPass` passes `this + 0x50` to
+        // `ForEachRb`), and that pointer is the `info` every one of its block draws receives. A
+        // payload-side constant because pyxis cannot embed an opaque unsized field at an offset.
+        const MODEL_INSTANCE_RBI_INFO_OFFSET: usize = 0x50;
+        let rbi_infos: [usize; crate::hooks::graphics_engine::render_block::PLAYER_MODEL_SLOTS] =
+            character.m_AnimatedModel.m_ModelInstances.map(|instance| {
+                if instance == 0 {
+                    0
+                } else {
+                    instance as usize + MODEL_INSTANCE_RBI_INFO_OFFSET
+                }
+            });
+        crate::hooks::graphics_engine::render_block::publish_player_rbi_infos(&rbi_infos);
+        crate::hooks::graphics_engine::render_block::publish_player_root(
+            glam::Mat4::from(character.m_WorldMatrixT0)
+                .w_axis
+                .truncate(),
+            glam::Mat4::from(character.m_WorldMatrixT1)
+                .w_axis
+                .truncate(),
+        );
+        let bone = |name: &[u8]| animation_controller.GetBoneIndex(hashlittle(name) as u32);
+        crate::hooks::graphics_engine::render_block::publish_collapse_bones(&[
+            head_index,
+            bone(b"offset_facialOrienter"),
+            bone(b"fJaw"),
+            bone(b"fMidLwrLip"),
+            bone(b"fLeftMouthCorner"),
+            bone(b"fRightMouthCorner"),
+            bone(b"fNose"),
+            bone(b"fMidUprLip"),
+            bone(b"fUprLids"),
+            bone(b"fLwrLids"),
+            bone(b"fLeftBrowMidA"),
+            bone(b"fRightBrowMidA"),
+            bone(b"fLeftEye"),
+            bone(b"fRightEye"),
+            bone(b"fLeftEar"),
+            bone(b"fRightEar"),
         ]);
 
         // HEAD: optionally the legacy scale-hide, plus the full headpose pose, in a single
@@ -68,6 +107,12 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         let neck_index = character.GetSafeIndex(SafeBoneIndex::NECK);
         let mut neck_joint = Joint::default();
         animation_controller.GetJoint(neck_index, &mut neck_joint);
+        // The head-hide collapse target: the render side cannot read positions out of the
+        // palette (the translation slots depend on each block's layout), so the model-space neck
+        // point comes from the skeleton here.
+        crate::hooks::graphics_engine::render_block::publish_collapse_target(joint_translation(
+            &neck_joint,
+        ));
         let animated_neck_world = character_world.transform_point3(joint_translation(&neck_joint));
 
         // The animated eye midpoint, expressed as a body-frame arm from the neck pivot: rotating
@@ -95,17 +140,36 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         }
 
         // Only override the pose once a valid anchor exists; until then (loading screens, garbage
-        // bone data) the bone keeps its animated pose and only the head-hide scale applies.
+        // bone data) the bone keeps its animated pose and only the legacy scale-hide applies.
         if headpose::is_active() && headpose::anchor().is_some() {
-            let headpose = headpose::query();
-            let desired_head_world = headpose.to_mat4();
-            let desired_head_model = character_world.inverse() * desired_head_world;
-            let (_, rotation, translation) = desired_head_model.to_scale_rotation_translation();
-            // Always write both translation and orientation: we take full control of the head bone
-            // to match it to the player's head, as VR will.
-            joint.m_Translation.data = [translation.x, translation.y, translation.z];
+            // Compose the player's body-relative offset onto the *animated* model-space
+            // orientation, exactly like the neck twist below. The previous absolute write assumed
+            // the bone's rest frame matched the model axes, which it does not — observed in the
+            // (now headful) shadow as the head collapsing into the shoulders. Model space is the
+            // body frame, so the sim's body-relative angles apply directly, and the animated
+            // translation is kept (plus the roomscale offset brought into the body frame), so the
+            // head stays anatomically placed while turning where the player looks.
+            let (yaw, pitch, roll) = headpose::sim::euler_angles();
+            let offset_model = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, roll);
+            let [qx, qy, qz, qw] = joint.m_Orientation.data;
+            let animated = glam::Quat::from_xyzw(qx, qy, qz, qw);
+            let composed = offset_model * animated;
             // glam Quat (x,y,z,w) -> Havok AlignedQuat [x,y,z,w] is a direct copy.
-            joint.m_Orientation.data = [rotation.x, rotation.y, rotation.z, rotation.w];
+            joint.m_Orientation.data = [composed.x, composed.y, composed.z, composed.w];
+
+            // The roomscale positional offset, brought into the body frame. Zero whenever the
+            // offset config is zero: the pose position is the anchor captured above plus the
+            // offset.
+            let world_offset = headpose::query().position - animated_head_world;
+            if world_offset != glam::Vec3::ZERO {
+                let model_offset = character_rotation.inverse() * world_offset;
+                let [tx, ty, tz] = joint.m_Translation.data;
+                joint.m_Translation.data = [
+                    tx + model_offset.x,
+                    ty + model_offset.y,
+                    tz + model_offset.z,
+                ];
+            }
         }
 
         animation_controller.SetJoint(head_index, &mut joint);

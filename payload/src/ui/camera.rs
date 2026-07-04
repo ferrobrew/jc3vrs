@@ -13,9 +13,13 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
     ui.checkbox(&mut cs.use_eye_matrices, "Use eye matrices");
     ui.checkbox(
         &mut cs.hide_head_draws,
-        "Hide head (skip facial draws; shadow keeps it)",
+        "Hide head (collapse facial bones; shadow keeps it)",
     );
     ui.checkbox(&mut cs.hide_head_scale, "Hide head (legacy bone scale)");
+    if ui.button("Dump character block draws (log)").clicked() {
+        hooks::graphics_engine::render_block::DUMP_DRAWS
+            .store(48, std::sync::atomic::Ordering::Relaxed);
+    }
 
     // With eye matrices on, the head sliders are a correction relative to the measured eye
     // position; with them off, they are the whole arm from the neck pivot.

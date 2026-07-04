@@ -24,7 +24,7 @@
 
 use std::sync::OnceLock;
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
 pub mod config;
@@ -37,13 +37,6 @@ pub use config::HeadPoseConfig;
 pub struct HeadPose {
     pub position: Vec3,
     pub orientation: Quat,
-}
-
-impl HeadPose {
-    /// Build a 4x4 world transform from this pose.
-    pub fn to_mat4(self) -> Mat4 {
-        Mat4::from_rotation_translation(self.orientation, self.position)
-    }
 }
 
 /// The current headpose (position + orientation), as published by the active source.
