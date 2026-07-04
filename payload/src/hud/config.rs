@@ -87,8 +87,8 @@ impl HudConfig {
             marker_warp: true,
             marker_radius: 0.08,
             marker_max_depth: 150.0,
-            split: false,
-            suppress_overlays: false,
+            split: true,
+            suppress_overlays: true,
             split_path_prefix: SplitPathPrefix::new(),
         }
     }
