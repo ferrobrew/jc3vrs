@@ -4,10 +4,10 @@
 //! backtrace of the faulting thread, and a backtrace of every other thread the moment a fatal
 //! exception is *raised* -- before any handler unwinds. This covers the case where the game catches a
 //! fault itself and turns it into a clean exit: Wine prints no backtrace and the window just
-//! vanishes, but the record still lands in `jc3vrs-crash.log` -- a dedicated file that, unlike the
-//! per-run-truncated `jc3vrs.log`, is only ever appended to, so records accumulate across sessions
-//! and recurring crashes can be correlated (each session writes a timestamped start marker, and
-//! each record head carries a UTC timestamp matching the tracing log's). A panic hook does the same for Rust panics,
+//! vanishes, but the record still lands in the session's crash log (`jc3vrs-crash-<UTC>.log`, one
+//! per session) -- a dedicated file that, unlike the per-run-truncated `jc3vrs.log`, survives the
+//! run and is self-contained per session (each record head carries a UTC timestamp matching the
+//! tracing log's). A panic hook does the same for Rust panics,
 //! which don't raise an SEH exception and so are invisible to the VEH handler. Each address is
 //! resolved to its containing module + offset (`module+0xoff`) via `VirtualQuery`, which works under
 //! Wine where `std::backtrace` usually can't symbolize.
@@ -60,7 +60,7 @@ use windows::{
                     Thread32Next,
                 },
             },
-            LibraryLoader::GetModuleFileNameW,
+            LibraryLoader::{GetModuleFileNameW, GetModuleHandleW},
             Memory::{MEMORY_BASIC_INFORMATION, VirtualQuery},
             SystemInformation::{GetSystemTime, GetTickCount64},
             Threading::{
@@ -238,14 +238,20 @@ fn log_breadcrumbs() {
 pub fn install() {
     // Open the crash log with a raw handle. This is a *separate* file from `jc3vrs.log`: the
     // tracing subscriber truncates that one every run, which silently discarded every past crash
-    // record. `jc3vrs-crash.log` is opened append-only and never truncated, so records accumulate
-    // across sessions and recurring crashes can be correlated. Each session writes a timestamped
-    // start marker, and each record is timestamped, to line records up with the (UTC-stamped)
-    // tracing log of the run that produced them.
+    // record. Each session gets its own timestamped file (`jc3vrs-crash-<UTC>.log`), opened
+    // append-only, so a session's records are self-contained and easy to hand around; each record
+    // is timestamped to line up with the (UTC-stamped) tracing log of the run that produced it.
+    let session_name = {
+        let time = unsafe { GetSystemTime() };
+        format!(
+            "jc3vrs-crash-{:04}{:02}{:02}-{:02}{:02}{:02}.log",
+            time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
+        )
+    };
     if let Some(path) = crate::module::get_path()
         .as_ref()
         .and_then(|path| path.parent())
-        .map(|parent| parent.join("jc3vrs-crash.log"))
+        .map(|parent| parent.join(&session_name))
     {
         let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
         wide.push(0);
@@ -269,6 +275,20 @@ pub fn install() {
             line.str("=== session start ");
             stamp(&mut line);
             line.str("===").flush();
+        }
+    }
+
+    for (slot, name) in PROBE_HOST_BASES
+        .iter()
+        .zip(["kernelbase.dll", "ucrtbase.dll", "ntdll.dll"])
+    {
+        let wide: Vec<u16> = std::ffi::OsStr::new(name)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: `wide` is a null-terminated UTF-16 module name.
+        if let Ok(module) = unsafe { GetModuleHandleW(PCWSTR(wide.as_ptr())) } {
+            slot.store(module.0 as usize, Ordering::Relaxed);
         }
     }
 
@@ -486,6 +506,35 @@ fn stamp(line: &mut Line) {
         .str(" UTC ");
 }
 
+/// Whether `addr` lies inside one of the system modules whose functions carry their own SEH
+/// probes (`lstrlen`, `memcpy` wrappers, dispatch internals): kernelbase, ucrtbase, and ntdll.
+/// Resolved by allocation base so no names are touched in the handler.
+fn faulting_module_is_probe_host(addr: usize) -> bool {
+    if addr == 0 {
+        return false;
+    }
+    let mut mbi = MEMORY_BASIC_INFORMATION::default();
+    // SAFETY: VirtualQuery fills a plain struct; a zero return means unmapped.
+    let len = unsafe {
+        VirtualQuery(
+            Some(addr as *const std::ffi::c_void),
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
+    };
+    if len == 0 {
+        return false;
+    }
+    let base = mbi.AllocationBase as usize;
+    base != 0
+        && PROBE_HOST_BASES
+            .iter()
+            .any(|b| b.load(Ordering::Relaxed) == base)
+}
+
+/// The allocation bases of kernelbase, ucrtbase, and ntdll, resolved at [`install`].
+static PROBE_HOST_BASES: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
+
 unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     if IN_HANDLER.swap(true, Ordering::SeqCst) {
         // Held by an earlier entry. If it has been held implausibly long, that entry faulted
@@ -501,6 +550,35 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
             .flush();
     }
     HANDLER_TAKEN_AT_MS.store(unsafe { GetTickCount64() }, Ordering::Relaxed);
+    // A panic anywhere in the logging tree would otherwise unwind into this `extern "system"`
+    // boundary and hit the compiler's abort pad — a ud2 that raises ILLEGAL_INSTRUCTION *from
+    // inside the handler*, which Wine's dispatch then retries in a loop until the process dies
+    // (observed in-game: 200+ identical C000001D records at our own module in 11 ms). Catch the
+    // panic instead, and log its message through the same allocation-free writer so the culprit
+    // names itself.
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        unsafe { record_exception(info) };
+    }));
+    if let Err(payload) = panicked {
+        let mut line = Line::new();
+        line.str("  (the crash handler itself panicked while logging; record incomplete: ");
+        match panic_message_bytes(payload.as_ref()) {
+            Some(msg) => {
+                line.bytes(msg);
+            }
+            None => {
+                line.str("<no message>");
+            }
+        }
+        line.str(")").flush();
+    }
+    IN_HANDLER.store(false, Ordering::SeqCst);
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+/// The body of [`handler`]: snapshot the exception record and log it. Split out so the handler
+/// can wrap it in `catch_unwind`.
+unsafe fn record_exception(info: *mut EXCEPTION_POINTERS) {
     unsafe {
         // Snapshot everything needed from the exception record in one tight window, after probing
         // that the record memory is actually committed and readable. Under Wine, records for
@@ -544,8 +622,6 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
             }
         }
     }
-    IN_HANDLER.store(false, Ordering::SeqCst);
-    EXCEPTION_CONTINUE_SEARCH
 }
 
 /// The fields of an `EXCEPTION_RECORD` the logger uses, copied out by value in [`handler`] so no
@@ -577,9 +653,12 @@ unsafe fn readable(addr: usize, len: usize) -> bool {
             return false;
         }
         const READABLE_PROTECTIONS: u32 = 0x02 | 0x04 | 0x08 | 0x20 | 0x40 | 0x80;
+        const PAGE_GUARD_BIT: u32 = 0x100;
         let protect = mbi.Protect.0;
         mbi.State.0 == 0x1000 // MEM_COMMIT.
             && (protect & READABLE_PROTECTIONS) != 0
+            // A guard page is "readable" by protection bits but faults on touch (stack growth).
+            && (protect & PAGE_GUARD_BIT) == 0
             && (protect & 0x100) == 0 // PAGE_GUARD.
             && addr + len <= mbi.BaseAddress as usize + mbi.RegionSize
     }
@@ -695,6 +774,12 @@ unsafe fn log_faulting_stack(rsp: u64) {
             std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
         ) == 0
         {
+            return;
+        }
+        // The region must be committed and readable, not merely present: a dying thread's stack
+        // can be reserved-but-decommitted, and scanning it faulted the handler itself (observed
+        // in-game as an access violation at this function mid-record).
+        if !readable(rsp as usize, 8) {
             return;
         }
         let region_end = mbi.BaseAddress as usize + mbi.RegionSize;
@@ -826,6 +911,14 @@ unsafe fn log_record(rec: FaultRecord, ctx: *mut CONTEXT) {
             ("n/a", 0)
         };
 
+        // Faults raised inside the system's internally-guarded probe functions (lstrlen-style
+        // SEH in kernelbase/ucrtbase/ntdll) are routine first-chance traffic the game survives in
+        // storms — and the deep dumps below kept faulting the handler itself mid-storm, each time
+        // somewhere new (a scan of a decommitted stack, then formatting with trampled spills).
+        // Give them the shallow record only; real crashes fault in game or payload code and keep
+        // the full dump.
+        let shallow_probe_fault = faulting_module_is_probe_host(rec.address);
+
         // Storm throttle: cap the number of full dumps per window. The alternating-address storms
         // that motivate this slip past the identical-repeat dedup above.
         let now_ms = GetTickCount64();
@@ -850,11 +943,14 @@ unsafe fn log_record(rec: FaultRecord, ctx: *mut CONTEXT) {
         if !full_record {
             head.str(" (storm: dump throttled)");
         }
+        if shallow_probe_fault {
+            head.str(" (probe-host fault: dump skipped)");
+        }
         head.flush();
 
         // The fault line is cheap and always written, so throttled records stay attributable.
         log_frame("fault", rec.address);
-        if !full_record {
+        if !full_record || shallow_probe_fault {
             return;
         }
 
@@ -939,6 +1035,8 @@ unsafe fn dump_thread(tid: u32) {
                     &mut mbi,
                     std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
                 ) != 0
+                // Committed and readable, not merely present — see log_faulting_stack.
+                && readable(rsp as usize, 8)
             {
                 let region_end = mbi.BaseAddress as usize + mbi.RegionSize;
                 let available = region_end.saturating_sub(rsp as usize) / 8;
