@@ -53,7 +53,8 @@ use windows::{
             Diagnostics::{
                 Debug::{
                     AddVectoredExceptionHandler, CONTEXT, CONTEXT_FLAGS, EXCEPTION_POINTERS,
-                    EXCEPTION_RECORD, GetThreadContext, RtlCaptureStackBackTrace,
+                    EXCEPTION_RECORD, GetThreadContext, RemoveVectoredExceptionHandler,
+                    RtlCaptureStackBackTrace,
                 },
                 ToolHelp::{
                     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First,
@@ -125,6 +126,13 @@ static THREAD_SCRATCH: ThreadScratchCell = ThreadScratchCell(std::cell::UnsafeCe
 /// process is dying). `0` means "not opened". Stored as an `isize` so it lives in an atomic without a
 /// lock -- the handler must not touch `parking_lot` or `std::io`.
 static CRASH_LOG: AtomicIsize = AtomicIsize::new(0);
+
+/// The registration handle from `AddVectoredExceptionHandler`, so [`uninstall`] can remove it on
+/// eject. Leaving the registration behind is fatal: ntdll's handler list would keep a pointer into
+/// the unmapped DLL, and the game's next routine first-chance exception (its SEH probes fire
+/// constantly) would dispatch straight into freed memory — observed as a consistent crash within a
+/// minute of uninjection.
+static VEH_HANDLE: AtomicUsize = AtomicUsize::new(0);
 
 /// Reentrancy guard: set while the VEH handler or panic hook is running. If the logging code itself
 /// triggers an exception (or a panic fires mid-handler), the recursive entry sees this flag and
@@ -292,7 +300,8 @@ pub fn install() {
         }
     }
 
-    unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
+    let veh = unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
+    VEH_HANDLE.store(veh as usize, Ordering::Relaxed);
     // Rust panics unwind/abort instead of raising an SEH exception, so the VEH handler above never
     // sees them. Log the message + a backtrace ourselves before the process dies. The same
     // re-entrancy guard the VEH handler uses covers this hook. Each piece is flushed as its own
@@ -330,6 +339,32 @@ pub fn install() {
         IN_HANDLER.store(false, Ordering::SeqCst);
     }));
     tracing::info!("Crash handler installed");
+}
+
+/// Remove the VEH registration and close the crash log on eject. The panic hook needs no
+/// counterpart: its registry lives in this DLL's statically linked `std` and unloads with the
+/// image, whereas the VEH registration lives in ntdll's process-wide list and would dangle (see
+/// [`VEH_HANDLE`]).
+pub fn uninstall() {
+    let veh = VEH_HANDLE.swap(0, Ordering::Relaxed);
+    if veh != 0 {
+        // SAFETY: `veh` is the registration handle returned by `AddVectoredExceptionHandler` in
+        // `install`, removed at most once via the swap above.
+        unsafe { RemoveVectoredExceptionHandler(veh as *mut std::ffi::c_void) };
+    }
+    let mut line = Line::new();
+    line.str("=== session end (uninjected) ");
+    stamp(&mut line);
+    line.str("===").flush();
+    let raw = CRASH_LOG.swap(0, Ordering::Relaxed);
+    if raw != 0 {
+        // SAFETY: `raw` is the append-mode handle opened in `install`, closed at most once via the
+        // swap above; the handler treats a zero handle as "not opened" and skips writing.
+        unsafe {
+            let _ = CloseHandle(HANDLE(raw as *mut std::ffi::c_void));
+        }
+    }
+    tracing::info!("Crash handler uninstalled");
 }
 
 /// Extract the panic message payload as bytes without `core::fmt`, probing every heap pointer

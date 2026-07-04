@@ -98,6 +98,10 @@ fn shutdown_startup() {
     // Wait to ensure we're clear of the blast radius of the hooks
     std::thread::sleep(std::time::Duration::from_millis(100));
 
+    // The VEH registration must not outlive the DLL: ntdll would keep calling into the unmapped
+    // image on the game's next routine first-chance exception.
+    crash::uninstall();
+
     tracing::info!("Ejecting");
     logging::uninstall();
     module::exit();
