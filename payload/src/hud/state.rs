@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CLEAR_DEPTH, D3D11_CLEAR_STENCIL, ID3D11DeviceContext,
 };
 
-use super::{HudMode, binding, quad::HudQuad, target::HudTarget};
+use super::{HudMode, binding, quad::HudQuad, split, target::HudTarget};
 
 /// Global HUD state. Locked briefly on the render thread.
 pub static HUD_STATE: Mutex<HudState> = Mutex::new(HudState::new());
@@ -39,6 +39,11 @@ pub struct HudState {
     /// The panel pose `(position, rotation)` chosen for the current frame, cached for the marker
     /// projection ([`compute_panel_vp`](crate::hud::compute_panel_vp)) to reuse.
     current_pose: Option<(Vec3, Quat)>,
+    /// The extra layer targets for the multi-pass split ([`HudLayer::Markers`](split::HudLayer)
+    /// and [`HudLayer::Center`](split::HudLayer)); layer 0 (static) renders into
+    /// [`target`](HudState::target). Present only while the split is enabled and sized like the
+    /// main target.
+    layer_targets: [Option<HudTarget>; split::LAYER_COUNT - 1],
     /// World-space panel corners, computed once per frame on eye 0 and reused for eye 1 so both
     /// eyes project the same world position through their own per-eye VP (correct stereo depth).
     cached_corners: Option<[[f32; 4]; 4]>,
@@ -91,6 +96,7 @@ impl HudState {
             latched_pose: None,
             current_pose: None,
             cached_corners: None,
+            layer_targets: [None, None],
         }
     }
 
@@ -142,6 +148,46 @@ impl HudState {
         if !self.redirected && binding::redirect_to(target, texture_width, texture_height) {
             self.redirected = true;
         }
+    }
+
+    /// Ensure the extra layer targets exist at the main target's size while the split is enabled,
+    /// and drop them while it is not. Layer creation failures log and leave the slot empty, which
+    /// keeps the split inactive (see [`split_views`](HudState::split_views)).
+    pub(super) fn ensure_layers(&mut self, device: &Device, enabled: bool) {
+        if !enabled {
+            self.layer_targets = [None, None];
+            return;
+        }
+        let Some((width, height)) = self.target.as_ref().map(HudTarget::size) else {
+            return;
+        };
+        for slot in &mut self.layer_targets {
+            if slot.as_ref().map(HudTarget::size) != Some((width, height)) {
+                match HudTarget::new(device, width, height) {
+                    Ok(target) => *slot = Some(target),
+                    Err(e) => {
+                        tracing::error!("HUD split layer: {e:#}");
+                        *slot = None;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The per-layer render-target views for the split passes, or `None` unless the redirect is
+    /// applied and every layer target exists. The views are cloned (COM-refcounted), so they stay
+    /// valid for the frame even if the targets are recreated concurrently.
+    pub fn split_views(&self) -> Option<split::LayerViews> {
+        if !self.redirected {
+            return None;
+        }
+        let main = self.target.as_ref()?;
+        let markers = self.layer_targets[0].as_ref()?;
+        let center = self.layer_targets[1].as_ref()?;
+        Some(split::LayerViews {
+            views: [main, markers, center].map(|t| (t.color_rtv().clone(), t.depth_dsv().clone())),
+        })
     }
 
     /// Restore the engine's own binding and drop our target, so the UI no longer renders into our
@@ -230,6 +276,19 @@ impl HudState {
         }
         if let Some(quad) = self.quad.as_ref() {
             quad.draw(context, device, target, &hud_srv, &corners);
+            // While split, composite the extra layers over the static panel with the same
+            // world-space corners (bottom to top: markers, then the center/reticle group). The
+            // per-layer depth arrives with the depth-composite step; identical corners keep the
+            // split visually equivalent to the single-texture panel until then.
+            for layer in self.layer_targets.iter().flatten() {
+                quad.draw(
+                    context,
+                    device,
+                    target,
+                    &layer.color_srv().clone(),
+                    &corners,
+                );
+            }
         }
     }
 
@@ -242,15 +301,18 @@ impl HudState {
         let Some(target) = self.target.as_ref() else {
             return;
         };
-        // SAFETY: `context` is the live engine context; RTV and DSV belong to our target texture.
+        // SAFETY: `context` is the live engine context; the RTVs and DSVs belong to our target
+        // textures.
         unsafe {
-            context.ClearRenderTargetView(target.color_rtv(), &[0.0, 0.0, 0.0, 0.0]);
-            context.ClearDepthStencilView(
-                target.depth_dsv(),
-                (D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL).0,
-                1.0,
-                0,
-            );
+            for target in std::iter::once(target).chain(self.layer_targets.iter().flatten()) {
+                context.ClearRenderTargetView(target.color_rtv(), &[0.0, 0.0, 0.0, 0.0]);
+                context.ClearDepthStencilView(
+                    target.depth_dsv(),
+                    (D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL).0,
+                    1.0,
+                    0,
+                );
+            }
         }
     }
 

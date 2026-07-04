@@ -30,6 +30,27 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0).text("Render scale (x)"),
             );
             ui.checkbox(&mut cfg.hud.quad, "Draw the HUD as a floating quad per eye");
+            ui.checkbox(
+                &mut cfg.hud.split,
+                "Split the HUD into depth layers (static / markers / center)",
+            );
+            ui.add_enabled_ui(cfg.hud.split, |ui| {
+                ui.indent("hud_split", |ui| {
+                    ui.checkbox(
+                        &mut cfg.hud.suppress_overlays,
+                        "Suppress full-screen overlays (damage flash, drowning) in every layer",
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label("Clip path prefix");
+                        let mut prefix = cfg.hud.split_path_prefix.as_str().to_string();
+                        if ui.text_edit_singleline(&mut prefix).changed()
+                            && let Err(e) = cfg.hud.split_path_prefix.set(&prefix)
+                        {
+                            tracing::warn!("{e}");
+                        }
+                    });
+                });
+            });
             ui.add_enabled_ui(cfg.hud.quad, |ui| {
                 ui.indent("hud_sliders", |ui| {
                     ui.add(

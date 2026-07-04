@@ -7,6 +7,7 @@
 
 use detours_macro::detour;
 use jc3gi::{
+    graphics_engine::graphics_engine::HContext_t,
     types::math::{Matrix4, Vector2, Vector3},
     ui::ui_manager::{ScreenPos, UIManager},
 };
@@ -15,7 +16,32 @@ use re_utilities::hook_library::HookLibrary;
 use crate::config::Config;
 
 pub(super) fn hook_library() -> HookLibrary {
-    HookLibrary::new().with_static_binder(&GET_2D_INFO_BINDER)
+    HookLibrary::new()
+        .with_static_binder(&GET_2D_INFO_BINDER)
+        .with_static_binder(&UI_RENDER_BINDER)
+}
+
+/// Replace the UI render with the multi-pass HUD split when it is active this frame; otherwise
+/// pass through. Runs on the UI render worker (kicked by `StartRender`). See
+/// [`crate::hud::split`].
+#[detour(address = UIManager::Render_ADDRESS)]
+fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
+    let original = UI_RENDER.get().unwrap();
+    let Some((views, suppress_overlays, prefix)) = crate::hud::split_inputs() else {
+        original.call(this, context);
+        return;
+    };
+    // SAFETY: called from the detour with the detour's own arguments, on the UI render worker.
+    unsafe {
+        crate::hud::split::render_split(
+            this,
+            context as *mut std::ffi::c_void,
+            &views,
+            suppress_overlays,
+            prefix.as_str(),
+            &|t, c| original.call(t, c as *mut HContext_t),
+        );
+    }
 }
 
 /// Replace the VP and camera matrix in `Get2DInfo` with the floating panel's orientation, so

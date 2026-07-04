@@ -35,6 +35,20 @@ pub struct HudConfig {
     pub panel_scale: f32,
     /// Lazy-follow damping parameters for the floating panel.
     pub follow: FollowConfig,
+    /// Render the HUD in three visibility passes -- static HUD, world markers, reticles -- into
+    /// separate textures, so the composite can place each group at its own depth (issue #14).
+    /// Requires [`redirect`](HudConfig::redirect); ignored during full-screen UI
+    /// ([`HudMode::Movie`](crate::hud::HudMode)). See `payload/src/hud/split.rs`.
+    pub split: bool,
+    /// While splitting, keep the full-screen Scaleform overlays -- drowning tint, damage flashes,
+    /// directional damage indicators -- hidden in every pass (issue #8). They were authored to
+    /// cover a flat screen and cover the whole panel in VR instead.
+    pub suppress_overlays: bool,
+    /// The clip-path prefix from the root movie's timeline to the HUD movie's clips, ending in a
+    /// dot when non-empty (e.g. `"hud."`). The HUD movie is attached by `root.gfx`'s ActionScript
+    /// under a runtime name the display-tree dump reveals; until confirmed in-game, the authored
+    /// clip names are tried bare.
+    pub split_path_prefix: SplitPathPrefix,
 }
 impl HudConfig {
     pub const fn new() -> Self {
@@ -47,9 +61,84 @@ impl HudConfig {
             distance: 3.0,
             panel_scale: 1.0,
             follow: FollowConfig::new(),
+            split: false,
+            suppress_overlays: false,
+            split_path_prefix: SplitPathPrefix::new(),
         }
     }
 }
+
+/// A short fixed-capacity string for [`HudConfig::split_path_prefix`], so `HudConfig` stays `Copy`
+/// (the config is snapshotted by value throughout the payload).
+#[derive(Copy, Clone, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct SplitPathPrefix {
+    bytes: [u8; Self::CAPACITY],
+    len: u8,
+}
+
+impl SplitPathPrefix {
+    /// Enough for a couple of nesting levels of clip names.
+    pub const CAPACITY: usize = 64;
+
+    pub const fn new() -> Self {
+        Self {
+            bytes: [0; Self::CAPACITY],
+            len: 0,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        // The only writers validated UTF-8 on the way in.
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("")
+    }
+
+    /// Replace the prefix. Fails when the string exceeds the capacity.
+    pub fn set(&mut self, value: &str) -> Result<(), PrefixTooLongError> {
+        let bytes = value.as_bytes();
+        if bytes.len() > Self::CAPACITY {
+            return Err(PrefixTooLongError { len: bytes.len() });
+        }
+        self.bytes = [0; Self::CAPACITY];
+        self.bytes[..bytes.len()].copy_from_slice(bytes);
+        self.len = bytes.len() as u8;
+        Ok(())
+    }
+}
+
+impl TryFrom<String> for SplitPathPrefix {
+    type Error = PrefixTooLongError;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let mut prefix = Self::new();
+        prefix.set(&value)?;
+        Ok(prefix)
+    }
+}
+
+impl From<SplitPathPrefix> for String {
+    fn from(value: SplitPathPrefix) -> Self {
+        value.as_str().to_string()
+    }
+}
+
+/// The clip-path prefix exceeds [`SplitPathPrefix::CAPACITY`].
+#[derive(Debug)]
+pub struct PrefixTooLongError {
+    len: usize,
+}
+
+impl std::fmt::Display for PrefixTooLongError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "hud config: the split path prefix is {} bytes; the capacity is {}",
+            self.len,
+            SplitPathPrefix::CAPACITY
+        )
+    }
+}
+
+impl std::error::Error for PrefixTooLongError {}
 
 /// Lazy-follow damping parameters for the floating HUD panel. See `docs/hud.md`.
 #[derive(Copy, Clone, Serialize, Deserialize)]
