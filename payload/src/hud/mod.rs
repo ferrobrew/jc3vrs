@@ -225,12 +225,19 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         // Per-layer corner sets while the split runs in gameplay: each layer keeps the panel's
         // apparent size at its own distance, so only the stereo depth differs.
         let split_active = cfg.split && mode == HudMode::Hud;
-        // The center layer's distance follows the smoothed aim depth when enabled, easing back to
-        // the configured distance while nothing is targeted.
-        let center_distance = if split_active && cfg.center_depth_from_aim {
-            aim::current(cfg.center_distance)
-        } else {
+        // The reticle depth (the split's center layer, or the single panel's center bubble)
+        // follows the smoothed aim depth when enabled, easing back to a flat rest distance while
+        // nothing is targeted: the center-layer distance under the split, the panel distance
+        // otherwise (so a stale bubble flattens into the panel instead of poking out of it).
+        let center_rest = if split_active {
             cfg.center_distance
+        } else {
+            cfg.distance
+        };
+        let center_distance = if cfg.center_depth_from_aim && mode == HudMode::Hud {
+            aim::current(center_rest)
+        } else {
+            center_rest
         };
         hud.compute_layer_corners(split_active.then(|| {
             [
@@ -241,11 +248,29 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         }));
         // The frame's recorded marker depths for the warp (recorded on the game thread by the
         // Get2DInfo hook); taken whether or not the warp draws, so stale markers never linger.
-        let frame_markers = markers::take_frame();
-        hud.set_warp_frame((split_active && cfg.marker_warp).then(|| state::WarpFrame {
+        let mut frame_markers = markers::take_frame();
+        let warp_active = cfg.marker_warp && mode == HudMode::Hud;
+        // Single-panel mode: the reticle region joins the depth field as a center bubble at the
+        // aim depth (under the split, the center layer carries the aim depth instead).
+        if warp_active && !split_active && cfg.center_depth_from_aim {
+            frame_markers.insert(
+                0,
+                markers::MarkerDepth {
+                    u: 0.5,
+                    v: 0.5,
+                    depth: center_distance,
+                    radius: cfg.center_bubble_radius,
+                },
+            );
+        }
+        hud.set_warp_frame(warp_active.then(|| state::WarpFrame {
             anchor: pos.to_array(),
             markers: frame_markers,
-            radius: cfg.marker_radius,
+            base_distance: if split_active {
+                cfg.marker_distance
+            } else {
+                cfg.distance
+            },
         }));
     }
 

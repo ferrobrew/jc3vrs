@@ -19,6 +19,8 @@ pub struct MarkerDepth {
     pub v: f32,
     /// Distance from the panel anchor to the marker's world point, in meters.
     pub depth: f32,
+    /// The warp falloff radius around the marker, in texture-uv units.
+    pub radius: f32,
 }
 
 /// The shader's marker capacity (matches `Markers[32]` in `hud_layer_vs.hlsl`).

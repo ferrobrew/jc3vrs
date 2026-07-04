@@ -321,7 +321,10 @@ unsafe fn restore_visibility(handles: &mut ClipHandles, snapshot: &VisibilitySna
 }
 
 /// Read a clip's visibility through its cached handle, defaulting to visible on failure.
-unsafe fn get_visible(handle: &mut ClipHandle) -> bool {
+///
+/// # Safety
+/// The caller must be on the capture thread or own the capture (see [`ClipHandle`]).
+pub(crate) unsafe fn get_visible(handle: &mut ClipHandle) -> bool {
     // SAFETY: the handle's value is pinned and managed; the interface pointer comes from it.
     unsafe {
         let Some(value) = handle.value.as_mut() else {
@@ -341,7 +344,10 @@ unsafe fn get_visible(handle: &mut ClipHandle) -> bool {
 
 /// Write a clip's visibility through its cached handle (a `VarsSet = V_VISIBLE` display-info
 /// write: no AVM, no AS3 setters).
-unsafe fn set_visible(handle: &mut ClipHandle, visible: bool) {
+///
+/// # Safety
+/// The caller must be on the capture thread or own the capture (see [`ClipHandle`]).
+pub(crate) unsafe fn set_visible(handle: &mut ClipHandle, visible: bool) {
     // SAFETY: as `get_visible`.
     unsafe {
         let Some(value) = handle.value.as_mut() else {

@@ -93,13 +93,20 @@ pub fn process_requests() {
         release_clip_handles();
     }
 
-    // The anonymous POI pool is assumed stable, but the game can grow or rebuild it; refresh the
-    // handle registry periodically while the split is active so new clips join the markers layer.
-    if crate::config::Config::lock_query(|c| c.hud.split)
-        && crate::hud::split::CLIP_HANDLES.lock().is_some()
-        && LAST_DISCOVERY
-            .lock()
-            .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0)
+    let (split, suppress_overlays) =
+        crate::config::Config::lock_query(|c| (c.hud.split, c.hud.suppress_overlays));
+    enforce_overlay_suppression(suppress_overlays);
+
+    // The overlay enforcement and the split both need the handle registry; request the initial
+    // discovery when either wants it, and refresh periodically while it is live (the anonymous
+    // POI pool is assumed stable, but the game can grow or rebuild it).
+    let handles_needed = split || suppress_overlays;
+    let handles_live = crate::hud::split::CLIP_HANDLES.lock().is_some();
+    if handles_needed
+        && (!handles_live
+            || LAST_DISCOVERY
+                .lock()
+                .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0))
     {
         DISCOVERY_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -137,6 +144,30 @@ pub fn process_requests() {
         if due && discover_layout(movie_impl, movie_root) {
             DISCOVERY_REQUESTED.store(false, std::sync::atomic::Ordering::Relaxed);
         }
+    }
+}
+
+/// Whether the overlay clips are currently being held hidden, so the enforcement can restore
+/// them once when it turns off.
+static OVERLAYS_ENFORCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Hold the issue #8 full-screen overlay clips hidden while suppression is on (game thread, every
+/// frame: the game re-shows them when their effects fire, so a one-shot hide would not stick).
+/// On the on-to-off transition the clips are set visible once; the game's own logic re-hides the
+/// ones whose effects are inactive on their next update.
+fn enforce_overlay_suppression(suppress: bool) {
+    let was = OVERLAYS_ENFORCED.swap(suppress, std::sync::atomic::Ordering::Relaxed);
+    if !suppress && !was {
+        return;
+    }
+    let mut handles = crate::hud::split::CLIP_HANDLES.lock();
+    let Some(handles) = handles.as_mut() else {
+        return;
+    };
+    for handle in &mut handles.overlays {
+        // SAFETY: this runs on the game thread (the Scaleform capture thread), and the handles
+        // are pinned managed values from the registry.
+        unsafe { crate::hud::split::set_visible(handle, !suppress) };
     }
 }
 

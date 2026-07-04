@@ -46,23 +46,30 @@ pub struct HudConfig {
     /// Drive the center layer's depth from the grapple reticle's aim point (smoothed), so the
     /// reticle group sits at the vergence of the surface it targets.
     pub center_depth_from_aim: bool,
-    /// While splitting, warp the marker layer per marker: each on-screen world marker's
-    /// neighborhood is displaced to the marker's real world depth (recorded from the game's own
-    /// world-to-screen calls), giving markers depth-correct stereo disparity individually.
+    /// Warp the panel per element: each on-screen world marker's neighborhood is displaced to
+    /// the marker's real world depth (recorded from the game's own world-to-screen calls), and
+    /// the screen-center reticle region to the aim depth, giving depth-correct stereo disparity
+    /// without re-rendering the HUD. Applies to the single panel; while
+    /// [`split`](HudConfig::split) is on it applies to the marker layer instead.
     pub marker_warp: bool,
+    /// The radius of the center (reticle) region displaced to the aim depth, in texture-uv units.
+    pub center_bubble_radius: f32,
     /// The warp falloff radius around each marker, in texture-uv units.
     pub marker_radius: f32,
     /// Marker depths are clamped to this, in meters -- beyond it disparity is indistinguishable
     /// from infinity.
     pub marker_max_depth: f32,
-    /// Render the HUD in three visibility passes -- static HUD, world markers, reticles -- into
-    /// separate textures, so the composite can place each group at its own depth (issue #14).
-    /// Requires [`redirect`](HudConfig::redirect); ignored during full-screen UI
-    /// ([`HudMode::Movie`](crate::hud::HudMode)). See `payload/src/hud/split.rs`.
+    /// EXPERIMENTAL: render the HUD in three visibility passes -- static HUD, world markers,
+    /// reticles -- into separate textures composited at per-layer depths. Currently unstable:
+    /// consuming multiple display-tree captures per frame fights Scaleform's once-a-frame
+    /// consumption model (stale snapshots, flicker, and update latency); the single-panel warp
+    /// ([`marker_warp`](HudConfig::marker_warp)) is the supported depth mechanism. See
+    /// `payload/src/hud/split.rs`.
     pub split: bool,
-    /// While splitting, keep the full-screen Scaleform overlays -- drowning tint, damage flashes,
-    /// directional damage indicators -- hidden in every pass (issue #8). They were authored to
-    /// cover a flat screen and cover the whole panel in VR instead.
+    /// Keep the full-screen Scaleform overlays -- drowning tint, damage flashes, directional
+    /// damage indicators -- hidden (issue #8): they were authored to cover a flat screen and
+    /// cover the whole panel in VR instead. Enforced per frame on the game thread through the
+    /// discovered clip handles.
     pub suppress_overlays: bool,
     /// The clip-path prefix from the root movie's timeline to the HUD movie's clips, ending in a
     /// dot when non-empty (e.g. `"hud."`). The HUD movie is attached by `root.gfx`'s ActionScript
@@ -85,9 +92,10 @@ impl HudConfig {
             center_distance: 3.0,
             center_depth_from_aim: true,
             marker_warp: true,
+            center_bubble_radius: 0.12,
             marker_radius: 0.08,
             marker_max_depth: 150.0,
-            split: true,
+            split: false,
             suppress_overlays: true,
             split_path_prefix: SplitPathPrefix::new(),
         }

@@ -49,7 +49,7 @@ fn convert_3d_coords_default(
     let (panel_enabled, record_aim, max_depth) = Config::lock_query(|c| {
         (
             c.hud.redirect && c.hud.quad,
-            c.hud.split && c.hud.center_depth_from_aim,
+            c.hud.center_depth_from_aim,
             c.hud.marker_max_depth,
         )
     });
@@ -128,11 +128,12 @@ fn get_2d_info(
     a10: bool,
     offset: Vector2,
 ) {
-    let (panel_enabled, record_depths, max_depth) = Config::lock_query(|c| {
+    let (panel_enabled, record_depths, max_depth, marker_radius) = Config::lock_query(|c| {
         (
             c.hud.redirect && c.hud.quad,
-            c.hud.redirect && c.hud.quad && c.hud.split && c.hud.marker_warp,
+            c.hud.redirect && c.hud.quad && c.hud.marker_warp,
             c.hud.marker_max_depth,
+            c.hud.marker_radius,
         )
     });
     let aspect = crate::hud::current_aspect();
@@ -191,6 +192,7 @@ fn get_2d_info(
                     u: *out_x / manager.m_CachedStageWidth,
                     v: *out_y / manager.m_CachedStageHeight,
                     depth,
+                    radius: marker_radius,
                 });
             }
         }

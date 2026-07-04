@@ -55,10 +55,8 @@ pub(super) struct WarpInputs {
     pub anchor: [f32; 3],
     /// The layer's flat distance (the corners' distance from the anchor).
     pub base_distance: f32,
-    /// The frame's recorded markers with the configured falloff radius baked in.
+    /// The frame's recorded markers, each with its own falloff radius.
     pub markers: Vec<MarkerDepth>,
-    /// Falloff radius around each marker, in uv units.
-    pub radius: f32,
 }
 
 /// The warp pass: the grid-warp pipeline and its constant buffer.
@@ -205,7 +203,7 @@ impl HudWarp {
             markers: [[0.0; 4]; MARKER_CAPACITY],
         };
         for (slot, marker) in constants.markers.iter_mut().zip(inputs.markers.iter()) {
-            *slot = [marker.u, marker.v, marker.depth, inputs.radius];
+            *slot = [marker.u, marker.v, marker.depth, marker.radius];
         }
 
         // SAFETY: `device.m_Device` is live; `target.m_Texture` is the engine's render-target-capable

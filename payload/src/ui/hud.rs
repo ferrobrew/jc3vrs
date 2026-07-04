@@ -31,42 +31,50 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
             );
             ui.checkbox(&mut cfg.hud.quad, "Draw the HUD as a floating quad per eye");
             ui.checkbox(
+                &mut cfg.hud.suppress_overlays,
+                "Suppress full-screen overlays (damage flash, drowning)",
+            );
+            ui.checkbox(
+                &mut cfg.hud.marker_warp,
+                "Warp the panel to per-element world depths (markers + center bubble)",
+            );
+            ui.add_enabled_ui(cfg.hud.marker_warp, |ui| {
+                ui.indent("hud_warp", |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut cfg.hud.marker_radius, 0.01..=0.3)
+                            .text("Marker warp radius (uv)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut cfg.hud.marker_max_depth, 10.0..=1000.0)
+                            .logarithmic(true)
+                            .text("Marker depth clamp (m)"),
+                    );
+                    ui.checkbox(
+                        &mut cfg.hud.center_depth_from_aim,
+                        "Drive the center bubble's depth from the aim point",
+                    );
+                    ui.add_enabled_ui(cfg.hud.center_depth_from_aim, |ui| {
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.center_bubble_radius, 0.01..=0.4)
+                                .text("Center bubble radius (uv)"),
+                        );
+                    });
+                });
+            });
+            ui.checkbox(
                 &mut cfg.hud.split,
-                "Split the HUD into depth layers (static / markers / center)",
+                "EXPERIMENTAL: split the HUD into depth layers (multi-pass, unstable)",
             );
             ui.add_enabled_ui(cfg.hud.split, |ui| {
                 ui.indent("hud_split", |ui| {
-                    ui.checkbox(
-                        &mut cfg.hud.suppress_overlays,
-                        "Suppress full-screen overlays (damage flash, drowning) in every layer",
-                    );
                     ui.add(
                         egui::Slider::new(&mut cfg.hud.marker_distance, 0.3..=50.0)
                             .logarithmic(true)
                             .text("Marker layer distance (m)"),
                     );
-                    ui.checkbox(
-                        &mut cfg.hud.marker_warp,
-                        "Warp markers to their world depth (per-marker disparity)",
-                    );
-                    ui.add_enabled_ui(cfg.hud.marker_warp, |ui| {
-                        ui.add(
-                            egui::Slider::new(&mut cfg.hud.marker_radius, 0.01..=0.3)
-                                .text("Marker warp radius (uv)"),
-                        );
-                        ui.add(
-                            egui::Slider::new(&mut cfg.hud.marker_max_depth, 10.0..=1000.0)
-                                .logarithmic(true)
-                                .text("Marker depth clamp (m)"),
-                        );
-                    });
                     ui.add(
                         egui::Slider::new(&mut cfg.hud.center_distance, 0.3..=10.0)
                             .text("Center layer distance (m)"),
-                    );
-                    ui.checkbox(
-                        &mut cfg.hud.center_depth_from_aim,
-                        "Drive center layer depth from the grapple aim point",
                     );
                     ui.horizontal(|ui| {
                         ui.label("Clip path prefix");

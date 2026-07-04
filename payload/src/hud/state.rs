@@ -19,14 +19,16 @@ use super::{
     warp::{HudWarp, WarpInputs},
 };
 
-/// The per-frame inputs for the marker-layer warp, chosen on eye 0.
+/// The per-frame inputs for the panel warp, chosen on eye 0.
 pub struct WarpFrame {
-    /// The panel anchor (head position) the layer corners were built around.
+    /// The panel anchor (head position) the corners were built around.
     pub anchor: [f32; 3],
-    /// The frame's recorded on-screen markers.
+    /// The frame's recorded on-screen markers (plus, in single-panel mode, the center bubble as
+    /// the first entry).
     pub markers: Vec<MarkerDepth>,
-    /// Falloff radius around each marker, in uv units.
-    pub radius: f32,
+    /// The flat (base) distance of the surface being warped: the panel distance in single-panel
+    /// mode, the marker layer's distance under the split.
+    pub base_distance: f32,
 }
 
 /// Global HUD state. Locked briefly on the render thread.
@@ -356,6 +358,28 @@ impl HudState {
         let split_ready = self.cached_layer_corners.iter().all(Option::is_some)
             && layer_srvs.iter().all(Option::is_some);
         if !split_ready {
+            // Single-panel mode: the whole HUD texture on one surface, depth-warped per element
+            // when the frame has warp inputs (markers at world depth, the reticle region at aim
+            // depth), flat otherwise.
+            if let Some(frame) = self.warp_frame.as_ref() {
+                if self.warp.is_none() {
+                    match HudWarp::new(device) {
+                        Ok(warp) => self.warp = Some(warp),
+                        Err(e) => tracing::error!("HUD warp: {e:#}"),
+                    }
+                }
+                if let Some(warp) = self.warp.as_ref() {
+                    let inputs = WarpInputs {
+                        corners,
+                        anchor: frame.anchor,
+                        base_distance: frame.base_distance,
+                        markers: frame.markers.clone(),
+                    };
+                    if warp.draw(context, device, target, &hud_srv, &inputs) {
+                        return;
+                    }
+                }
+            }
             if let Some(quad) = self.quad.as_ref() {
                 quad.draw(context, device, target, &hud_srv, &corners);
             }
@@ -390,7 +414,6 @@ impl HudState {
                         anchor: frame.anchor,
                         base_distance: distance,
                         markers: frame.markers.clone(),
-                        radius: frame.radius,
                     };
                     if warp.draw(context, device, target, srv, &inputs) {
                         continue;
