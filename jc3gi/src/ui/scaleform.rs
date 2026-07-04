@@ -1,4 +1,6 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::ui::ui_manager::UIManager;
 #[repr(C, align(8))]
 /// A node in the display tree returned by `Movie::GetDisplayObjectsTree`. Inherits from
 /// [`RefCountImpl`] and embeds a `Scaleform::String` for the name and a
@@ -177,9 +179,9 @@ impl Movie {
     /// [`AmpMovieObjectDesc`] nodes, each carrying the clip's instance name (or `"Unnamed"`)
     /// and a child array, calling `DisplayObject::GetName` on every child and recursing into
     /// containers. `heap` is the Scaleform `MemoryHeap*` used for the allocations (e.g.
-    /// [`MovieImpl::pHeap`]); the tree is freed by releasing the root node. Slot 9 (offset
-    /// `0x48`); the implementation is at `0x141_BED_530`. Call on the capture (game update)
-    /// thread, where the display tree is stable.
+    /// [`MovieImpl::pHeap`]); the tree is freed by releasing the root node. Slot 35 of the
+    /// `ASMovieRootBase` vtable; the implementation is at `0x141_BED_530`. Call on the capture
+    /// (game update) thread, where the display tree is stable.
     pub unsafe fn GetDisplayObjectsTree(
         &self,
         heap: *mut crate::ui::scaleform::MemoryHeap,
@@ -191,9 +193,11 @@ impl Movie {
     }
 }
 impl Movie {
-    /// The `MovieRoot` vtable address. The payload checks a live object against it before
-    /// trusting the vtable-indexed calls, since `m_Movie`'s dynamic type is load-bearing here.
-    pub const VFTABLE: u64 = 5408692096;
+    /// The `AS3::MovieRoot` vtable address (the `ASMovieRootBase` layout: slot 35 is
+    /// [`GetDisplayObjectsTree`](Movie::GetDisplayObjectsTree), slots 49/50/57 are the bound
+    /// SetVariable/GetVariable/Invoke). The payload checks a live object against it before
+    /// trusting the vtable-indexed calls, since the object's dynamic type is load-bearing here.
+    pub const VFTABLE: u64 = 5408691888;
 }
 impl std::convert::AsRef<Movie> for Movie {
     fn as_ref(&self) -> &Movie {
@@ -206,10 +210,15 @@ impl std::convert::AsMut<Movie> for Movie {
     }
 }
 #[repr(C, align(8))]
-/// The `GFx::MovieImpl` behind a [`Movie`]: the movie instance state, including the heap all of
-/// its allocations come from.
+/// The `GFx::MovieImpl` behind [`UIManager::m_Movie`](ui::ui_manager::UIManager::m_Movie): the
+/// `GFx::Movie` instance. The rendering-side virtuals live on its own vtable; the AS3 side
+/// (SetVariable, Invoke, the display tree) lives on [`pASMovieRoot`](MovieImpl::pASMovieRoot).
 pub struct MovieImpl {
-    _field_0: [u8; 56],
+    vftable: *const crate::ui::scaleform::MovieImplVftable,
+    _field_8: [u8; 16],
+    /// The AS3 `MovieRoot` (the [`Movie`] interface): SetVariable, Invoke, and the display tree.
+    pub pASMovieRoot: *mut crate::ui::scaleform::Movie,
+    _field_20: [u8; 24],
     /// The `GFx::Value::ObjectInterface` for this movie: the dispatcher every `GFx::Value`
     /// display-object/member operation goes through.
     pub pObjectInterface: *mut ::std::ffi::c_void,
@@ -225,7 +234,30 @@ fn _MovieImpl_size_check() {
     }
     unreachable!()
 }
-impl MovieImpl {}
+impl MovieImpl {
+    pub fn vftable(&self) -> *const crate::ui::scaleform::MovieImplVftable {
+        self.vftable as *const crate::ui::scaleform::MovieImplVftable
+    }
+    /// Snapshots the display tree for the render thread (`GFx::Movie` vtable slot 25). Must be
+    /// called from the current capture thread (see
+    /// [`SetCaptureThread`](MovieImpl::SetCaptureThread)); `if_changed = false` forces a fresh
+    /// snapshot. The next `RTHandle::NextCapture` on the render side picks it up.
+    pub unsafe fn Capture(&mut self, if_changed: bool) -> u64 {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Capture).read();
+            f(self as *mut Self as _, if_changed)
+        }
+    }
+    /// Reassigns which thread owns the capture (`GFx::Movie` vtable slot 27). The engine hands
+    /// ownership between the update thread and the render thread this way
+    /// (`RenderOffScreenTextures` does exactly this per frame).
+    pub unsafe fn SetCaptureThread(&mut self, thread_id: u32) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).SetCaptureThread).read();
+            f(self as *mut Self as _, thread_id)
+        }
+    }
+}
 impl std::convert::AsRef<MovieImpl> for MovieImpl {
     fn as_ref(&self) -> &MovieImpl {
         self
@@ -233,6 +265,67 @@ impl std::convert::AsRef<MovieImpl> for MovieImpl {
 }
 impl std::convert::AsMut<MovieImpl> for MovieImpl {
     fn as_mut(&mut self) -> &mut MovieImpl {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct MovieImplVftable {
+    _vfunc_0: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_1: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_2: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_3: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_4: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_5: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_6: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_7: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_8: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_9: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_10: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_11: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_12: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_13: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_14: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_15: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_16: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_17: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_18: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_19: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_20: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_21: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_22: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_23: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_24: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    /// Snapshots the display tree for the render thread (`GFx::Movie` vtable slot 25). Must be
+    /// called from the current capture thread (see
+    /// [`SetCaptureThread`](MovieImpl::SetCaptureThread)); `if_changed = false` forces a fresh
+    /// snapshot. The next `RTHandle::NextCapture` on the render side picks it up.
+    pub Capture: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+        if_changed: bool,
+    ) -> u64,
+    _vfunc_26: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    /// Reassigns which thread owns the capture (`GFx::Movie` vtable slot 27). The engine hands
+    /// ownership between the update thread and the render thread this way
+    /// (`RenderOffScreenTextures` does exactly this per frame).
+    pub SetCaptureThread: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+        thread_id: u32,
+    ),
+}
+fn _MovieImplVftable_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xE0], MovieImplVftable>([0u8; 0xE0]);
+    }
+    unreachable!()
+}
+impl MovieImplVftable {}
+impl std::convert::AsRef<MovieImplVftable> for MovieImplVftable {
+    fn as_ref(&self) -> &MovieImplVftable {
+        self
+    }
+}
+impl std::convert::AsMut<MovieImplVftable> for MovieImplVftable {
+    fn as_mut(&mut self) -> &mut MovieImplVftable {
         self
     }
 }
@@ -247,13 +340,39 @@ pub struct MovieVftable {
     _vfunc_6: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
     _vfunc_7: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
     _vfunc_8: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_9: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_10: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_11: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_12: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_13: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_14: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_15: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_16: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_17: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_18: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_19: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_20: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_21: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_22: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_23: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_24: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_25: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_26: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_27: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_28: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_29: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_30: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_31: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_32: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_33: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
+    _vfunc_34: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
     /// Recursively walks the runtime display tree from the root movie clip: returns a tree of
     /// [`AmpMovieObjectDesc`] nodes, each carrying the clip's instance name (or `"Unnamed"`)
     /// and a child array, calling `DisplayObject::GetName` on every child and recursing into
     /// containers. `heap` is the Scaleform `MemoryHeap*` used for the allocations (e.g.
-    /// [`MovieImpl::pHeap`]); the tree is freed by releasing the root node. Slot 9 (offset
-    /// `0x48`); the implementation is at `0x141_BED_530`. Call on the capture (game update)
-    /// thread, where the display tree is stable.
+    /// [`MovieImpl::pHeap`]); the tree is freed by releasing the root node. Slot 35 of the
+    /// `ASMovieRootBase` vtable; the implementation is at `0x141_BED_530`. Call on the capture
+    /// (game update) thread, where the display tree is stable.
     pub GetDisplayObjectsTree: unsafe extern "system" fn(
         this: *const crate::ui::scaleform::Movie,
         heap: *mut crate::ui::scaleform::MemoryHeap,
@@ -261,7 +380,7 @@ pub struct MovieVftable {
 }
 fn _MovieVftable_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x50], MovieVftable>([0u8; 0x50]);
+        ::std::mem::transmute::<[u8; 0x120], MovieVftable>([0u8; 0x120]);
     }
     unreachable!()
 }

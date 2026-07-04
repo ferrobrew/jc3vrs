@@ -1,4 +1,6 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::ui::scaleform::Movie;
 #[repr(C, align(8))]
 /// A Scaleform render buffer: what [`UIManager::m_RenderBuffer`] points at. It holds the
 /// render-target and depth-stencil views the UI HAL renders into; [`UpdateData`](RenderTargetData::UpdateData)
@@ -95,22 +97,43 @@ pub struct UIManager {
     pub m_MovieScaleWidth: i32,
     /// The movie render rectangle's height; see [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth).
     pub m_MovieScaleHeight: i32,
-    _field_3c: [u8; 4748],
+    _field_3c: [u8; 8],
+    /// The update thread's id, recorded at init and refreshed by `PreRender`: the thread that owns
+    /// the Scaleform capture (`Advance`/`Capture` run there). Hand capture ownership back to it
+    /// after borrowing the capture thread.
+    pub m_MainThreadId: u32,
+    _field_48: [u8; 458],
+    /// Whether the render system is initialized. One of the three gates `Render` checks before
+    /// drawing.
+    pub m_RenderReady: bool,
+    /// Whether rendering is active (cleared during device resets). The second `Render` gate.
+    pub m_RenderActive: bool,
+    _field_214: [u8; 4260],
+    /// The lock serializing the UI update (`PreRender`: `Advance` + `Capture`) against the UI
+    /// render (`Render`, `RenderOffScreenTextures`). A Win32 critical section, so re-entrant on
+    /// the owning thread: a `Render` hook can hold it across visibility writes, captures, and
+    /// calls to the original (which re-enters it).
+    pub m_DeferredRenderLock: *mut crate::graphics_engine::device::CRITICAL_SECTION,
+    _field_12c0: [u8; 24],
     /// The Scaleform `GFx::Loader`, created in `InitializeSystem`. Loads `.gfx` files via
     /// `Loader::CreateMovie`.
     pub m_Loader: *mut ::std::ffi::c_void,
     /// The `GFx::MovieDef` for `ui/root.gfx` -- the definition object, not the live instance.
     pub m_MovieDef: *mut ::std::ffi::c_void,
-    /// The live `GFx::Movie` instance (a `MovieRoot` under the hood), created by
-    /// `MovieDef::CreateInstance` in `InitializeSystem`. All `CUIBase` subclasses share this
-    /// single movie.
-    pub m_Movie: *mut crate::ui::scaleform::Movie,
-    _field_12e0: [u8; 176],
+    /// The live `GFx::Movie` instance (a [`MovieImpl`]), created by `MovieDef::CreateInstance` in
+    /// `InitializeSystem`. All `CUIBase` subclasses share this single movie. The AS3 side (the
+    /// [`Movie`](ui::scaleform::Movie) interface: SetVariable, Invoke, the display tree) hangs off
+    /// [`MovieImpl::pASMovieRoot`].
+    pub m_Movie: *mut crate::ui::scaleform::MovieImpl,
+    _field_12f0: [u8; 160],
     /// The Scaleform render buffer the UI HAL renders into, set up by
     /// [`InitPlatformRT`](UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`] rebinds which
     /// views it renders into.
     pub m_RenderBuffer: *mut crate::ui::ui_manager::RenderTargetData,
-    _field_1398: [u8; 236],
+    _field_1398: [u8; 231],
+    /// The third `Render` gate: whether UI rendering is enabled at all.
+    pub m_RenderingEnabled: bool,
+    _field_1480: [u8; 4],
     /// The movie stage's authored width (`m_CachedStageSize.x`), refreshed every frame from the loaded
     /// movie. The world-to-screen mapping ([`Convert3DCoords`](UIManager::Convert3DCoords)) maps NDC
     /// into this.
@@ -145,12 +168,31 @@ impl UIManager {
     }
 }
 impl UIManager {
-    pub const InitPlatformRT_ADDRESS: usize = 0x140F696E0;
+    pub const Render_ADDRESS: usize = 0x141007B70;
     /// Binds the UI render target: builds a [`RenderTargetData`] from the engine surface's
     /// render-target and depth-stencil views via [`RenderTargetData::UpdateData`]. Called at startup
     /// and on every device or resolution reset; `a2` carries the target side length (the buffer is
     /// square: width = height = a2). This only creates the render buffer -- the Scaleform movie's
     /// viewport is set separately by [`SetMovieViewport`](UIManager::SetMovieViewport).
+    /// The UI render: takes [`m_DeferredRenderLock`](UIManager::m_DeferredRenderLock), checks the
+    /// three render gates, retargets the Scaleform render-thread ids, drains the thread command
+    /// queue, binds the display render target, and draws the movie's latest captured display tree
+    /// (`GetDisplayHandle` -> `RTHandle::NextCapture` -> `HAL::Draw`) within a
+    /// `BeginFrame`/`BeginScene` pair. Runs on a CPU-fragment worker (kicked by `StartRender`,
+    /// joined by `SyncRender`). `IUIManager` vtable slot 4.
+    pub unsafe fn Render(
+        &mut self,
+        context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            ) = ::std::mem::transmute(Self::Render_ADDRESS);
+            f(self as *mut Self as _, context)
+        }
+    }
+    pub const InitPlatformRT_ADDRESS: usize = 0x140F696E0;
     pub unsafe fn InitPlatformRT(&mut self, a2: i32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, a2: i32) = ::std::mem::transmute(

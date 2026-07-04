@@ -14,7 +14,7 @@
 use std::ffi::CString;
 
 use jc3gi::ui::{
-    scaleform::{AmpMovieObjectDesc, Movie, Value},
+    scaleform::{AmpMovieObjectDesc, Movie, MovieImpl, Value},
     ui_manager::UIManager,
 };
 use parking_lot::Mutex;
@@ -50,51 +50,53 @@ pub fn process_requests() {
     if requests.is_empty() {
         return;
     }
-    let Some(movie) = live_movie() else {
+    let Some((movie_impl, movie_root)) = live_movie() else {
         tracing::warn!("scaleform: the UI movie is not available; dropping the queued requests");
         return;
     };
     for request in requests {
         match request {
-            Request::DumpTree => dump_tree(movie),
-            Request::SetClipVisible { path, visible } => set_clip_visible(movie, &path, visible),
+            Request::DumpTree => dump_tree(movie_impl, movie_root),
+            Request::SetClipVisible { path, visible } => {
+                set_clip_visible(movie_root, &path, visible)
+            }
         }
     }
 }
 
-/// The live UI movie, if the UI manager exists, the movie pointer is set, and its vtable is the
-/// `MovieRoot` vtable the bindings model. A vtable mismatch means the `m_Movie` model is wrong
-/// for this binary, so every operation refuses rather than calling through it.
-fn live_movie() -> Option<&'static Movie> {
-    // SAFETY: the UI manager is a live singleton past startup; m_Movie is set once at UI init and
-    // stable afterwards.
-    let movie = unsafe { UIManager::get()?.m_Movie.as_ref()? };
-    let vftable = movie.vftable() as usize as u64;
-    if vftable != Movie::VFTABLE {
-        tracing::error!(
-            "scaleform: m_Movie's vtable is {vftable:#x}, expected the MovieRoot vtable {:#x}; \
-             refusing to operate on it",
-            Movie::VFTABLE
-        );
-        return None;
+/// The live UI movie pair `(MovieImpl, MovieRoot)`, if the UI manager exists, `m_Movie` and its
+/// `pASMovieRoot` are set, and the root's vtable is the `MovieRoot` vtable the bindings model. A
+/// vtable mismatch means the model is wrong for this binary, so every operation refuses rather
+/// than calling through it.
+fn live_movie() -> Option<(&'static mut MovieImpl, &'static Movie)> {
+    // SAFETY: the UI manager is a live singleton past startup; m_Movie and its AS3 root are set
+    // once at UI init and stable afterwards.
+    unsafe {
+        let movie_impl = UIManager::get()?.m_Movie.as_mut()?;
+        let movie_root = movie_impl.pASMovieRoot.as_ref()?;
+        let vftable = movie_root.vftable() as usize as u64;
+        if vftable != Movie::VFTABLE {
+            tracing::error!(
+                "scaleform: the AS3 root's vtable is {vftable:#x}, expected the MovieRoot vtable \
+                 {:#x}; refusing to operate on it",
+                Movie::VFTABLE
+            );
+            return None;
+        }
+        Some((movie_impl, movie_root))
     }
-    Some(movie)
 }
 
 /// Log the movie's display tree, one line per clip, as `path`-style names with child counts.
-fn dump_tree(movie: &Movie) {
-    // SAFETY: called on the capture thread; the movie's impl and heap are live for the whole
-    // frame. The returned tree is a fresh allocation we release when done.
+fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
+    // SAFETY: called on the capture thread; the movie's heap is live for the whole frame. The
+    // returned tree is a fresh allocation we release when done.
     unsafe {
-        let Some(movie_impl) = movie.pMovieImpl.as_ref() else {
-            tracing::warn!("scaleform: the movie has no MovieImpl; cannot dump the tree");
-            return;
-        };
         if movie_impl.pHeap.is_null() {
             tracing::warn!("scaleform: the movie's heap is null; cannot dump the tree");
             return;
         }
-        let root = movie.GetDisplayObjectsTree(movie_impl.pHeap);
+        let root = movie_root.GetDisplayObjectsTree(movie_impl.pHeap);
         let Some(root_ref) = root.as_ref() else {
             tracing::warn!("scaleform: GetDisplayObjectsTree returned no tree");
             return;
