@@ -177,6 +177,27 @@ unsafe fn build(movie: &mut MovieImpl) -> Option<Partition> {
             return None;
         }
 
+        // The container must be part of the movie's *live* tree: the game re-attaches the HUD
+        // clips around menu transitions, and handles resolved against the previous attachment
+        // point still resolve to live-but-detached objects. Moving those would double-parent
+        // them once the game re-inserts them (which hangs the renderer's cache reconciliation),
+        // so refuse and wait for a fresh discovery.
+        let mut walk = hud_container.cast::<TreeNode>();
+        for _ in 0..64 {
+            let parent = (*walk).pParent;
+            if parent.is_null() {
+                break;
+            }
+            walk = parent;
+        }
+        if walk != movie.pRenderRoot.cast::<TreeNode>() {
+            tracing::warn!(
+                "hud roots: the HUD container is not attached to the live render root; not \
+                 partitioning"
+            );
+            return None;
+        }
+
         let context = &mut movie.RenderContext;
         let roots = [context.CreateEntryTreeRoot(), context.CreateEntryTreeRoot()];
         if roots.iter().any(|r| r.is_null()) {
@@ -213,84 +234,69 @@ unsafe fn build(movie: &mut MovieImpl) -> Option<Partition> {
 unsafe fn reconcile(p: &mut Partition) {
     // SAFETY (whole body): capture-seam threading per on_capture's contract.
     unsafe {
-        // Despawns: the display side removed the tombstone (its parent went null). Drop the real
-        // node from its root; the display object's own reference decides its lifetime.
+        // Despawns and reclaims. A tombstone whose parent went null was removed by the display
+        // side (a pool despawn): drop the real node from its root; the display object's own
+        // reference decides its lifetime. A moved node whose parent is no longer our root was
+        // re-inserted *somewhere* by the display side (`Insert` overwrites `pParent`): it is
+        // double-parented, which the renderer's lockstep cache reconciliation never converges on
+        // (an infinite loop under the deferred render lock, hanging the game). Give it back:
+        // remove it from our root's array and restore the display side's parent (our removal
+        // nulls it). The tombstone reference is dropped either way -- a still-placed tombstone
+        // must stay put (pulling it would shift the display side's cached indices), renders
+        // nothing, and the display side's own eventual removal destroys it.
         let mut despawned = 0usize;
+        let mut reclaimed = 0usize;
         let mut index = 0;
         while index < p.moved.len() {
-            if (*p.moved[index].tombstone.cast::<TreeNode>())
-                .pParent
-                .is_null()
-            {
-                let entry = p.moved.swap_remove(index);
-                remove_from_root(p.roots[entry.root], entry.node);
-                release_entry(entry.tombstone.cast());
-                despawned += 1;
-            } else {
+            let entry = &p.moved[index];
+            let tombstone_gone = (*entry.tombstone.cast::<TreeNode>()).pParent.is_null();
+            let display_parent = (*entry.node).pParent;
+            let reparented = display_parent != p.roots[entry.root].cast::<TreeNode>();
+            if !tombstone_gone && !reparented {
                 index += 1;
+                continue;
             }
+            let entry = p.moved.swap_remove(index);
+            remove_from_root(p.roots[entry.root], entry.node);
+            if reparented && !display_parent.is_null() {
+                // Our removal nulled the parent the display side just set; restore it.
+                (*entry.node).pParent = display_parent;
+                reclaimed += 1;
+            } else {
+                despawned += 1;
+            }
+            release_entry(entry.tombstone.cast());
         }
 
         // Spawns: any child of the HUD container we do not know is a fresh pool clip; adopt it
-        // into the markers root. Collect first: moving mutates the child array. A node that is
-        // already moved must never be adopted again -- a second insert would put it in the root's
-        // child array twice, and the renderer's lockstep cache reconciliation never converges on
-        // a duplicated child (an infinite loop under the deferred render lock, hanging the game).
+        // into the markers root. Collect first: moving mutates the child array. Nodes still in
+        // `moved` can no longer appear here (the reclaim pass above dropped any the display side
+        // took back), but never adopt one regardless -- a double insert is the hang above.
         let container = p.hud_container.as_mut().unwrap_unchecked();
         let mut fresh = Vec::new();
         for i in 0..container.GetSize() {
             let child = container.GetAt(i);
-            if child.is_null() || p.known_static.contains(&child) {
-                continue;
-            }
-            if let Some(entry) = p
-                .moved
-                .iter()
-                .find(|m| m.tombstone.cast::<TreeNode>() == child || m.node == child)
+            if child.is_null()
+                || p.known_static.contains(&child)
+                || p.moved
+                    .iter()
+                    .any(|m| m.tombstone.cast::<TreeNode>() == child || m.node == child)
             {
-                if entry.node == child {
-                    // The display side re-inserted a node we hold (a pool reattach racing our
-                    // bookkeeping). Give it back: it is now legitimately a child of the HUD
-                    // container, so it must leave our root before the capture publishes a
-                    // double-parented node.
-                    fresh.push(child);
-                }
                 continue;
             }
             fresh.push(child);
         }
-        let mut adopted = 0usize;
+        let adopted = fresh.len();
         for node in fresh {
-            if let Some(position) = p.moved.iter().position(|m| m.node == node) {
-                let entry = p.moved.swap_remove(position);
-                remove_from_root(p.roots[entry.root], entry.node);
-                reclaim_tombstone(p, &entry);
-                tracing::warn!("hud roots: the display side reclaimed a moved node; returned it");
-                continue;
-            }
             adopt(p, node);
-            adopted += 1;
         }
-        if adopted != 0 || despawned != 0 {
+        if adopted != 0 || despawned != 0 || reclaimed != 0 {
             tracing::info!(
-                "hud roots: reconciled {adopted} adoption(s), {despawned} despawn(s) \
-                 ({} moved total)",
+                "hud roots: reconciled {adopted} adoption(s), {despawned} despawn(s), \
+                 {reclaimed} reclaim(s) ({} moved total)",
                 p.moved.len()
             );
         }
-    }
-}
-
-/// Retire a reclaimed node's tombstone. The display side re-owns the node elsewhere in the
-/// container while the tombstone may still be placed; pulling it out ourselves would shift the
-/// display side's cached indices (the very thing tombstones prevent), so only our reference is
-/// dropped -- the tombstone renders nothing, and the display side's own eventual removal destroys
-/// it.
-unsafe fn reclaim_tombstone(_p: &mut Partition, entry: &MovedNode) {
-    // SAFETY: capture seam per on_capture's contract; the container's reference keeps a placed
-    // tombstone alive after ours is gone.
-    unsafe {
-        release_entry(entry.tombstone.cast());
     }
 }
 
@@ -352,7 +358,16 @@ unsafe fn teardown(p: &mut Partition) {
         let container = p.hud_container.as_mut().unwrap_unchecked();
         for entry in p.moved.drain(..) {
             let tombstone_node = entry.tombstone.cast::<TreeNode>();
-            if (*tombstone_node).pParent.is_null() {
+            let display_parent = (*entry.node).pParent;
+            let reparented = display_parent != p.roots[entry.root].cast::<TreeNode>();
+            if reparented {
+                // The display side already re-owns the node elsewhere; detach it from our array
+                // and restore the parent our removal nulls.
+                remove_from_root(p.roots[entry.root], entry.node);
+                if !display_parent.is_null() {
+                    (*entry.node).pParent = display_parent;
+                }
+            } else if (*tombstone_node).pParent.is_null() {
                 // The display side already dropped this child; just detach the real node.
                 remove_from_root(p.roots[entry.root], entry.node);
             } else if let Some(index) = find_child(container, tombstone_node) {

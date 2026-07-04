@@ -49,6 +49,23 @@ pub fn request_layout_discovery() {
 /// capture thread before the hooks come down).
 static RELEASE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether the current handle registry was resolved during gameplay ([`HudMode::Hud`]
+/// (crate::hud::HudMode)). The game re-attaches the HUD clips around the frontend/gameplay
+/// transition, so handles resolved in a menu can point at a detached tree -- the render-root
+/// partition must never build from those (moving nodes the game is about to re-insert into the
+/// live tree double-parents them, which hangs the renderer's cache reconciliation).
+static DISCOVERED_IN_HUD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The [`HudMode`](crate::hud::HudMode) seen by the previous [`process_requests`] call, for the
+/// menu-to-gameplay transition detection (`true` = gameplay).
+static LAST_MODE_WAS_HUD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the live handle registry was resolved during gameplay (see [`DISCOVERED_IN_HUD`]).
+pub fn handles_hud_fresh() -> bool {
+    DISCOVERED_IN_HUD.load(std::sync::atomic::Ordering::Relaxed)
+        && crate::hud::split::CLIP_HANDLES.lock().is_some()
+}
+
 /// Request the clip-handle registry's release (from the shutdown path; executed on the game
 /// thread by [`process_requests`]).
 pub fn request_release_handles() {
@@ -99,6 +116,16 @@ pub fn request_set_clip_visible(path: String, visible: bool) {
 pub fn process_requests() {
     if RELEASE_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
         release_clip_handles();
+    }
+
+    // The game re-attaches the HUD clips around the frontend/gameplay transition, so a registry
+    // resolved in a menu points at a soon-to-be-stale tree. Rebuild it on entering gameplay.
+    let in_hud = crate::hud::current_mode() == crate::hud::HudMode::Hud;
+    if in_hud && !LAST_MODE_WAS_HUD.swap(in_hud, std::sync::atomic::Ordering::Relaxed) {
+        release_clip_handles();
+        DISCOVERY_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        LAST_MODE_WAS_HUD.store(in_hud, std::sync::atomic::Ordering::Relaxed);
     }
 
     // The capture-seam hooks (the render-root partition and the overlay suppression) need the
@@ -344,6 +371,10 @@ fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
 
         release_clip_handles();
         *crate::hud::split::CLIP_HANDLES.lock() = Some(handles);
+        DISCOVERED_IN_HUD.store(
+            crate::hud::current_mode() == crate::hud::HudMode::Hud,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         resolved > 0
     }
 }

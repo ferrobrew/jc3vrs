@@ -111,6 +111,7 @@ fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
         });
         let split_active = split_enabled
             && crate::hud::current_mode() == crate::hud::HudMode::Hud
+            && crate::hud::scaleform::handles_hud_fresh()
             && crate::hud::split_layers_ready();
         // SAFETY: this is the capture seam both callees require; `this` is the live main movie.
         unsafe {
