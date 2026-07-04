@@ -56,7 +56,7 @@ pub const LAYERS: [HudLayer; LAYER_COUNT] = [HudLayer::Static, HudLayer::Markers
 /// The authored top-level containers of `hud.gfx` assigned to each layer. Paths are relative to
 /// the HUD movie's timeline; [`HudConfig::split_path_prefix`](crate::hud::HudConfig) is prepended
 /// at call time once the runtime attachment point is known.
-const LAYER_CONTAINERS: [&[&str]; LAYER_COUNT] = [
+pub(crate) const LAYER_CONTAINERS: [&[&str]; LAYER_COUNT] = [
     // Static: the six corner/edge safe-area groups and the selection wheel.
     &[
         "MCI_safe_area_top_left",
@@ -76,7 +76,7 @@ const LAYER_CONTAINERS: [&[&str]; LAYER_COUNT] = [
 /// The full-screen overlay clips of issue #8, all children of the center container: held
 /// invisible in every pass while
 /// [`HudConfig::suppress_overlays`](crate::hud::HudConfig::suppress_overlays) is on.
-const OVERLAY_CLIPS: &[&str] = &[
+pub(crate) const OVERLAY_CLIPS: &[&str] = &[
     "MCI_safe_area_center.MCI_drowning_container",
     "MCI_safe_area_center.MCI_health_damage_manager",
     "MCI_safe_area_center.MCI_character_damage_indicators",

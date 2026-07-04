@@ -122,6 +122,25 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                     ui.label("(redirect not yet applied)");
                 }
             });
+        egui::CollapsingHeader::new("Split layer textures")
+            .default_open(false)
+            .show(ui, |ui| {
+                let ids = hud.layer_preview_ids(renderer);
+                let size = egui::vec2(preview_width, preview_width / aspect.max(f32::EPSILON));
+                for (id, label) in ids.iter().zip(["Markers", "Center"]) {
+                    ui.label(label);
+                    match id {
+                        Some(id) => {
+                            ui.add(egui::Image::new(egui::ImageSource::Texture(
+                                egui::load::SizedTexture { id: *id, size },
+                            )));
+                        }
+                        None => {
+                            ui.label("(layer target not created)");
+                        }
+                    }
+                }
+            });
     }
 
     scaleform_debug_ui(ui);

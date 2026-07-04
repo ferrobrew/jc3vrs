@@ -106,6 +106,30 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
         dump_node(root_ref, &mut String::new(), &mut lines);
         tracing::info!("scaleform: display tree dump ends ({lines} clips)");
         root_ref.Release();
+
+        // Probe the split's known clip paths: whether each resolves and its current visibility,
+        // with the configured prefix applied. This is the ground truth for the split partition
+        // and the overlay suppression (a suppressed clip that still shows means the effect lives
+        // at a different path).
+        let prefix = crate::config::Config::lock_query(|c| c.hud.split_path_prefix);
+        let prefix = prefix.as_str();
+        tracing::info!("scaleform: split path probe (prefix {prefix:?})");
+        let containers = crate::hud::split::LAYER_CONTAINERS
+            .iter()
+            .flat_map(|layer| layer.iter());
+        for path in containers.chain(crate::hud::split::OVERLAY_CLIPS.iter()) {
+            let full = format!("{prefix}{path}._visible\0");
+            let mut value = Value::new_boolean(true);
+            let ok = movie_root.GetVariable(&mut value, full.as_ptr());
+            if ok && value.Type & 0x8F == Value::VT_BOOLEAN {
+                let visible = value.mValue & 0xFF != 0;
+                tracing::info!("scaleform: probe {path}: visible={visible}");
+            } else if ok {
+                tracing::info!("scaleform: probe {path}: resolves (non-boolean _visible)");
+            } else {
+                tracing::warn!("scaleform: probe {path}: does not resolve");
+            }
+        }
     }
 }
 

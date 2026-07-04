@@ -45,6 +45,8 @@ pub struct HudState {
     back_buffer_size: Option<(u32, u32)>,
     /// The egui texture id for the HUD preview, registered lazily on the UI thread.
     preview_id: Option<egui::TextureId>,
+    /// The egui texture ids for the marker/center layer previews, registered lazily.
+    layer_preview_ids: [Option<egui::TextureId>; split::LAYER_COUNT - 1],
     /// The quad pass that draws the redirected HUD back into the scene, built lazily on first draw.
     quad: Option<HudQuad>,
     /// The marker-layer warp pass, built lazily on the first warped draw.
@@ -117,6 +119,7 @@ impl HudState {
             redirected: false,
             back_buffer_size: None,
             preview_id: None,
+            layer_preview_ids: [None, None],
             quad: None,
             warp: None,
             warp_frame: None,
@@ -184,7 +187,11 @@ impl HudState {
     /// keeps the split inactive (see [`split_views`](HudState::split_views)).
     pub(super) fn ensure_layers(&mut self, device: &Device, enabled: bool) {
         if !enabled {
-            self.layer_targets = [None, None];
+            if self.layer_targets.iter().any(Option::is_some) {
+                self.layer_targets = [None, None];
+                // The preview SRVs belonged to the dropped textures; re-register next preview.
+                self.layer_preview_ids = [None, None];
+            }
             return;
         }
         let Some((width, height)) = self.target.as_ref().map(HudTarget::size) else {
@@ -193,7 +200,10 @@ impl HudState {
         for slot in &mut self.layer_targets {
             if slot.as_ref().map(HudTarget::size) != Some((width, height)) {
                 match HudTarget::new(device, width, height) {
-                    Ok(target) => *slot = Some(target),
+                    Ok(target) => {
+                        *slot = Some(target);
+                        self.layer_preview_ids = [None, None];
+                    }
                     Err(e) => {
                         tracing::error!("HUD split layer: {e:#}");
                         *slot = None;
@@ -431,11 +441,36 @@ impl HudState {
         self.preview_id
     }
 
+    /// Register (once) and return the egui texture ids for the marker/center layer previews.
+    /// `None` per slot until the layer target exists.
+    pub fn layer_preview_ids(
+        &mut self,
+        renderer: &mut egui_directx11::Renderer,
+    ) -> [Option<egui::TextureId>; split::LAYER_COUNT - 1] {
+        for (id, target) in self
+            .layer_preview_ids
+            .iter_mut()
+            .zip(self.layer_targets.iter())
+        {
+            if id.is_none()
+                && let Some(target) = target.as_ref()
+            {
+                *id = Some(renderer.register_user_texture(target.color_srv().clone()));
+            }
+        }
+        self.layer_preview_ids
+    }
+
     /// Drop the egui preview registration. Call on the UI thread (it owns the renderer), so the texture
     /// id is released rather than leaked.
     pub fn release_preview(&mut self, renderer: &mut egui_directx11::Renderer) {
         if let Some(id) = self.preview_id.take() {
             renderer.unregister_user_texture(id);
+        }
+        for id in &mut self.layer_preview_ids {
+            if let Some(id) = id.take() {
+                renderer.unregister_user_texture(id);
+            }
         }
     }
 }
