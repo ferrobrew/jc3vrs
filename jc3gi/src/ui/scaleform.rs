@@ -362,7 +362,7 @@ pub struct MovieImpl {
 }
 fn _MovieImpl_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x53F0], MovieImpl>([0u8; 0x53F0]);
+        ::std::mem::transmute::<[u8; 0x5468], MovieImpl>([0u8; 0x5468]);
     }
     unreachable!()
 }
@@ -722,11 +722,17 @@ pub struct RenderContext {
     /// of a HAL frame and cleared by `HAL::EndFrame` (`EndFrameContextNotify`), so within one
     /// `CUIManager::Render` call every draw sees the same snapshot.
     pub NextCaptureCalledInFrame: bool,
-    _field_9a: [u8; 6],
+    _field_9a: [u8; 86],
+    /// The per-slot snapshot frame ids, indexed like `pSnapshots`: `[0]` the active snapshot
+    /// (incremented by every `Capture`), `[1]` pending, `[2]` displaying, `[3]` finalizing. The
+    /// gap between `[0]` and `[2]` is how far the displayed UI trails the update thread -- a
+    /// growing gap means the render side is not consuming captures.
+    pub SnapshotFrameIds: [u64; 4],
+    _field_110: [u8; 8],
 }
 fn _RenderContext_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0xA0], RenderContext>([0u8; 0xA0]);
+        ::std::mem::transmute::<[u8; 0x118], RenderContext>([0u8; 0x118]);
     }
     unreachable!()
 }

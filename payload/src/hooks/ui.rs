@@ -118,10 +118,42 @@ fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
             crate::hud::split::apply_overlay_suppression(suppress_overlays);
             if let Some(movie) = this.as_mut() {
                 crate::hud::roots::on_capture(movie, split_active);
+                log_pipeline_lag(movie, split_active);
             }
         }
     }
     MOVIE_CAPTURE.get().unwrap().call(this, if_changed)
+}
+
+/// Log the snapshot pipeline's produced-vs-displayed gap every few seconds: the displayed UI
+/// trailing the update thread by a growing number of captures means the render side is not
+/// consuming them (the "elements update late" symptom); a steady small gap acquits the snapshot
+/// pipeline and points at the update side instead.
+fn log_pipeline_lag(movie: &MovieImpl, split_active: bool) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST_LOG: parking_lot::Mutex<Option<std::time::Instant>> = parking_lot::Mutex::new(None);
+    static LAST_ACTIVE: AtomicU64 = AtomicU64::new(0);
+    let due = {
+        let mut last = LAST_LOG.lock();
+        let due = last.is_none_or(|t| t.elapsed().as_secs_f32() >= 5.0);
+        if due {
+            *last = Some(std::time::Instant::now());
+        }
+        due
+    };
+    if !due {
+        return;
+    }
+    let ids = movie.RenderContext.SnapshotFrameIds;
+    let produced_in_window = ids[0].wrapping_sub(LAST_ACTIVE.swap(ids[0], Ordering::Relaxed));
+    tracing::info!(
+        "scaleform pipeline: active {} displaying {} (lag {}), {} captures in window,          partition {}",
+        ids[0],
+        ids[2],
+        ids[0].saturating_sub(ids[2]),
+        produced_in_window,
+        if split_active { "active" } else { "inactive" },
+    );
 }
 
 /// Render the partitioned HUD (each render root into its own layer texture, full rate) while the

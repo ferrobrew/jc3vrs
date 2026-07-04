@@ -140,7 +140,10 @@ pub fn teardown_now() {
 /// when the handles or nodes are not available yet.
 unsafe fn build(movie: &mut MovieImpl) -> Option<Partition> {
     let mut handles = super::split::CLIP_HANDLES.lock();
-    let handles = handles.as_mut()?;
+    let Some(handles) = handles.as_mut() else {
+        log_build_wait("the clip-handle registry is not resolved yet");
+        return None;
+    };
 
     // SAFETY (whole body): capture-seam threading per on_capture's contract.
     unsafe {
@@ -383,6 +386,17 @@ unsafe fn teardown(p: &mut Partition) {
             release_entry(root.cast());
         }
         tracing::info!("hud roots: partition torn down");
+    }
+}
+
+/// Log why the partition is still waiting to build, once per distinct reason per activation
+/// attempt streak (the build retries every frame, so an unconditional log would spam).
+fn log_build_wait(reason: &'static str) {
+    static LAST: parking_lot::Mutex<Option<&'static str>> = parking_lot::Mutex::new(None);
+    let mut last = LAST.lock();
+    if *last != Some(reason) {
+        *last = Some(reason);
+        tracing::info!("hud roots: waiting to partition: {reason}");
     }
 }
 
