@@ -4,6 +4,7 @@ pub mod draw;
 pub mod gi;
 pub mod graphics_engine;
 pub mod post_effects;
+pub mod render_block;
 pub mod render_engine;
 pub mod render_pass;
 pub mod shadow_manager;

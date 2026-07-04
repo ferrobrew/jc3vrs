@@ -1,6 +1,9 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[allow(unused_imports)]
-use crate::{camera::camera::Camera, graphics_engine::render_pass::RenderPass};
+use crate::{
+    camera::camera::Camera, graphics_engine::render_block::RBIInfo,
+    graphics_engine::render_pass::RenderPass,
+};
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
 pub enum ActiveCursor {
@@ -325,12 +328,17 @@ pub use windows::Win32::Foundation::HWND as HWND;
 /// translation-free offset view-projection, and the separate camera world position), shadow data, and
 /// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].
 pub struct RenderContext {
-    _field_0: [u8; 1108],
+    _field_0: [u8; 1100],
     /// The 8 per-atlas-slice projective shadow transforms, copied per dispatch from the shadow
     /// manager's parity storage. The deferred lighting shaders index them dynamically by a light's
     /// packed slice index (`cb0[63 + 4*slice .. 66 + 4*slice]` in the GlobalConstants) to project a
     /// light-relative position into its shadow-atlas slice; the sun resolve uses
     /// [`m_ShadowCascades`](RenderContext::m_ShadowCascades) instead.
+    /// The instance-transform slot the render blocks pass to
+    /// [`RBIInfo::GetMatrix`](graphics_engine::render_block::RBIInfo::GetMatrix) for the current
+    /// dispatch.
+    pub m_TransformIndex: u32,
+    _field_450: [u8; 4],
     pub m_ShadowMatrices: [crate::types::math::Matrix4; 8],
     /// The forward-material cascaded sun-shadow transform + cascade box-test parameters.
     pub m_ShadowCascades: crate::graphics_engine::graphics_engine::ShadowCascades,
@@ -338,10 +346,15 @@ pub struct RenderContext {
     /// parity storage (a byte store in [`RenderPass::SetRenderContextCamera`]).
     pub m_ActiveCascadeCount: u8,
     _field_775: [u8; 3],
+    /// The pass-family status bits for the current draw: `0x1` default, `0x2` static shadow map,
+    /// `0x4` dynamic shadow map. Render blocks branch on `& 6` to select the shadow/depth-only
+    /// path versus the full material path.
+    pub m_RenderStatus: u32,
+    _field_77c: [u8; 4],
 }
 fn _RenderContext_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x778], RenderContext>([0u8; 0x778]);
+        ::std::mem::transmute::<[u8; 0x780], RenderContext>([0u8; 0x780]);
     }
     unreachable!()
 }
