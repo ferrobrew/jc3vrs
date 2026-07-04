@@ -278,7 +278,13 @@ pub fn install() {
     // re-entrancy guard the VEH handler uses covers this hook. Each piece is flushed as its own
     // line, most-reliable first, so a fault while extracting a later piece cannot lose the earlier
     // ones -- the sentinel and location touch nothing heap-derived.
-    std::panic::set_hook(Box::new(|info| {
+    //
+    // The previously installed hook (lib.rs installs the tracing hook before this runs) is
+    // chained afterwards, so panics still reach jc3vrs.log: set_hook replaces rather than stacks,
+    // which silently disabled the tracing hook until this chaining. The allocation-free crash-log
+    // lines land first, so a fault in the richer tracing path cannot mask them.
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
         if IN_HANDLER.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -300,6 +306,7 @@ pub fn install() {
             Line::new().str("  message: ").bytes(msg).flush();
         }
         unsafe { log_backtrace() };
+        previous_hook(info);
         IN_HANDLER.store(false, Ordering::SeqCst);
     }));
     tracing::info!("Crash handler installed");
@@ -503,18 +510,27 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
         // a vectored handler escalates otherwise-handled exception traffic into process death. The
         // probe-then-read window is still racy in principle, but a single read can no longer
         // disagree with itself, and nothing dereferences the record after this block.
+        //
+        // The reads are volatile because a plain copy is not actually a single read: the record
+        // often lives on the faulting thread's own stack, which Wine's recursive exception
+        // dispatch rewrites while the handler runs, and the optimizer is free to defer each
+        // field's load to its use site -- observed in-game as records whose printed code was
+        // stack garbage that could never have passed the FATAL_CODES gate below (the gate's load
+        // and the print's load were separate reads of changed memory).
         if let Some(ep) = info.as_ref() {
             let rec_ptr = ep.ExceptionRecord;
             if !rec_ptr.is_null()
                 && readable(rec_ptr as usize, std::mem::size_of::<EXCEPTION_RECORD>())
             {
-                let rec_ref = &*rec_ptr;
                 let record = FaultRecord {
-                    code: rec_ref.ExceptionCode.0 as u32,
-                    address: rec_ref.ExceptionAddress as usize,
-                    parameter_count: rec_ref.NumberParameters,
-                    info0: rec_ref.ExceptionInformation[0],
-                    info1: rec_ref.ExceptionInformation[1],
+                    code: std::ptr::read_volatile(&raw const (*rec_ptr).ExceptionCode).0 as u32,
+                    address: std::ptr::read_volatile(&raw const (*rec_ptr).ExceptionAddress)
+                        as usize,
+                    parameter_count: std::ptr::read_volatile(
+                        &raw const (*rec_ptr).NumberParameters,
+                    ),
+                    info0: std::ptr::read_volatile(&raw const (*rec_ptr).ExceptionInformation[0]),
+                    info1: std::ptr::read_volatile(&raw const (*rec_ptr).ExceptionInformation[1]),
                 };
                 if FATAL_CODES.contains(&record.code) {
                     let ctx = ep.ContextRecord;
