@@ -23,7 +23,7 @@
 //! named children of the center container and can be held invisible in every pass.
 
 use jc3gi::ui::{
-    scaleform::{Movie, Value},
+    scaleform::{DisplayInfo, Movie, Value},
     ui_manager::UIManager,
 };
 use windows::{
@@ -88,12 +88,53 @@ pub(crate) const OVERLAY_CLIPS: &[&str] = &[
     "MCI_safe_area_center.MCI_sniper",
 ];
 
-/// The anonymous (auto-named `instanceNNNN`) children of the HUD clip, discovered from the live
-/// display tree: the POI pool is instantiated there, not under `MCI_poi_stage` (which stays
-/// empty). These belong to the markers layer. Written by the layout discovery on the game thread;
-/// read by the split passes on the render worker.
-pub(crate) static DYNAMIC_MARKER_CLIPS: parking_lot::Mutex<Vec<String>> =
-    parking_lot::Mutex::new(Vec::new());
+/// A heap-pinned managed [`Value`] handle to a clip. The `Value` is an intrusive list node on
+/// the movie's external-references list, so it must never move after `GetVariable` fills it --
+/// hence the box. Release (on the capture thread) before dropping.
+pub(crate) struct ClipHandle {
+    /// The pinned managed value. Present until released; absent when the clip path did not
+    /// resolve at discovery (the handle then reads as visible and writes are no-ops).
+    pub value: Option<Box<Value>>,
+}
+
+impl ClipHandle {
+    /// Release the managed value through its object interface. Must run on the capture thread
+    /// (the game thread, or a split pass that owns the capture).
+    pub unsafe fn release(&mut self) {
+        if let Some(mut value) = self.value.take() {
+            // SAFETY: the value was filled in place by GetVariable and never moved; managed
+            // values carry their object interface.
+            unsafe {
+                if let Some(interface) = value.pObjectInterface.as_mut() {
+                    let data = value.mValue as *mut std::ffi::c_void;
+                    interface.ObjectRelease(value.as_mut(), data);
+                }
+            }
+        }
+    }
+}
+
+/// The clip handles the split passes toggle, grouped by role. Built by the layout discovery on
+/// the game thread; used by the split passes on the render worker (which owns the capture while
+/// doing so); replaced wholesale on rediscovery (old handles released first).
+pub(crate) struct ClipHandles {
+    /// Per layer, the named containers (in [`LAYER_CONTAINERS`] order, missing clips skipped).
+    pub containers: [Vec<ClipHandle>; LAYER_COUNT],
+    /// The issue #8 overlay clips.
+    pub overlays: Vec<ClipHandle>,
+    /// The anonymous POI pool (markers layer).
+    pub dynamic: Vec<ClipHandle>,
+}
+
+// SAFETY: the raw pointers inside the handles (the pinned Values and their object interfaces)
+// are only dereferenced on the capture thread or by a split pass that owns the capture, never
+// concurrently -- the registry mutex plus the capture-thread discipline provide the
+// synchronization the pointer types cannot express.
+unsafe impl Send for ClipHandle {}
+
+/// The live handle registry. `None` until a discovery succeeds.
+pub(crate) static CLIP_HANDLES: parking_lot::Mutex<Option<ClipHandles>> =
+    parking_lot::Mutex::new(None);
 
 /// The per-pass render-target views, snapshotted from the HUD state before the passes run (so the
 /// state lock is not held across the original `Render` calls). The views are COM clones, so they
@@ -116,7 +157,6 @@ pub unsafe fn render_split(
     context: *mut std::ffi::c_void,
     views: &LayerViews,
     suppress_overlays: bool,
-    prefix: &str,
     original: &dyn Fn(*mut UIManager, *mut std::ffi::c_void),
 ) {
     // SAFETY (whole body): `this` is the live UI manager inside its own Render call path; the
@@ -141,6 +181,17 @@ pub unsafe fn render_split(
             return;
         }
 
+        // The clip handles are built by the layout discovery on the game thread; without them
+        // the split cannot mask, so degrade to the single-texture render and (re-)request
+        // discovery. The registry lock is held for the whole split, which also blocks a
+        // concurrent rediscovery from releasing handles mid-use.
+        let mut handles = CLIP_HANDLES.lock();
+        let Some(handles) = handles.as_mut() else {
+            super::scaleform::request_layout_discovery();
+            original(this, context);
+            return;
+        };
+
         EnterCriticalSection(lock as *mut _);
 
         // Borrow capture ownership for the visibility+capture sequence. This must mirror the
@@ -156,27 +207,17 @@ pub unsafe fn render_split(
         manager.m_CurrentCaptureThread = render_thread;
         movie_impl.SetCaptureThread(render_thread);
 
-        // Probe the display tree before doing anything: the HUD movie's clips only exist once
-        // the HUD is activated (they are absent at startup and during full-screen UI), and a
-        // wrong prefix never resolves. Splitting without working visibility writes would draw
-        // the full HUD into every layer (a triple-ghosted panel), so degrade to the normal
-        // single-texture render until the paths resolve.
-        if !paths_resolve(movie_root, prefix) {
-            manager.m_CurrentCaptureThread = previous_capture_thread;
-            movie_impl.SetCaptureThread(previous_capture_thread);
-            LeaveCriticalSection(lock as *mut _);
-            original(this, context);
-            return;
-        }
-
-        // Snapshot each container's game-driven visibility: the game shows and hides these
-        // (wingsuit HUD, state-driven groups) and only writes on state changes, so forcing them
-        // visible would desync its bookkeeping. Each pass shows a container only if the game had
-        // it visible *and* it belongs to the pass's layer; the exact snapshot is restored after.
-        let visibility = snapshot_visibility(movie_root, prefix);
+        // Snapshot each clip's game-driven visibility: the game shows and hides these (wingsuit
+        // HUD, POI pool entries) and only writes on state changes, so forcing them visible would
+        // desync its bookkeeping. Each pass shows a clip only if the game had it visible *and*
+        // it belongs to the pass's layer; the exact snapshot is restored after. All reads and
+        // writes go through GetDisplayInfo/SetDisplayInfo on cached handles -- the same direct
+        // display-info channel the game's own UpdatePOIs uses -- because AVM path resolution per
+        // write is slow and AS3 `visible` property setters run clip show/hide logic.
+        let snapshot = snapshot_visibility(handles);
 
         for layer in LAYERS {
-            set_layer_visibility(movie_root, prefix, layer, &visibility, suppress_overlays);
+            set_layer_visibility(handles, &snapshot, layer, suppress_overlays);
             movie_impl.Capture(true);
             rebind_views(manager, &views.views[layer as usize]);
             original(this, context);
@@ -185,7 +226,7 @@ pub unsafe fn render_split(
         // Restore the game's own visibility (and a clean capture of it) so menus, the movie mode,
         // and a mid-frame split disable all see the HUD exactly as the game left it; hand capture
         // ownership back to its previous owner.
-        restore_visibility(movie_root, prefix, &visibility);
+        restore_visibility(handles, &snapshot);
         movie_impl.Capture(true);
         manager.m_CurrentCaptureThread = previous_capture_thread;
         movie_impl.SetCaptureThread(previous_capture_thread);
@@ -195,156 +236,122 @@ pub unsafe fn render_split(
     }
 }
 
-/// Whether the layer containers currently resolve in the display tree, probing one
-/// representative path. Logs transitions in both directions (once each), so the log shows when
-/// the HUD movie's clips appeared and if they ever vanish again.
-unsafe fn paths_resolve(movie_root: &Movie, prefix: &str) -> bool {
-    use std::sync::atomic::{AtomicU8, Ordering};
-    /// 0 = unknown, 1 = resolving, 2 = not resolving.
-    static STATE: AtomicU8 = AtomicU8::new(0);
-
-    let full = format!("{prefix}MCI_safe_area_center.visible\0");
-    let mut value = Value::new_boolean(true);
-    // SAFETY: NUL-terminated path bytes; an unmanaged stack value the movie fills in.
-    let ok = unsafe { movie_root.GetVariable(&mut value, full.as_ptr()) };
-
-    let new_state = if ok { 1 } else { 2 };
-    let old_state = STATE.swap(new_state, Ordering::Relaxed);
-    if old_state != new_state {
-        if ok {
-            tracing::info!(
-                "hud split: the HUD clip paths resolve (prefix {prefix:?}); splitting is active"
-            );
-        } else {
-            tracing::warn!(
-                "hud split: the HUD clip paths do not resolve (prefix {prefix:?}); rendering \
-                 single-texture and requesting layout discovery"
-            );
-        }
-    }
-    if !ok {
-        super::scaleform::request_layout_discovery();
-    }
-    ok
-}
-
-/// The game-driven visibility snapshot: one flag per container (in [`LAYERS`]/
-/// [`LAYER_CONTAINERS`] order, flattened), one per overlay clip, and one per dynamic marker clip
-/// (paired with its name, snapshotted together so the sets cannot drift mid-frame).
+/// The game-driven visibility snapshot, index-aligned with [`ClipHandles`]' vectors.
 struct VisibilitySnapshot {
-    containers: [[bool; MAX_CONTAINERS]; LAYER_COUNT],
-    overlays: [bool; MAX_OVERLAYS],
-    dynamic: Vec<(String, bool)>,
+    containers: [Vec<bool>; LAYER_COUNT],
+    overlays: Vec<bool>,
+    dynamic: Vec<bool>,
 }
 
-/// The largest per-layer container list.
-const MAX_CONTAINERS: usize = 7;
-/// The overlay clip count.
-const MAX_OVERLAYS: usize = 7;
-
-/// Read each container's and overlay clip's current `visible` (defaulting to visible when the
-/// path does not resolve, which is also logged once by the write path).
-unsafe fn snapshot_visibility(movie_root: &Movie, prefix: &str) -> VisibilitySnapshot {
+/// Read each handle's current visibility (defaulting to visible when the read fails).
+unsafe fn snapshot_visibility(handles: &mut ClipHandles) -> VisibilitySnapshot {
     // SAFETY: the caller holds the deferred-render lock and capture ownership.
     unsafe {
-        let mut snapshot = VisibilitySnapshot {
-            containers: [[true; MAX_CONTAINERS]; LAYER_COUNT],
-            overlays: [true; MAX_OVERLAYS],
-            dynamic: Vec::new(),
-        };
-        for layer in LAYERS {
-            for (i, container) in LAYER_CONTAINERS[layer as usize].iter().enumerate() {
-                snapshot.containers[layer as usize][i] = get_visible(movie_root, prefix, container);
-            }
+        VisibilitySnapshot {
+            containers: std::array::from_fn(|layer| {
+                handles.containers[layer]
+                    .iter_mut()
+                    .map(|h| get_visible(h))
+                    .collect()
+            }),
+            overlays: handles
+                .overlays
+                .iter_mut()
+                .map(|h| get_visible(h))
+                .collect(),
+            dynamic: handles.dynamic.iter_mut().map(|h| get_visible(h)).collect(),
         }
-        for (i, clip) in OVERLAY_CLIPS.iter().enumerate() {
-            snapshot.overlays[i] = get_visible(movie_root, prefix, clip);
-        }
-        let dynamic = DYNAMIC_MARKER_CLIPS.lock();
-        snapshot.dynamic = dynamic
-            .iter()
-            .map(|name| (name.clone(), get_visible(movie_root, prefix, name)))
-            .collect();
-        snapshot
     }
 }
 
-/// Set the display list to show exactly `layer`'s containers that the game itself had visible
-/// (plus, optionally, keep the overlay clips hidden even in their own layer's pass).
+/// Set the display list to show exactly `layer`'s clips that the game itself had visible (plus,
+/// optionally, keep the overlay clips hidden even in their own layer's pass).
 unsafe fn set_layer_visibility(
-    movie_root: &Movie,
-    prefix: &str,
-    layer: HudLayer,
+    handles: &mut ClipHandles,
     snapshot: &VisibilitySnapshot,
+    layer: HudLayer,
     suppress_overlays: bool,
 ) {
     // SAFETY: the caller holds the deferred-render lock and capture ownership.
     unsafe {
         for other in LAYERS {
-            for (i, container) in LAYER_CONTAINERS[other as usize].iter().enumerate() {
-                let visible = other == layer && snapshot.containers[other as usize][i];
-                set_visible(movie_root, prefix, container, visible);
+            let in_layer = other == layer;
+            for (handle, was_visible) in handles.containers[other as usize]
+                .iter_mut()
+                .zip(&snapshot.containers[other as usize])
+            {
+                set_visible(handle, in_layer && *was_visible);
             }
         }
         // The anonymous POI pool belongs to the markers layer.
-        for (name, was_visible) in &snapshot.dynamic {
-            let visible = layer == HudLayer::Markers && *was_visible;
-            set_visible(movie_root, prefix, name, visible);
+        let markers = layer == HudLayer::Markers;
+        for (handle, was_visible) in handles.dynamic.iter_mut().zip(&snapshot.dynamic) {
+            set_visible(handle, markers && *was_visible);
         }
         if suppress_overlays {
-            for clip in OVERLAY_CLIPS {
-                set_visible(movie_root, prefix, clip, false);
+            for handle in &mut handles.overlays {
+                set_visible(handle, false);
             }
         }
     }
 }
 
-/// Restore every container and overlay clip to its snapshotted game-driven visibility.
-unsafe fn restore_visibility(movie_root: &Movie, prefix: &str, snapshot: &VisibilitySnapshot) {
+/// Restore every clip to its snapshotted game-driven visibility.
+unsafe fn restore_visibility(handles: &mut ClipHandles, snapshot: &VisibilitySnapshot) {
     // SAFETY: the caller holds the deferred-render lock and capture ownership.
     unsafe {
         for layer in LAYERS {
-            for (i, container) in LAYER_CONTAINERS[layer as usize].iter().enumerate() {
-                set_visible(
-                    movie_root,
-                    prefix,
-                    container,
-                    snapshot.containers[layer as usize][i],
-                );
+            for (handle, was_visible) in handles.containers[layer as usize]
+                .iter_mut()
+                .zip(&snapshot.containers[layer as usize])
+            {
+                set_visible(handle, *was_visible);
             }
         }
-        for (i, clip) in OVERLAY_CLIPS.iter().enumerate() {
-            set_visible(movie_root, prefix, clip, snapshot.overlays[i]);
+        for (handle, was_visible) in handles.overlays.iter_mut().zip(&snapshot.overlays) {
+            set_visible(handle, *was_visible);
         }
-        for (name, was_visible) in &snapshot.dynamic {
-            set_visible(movie_root, prefix, name, *was_visible);
+        for (handle, was_visible) in handles.dynamic.iter_mut().zip(&snapshot.dynamic) {
+            set_visible(handle, *was_visible);
         }
     }
 }
 
-/// Read `<prefix><path>.visible`, defaulting to `true` when the path does not resolve or the
-/// value is not a boolean.
-unsafe fn get_visible(movie_root: &Movie, prefix: &str, path: &str) -> bool {
-    let full = format!("{prefix}{path}.visible\0");
-    let mut value = Value::new_boolean(true);
-    // SAFETY: NUL-terminated path bytes; an unmanaged stack value the movie fills in. A boolean
-    // result is unmanaged, so nothing needs releasing.
-    let ok = unsafe { movie_root.GetVariable(&mut value, full.as_ptr()) };
-    if !ok || value.Type & 0x8F != Value::VT_BOOLEAN {
-        return true;
+/// Read a clip's visibility through its cached handle, defaulting to visible on failure.
+unsafe fn get_visible(handle: &mut ClipHandle) -> bool {
+    // SAFETY: the handle's value is pinned and managed; the interface pointer comes from it.
+    unsafe {
+        let Some(value) = handle.value.as_mut() else {
+            return true;
+        };
+        let Some(interface) = value.pObjectInterface.as_mut() else {
+            return true;
+        };
+        let mut info = DisplayInfo::default();
+        let data = value.mValue as *mut std::ffi::c_void;
+        if !interface.GetDisplayInfo(data, &mut info) {
+            return true;
+        }
+        info.Visible
     }
-    value.mValue & 0xFF != 0
 }
 
-/// Write `<prefix><path>.visible = visible` on the movie. Failures are logged once per path (the
-/// prefix may be wrong until the in-game display-tree dump pins the attachment point).
-unsafe fn set_visible(movie_root: &Movie, prefix: &str, path: &str, visible: bool) {
-    let full = format!("{prefix}{path}.visible\0");
-    let value = Value::new_boolean(visible);
-    // SAFETY: NUL-terminated path bytes; an unmanaged stack boolean the movie copies.
-    let ok = unsafe { movie_root.SetVariable(full.as_ptr(), &value, 0) };
-    if !ok {
-        log_path_failure_once(&full[..full.len() - ".visible\0".len()]);
+/// Write a clip's visibility through its cached handle (a `VarsSet = V_VISIBLE` display-info
+/// write: no AVM, no AS3 setters).
+unsafe fn set_visible(handle: &mut ClipHandle, visible: bool) {
+    // SAFETY: as `get_visible`.
+    unsafe {
+        let Some(value) = handle.value.as_mut() else {
+            return;
+        };
+        let Some(interface) = value.pObjectInterface.as_mut() else {
+            return;
+        };
+        let mut info = DisplayInfo::default();
+        info.VarsSet = DisplayInfo::V_VISIBLE as u16;
+        info.Visible = visible;
+        let data = value.mValue as *mut std::ffi::c_void;
+        interface.SetDisplayInfo(data, &info);
     }
 }
 
@@ -357,20 +364,6 @@ fn log_split_fallback_once() {
             "hud split: the AS3 root's vtable does not match the modeled MovieRoot vtable; \
              falling back to the single-texture render"
         );
-    }
-}
-
-/// Log a failing clip path once rather than every frame (60+ writes per second per path).
-fn log_path_failure_once(path: &str) {
-    use std::sync::Mutex;
-    static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    let mut logged = LOGGED.lock().unwrap();
-    if !logged.iter().any(|p| p == path) {
-        tracing::warn!(
-            "hud split: SetVariable failed for {path:?}; the clip path (or the configured split \
-             path prefix) does not match the runtime display tree"
-        );
-        logged.push(path.to_string());
     }
 }
 

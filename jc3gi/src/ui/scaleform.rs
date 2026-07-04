@@ -68,6 +68,57 @@ impl std::convert::AsMut<AmpMovieObjectDesc> for AmpMovieObjectDesc {
         self
     }
 }
+#[derive(Default)]
+#[repr(C, align(16))]
+/// A display object's presentation state, read and written through
+/// [`ValueObjectInterface::GetDisplayInfo`] / [`SetDisplayInfo`](ValueObjectInterface::SetDisplayInfo).
+/// [`VarsSet`](DisplayInfo::VarsSet) selects which fields a write applies.
+pub struct DisplayInfo {
+    pub X: f64,
+    pub Y: f64,
+    pub Rotation: f64,
+    pub XScale: f64,
+    pub YScale: f64,
+    pub Alpha: f64,
+    pub Z: f64,
+    pub XRotation: f64,
+    pub YRotation: f64,
+    pub ZScale: f64,
+    pub FOV: f64,
+    _field_58: [u8; 8],
+    /// `Render::Matrix3x4<float>` (3D view matrix).
+    pub ViewMatrix3D: [f32; 12],
+    /// `Render::Matrix4x4<float>` (3D projection matrix).
+    pub ProjectionMatrix3D: [f32; 16],
+    /// `Render::EdgeAAMode`.
+    pub EdgeAAMode: u32,
+    /// Which fields a [`SetDisplayInfo`](ValueObjectInterface::SetDisplayInfo) call applies
+    /// (`V_*` bits; `0x40` = visible).
+    pub VarsSet: u16,
+    pub Visible: bool,
+    _field_d7: [u8; 9],
+}
+fn _DisplayInfo_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xE0], DisplayInfo>([0u8; 0xE0]);
+    }
+    unreachable!()
+}
+impl DisplayInfo {}
+impl DisplayInfo {
+    /// The [`VarsSet`](DisplayInfo::VarsSet) bit selecting [`Visible`](DisplayInfo::Visible).
+    pub const V_VISIBLE: u32 = 64;
+}
+impl std::convert::AsRef<DisplayInfo> for DisplayInfo {
+    fn as_ref(&self) -> &DisplayInfo {
+        self
+    }
+}
+impl std::convert::AsMut<DisplayInfo> for DisplayInfo {
+    fn as_mut(&mut self) -> &mut DisplayInfo {
+        self
+    }
+}
 #[repr(C, align(1))]
 /// A Scaleform `MemoryHeap`. Opaque; allocation goes through its vtable (`Alloc` at slot offset
 /// `0x50`).
@@ -529,7 +580,7 @@ pub struct Value {
     /// `ListNode<Value>::pNext`; null for unmanaged values.
     pub pNext: *mut crate::ui::scaleform::Value,
     /// The owning movie's object interface; null for unmanaged values.
-    pub pObjectInterface: *mut ::std::ffi::c_void,
+    pub pObjectInterface: *mut crate::ui::scaleform::ValueObjectInterface,
     /// The `ValueType` tag, possibly with `VTC_*` control bits (so not modeled as an enum).
     pub Type: u32,
     _field_1c: [u8; 4],
@@ -569,6 +620,86 @@ impl std::convert::AsRef<Value> for Value {
 }
 impl std::convert::AsMut<Value> for Value {
     fn as_mut(&mut self) -> &mut Value {
+        self
+    }
+}
+#[repr(C, align(1))]
+/// The `GFx::Value::ObjectInterface`: the dispatcher for operations on managed values (display
+/// objects, arrays). One per movie ([`MovieImpl::pObjectInterface`]); a managed [`Value`] carries
+/// its owning interface in [`Value::pObjectInterface`].
+pub struct ValueObjectInterface {
+    _field_0: [u8; 8],
+}
+fn _ValueObjectInterface_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x8], ValueObjectInterface>([0u8; 0x8]);
+    }
+    unreachable!()
+}
+impl ValueObjectInterface {
+    pub const GetDisplayInfo_ADDRESS: usize = 0x141BB8690;
+    /// Reads a display object's `DisplayInfo` (position, scale, alpha, visibility). `data` is the
+    /// value's [`mValue`](Value::mValue) payload. Returns false when the value is not a display
+    /// object.
+    pub unsafe fn GetDisplayInfo(
+        &mut self,
+        data: *mut ::std::ffi::c_void,
+        info: *mut crate::ui::scaleform::DisplayInfo,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                data: *mut ::std::ffi::c_void,
+                info: *mut crate::ui::scaleform::DisplayInfo,
+            ) -> bool = ::std::mem::transmute(Self::GetDisplayInfo_ADDRESS);
+            f(self as *mut Self as _, data, info)
+        }
+    }
+    pub const SetDisplayInfo_ADDRESS: usize = 0x141BAEF00;
+    /// Writes the `DisplayInfo` fields selected by [`DisplayInfo::VarsSet`] directly at the
+    /// display-object level -- no AVM path resolution and no AS3 property setters, which is what
+    /// makes it suitable for high-frequency writes (the game's own `CHUDUI::UpdatePOIs` drives
+    /// POI positions and visibility through it every frame).
+    pub unsafe fn SetDisplayInfo(
+        &mut self,
+        data: *mut ::std::ffi::c_void,
+        info: *const crate::ui::scaleform::DisplayInfo,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                data: *mut ::std::ffi::c_void,
+                info: *const crate::ui::scaleform::DisplayInfo,
+            ) -> bool = ::std::mem::transmute(Self::SetDisplayInfo_ADDRESS);
+            f(self as *mut Self as _, data, info)
+        }
+    }
+    pub const ObjectRelease_ADDRESS: usize = 0x141BC8D70;
+    /// Releases a managed value: unlinks it from the movie's external-references list and drops
+    /// the AS3 object reference. Call on the capture thread. `data` is the value's
+    /// [`mValue`](Value::mValue) payload.
+    pub unsafe fn ObjectRelease(
+        &mut self,
+        value: *mut crate::ui::scaleform::Value,
+        data: *mut ::std::ffi::c_void,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                value: *mut crate::ui::scaleform::Value,
+                data: *mut ::std::ffi::c_void,
+            ) = ::std::mem::transmute(Self::ObjectRelease_ADDRESS);
+            f(self as *mut Self as _, value, data)
+        }
+    }
+}
+impl std::convert::AsRef<ValueObjectInterface> for ValueObjectInterface {
+    fn as_ref(&self) -> &ValueObjectInterface {
+        self
+    }
+}
+impl std::convert::AsMut<ValueObjectInterface> for ValueObjectInterface {
+    fn as_mut(&mut self) -> &mut ValueObjectInterface {
         self
     }
 }

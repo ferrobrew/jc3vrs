@@ -158,13 +158,13 @@ pub fn tick(device: &Device, back_buffer_width: u32, back_buffer_height: u32) {
 /// The inputs the `CUIManager::Render` detour needs for a split frame, or `None` when the split
 /// must not run this frame (disabled, not redirected, layer targets missing, or full-screen UI).
 /// Snapshotted under the state lock so the detour never holds it across the original render.
-pub fn split_inputs() -> Option<(split::LayerViews, bool, config::SplitPathPrefix)> {
+pub fn split_inputs() -> Option<(split::LayerViews, bool)> {
     let cfg = crate::config::Config::lock_query(|c| c.hud);
     if !cfg.redirect || !cfg.split || current_mode() != HudMode::Hud {
         return None;
     }
     let views = HUD_STATE.lock().split_views()?;
-    Some((views, cfg.suppress_overlays, cfg.split_path_prefix))
+    Some((views, cfg.suppress_overlays))
 }
 
 /// Compute the HUD texture dimensions from the render scale, the configured aspect (width / height),
@@ -342,5 +342,8 @@ pub fn install() {
     crate::lifecycle::on_cleanup(|renderer| {
         crate::config::CONFIG.lock().hud.redirect = false;
         HUD_STATE.lock().release_preview(renderer);
+        // The clip handles must be released on the capture (game) thread; the shutdown path lets
+        // a few more frames tick before the hooks come down, which drains this request.
+        scaleform::request_release_handles();
     });
 }

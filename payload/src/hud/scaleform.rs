@@ -39,10 +39,38 @@ static DISCOVERY_REQUESTED: std::sync::atomic::AtomicBool =
 static LAST_DISCOVERY: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 /// Request a display-tree layout discovery: derive the split's clip-path prefix from the live
-/// tree (by locating `MCI_safe_area_center`'s parent) and collect the HUD clip's anonymous
-/// children (the POI pool) for the markers layer.
+/// tree (by locating `MCI_safe_area_center`'s parent), collect the HUD clip's anonymous children
+/// (the POI pool), and build the split's clip-handle registry.
 pub fn request_layout_discovery() {
     DISCOVERY_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether a handle release is wanted (set at shutdown so the managed values are released on the
+/// capture thread before the hooks come down).
+static RELEASE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Request the clip-handle registry's release (from the shutdown path; executed on the game
+/// thread by [`process_requests`]).
+pub fn request_release_handles() {
+    RELEASE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Release and drop the clip-handle registry (capture thread).
+fn release_clip_handles() {
+    if let Some(mut handles) = crate::hud::split::CLIP_HANDLES.lock().take() {
+        // SAFETY: called on the capture thread; each handle releases through its own interface.
+        unsafe {
+            for handle in handles
+                .containers
+                .iter_mut()
+                .flatten()
+                .chain(handles.overlays.iter_mut())
+                .chain(handles.dynamic.iter_mut())
+            {
+                handle.release();
+            }
+        }
+    }
 }
 
 /// Queue a display-tree dump (from the debug UI).
@@ -61,6 +89,10 @@ pub fn request_set_clip_visible(path: String, visible: bool) {
 /// Execute all pending requests. Call once per frame on the game update thread (the Scaleform
 /// capture thread), before the frame's UI advance.
 pub fn process_requests() {
+    if RELEASE_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        release_clip_handles();
+    }
+
     let requests = std::mem::take(&mut *REQUESTS.lock());
     if requests.is_empty() && !DISCOVERY_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
         return;
@@ -235,10 +267,6 @@ fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
         let Some((prefix, anonymous)) = found else {
             return false;
         };
-        tracing::info!(
-            "scaleform: layout discovery: prefix {prefix:?}, {} anonymous marker clips",
-            anonymous.len()
-        );
         if let Err(e) = crate::config::CONFIG
             .lock()
             .hud
@@ -248,8 +276,52 @@ fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
             tracing::warn!("scaleform: layout discovery: {e}");
             return false;
         }
-        *crate::hud::split::DYNAMIC_MARKER_CLIPS.lock() = anonymous;
-        true
+
+        // Resolve a pinned managed handle per clip, on this (capture) thread. The Value is an
+        // intrusive list node on the movie's external-references list once filled, so it is
+        // boxed first and never moved afterwards.
+        let mut resolved = 0usize;
+        let mut total = 0usize;
+        let mut resolve = |path: &str| -> crate::hud::split::ClipHandle {
+            total += 1;
+            let full = format!("{prefix}{path}\0");
+            let mut value = Box::new(Value::new_boolean(false));
+            let ok = movie_root.GetVariable(value.as_mut(), full.as_ptr());
+            let is_display_object = ok
+                && value.Type & 0x8F == Value::VT_DISPLAY_OBJECT
+                && !value.pObjectInterface.is_null();
+            if is_display_object {
+                resolved += 1;
+            } else {
+                tracing::warn!("scaleform: layout discovery: {path} did not resolve to a clip");
+            }
+            crate::hud::split::ClipHandle {
+                value: is_display_object.then_some(value),
+            }
+        };
+
+        let handles = crate::hud::split::ClipHandles {
+            containers: std::array::from_fn(|layer| {
+                crate::hud::split::LAYER_CONTAINERS[layer]
+                    .iter()
+                    .map(|path| resolve(path))
+                    .collect()
+            }),
+            overlays: crate::hud::split::OVERLAY_CLIPS
+                .iter()
+                .map(|path| resolve(path))
+                .collect(),
+            dynamic: anonymous.iter().map(|name| resolve(name)).collect(),
+        };
+        tracing::info!(
+            "scaleform: layout discovery: prefix {prefix:?}, {resolved}/{total} clips resolved \
+             ({} anonymous marker clips)",
+            anonymous.len()
+        );
+
+        release_clip_handles();
+        *crate::hud::split::CLIP_HANDLES.lock() = Some(handles);
+        resolved > 0
     }
 }
 

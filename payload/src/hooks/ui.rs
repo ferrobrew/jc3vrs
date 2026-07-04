@@ -91,7 +91,7 @@ fn convert_3d_coords_default(
 #[detour(address = UIManager::Render_ADDRESS)]
 fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
     let original = UI_RENDER.get().unwrap();
-    let Some((views, suppress_overlays, prefix)) = crate::hud::split_inputs() else {
+    let Some((views, suppress_overlays)) = crate::hud::split_inputs() else {
         original.call(this, context);
         return;
     };
@@ -102,7 +102,6 @@ fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
             context as *mut std::ffi::c_void,
             &views,
             suppress_overlays,
-            prefix.as_str(),
             &|t, c| original.call(t, c as *mut HContext_t),
         );
     }
