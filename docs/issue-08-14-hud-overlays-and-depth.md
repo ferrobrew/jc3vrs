@@ -5,12 +5,48 @@ panel) and issue #14 (dynamic HUD depth/scale based on scene geometry). The two
 share the same underlying Scaleform architecture and the same per-element
 separation question, so they're documented together.
 
-**Status: implemented on the `hud-depth-split` branch as a time-multiplexed
-split (one layer's texture refreshed per frame), pending in-game
-verification.** The split separates the HUD into three layers (static /
-markers / center) in separate textures composited at per-layer depths, with a
-per-marker depth warp on the marker layer, an aim-driven depth for the center
-layer, and overlay suppression for #8.
+**Status: investigating a render-tree partition (multiple `TreeRoot`s in the
+one movie's render context) as the split mechanism.** Two implemented
+mechanisms preceded it on the `hud-depth-split` branch: the multi-pass
+visibility split (structurally unsound; see correction 2 below) and the
+time-multiplexed split (stable, but in-game testing showed the structural
+cost is visible: with each layer's texture refreshed at 1/3 rate from a
+different frame's camera/panel matrices, world-to-screen'd elements appear at
+disagreeing positions across layers under motion, and strobe at refresh
+boundaries within a layer -- pose freezing compensates camera rotation for
+the marker layer but not translation parallax nor the cross-layer projection
+disagreement). World-to-screen'd content fundamentally needs full-rate
+sampling, and one safe capture per frame means time multiplexing can never
+provide it. The single-panel warp (full-rate, per-marker depth on one
+texture) remains the working fallback throughout.
+
+Actual multiple movie instances (one per layer) were considered and
+rejected: the game drives the HUD one-way through cached `GFx::Value`
+handles into specific objects of the main movie, so clones receive nothing;
+keeping them alive means mirroring every invoke and display-info write into
+per-clone object equivalents, and the anonymous POI pool's identity across
+movies only holds if the AS3 is perfectly deterministic -- a lockstep
+problem with divergence failure modes.
+
+**The render-root partition.** A movie's display tree mirrors into a render
+tree (`Render::TreeContainer`/`TreeShape` entries) inside its render
+context; `HAL::Draw` takes a `TreeRoot`, and the engine already draws
+multiple roots per frame through the same HAL (the off-screen UI movies,
+the debug-text handle). The context's snapshot pipeline covers all entries
+in the context, not just one root. So: create two extra `TreeRoot`s in the
+HUD movie's own context, reparent the layer containers' render nodes into
+them (on the game thread at the capture seam, once), and replace
+`CUIManager::Render`'s body with one `BeginFrame` / one `NextCapture` /
+three `HAL::Draw` calls -- main root into the static texture, the extra
+roots into the marker and center textures -- then `EndFrame`. Full rate,
+zero added latency, zero extra captures, no visibility masking (each
+element draws exactly once per frame), and the display side (hit-testing,
+AS3) is untouched. Open questions under investigation: `TreeRoot` creation
+in the live context (allocation and viewport setup copied from the main
+root), the `TreeContainer::Remove`/`Insert` change-bit protocol so
+snapshots stay consistent, and whether any display-side event re-inserts a
+moved container under its original parent (re-detectable per frame at the
+capture seam if so).
 
 Two corrections to the original analysis below, from in-game testing and
 release-binary verification:
@@ -32,8 +68,9 @@ release-binary verification:
    claim also forced every `CUIBase::Invoke` through the queued-with-delay
    path), and a crash in `PrimitiveBundle::InsertEntry`.
 
-The implemented design therefore multiplexes in time, with all Scaleform
-writes on the game thread and zero added captures:
+The time-multiplexed design (kept in the tree until the render-root
+partition proves itself) works as follows, with all Scaleform writes on the
+game thread and zero added captures:
 
 - A detour on `GFx::MovieImpl::Capture` (`0x14198B7D0`; called at the end of
   `CUIManager::PreRender`, after `UpdatePOIs` and `Advance`, deferred render
@@ -57,9 +94,10 @@ writes on the game thread and zero added captures:
   icons stay glued to their world spots; the head-locked static and center
   layers only see up to ~3 frames of content latency.
 
-What still needs an in-game pass: the layer visuals themselves, the refresh
-cadence (whether 1/3-rate updates read acceptably), and the intent tracking
-against the game's own show/hide traffic (wingsuit HUD, the POI pool).
+In-game verification result: stable (after restoring clip intent across the
+periodic handle rediscovery, which otherwise baked the mask state in as game
+intent and darkened the HUD within seconds), but the 1/3-rate refresh is
+visibly wrong under motion, per the status section above.
 
 ## The problems
 
