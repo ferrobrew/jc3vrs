@@ -55,7 +55,11 @@ pub fn request_release_handles() {
     RELEASE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Release and drop the clip-handle registry (capture thread).
+/// Release and drop the clip-handle registry (capture thread). Every clip is first restored to
+/// the game's tracked visibility intent: the periodic rediscovery replaces the registry while
+/// the split mask holds most clips hidden, and without the restore the fresh handles would read
+/// that mask state back as the game's intent -- baking the clips permanently invisible, a few
+/// layers' worth per rediscovery until the whole HUD is dark.
 fn release_clip_handles() {
     if let Some(mut handles) = crate::hud::split::CLIP_HANDLES.lock().take() {
         // SAFETY: called on the capture thread; each handle releases through its own interface.
@@ -67,6 +71,7 @@ fn release_clip_handles() {
                 .chain(handles.overlays.iter_mut())
                 .chain(handles.dynamic.iter_mut())
             {
+                crate::hud::split::unforce_visible(handle);
                 handle.release();
             }
         }

@@ -344,8 +344,13 @@ pub unsafe fn bind_layer_and_clear(
                 layer
             } else {
                 // Same frame (a later eye) or no fresh capture: pin the render to the current
-                // displaying snapshot and redraw the layer it was masked for.
-                movie_impl.RenderContext.NextCaptureCalledInFrame = true;
+                // displaying snapshot and redraw the layer it was masked for. Only set the latch
+                // when the original will actually render -- its early-out never reaches the
+                // `HAL::EndFrame` that clears the latch, and a stuck latch stops all snapshot
+                // consumption for good.
+                if manager.m_RenderReady && manager.m_RenderActive && manager.m_RenderingEnabled {
+                    movie_impl.RenderContext.NextCaptureCalledInFrame = true;
+                }
                 BOUND_LAYER.load(Ordering::Relaxed)
             };
 
@@ -393,7 +398,7 @@ unsafe fn force_visible(handle: &mut ClipHandle, visible: bool) {
 }
 
 /// Restore a clip to the game's intent and stop tracking it as forced.
-unsafe fn unforce_visible(handle: &mut ClipHandle) {
+pub(crate) unsafe fn unforce_visible(handle: &mut ClipHandle) {
     if handle.forced.take().is_some() {
         let intent = handle.game_visible;
         // SAFETY: forwarded to set_visible; see the caller's obligations.
