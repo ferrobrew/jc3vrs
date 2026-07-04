@@ -33,6 +33,7 @@
 pub mod aim;
 mod binding;
 mod config;
+mod depth_probe;
 pub mod markers;
 mod quad;
 pub mod scaleform;
@@ -203,6 +204,13 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
 
     let mut hud = HUD_STATE.lock();
 
+    // Probe the scene depth under the crosshair on eye 0 and feed the aim-depth smoother, so the
+    // reticle layer carries a distance cue for whatever is being aimed at even without the
+    // grapple's world point. Runs under the engine context mutex held by the caller.
+    if eye == 0 && cfg.split && cfg.center_depth_from_aim {
+        hud.sample_depth_probe(context, device, cfg.marker_max_depth);
+    }
+
     // Compute world-space corners once per frame on eye 0 and cache them. Both eyes then
     // project the same world-space quad through their own per-eye VP, producing correct stereo
     // disparity. Computing corners per-eye instead would cancel the world transform against the
@@ -242,6 +250,20 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         // The frame's recorded marker depths for the warp (recorded on the game thread by the
         // Get2DInfo hook); taken whether or not the warp draws, so stale markers never linger.
         let frame_markers = markers::take_frame();
+        // A marker sitting at the reticle center is the game's own aimed-at target (the auto-aim
+        // POI lands exactly there); feed its depth to the aim smoother as a gameplay-side source.
+        if split_active && cfg.center_depth_from_aim {
+            let center_lock_radius = 0.03f32;
+            if let Some(marker) = frame_markers
+                .iter()
+                .filter(|m| {
+                    (m.u - 0.5).abs() < center_lock_radius && (m.v - 0.5).abs() < center_lock_radius
+                })
+                .min_by(|a, b| a.depth.total_cmp(&b.depth))
+            {
+                aim::record_center_marker(marker.depth);
+            }
+        }
         hud.set_warp_frame((split_active && cfg.marker_warp).then(|| state::WarpFrame {
             anchor: pos.to_array(),
             markers: frame_markers,

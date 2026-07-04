@@ -1,13 +1,15 @@
-//! The aim depth for the center (reticle) layer, recorded from the grapple reticle's
-//! world-to-screen calls and smoothed with a critically-damped exponential.
+//! The aim depth for the center (reticle) layer, smoothed with a critically-damped exponential.
 //!
-//! `CHUDUI::UpdateGrappleReticle` projects the grapple's world points through a default-VP
-//! wrapper each frame; its world point is the surface the player is about to interact with --
-//! the single most depth-meaningful point on the HUD. The hook records the point's distance from
-//! the panel anchor here; the center layer reads the smoothed depth as its distance, so the
-//! reticle group sits at the vergence of the thing it targets. When no aim point has been
-//! recorded recently (no grapple reticle on screen), the depth eases back to the configured
-//! center-layer distance.
+//! Two sources, in priority order:
+//!
+//! 1. The grapple reticle's world point (`CHUDUI::UpdateGrappleReticle`'s world-to-screen calls):
+//!    the exact surface the player is about to interact with, available while grappling.
+//! 2. A world-anchored marker at the reticle (the auto-aim target POI lands exactly there): the
+//!    exact target the game itself considers aimed-at, available while something is locked.
+//! 3. The scene depth under the crosshair (the [`super::depth_probe`] readback): what the player
+//!    is looking at or shooting, available always -- so the crosshair itself is a distance cue.
+//!
+//! When neither is fresh, the depth eases back to the configured center-layer distance.
 
 use std::time::Instant;
 
@@ -25,39 +27,74 @@ const HALFLIFE_SECONDS: f32 = 0.15;
 struct AimState {
     /// The smoothed depth, in meters.
     smoothed: f32,
-    /// The most recently recorded raw depth.
-    target: f32,
-    /// When the raw depth was last recorded.
-    recorded_at: Option<Instant>,
+    /// The most recently recorded grapple depth.
+    grapple: f32,
+    /// When the grapple depth was last recorded.
+    grapple_at: Option<Instant>,
+    /// The most recently recorded scene-probe depth.
+    probe: f32,
+    /// When the probe depth was last recorded.
+    probe_at: Option<Instant>,
+    /// The most recently recorded center-marker (auto-aim target) depth.
+    center_marker: f32,
+    /// When the center-marker depth was last recorded.
+    center_marker_at: Option<Instant>,
     /// When the smoothed value was last advanced.
     updated_at: Option<Instant>,
 }
 
 static STATE: Mutex<AimState> = Mutex::new(AimState {
     smoothed: 3.0,
-    target: 3.0,
-    recorded_at: None,
+    grapple: 3.0,
+    grapple_at: None,
+    probe: 3.0,
+    probe_at: None,
+    center_marker: 3.0,
+    center_marker_at: None,
     updated_at: None,
 });
 
-/// Record the aim point's depth (game thread, from the grapple-reticle hook). `depth` is the
-/// distance from the panel anchor to the aim world point, in meters.
+/// Record the grapple aim point's depth (game thread, from the grapple-reticle hook). `depth` is
+/// the distance from the panel anchor to the aim world point, in meters.
 pub fn record(depth: f32) {
     let mut state = STATE.lock();
-    state.target = depth;
-    state.recorded_at = Some(Instant::now());
+    state.grapple = depth;
+    state.grapple_at = Some(Instant::now());
 }
 
-/// The smoothed aim depth for the center layer (render thread, eye 0). Eases toward the last
-/// recorded depth, or toward `base_distance` when the recording has gone stale.
+/// Record the scene depth under the crosshair (render thread, from the depth probe), in meters.
+pub fn record_probe(depth: f32) {
+    let mut state = STATE.lock();
+    state.probe = depth;
+    state.probe_at = Some(Instant::now());
+}
+
+/// Record an aimed-at marker's depth (render thread; the recorded marker nearest the reticle
+/// center, when one sits within the lock-on radius), in meters.
+pub fn record_center_marker(depth: f32) {
+    let mut state = STATE.lock();
+    state.center_marker = depth;
+    state.center_marker_at = Some(Instant::now());
+}
+
+/// The smoothed aim depth for the center layer (render thread, eye 0). Eases toward the freshest
+/// source -- the grapple point over the scene probe -- or toward `base_distance` when both are
+/// stale.
 pub fn current(base_distance: f32) -> f32 {
     let mut state = STATE.lock();
     let now = Instant::now();
 
-    let stale = state
-        .recorded_at
-        .is_none_or(|t| t.elapsed().as_secs_f32() > STALE_AFTER_SECONDS);
-    let target = if stale { base_distance } else { state.target };
+    let fresh =
+        |t: Option<Instant>| t.is_some_and(|t| t.elapsed().as_secs_f32() <= STALE_AFTER_SECONDS);
+    let target = if fresh(state.grapple_at) {
+        state.grapple
+    } else if fresh(state.center_marker_at) {
+        state.center_marker
+    } else if fresh(state.probe_at) {
+        state.probe
+    } else {
+        base_distance
+    };
 
     let dt = state
         .updated_at
