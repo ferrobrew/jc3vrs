@@ -142,7 +142,9 @@ unsafe fn dump_node(node: &AmpMovieObjectDesc, prefix: &mut String, lines: &mut 
         let name = if node.name.is_null() {
             "<null>".to_string()
         } else {
-            std::ffi::CStr::from_ptr(node.name as *const i8)
+            // The name is a Scaleform::String: a DataDesc header (u64 size, i32 refcount) with
+            // the NUL-terminated characters inline at +0xC.
+            std::ffi::CStr::from_ptr(node.name.add(0xC) as *const i8)
                 .to_string_lossy()
                 .into_owned()
         };

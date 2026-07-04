@@ -9,8 +9,9 @@ use crate::ui::ui_manager::UIManager;
 /// Layout verified from `GetChildDescTree` at `0x141_A30_410`.
 pub struct AmpMovieObjectDesc {
     pub ref_count_impl: crate::ui::scaleform::RefCountImpl,
-    /// The clip's instance name, or `"Unnamed"`. A `Scaleform::String` (heap-allocated with SSO);
-    /// the first 8 bytes are a `*const c_char` pointing into the internal buffer.
+    /// The clip's instance name, or `"Unnamed"`: a `Scaleform::String`, i.e. a pointer to its
+    /// `DataDesc` header (`Size: u64`, `RefCount: i32`), with the NUL-terminated characters
+    /// inline at `+0xC`.
     pub name: *const u8,
     /// Pointer to the child array. Each element is a `Ptr<AmpMovieObjectDesc>` (a raw pointer
     /// to another `AmpMovieObjectDesc`).
