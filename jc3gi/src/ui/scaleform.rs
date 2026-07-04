@@ -279,16 +279,36 @@ pub struct MovieImpl {
     _field_48: [u8; 8],
     /// The root `DisplayObjContainer` (the main movie clip).
     pub pMainMovie: *mut ::std::ffi::c_void,
+    _field_58: [u8; 21240],
+    /// The movie's embedded `Render::Context` (the snapshot pipeline: active/pending/displaying
+    /// snapshots, the capture locks, and the once-a-frame consumption latch).
+    pub RenderContext: crate::ui::scaleform::RenderContext,
 }
 fn _MovieImpl_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x58], MovieImpl>([0u8; 0x58]);
+        ::std::mem::transmute::<[u8; 0x53F0], MovieImpl>([0u8; 0x53F0]);
     }
     unreachable!()
 }
 impl MovieImpl {
     pub fn vftable(&self) -> *const crate::ui::scaleform::MovieImplVftable {
         self.vftable as *const crate::ui::scaleform::MovieImplVftable
+    }
+    pub const CaptureImpl_ADDRESS: usize = 0x14198B7D0;
+    /// The concrete implementation behind the [`Capture`](MovieImpl::Capture) virtual (vtable
+    /// slot 25): gates on `Context::HasChanges` when `if_changed` is set, suspends the GC, and
+    /// runs `Render::Context::Capture` to publish the frame's display-tree changes as the pending
+    /// snapshot. `CUIManager::PreRender` calls it right after `Advance`, on the game update
+    /// thread with the deferred render lock held -- the only point in the frame where every
+    /// display-tree writer is quiescent, which makes it the seam for pre-capture display-list
+    /// edits.
+    pub unsafe fn CaptureImpl(&mut self, if_changed: bool) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, if_changed: bool) -> u64 = ::std::mem::transmute(
+                Self::CaptureImpl_ADDRESS,
+            );
+            f(self as *mut Self as _, if_changed)
+        }
     }
     /// Snapshots the display tree for the render thread (`GFx::Movie` vtable slot 25). Must be
     /// called from the current capture thread (see
@@ -528,6 +548,67 @@ impl std::convert::AsRef<RefCountImplVftable> for RefCountImplVftable {
 }
 impl std::convert::AsMut<RefCountImplVftable> for RefCountImplVftable {
     fn as_mut(&mut self) -> &mut RefCountImplVftable {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The Scaleform `Render::ContextImpl::Context`: the display-tree snapshot pipeline between the
+/// update thread and the renderer. `Capture` (update thread) merges the active snapshot's changes
+/// into the pending snapshot; `RTHandle::NextCapture` (render thread) consumes the pending
+/// snapshot into the displaying one, at most once per HAL frame. Only the fields the payload
+/// touches are modeled; the declared size covers just the modeled prefix.
+pub struct RenderContext {
+    _field_0: [u8; 153],
+    /// The once-a-frame consumption latch: while set, `RTHandle::NextCapture` keeps the current
+    /// displaying snapshot instead of consuming the pending one. Set by the first `NextCapture`
+    /// of a HAL frame and cleared by `HAL::EndFrame` (`EndFrameContextNotify`), so within one
+    /// `CUIManager::Render` call every draw sees the same snapshot.
+    pub NextCaptureCalledInFrame: bool,
+    _field_9a: [u8; 6],
+}
+fn _RenderContext_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xA0], RenderContext>([0u8; 0xA0]);
+    }
+    unreachable!()
+}
+impl RenderContext {}
+impl std::convert::AsRef<RenderContext> for RenderContext {
+    fn as_ref(&self) -> &RenderContext {
+        self
+    }
+}
+impl std::convert::AsMut<RenderContext> for RenderContext {
+    fn as_mut(&mut self) -> &mut RenderContext {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The Scaleform `Render::D3D1x::HAL` behind `CUIManager::m_RenderHAL`: the D3D11 rendering
+/// backend the UI render worker draws through.
+pub struct RenderHAL {
+    _field_0: [u8; 291752],
+    /// The `ID3D11Device` the HAL was initialized with.
+    pub pDevice: *mut ::std::ffi::c_void,
+    /// The `ID3D11DeviceContext` every HAL draw goes through (possibly a deferred context; see
+    /// `UsingDeferredContext` at `0x473C0`). Work recorded on it from the UI render worker is
+    /// ordered with the HAL's own draws.
+    pub pDeviceContext: *mut ::std::ffi::c_void,
+}
+fn _RenderHAL_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x473B8], RenderHAL>([0u8; 0x473B8]);
+    }
+    unreachable!()
+}
+impl RenderHAL {}
+impl std::convert::AsRef<RenderHAL> for RenderHAL {
+    fn as_ref(&self) -> &RenderHAL {
+        self
+    }
+}
+impl std::convert::AsMut<RenderHAL> for RenderHAL {
+    fn as_mut(&mut self) -> &mut RenderHAL {
         self
     }
 }

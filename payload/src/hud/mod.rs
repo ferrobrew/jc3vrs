@@ -155,16 +155,23 @@ pub fn tick(device: &Device, back_buffer_width: u32, back_buffer_height: u32) {
     }
 }
 
-/// The inputs the `CUIManager::Render` detour needs for a split frame, or `None` when the split
-/// must not run this frame (disabled, not redirected, layer targets missing, or full-screen UI).
-/// Snapshotted under the state lock so the detour never holds it across the original render.
-pub fn split_inputs() -> Option<(split::LayerViews, bool)> {
+/// The layer views the `CUIManager::Render` detour needs for a split frame, or `None` when the
+/// split must not run this frame (disabled, not redirected, layer targets missing, full-screen
+/// UI, or no masked capture live yet). Snapshotted under the state lock so the detour never holds
+/// it across the original render.
+pub fn split_inputs() -> Option<split::LayerViews> {
     let cfg = crate::config::Config::lock_query(|c| c.hud);
-    if !cfg.redirect || !cfg.split || current_mode() != HudMode::Hud {
+    if !cfg.redirect || !cfg.split || current_mode() != HudMode::Hud || !split::mask_live() {
         return None;
     }
-    let views = HUD_STATE.lock().split_views()?;
-    Some((views, cfg.suppress_overlays))
+    HUD_STATE.lock().split_views()
+}
+
+/// Whether the redirect and every layer target are in place, so the game-thread capture mask has
+/// textures to land in. Gates the masking itself: masking without the redirected layer textures
+/// would strip the visible HUD down to one layer's clips.
+pub fn split_layers_ready() -> bool {
+    HUD_STATE.lock().split_views().is_some()
 }
 
 /// Compute the HUD texture dimensions from the render scale, the configured aspect (width / height),
@@ -222,9 +229,14 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
             panel_height: panel_height(cfg.panel_scale, distance, aspect),
         };
         hud.compute_world_corners(&params_at(cfg.distance));
-        // Per-layer corner sets while the split runs in gameplay: each layer keeps the panel's
-        // apparent size at its own distance, so only the stereo depth differs.
-        let split_active = cfg.split && mode == HudMode::Hud;
+        // The split composites in gameplay once a masked capture is live (the layer textures
+        // then contain per-layer content rather than the whole HUD) and every layer has been
+        // rendered at least once (a never-refreshed texture is uninitialized).
+        let layer_gens = split::layer_generations();
+        let split_active = cfg.split
+            && mode == HudMode::Hud
+            && split::mask_live()
+            && layer_gens.iter().all(|&g| g > 0);
         // The reticle depth (the split's center layer, or the single panel's center bubble)
         // follows the smoothed aim depth when enabled, easing back to a flat rest distance while
         // nothing is targeted: the center-layer distance under the split, the panel distance
@@ -239,39 +251,48 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         } else {
             center_rest
         };
-        hud.compute_layer_corners(split_active.then(|| {
-            [
-                params_at(cfg.distance),
-                params_at(cfg.marker_distance),
-                params_at(center_distance),
-            ]
-        }));
         // The frame's recorded marker depths for the warp (recorded on the game thread by the
         // Get2DInfo hook); taken whether or not the warp draws, so stale markers never linger.
         let mut frame_markers = markers::take_frame();
         let warp_active = cfg.marker_warp && mode == HudMode::Hud;
-        // Single-panel mode: the reticle region joins the depth field as a center bubble at the
-        // aim depth (under the split, the center layer carries the aim depth instead).
-        if warp_active && !split_active && cfg.center_depth_from_aim {
-            frame_markers.insert(
-                0,
-                markers::MarkerDepth {
-                    u: 0.5,
-                    v: 0.5,
-                    depth: center_distance,
-                    radius: cfg.center_bubble_radius,
-                },
-            );
+        let marker_gen = layer_gens[split::HudLayer::Markers as usize];
+        let markers_refreshed = hud.begin_split_frame(split_active, marker_gen);
+        if split_active {
+            // Head-locked layers get fresh corners every frame; the marker layer's pose (and its
+            // warp inputs) freeze at each texture refresh, so world-anchored icons stay glued to
+            // their world spots while the texture is stale.
+            hud.set_layer_corners(&params_at(cfg.distance), &params_at(center_distance));
+            if markers_refreshed {
+                hud.set_marker_layer(
+                    &params_at(cfg.marker_distance),
+                    warp_active.then(|| state::WarpFrame {
+                        anchor: pos.to_array(),
+                        markers: frame_markers.clone(),
+                        base_distance: cfg.marker_distance,
+                    }),
+                );
+            }
+            hud.set_warp_frame(None);
+        } else {
+            // Single-panel mode: the reticle region joins the depth field as a center bubble at
+            // the aim depth (under the split, the center layer carries the aim depth instead).
+            if warp_active && cfg.center_depth_from_aim {
+                frame_markers.insert(
+                    0,
+                    markers::MarkerDepth {
+                        u: 0.5,
+                        v: 0.5,
+                        depth: center_distance,
+                        radius: cfg.center_bubble_radius,
+                    },
+                );
+            }
+            hud.set_warp_frame(warp_active.then(|| state::WarpFrame {
+                anchor: pos.to_array(),
+                markers: frame_markers,
+                base_distance: cfg.distance,
+            }));
         }
-        hud.set_warp_frame(warp_active.then(|| state::WarpFrame {
-            anchor: pos.to_array(),
-            markers: frame_markers,
-            base_distance: if split_active {
-                cfg.marker_distance
-            } else {
-                cfg.distance
-            },
-        }));
     }
 
     hud.draw_quad(context, device, target, eye);

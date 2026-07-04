@@ -115,6 +115,12 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             crate::hud::draw_quad(&context.m_Context, device, back_buffer, index);
         }
 
+        // The frame ends after the last eye's draws: the next UI render may consume a pending
+        // display-tree capture again (see the split's eye-consistency discipline).
+        if index == 1 || !crate::stereo::active() {
+            crate::hud::split::bump_render_frame();
+        }
+
         // Final back buffer for this eye. (The HDR scene / MainColor is captured earlier, at the
         // start of the post chain, before it gets read and recycled -- see capture_main_color.)
         if let (Some(dst), Some(src)) = (

@@ -1,40 +1,51 @@
-//! The multi-pass HUD split: render the HUD in three visibility passes into separate textures, so
-//! each group can be composited at its own depth (issue #14).
+//! The time-multiplexed HUD split: refresh one depth layer's texture per frame, so each group of
+//! elements can be composited at its own depth (issue #14).
 //!
 //! A single HUD texture forces every element to one depth: a crosshair crossing a distant marker
 //! gets the same stereo disparity as the marker, and the full-screen overlays cover the whole
-//! panel. Scaleform composites overlapping clips into the texture at draw time, so no amount of
-//! texture-space work can separate them afterwards -- the split has to happen at render time, by
-//! rendering the movie several times with different subsets visible.
+//! panel. Scaleform composites overlapping clips into the texture at draw time, so the split has
+//! to happen at render time, with different subsets visible.
 //!
-//! [`render_split`] replaces one `CUIManager::Render` call with three. `Render` draws the movie's
-//! latest *captured* display-tree snapshot, so visibility changes only take effect through a fresh
-//! `Movie::Capture` -- the sequence per pass is: set the pass's clip visibility (AS3 writes on the
-//! `MovieRoot`), capture (on the render thread, after borrowing capture-thread ownership the same
-//! way the engine's own `RenderOffScreenTextures` does), rebind the UI render buffer's views to
-//! the pass's texture, and call the original `Render`. The whole sequence holds
-//! [`UIManager::m_DeferredRenderLock`] -- the lock `PreRender` holds across `Advance`+`Capture` --
-//! so the update thread cannot mutate the display list mid-split; the lock is a Win32 critical
-//! section and therefore re-entrant when the original `Render` takes it again.
+//! Rendering the movie several times per frame does not work: the snapshot pipeline's `Capture`
+//! mutates the *active* snapshot -- the same data every game-thread UI write touches, with no
+//! writer lock -- so it is only safe on the game update thread, where it is serialized with all
+//! other UI code by being the same thread (which is exactly how the engine uses it, in
+//! `PreRender`). Capturing from the render worker races every invoke and display-info write:
+//! torn change lists, flicker, and updates surfacing frames late.
 //!
-//! The partition works on the ten authored top-level containers of `hud.gfx` (see
-//! `jc3gi`'s `ScaleformInfo` and `docs/issue-08-14-hud-overlays-and-depth.md`), so the visibility
-//! writes are a handful of `SetVariable` calls per pass. The full-screen overlays of issue #8 are
-//! named children of the center container and can be held invisible in every pass.
+//! So the split multiplexes in time instead: each game frame, [`apply_capture_mask`] (running in
+//! the [`MovieImpl::Capture`] detour -- game thread, after `UpdatePOIs` and `Advance`, deferred
+//! render lock held) sets the visibility mask for *one* layer, round-robin, and the engine's own
+//! once-a-frame capture carries it. The UI render detour ([`bind_layer_and_clear`]) redirects the
+//! render buffer to that layer's persistent texture and lets the single original render fill it.
+//! Each texture refreshes at `1/LAYER_COUNT` rate; the draw side compensates by freezing the
+//! marker layer's world pose between refreshes (world-anchored icons stay glued to their world
+//! spots), while the head-locked static and center layers only see a few frames of content
+//! latency.
+//!
+//! Within one engine frame the UI renders once per eye. Only the first render after a frame tick
+//! consumes a pending capture; later renders in the same frame set the context's once-a-frame
+//! latch ([`RenderContext::NextCaptureCalledInFrame`]) so they redraw the same snapshot -- both
+//! eyes always see identical layer content, even when the game thread slips the next frame's
+//! capture in between them.
 
 use jc3gi::ui::{
-    scaleform::{DisplayInfo, Movie, Value},
+    scaleform::{DisplayInfo, Value},
     ui_manager::UIManager,
 };
 use windows::{
     Win32::{
-        Graphics::Direct3D11::{ID3D11DepthStencilView, ID3D11RenderTargetView},
-        System::Threading::{EnterCriticalSection, GetCurrentThreadId, LeaveCriticalSection},
+        Graphics::Direct3D11::{
+            D3D11_CLEAR_DEPTH, D3D11_CLEAR_STENCIL, ID3D11DepthStencilView, ID3D11DeviceContext,
+            ID3D11RenderTargetView,
+        },
+        System::Threading::{EnterCriticalSection, LeaveCriticalSection},
     },
     core::Interface as _,
 };
 
-/// The HUD layers, in composite order (bottom to top). Each is one render pass and one texture.
+/// The HUD layers, in composite order (bottom to top). Each is one texture, refreshed round-robin
+/// one layer per frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HudLayer {
     /// The static HUD: the corner/edge safe-area containers and the weapon-selection wheel. No
@@ -43,15 +54,12 @@ pub enum HudLayer {
     /// World-anchored markers: the POI stage and the target tracker / score container.
     Markers = 1,
     /// The screen-center group: weapon/grapple/mech reticles, pickups, and center indicators.
-    /// Composited on top, at the aim depth once that is driven (issue #14 follow-up).
+    /// Composited on top, at the aim depth when that is driven.
     Center = 2,
 }
 
-/// The number of layers / passes / textures.
+/// The number of layers / textures.
 pub const LAYER_COUNT: usize = 3;
-
-/// All layers in pass order (which is also composite order, bottom to top).
-pub const LAYERS: [HudLayer; LAYER_COUNT] = [HudLayer::Static, HudLayer::Markers, HudLayer::Center];
 
 /// The authored top-level containers of `hud.gfx` assigned to each layer. Paths are relative to
 /// the HUD movie's timeline; [`HudConfig::split_path_prefix`](crate::hud::HudConfig) is prepended
@@ -74,10 +82,9 @@ pub(crate) const LAYER_CONTAINERS: [&[&str]; LAYER_COUNT] = [
 ];
 
 /// The full-screen overlay clips of issue #8, all children of the center container: held
-/// invisible in every pass while
-/// [`HudConfig::suppress_overlays`](crate::hud::HudConfig::suppress_overlays) is on. Paths
-/// confirmed against an in-game display-tree dump; `MCI_omni_damage` (the screen-wide damage
-/// flash) is a direct child of the center container, not of the health-damage manager.
+/// invisible while [`HudConfig::suppress_overlays`](crate::hud::HudConfig::suppress_overlays) is
+/// on. Paths confirmed against an in-game display-tree dump; `MCI_omni_damage` (the screen-wide
+/// damage flash) is a direct child of the center container, not of the health-damage manager.
 pub(crate) const OVERLAY_CLIPS: &[&str] = &[
     "MCI_safe_area_center.MCI_omni_damage",
     "MCI_safe_area_center.MCI_drowning_container",
@@ -88,18 +95,34 @@ pub(crate) const OVERLAY_CLIPS: &[&str] = &[
     "MCI_safe_area_center.MCI_sniper",
 ];
 
-/// A heap-pinned managed [`Value`] handle to a clip. The `Value` is an intrusive list node on
-/// the movie's external-references list, so it must never move after `GetVariable` fills it --
-/// hence the box. Release (on the capture thread) before dropping.
+/// A heap-pinned managed [`Value`] handle to a clip, plus the game-intent tracking the mask needs.
+/// The `Value` is an intrusive list node on the movie's external-references list, so it must never
+/// move after `GetVariable` fills it -- hence the box. Release (on the capture thread) before
+/// dropping.
 pub(crate) struct ClipHandle {
     /// The pinned managed value. Present until released; absent when the clip path did not
     /// resolve at discovery (the handle then reads as visible and writes are no-ops).
     pub value: Option<Box<Value>>,
+    /// The game's own visibility intent for this clip, tracked across our forced writes: refreshed
+    /// from a read-back whenever the current value differs from what we last wrote (meaning the
+    /// game wrote in between).
+    pub game_visible: bool,
+    /// The visibility we last forced, or `None` while unforced.
+    pub forced: Option<bool>,
 }
 
 impl ClipHandle {
+    /// Wrap a resolved (or unresolved) pinned value.
+    pub fn new(value: Option<Box<Value>>) -> Self {
+        Self {
+            value,
+            game_visible: true,
+            forced: None,
+        }
+    }
+
     /// Release the managed value through its object interface. Must run on the capture thread
-    /// (the game thread, or a split pass that owns the capture).
+    /// (the game update thread).
     pub unsafe fn release(&mut self) {
         if let Some(mut value) = self.value.take() {
             // SAFETY: the value was filled in place by GetVariable and never moved; managed
@@ -114,9 +137,9 @@ impl ClipHandle {
     }
 }
 
-/// The clip handles the split passes toggle, grouped by role. Built by the layout discovery on
-/// the game thread; used by the split passes on the render worker (which owns the capture while
-/// doing so); replaced wholesale on rediscovery (old handles released first).
+/// The clip handles the mask toggles, grouped by role. Built by the layout discovery on the game
+/// thread; masked on the game thread; replaced wholesale on rediscovery (old handles released
+/// first).
 pub(crate) struct ClipHandles {
     /// Per layer, the named containers (in [`LAYER_CONTAINERS`] order, missing clips skipped).
     pub containers: [Vec<ClipHandle>; LAYER_COUNT],
@@ -127,203 +150,261 @@ pub(crate) struct ClipHandles {
 }
 
 // SAFETY: the raw pointers inside the handles (the pinned Values and their object interfaces)
-// are only dereferenced on the capture thread or by a split pass that owns the capture, never
-// concurrently -- the registry mutex plus the capture-thread discipline provide the
-// synchronization the pointer types cannot express.
+// are only dereferenced on the capture (game update) thread, never concurrently -- the registry
+// mutex plus that thread discipline provide the synchronization the pointer types cannot express.
 unsafe impl Send for ClipHandle {}
 
 /// The live handle registry. `None` until a discovery succeeds.
 pub(crate) static CLIP_HANDLES: parking_lot::Mutex<Option<ClipHandles>> =
     parking_lot::Mutex::new(None);
 
-/// The per-pass render-target views, snapshotted from the HUD state before the passes run (so the
-/// state lock is not held across the original `Render` calls). The views are COM clones, so they
-/// keep their textures alive even if the state recreates its targets concurrently.
+/// The per-layer render-target views, snapshotted from the HUD state before the render detour
+/// uses them (so the state lock is not held across the original render). The views are COM
+/// clones, so they keep their textures alive even if the state recreates its targets concurrently.
 pub struct LayerViews {
-    /// `(RTV, DSV)` per layer, in [`LAYERS`] order.
+    /// `(RTV, DSV)` per layer, in [`LAYERS`] order. Layer 0 (static) is the main HUD target.
     pub(super) views: [(ID3D11RenderTargetView, ID3D11DepthStencilView); LAYER_COUNT],
 }
 
-/// Render the HUD in [`LAYER_COUNT`] visibility passes via repeated calls to the original
-/// `CUIManager::Render`. Falls back to a single original call when any precondition is missing
-/// (movie not live, vtable mismatch, lock unavailable), so a failed split degrades to the normal
-/// single-texture panel rather than a blank HUD.
+/// The masked-capture handshake between the game thread and the UI render worker: `(seq << 8) |
+/// (layer + 1)`, written by [`apply_capture_mask`] whenever a capture carries a layer mask, and
+/// zero while the mask is inactive. The layer is offset by one so the initial state reads as
+/// "no masked capture".
+static MASK_STATE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The last masked-capture sequence number the render side consumed.
+static CONSUMED_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The engine frame id of the last split render (from [`bump_render_frame`]); only the first
+/// render of a frame may consume a pending capture, so later renders (the other eye) redraw the
+/// same snapshot and the eyes never diverge.
+static LAST_RENDER_FRAME: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// The layer the render side last bound (what the displaying snapshot is masked for).
+static BOUND_LAYER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The current engine frame id, bumped once per frame by the render-thread tick.
+static RENDER_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Per-layer refresh generations, bumped when a layer's texture is (re)rendered with fresh
+/// content. The draw side freezes the marker layer's pose when its generation changes.
+static LAYER_GENERATIONS: [std::sync::atomic::AtomicU64; LAYER_COUNT] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+
+/// Mark the start of a new engine frame (render thread, once per frame). The next UI render may
+/// consume a pending capture again.
+pub fn bump_render_frame() {
+    RENDER_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The per-layer refresh generations (see [`LAYER_GENERATIONS`]).
+pub fn layer_generations() -> [u64; LAYER_COUNT] {
+    std::array::from_fn(|i| LAYER_GENERATIONS[i].load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Whether the displaying snapshot currently carries a layer mask (a masked capture has been
+/// consumed and the mask has not been deactivated since). Used by the draw side to decide between
+/// the split composite and the single panel.
+pub fn mask_live() -> bool {
+    MASK_STATE.load(std::sync::atomic::Ordering::Relaxed) != 0
+}
+
+/// Apply the frame's visibility state ahead of the engine's own capture. Runs in the
+/// [`MovieImpl::Capture`] detour on the game update thread, with the deferred render lock held
+/// and every display-tree writer quiescent -- the only safe point for these writes.
+///
+/// While the split is active, advances the round-robin schedule (only once the previous mask was
+/// consumed, so a game thread running ahead of the renderer re-captures the same mask instead of
+/// skipping layers) and masks each clip to `in_layer && game_intent`. While it is not, restores
+/// every clip to the game's intent once. The issue #8 overlays are forced hidden independently
+/// while overlay suppression is on.
+pub fn apply_capture_mask(split_active: bool, suppress_overlays: bool) {
+    use std::sync::atomic::Ordering;
+
+    let mut handles = CLIP_HANDLES.lock();
+    let Some(handles) = handles.as_mut() else {
+        return;
+    };
+
+    // SAFETY (all get/set_visible calls below): game update thread, deferred render lock held;
+    // the handles are pinned managed values from the registry.
+    unsafe {
+        if split_active {
+            let state = MASK_STATE.load(Ordering::Relaxed);
+            let (seq, layer) = if state == 0 {
+                (1, 0)
+            } else if state >> 8 == CONSUMED_SEQ.load(Ordering::Relaxed) {
+                // The previous mask was consumed; move to the next layer.
+                ((state >> 8) + 1, ((state & 0xFF) as usize) % LAYER_COUNT)
+            } else {
+                // Not consumed yet (the game thread is running ahead of the renderer); re-apply
+                // the same mask so the merged pending capture stays consistent and no layer's
+                // refresh is skipped.
+                (
+                    state >> 8,
+                    ((state & 0xFF) as usize + LAYER_COUNT - 1) % LAYER_COUNT,
+                )
+            };
+            for (index, containers) in handles.containers.iter_mut().enumerate() {
+                let in_layer = index == layer;
+                for handle in containers.iter_mut() {
+                    let intent = refresh_intent(handle);
+                    force_visible(handle, in_layer && intent);
+                }
+            }
+            let markers = layer == HudLayer::Markers as usize;
+            for handle in handles.dynamic.iter_mut() {
+                let intent = refresh_intent(handle);
+                force_visible(handle, markers && intent);
+            }
+            MASK_STATE.store((seq << 8) | (layer as u64 + 1), Ordering::Relaxed);
+        } else if MASK_STATE.swap(0, Ordering::Relaxed) != 0 {
+            for handle in handles
+                .containers
+                .iter_mut()
+                .flatten()
+                .chain(handles.dynamic.iter_mut())
+            {
+                unforce_visible(handle);
+            }
+        }
+
+        if suppress_overlays {
+            for handle in &mut handles.overlays {
+                refresh_intent(handle);
+                force_visible(handle, false);
+            }
+        } else {
+            for handle in &mut handles.overlays {
+                if handle.forced.is_some() {
+                    refresh_intent(handle);
+                    unforce_visible(handle);
+                }
+            }
+        }
+    }
+}
+
+/// The UI render detour's split step: pick the layer texture matching the snapshot this render
+/// will draw, clear it, bind it, run the original render, and restore the main binding. Falls
+/// back to the plain original call when any precondition is missing.
+///
+/// Consumption discipline: the first render of an engine frame consumes the pending capture (if
+/// any) and binds the layer that capture was masked for; later renders in the same frame set the
+/// context's once-a-frame latch so the original redraws the same displaying snapshot, and rebind
+/// the same layer. The deferred render lock is held across the decision and the render so the
+/// game thread cannot slip a capture in between.
 ///
 /// # Safety
 /// Must be called from the detour on `CUIManager::Render`, on the UI render worker, with `this`
 /// and `context` being the detour's own arguments.
-pub unsafe fn render_split(
+pub unsafe fn bind_layer_and_clear(
     this: *mut UIManager,
     context: *mut std::ffi::c_void,
     views: &LayerViews,
-    suppress_overlays: bool,
     original: &dyn Fn(*mut UIManager, *mut std::ffi::c_void),
 ) {
+    use std::sync::atomic::Ordering;
+
     // SAFETY (whole body): `this` is the live UI manager inside its own Render call path; the
-    // movie pointers are checked before use; the lock order (m_DeferredRenderLock, re-entered by
-    // the original) mirrors the engine's own PreRender/Render exclusion.
+    // movie and HAL pointers are checked before use; the deferred render lock is the engine's own
+    // PreRender/Render exclusion and is re-entrant for the original's own acquisition.
     unsafe {
         let Some(manager) = this.as_mut() else {
             return;
         };
-        let (Some(movie_impl), lock) = (manager.m_Movie.as_mut(), manager.m_DeferredRenderLock)
+        let lock = manager.m_DeferredRenderLock;
+        let device_context = manager
+            .m_RenderHAL
+            .as_ref()
+            .map(|hal| hal.pDeviceContext)
+            .filter(|p| !p.is_null());
+        let (Some(movie_impl), Some(device_context), false) =
+            (manager.m_Movie.as_mut(), device_context, lock.is_null())
         else {
-            original(this, context);
-            return;
-        };
-        let Some(movie_root) = movie_impl.pASMovieRoot.as_ref() else {
-            original(this, context);
-            return;
-        };
-        if lock.is_null() || movie_root.vftable() as usize as u64 != Movie::VFTABLE {
-            log_split_fallback_once();
-            original(this, context);
-            return;
-        }
-
-        // The clip handles are built by the layout discovery on the game thread; without them
-        // the split cannot mask, so degrade to the single-texture render and (re-)request
-        // discovery. The registry lock is held for the whole split, which also blocks a
-        // concurrent rediscovery from releasing handles mid-use.
-        let mut handles = CLIP_HANDLES.lock();
-        let Some(handles) = handles.as_mut() else {
-            super::scaleform::request_layout_discovery();
             original(this, context);
             return;
         };
 
         EnterCriticalSection(lock as *mut _);
 
-        // Borrow capture ownership for the visibility+capture sequence. This must mirror the
-        // engine's own `CUIManager::SetCaptureThread`: write `m_CurrentCaptureThread` *and* the
-        // movie's capture thread. `CUIBase::Invoke` runs the AVM immediately when the calling
-        // thread matches the field, so leaving it on the game thread lets event-driven invokes
-        // (damage flashes, UI activations) mutate the display list concurrently with our
-        // captures -- which corrupts the renderer's tree cache (elements vanish, then a crash in
-        // `PrimitiveBundle::InsertEntry`). With the field pointing at this thread, those invokes
-        // queue into the UI command queue and drain on the next game-thread update.
-        let render_thread = GetCurrentThreadId();
-        let previous_capture_thread = manager.m_CurrentCaptureThread;
-        manager.m_CurrentCaptureThread = render_thread;
-        movie_impl.SetCaptureThread(render_thread);
+        let state = MASK_STATE.load(Ordering::Relaxed);
+        let frame = RENDER_FRAME.load(Ordering::Relaxed);
+        let first_of_frame = LAST_RENDER_FRAME.swap(frame, Ordering::Relaxed) != frame;
+        let layer =
+            if first_of_frame && state != 0 && state >> 8 != CONSUMED_SEQ.load(Ordering::Relaxed) {
+                // First render of the frame with a fresh masked capture pending: consume it.
+                let layer = ((state & 0xFF) as usize - 1).min(LAYER_COUNT - 1);
+                CONSUMED_SEQ.store(state >> 8, Ordering::Relaxed);
+                BOUND_LAYER.store(layer, Ordering::Relaxed);
+                layer
+            } else {
+                // Same frame (a later eye) or no fresh capture: pin the render to the current
+                // displaying snapshot and redraw the layer it was masked for.
+                movie_impl.RenderContext.NextCaptureCalledInFrame = true;
+                BOUND_LAYER.load(Ordering::Relaxed)
+            };
 
-        // Snapshot each clip's game-driven visibility: the game shows and hides these (wingsuit
-        // HUD, POI pool entries) and only writes on state changes, so forcing them visible would
-        // desync its bookkeeping. Each pass shows a clip only if the game had it visible *and*
-        // it belongs to the pass's layer; the exact snapshot is restored after. All reads and
-        // writes go through GetDisplayInfo/SetDisplayInfo on cached handles -- the same direct
-        // display-info channel the game's own UpdatePOIs uses -- because AVM path resolution per
-        // write is slow and AS3 `visible` property setters run clip show/hide logic.
-        let snapshot = snapshot_visibility(handles);
+        // Clear the layer's texture on the HAL's own device context, so the clear is ordered with
+        // the draws the original is about to record, then point the UI render buffer at it.
+        let (rtv, dsv) = &views.views[layer];
+        let device_context =
+            std::mem::ManuallyDrop::new(ID3D11DeviceContext::from_raw(device_context));
+        device_context.ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 0.0]);
+        device_context.ClearDepthStencilView(
+            dsv,
+            (D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL).0,
+            1.0,
+            0,
+        );
+        rebind_views(manager, &views.views[layer]);
 
-        for layer in LAYERS {
-            set_layer_visibility(handles, &snapshot, layer, suppress_overlays);
-            // Unconditional: `true` is capture-on-change-only, gated on the render context's
-            // change buffer -- the pass must never draw a stale snapshot because a mask happened
-            // to produce no recorded change.
-            movie_impl.Capture(false);
-            rebind_views(manager, &views.views[layer as usize]);
-            original(this, context);
-        }
+        original(this, context);
+        LAYER_GENERATIONS[layer].fetch_add(1, Ordering::Relaxed);
 
-        // Restore the game's own visibility (and a clean capture of it) so menus, the movie mode,
-        // and a mid-frame split disable all see the HUD exactly as the game left it; hand capture
-        // ownership back to its previous owner.
-        restore_visibility(handles, &snapshot);
-        movie_impl.Capture(false);
-        manager.m_CurrentCaptureThread = previous_capture_thread;
-        movie_impl.SetCaptureThread(previous_capture_thread);
+        // Leave the render buffer on the main target (the static layer's texture), the binding
+        // every non-split consumer of the redirect expects.
         rebind_views(manager, &views.views[HudLayer::Static as usize]);
 
         LeaveCriticalSection(lock as *mut _);
     }
 }
 
-/// The game-driven visibility snapshot, index-aligned with [`ClipHandles`]' vectors.
-struct VisibilitySnapshot {
-    containers: [Vec<bool>; LAYER_COUNT],
-    overlays: Vec<bool>,
-    dynamic: Vec<bool>,
-}
-
-/// Read each handle's current visibility (defaulting to visible when the read fails).
-unsafe fn snapshot_visibility(handles: &mut ClipHandles) -> VisibilitySnapshot {
-    // SAFETY: the caller holds the deferred-render lock and capture ownership.
-    unsafe {
-        VisibilitySnapshot {
-            containers: std::array::from_fn(|layer| {
-                handles.containers[layer]
-                    .iter_mut()
-                    .map(|h| get_visible(h))
-                    .collect()
-            }),
-            overlays: handles
-                .overlays
-                .iter_mut()
-                .map(|h| get_visible(h))
-                .collect(),
-            dynamic: handles.dynamic.iter_mut().map(|h| get_visible(h)).collect(),
-        }
+/// Re-read a clip's game intent: when the current value differs from what we last wrote (or we
+/// never wrote), the game changed it in between, so the read is its intent. Returns the intent.
+unsafe fn refresh_intent(handle: &mut ClipHandle) -> bool {
+    // SAFETY: forwarded to get_visible; see the caller's obligations.
+    let read = unsafe { get_visible(handle) };
+    if handle.forced != Some(read) {
+        handle.game_visible = read;
     }
+    handle.game_visible
 }
 
-/// Set the display list to show exactly `layer`'s clips that the game itself had visible (plus,
-/// optionally, keep the overlay clips hidden even in their own layer's pass).
-unsafe fn set_layer_visibility(
-    handles: &mut ClipHandles,
-    snapshot: &VisibilitySnapshot,
-    layer: HudLayer,
-    suppress_overlays: bool,
-) {
-    // SAFETY: the caller holds the deferred-render lock and capture ownership.
-    unsafe {
-        for other in LAYERS {
-            let in_layer = other == layer;
-            for (handle, was_visible) in handles.containers[other as usize]
-                .iter_mut()
-                .zip(&snapshot.containers[other as usize])
-            {
-                set_visible(handle, in_layer && *was_visible);
-            }
-        }
-        // The anonymous POI pool belongs to the markers layer.
-        let markers = layer == HudLayer::Markers;
-        for (handle, was_visible) in handles.dynamic.iter_mut().zip(&snapshot.dynamic) {
-            set_visible(handle, markers && *was_visible);
-        }
-        if suppress_overlays {
-            for handle in &mut handles.overlays {
-                set_visible(handle, false);
-            }
-        }
-    }
+/// Force a clip's visibility, remembering the write for the intent tracking.
+unsafe fn force_visible(handle: &mut ClipHandle, visible: bool) {
+    // SAFETY: forwarded to set_visible; see the caller's obligations.
+    unsafe { set_visible(handle, visible) };
+    handle.forced = Some(visible);
 }
 
-/// Restore every clip to its snapshotted game-driven visibility.
-unsafe fn restore_visibility(handles: &mut ClipHandles, snapshot: &VisibilitySnapshot) {
-    // SAFETY: the caller holds the deferred-render lock and capture ownership.
-    unsafe {
-        for layer in LAYERS {
-            for (handle, was_visible) in handles.containers[layer as usize]
-                .iter_mut()
-                .zip(&snapshot.containers[layer as usize])
-            {
-                set_visible(handle, *was_visible);
-            }
-        }
-        for (handle, was_visible) in handles.overlays.iter_mut().zip(&snapshot.overlays) {
-            set_visible(handle, *was_visible);
-        }
-        for (handle, was_visible) in handles.dynamic.iter_mut().zip(&snapshot.dynamic) {
-            set_visible(handle, *was_visible);
-        }
+/// Restore a clip to the game's intent and stop tracking it as forced.
+unsafe fn unforce_visible(handle: &mut ClipHandle) {
+    if handle.forced.take().is_some() {
+        let intent = handle.game_visible;
+        // SAFETY: forwarded to set_visible; see the caller's obligations.
+        unsafe { set_visible(handle, intent) };
     }
 }
 
 /// Read a clip's visibility through its cached handle, defaulting to visible on failure.
 ///
 /// # Safety
-/// The caller must be on the capture thread or own the capture (see [`ClipHandle`]).
+/// The caller must be on the capture (game update) thread (see [`ClipHandle`]).
 pub(crate) unsafe fn get_visible(handle: &mut ClipHandle) -> bool {
     // SAFETY: the handle's value is pinned and managed; the interface pointer comes from it.
     unsafe {
@@ -346,7 +427,7 @@ pub(crate) unsafe fn get_visible(handle: &mut ClipHandle) -> bool {
 /// write: no AVM, no AS3 setters).
 ///
 /// # Safety
-/// The caller must be on the capture thread or own the capture (see [`ClipHandle`]).
+/// The caller must be on the capture (game update) thread (see [`ClipHandle`]).
 pub(crate) unsafe fn set_visible(handle: &mut ClipHandle, visible: bool) {
     // SAFETY: as `get_visible`.
     unsafe {
@@ -364,26 +445,14 @@ pub(crate) unsafe fn set_visible(handle: &mut ClipHandle, visible: bool) {
     }
 }
 
-/// Log the vtable-mismatch fallback once rather than every frame.
-fn log_split_fallback_once() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-    if !LOGGED.swap(true, Ordering::Relaxed) {
-        tracing::error!(
-            "hud split: the AS3 root's vtable does not match the modeled MovieRoot vtable; \
-             falling back to the single-texture render"
-        );
-    }
-}
-
-/// Rebind the UI render buffer's views to `(rtv, dsv)` for the next pass. The movie rectangle,
-/// safe area, and viewport are untouched -- every layer texture shares the redirect's dimensions.
+/// Rebind the UI render buffer's views to `(rtv, dsv)`. The movie rectangle, safe area, and
+/// viewport are untouched -- every layer texture shares the redirect's dimensions.
 unsafe fn rebind_views(
     manager: &mut UIManager,
     (rtv, dsv): &(ID3D11RenderTargetView, ID3D11DepthStencilView),
 ) {
-    // SAFETY: the render buffer was built by the redirect on this thread; UpdateData refcounts the
-    // views it swaps.
+    // SAFETY: the render buffer was built by the redirect; UpdateData refcounts the views it
+    // swaps.
     unsafe {
         if let Some(render_buffer) = manager.m_RenderBuffer.as_mut() {
             render_buffer.UpdateData(rtv.as_raw(), std::ptr::null_mut(), dsv.as_raw());

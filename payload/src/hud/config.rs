@@ -59,17 +59,15 @@ pub struct HudConfig {
     /// Marker depths are clamped to this, in meters -- beyond it disparity is indistinguishable
     /// from infinity.
     pub marker_max_depth: f32,
-    /// EXPERIMENTAL: render the HUD in three visibility passes -- static HUD, world markers,
-    /// reticles -- into separate textures composited at per-layer depths. Currently unstable:
-    /// consuming multiple display-tree captures per frame fights Scaleform's once-a-frame
-    /// consumption model (stale snapshots, flicker, and update latency); the single-panel warp
-    /// ([`marker_warp`](HudConfig::marker_warp)) is the supported depth mechanism. See
-    /// `payload/src/hud/split.rs`.
+    /// Split the HUD into three depth layers -- static HUD, world markers, reticles -- each in
+    /// its own texture composited at its own depth. Time-multiplexed: one layer's texture
+    /// refreshes per frame via a game-thread visibility mask ahead of the engine's own capture,
+    /// so the render cost and threading match vanilla. See `payload/src/hud/split.rs`.
     pub split: bool,
     /// Keep the full-screen Scaleform overlays -- drowning tint, damage flashes, directional
     /// damage indicators -- hidden (issue #8): they were authored to cover a flat screen and
     /// cover the whole panel in VR instead. Enforced per frame on the game thread through the
-    /// discovered clip handles.
+    /// discovered clip handles, ahead of each capture.
     pub suppress_overlays: bool,
     /// The clip-path prefix from the root movie's timeline to the HUD movie's clips, ending in a
     /// dot when non-empty (e.g. `"hud."`). The HUD movie is attached by `root.gfx`'s ActionScript
@@ -95,7 +93,7 @@ impl HudConfig {
             center_bubble_radius: 0.12,
             marker_radius: 0.08,
             marker_max_depth: 150.0,
-            split: false,
+            split: true,
             suppress_overlays: true,
             split_path_prefix: SplitPathPrefix::new(),
         }

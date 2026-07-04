@@ -128,7 +128,10 @@ pub struct UIManager {
     /// [`Movie`](ui::scaleform::Movie) interface: SetVariable, Invoke, the display tree) hangs off
     /// [`MovieImpl::pASMovieRoot`].
     pub m_Movie: *mut crate::ui::scaleform::MovieImpl,
-    _field_12f0: [u8; 160],
+    _field_12f0: [u8; 56],
+    /// The Scaleform `Render::D3D1x::HAL` the UI render worker draws through.
+    pub m_RenderHAL: *mut crate::ui::scaleform::RenderHAL,
+    _field_1330: [u8; 96],
     /// The Scaleform render buffer the UI HAL renders into, set up by
     /// [`InitPlatformRT`](UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`] rebinds which
     /// views it renders into.

@@ -64,7 +64,7 @@ pub struct HudState {
     /// The panel pose `(position, rotation)` chosen for the current frame, cached for the marker
     /// projection ([`compute_panel_vp`](crate::hud::compute_panel_vp)) to reuse.
     current_pose: Option<(Vec3, Quat)>,
-    /// The extra layer targets for the multi-pass split ([`HudLayer::Markers`](split::HudLayer)
+    /// The extra layer targets for the split ([`HudLayer::Markers`](split::HudLayer)
     /// and [`HudLayer::Center`](split::HudLayer)); layer 0 (static) renders into
     /// [`target`](HudState::target). Present only while the split is enabled and sized like the
     /// main target.
@@ -72,11 +72,18 @@ pub struct HudState {
     /// World-space panel corners, computed once per frame on eye 0 and reused for eye 1 so both
     /// eyes project the same world position through their own per-eye VP (correct stereo depth).
     cached_corners: Option<[[f32; 4]; 4]>,
-    /// While split: per-layer world-space corners and their distances, computed alongside
-    /// [`cached_corners`](HudState::cached_corners) on eye 0. Index matches
-    /// [`split::LAYERS`]; layer 0 (static) reuses `cached_corners`' geometry but is duplicated
-    /// here so the draw can sort all layers by distance.
+    /// While split: per-layer world-space corners and their distances, chosen on eye 0. Index
+    /// matches [`split::LAYERS`]. The static and center entries are recomputed every frame
+    /// (head-locked); the marker entry is frozen at each marker-texture refresh so the stale
+    /// texture stays glued to the world pose it was rendered for.
     cached_layer_corners: [Option<([[f32; 4]; 4], f32)>; split::LAYER_COUNT],
+    /// Whether the split composite is live this frame (chosen on eye 0; also gates the clear).
+    split_composite: bool,
+    /// The marker layer's refresh generation last seen by
+    /// [`begin_split_frame`](HudState::begin_split_frame).
+    marker_gen_seen: u64,
+    /// The marker layer's frozen warp inputs, refreshed with its corners.
+    frozen_marker_warp: Option<WarpFrame>,
 }
 
 /// Damped follow state: tracks the panel's eased orientation via quaternion slerp.
@@ -130,6 +137,9 @@ impl HudState {
             current_pose: None,
             cached_corners: None,
             cached_layer_corners: [None, None, None],
+            split_composite: false,
+            marker_gen_seen: 0,
+            frozen_marker_warp: None,
             layer_targets: [None, None],
         }
     }
@@ -291,22 +301,48 @@ impl HudState {
         self.warp_frame = frame;
     }
 
-    /// Compute the split layers' world-space corners (one set per layer, each at its own
-    /// distance), cached for both eyes like [`compute_world_corners`](HudState::compute_world_corners).
-    /// Pass `None` to clear (split off this frame).
-    pub fn compute_layer_corners(
-        &mut self,
-        params: Option<[super::quad::PanelParams; split::LAYER_COUNT]>,
-    ) {
-        self.cached_layer_corners = [None, None, None];
-        let Some(params) = params else {
-            return;
-        };
-        for (slot, params) in self.cached_layer_corners.iter_mut().zip(params.iter()) {
-            if let Some(corners) = super::quad::compute_world_corners(params) {
-                *slot = Some((corners, params.distance));
-            }
+    /// Begin the split's per-frame bookkeeping (eye 0): record whether the composite is live and
+    /// whether the marker layer's texture was refreshed since the last frame (its pose and warp
+    /// should then be re-frozen via [`set_marker_layer`](HudState::set_marker_layer)). While the
+    /// composite is inactive the per-layer state is dropped, so a re-entry starts fresh.
+    pub fn begin_split_frame(&mut self, active: bool, marker_gen: u64) -> bool {
+        self.split_composite = active;
+        if !active {
+            self.cached_layer_corners = [None, None, None];
+            self.frozen_marker_warp = None;
+            self.marker_gen_seen = marker_gen;
+            return false;
         }
+        let refreshed = marker_gen != self.marker_gen_seen;
+        self.marker_gen_seen = marker_gen;
+        refreshed
+    }
+
+    /// Compute the head-locked layers' world-space corners (the static and center layers), every
+    /// frame while the split composite is live.
+    pub fn set_layer_corners(
+        &mut self,
+        static_params: &super::quad::PanelParams,
+        center_params: &super::quad::PanelParams,
+    ) {
+        for (slot, params) in [
+            (split::HudLayer::Static, static_params),
+            (split::HudLayer::Center, center_params),
+        ]
+        .map(|(layer, params)| (layer as usize, params))
+        {
+            self.cached_layer_corners[slot] =
+                super::quad::compute_world_corners(params).map(|c| (c, params.distance));
+        }
+    }
+
+    /// Freeze the marker layer's world-space corners and warp inputs at a texture refresh; they
+    /// hold until the next refresh so the stale texture stays at the world pose it was rendered
+    /// for.
+    pub fn set_marker_layer(&mut self, params: &super::quad::PanelParams, warp: Option<WarpFrame>) {
+        self.cached_layer_corners[split::HudLayer::Markers as usize] =
+            super::quad::compute_world_corners(params).map(|c| (c, params.distance));
+        self.frozen_marker_warp = warp;
     }
 
     /// Draw the redirected HUD as a floating quad for `eye` over `target` (the eye's linear back
@@ -355,7 +391,8 @@ impl HudState {
                 .as_ref()
                 .map(|t| t.color_srv().clone()),
         ];
-        let split_ready = self.cached_layer_corners.iter().all(Option::is_some)
+        let split_ready = self.split_composite
+            && self.cached_layer_corners.iter().all(Option::is_some)
             && layer_srvs.iter().all(Option::is_some);
         if !split_ready {
             // Single-panel mode: the whole HUD texture on one surface, depth-warped per element
@@ -397,10 +434,10 @@ impl HudState {
         for i in order {
             let (layer_corners, distance) = self.cached_layer_corners[i].unwrap();
             let srv = layer_srvs[i].as_ref().unwrap();
-            // The marker layer draws depth-warped when the frame has warp inputs; the warp
+            // The marker layer draws depth-warped when it has frozen warp inputs; the warp
             // pipeline is built lazily and a build failure falls back to the flat quad.
             if i == split::HudLayer::Markers as usize
-                && let Some(frame) = self.warp_frame.as_ref()
+                && let Some(frame) = self.frozen_marker_warp.as_ref()
             {
                 if self.warp.is_none() {
                     match HudWarp::new(device) {
@@ -427,26 +464,27 @@ impl HudState {
     }
 
     /// Clear the HUD render target and depth-stencil so the next frame starts clean. A no-op when
-    /// not redirected. The caller must hold the engine context mutex.
+    /// not redirected, and while the split composite is live -- the layer textures (including the
+    /// main target, which doubles as the static layer) must persist between their refreshes, so
+    /// the UI render detour clears each one right before re-rendering it instead. The caller must
+    /// hold the engine context mutex.
     pub fn clear(&mut self, context: &ID3D11DeviceContext) {
-        if !self.redirected {
+        if !self.redirected || self.split_composite {
             return;
         }
         let Some(target) = self.target.as_ref() else {
             return;
         };
-        // SAFETY: `context` is the live engine context; the RTVs and DSVs belong to our target
-        // textures.
+        // SAFETY: `context` is the live engine context; the RTV and DSV belong to our target
+        // texture.
         unsafe {
-            for target in std::iter::once(target).chain(self.layer_targets.iter().flatten()) {
-                context.ClearRenderTargetView(target.color_rtv(), &[0.0, 0.0, 0.0, 0.0]);
-                context.ClearDepthStencilView(
-                    target.depth_dsv(),
-                    (D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL).0,
-                    1.0,
-                    0,
-                );
-            }
+            context.ClearRenderTargetView(target.color_rtv(), &[0.0, 0.0, 0.0, 0.0]);
+            context.ClearDepthStencilView(
+                target.depth_dsv(),
+                (D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL).0,
+                1.0,
+                0,
+            );
         }
     }
 

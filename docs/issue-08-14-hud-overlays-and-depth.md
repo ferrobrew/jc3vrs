@@ -5,31 +5,61 @@ panel) and issue #14 (dynamic HUD depth/scale based on scene geometry). The two
 share the same underlying Scaleform architecture and the same per-element
 separation question, so they're documented together.
 
-**Status: implemented on the `hud-depth-split` branch, pending in-game
-verification.** The multi-pass split renders the HUD in three visibility
-passes (static / markers / center) into separate textures composited at
-per-layer depths, with a per-marker depth warp on the marker layer, an
-aim-driven depth for the center layer, and overlay suppression for #8 — see
-`docs/hud.md` ("Depth layers") for the shipped design. This document keeps the
-underlying reverse-engineering and records what still needs an in-game pass:
+**Status: implemented on the `hud-depth-split` branch as a time-multiplexed
+split (one layer's texture refreshed per frame), pending in-game
+verification.** The split separates the HUD into three layers (static /
+markers / center) in separate textures composited at per-layer depths, with a
+per-marker depth warp on the marker layer, an aim-driven depth for the center
+layer, and overlay suppression for #8.
 
-1. The display-tree dump (HUD tab, Scaleform section) must confirm the runtime
-   clip paths — the authored `MCI_*` names and the attachment prefix under the
-   root movie (`hud.split_path_prefix`). `SetVariable` failures are logged
-   once per path.
-2. The MovieRoot vtable guard (`Movie::VFTABLE`, `0x1426216B0`) must match the
-   live object; a mismatch logs and disables every Scaleform-side operation.
-3. The capture-per-pass mechanism, the deferred-render-lock reentrancy, and
-   the per-layer visuals themselves.
+Two corrections to the original analysis below, from in-game testing and
+release-binary verification:
 
-One correction to the original analysis below: `HAL::Draw` renders a
-*captured* display-tree snapshot, so toggling `_visible` between draws does
-nothing without a fresh `Movie::Capture` per pass (with capture-thread
-ownership borrowed, as `RenderOffScreenTextures` does). The implemented
-sequence per pass is: set visibility, capture, rebind the render buffer's
-views, call the original `Render` — all under `m_DeferredRenderLock`, which
-`PreRender` also holds across `Advance`+`Capture`, making the split race-free
-against the update thread.
+1. `HAL::Draw` renders a *captured* display-tree snapshot, so toggling
+   `_visible` between draws does nothing without a fresh `Movie::Capture` per
+   pass.
+2. **Capturing off the game thread is structurally unsafe, so a multi-pass
+   split (several capture+render cycles per frame) cannot work.**
+   `Render::Context::Capture` mutates the *active* snapshot — the same data
+   every game-thread UI write (invokes, `SetDisplayInfo`, the POI updates)
+   mutates, with no writer lock; the capture lock only serializes `Capture`
+   against `NextCapture`. Vanilla is safe because the engine captures
+   exclusively in `PreRender` on the game thread, serialized with all other
+   UI code by being the same thread. A first implementation that captured
+   per pass from the render worker (with capture-thread ownership borrowed,
+   as `RenderOffScreenTextures` does) raced every game-thread UI write:
+   flicker across all layers, updates surfacing seconds late (the ownership
+   claim also forced every `CUIBase::Invoke` through the queued-with-delay
+   path), and a crash in `PrimitiveBundle::InsertEntry`.
+
+The implemented design therefore multiplexes in time, with all Scaleform
+writes on the game thread and zero added captures:
+
+- A detour on `GFx::MovieImpl::Capture` (`0x14198B7D0`; called at the end of
+  `CUIManager::PreRender`, after `UpdatePOIs` and `Advance`, deferred render
+  lock held) applies the visibility mask for *one* layer per frame,
+  round-robin, tracking the game's own visibility intent via read-backs. The
+  engine's own once-a-frame capture carries the mask. The schedule only
+  advances once the renderer consumed the previous mask, so a game thread
+  running ahead re-captures the same mask instead of skipping layers.
+- The `CUIManager::Render` detour binds the layer texture matching the mask
+  in the snapshot it is about to draw (a sequence number couples the two),
+  clears it on the HAL's own device context (`m_RenderHAL` at `+0x1328`,
+  `HAL::pDeviceContext` at `+0x473B0`), and calls the original once.
+- The UI renders once per eye; only the first render of an engine frame may
+  consume a pending capture. Later renders set the context's once-a-frame
+  consumption latch (`Context::NextCaptureCalledInFrame`, movie context
+  embedded at `MovieImpl+0x5350`, latch at `+0x99`; cleared by
+  `HAL::EndFrame` → `EndFrameContextNotify`) so both eyes draw the same
+  snapshot even when the game thread slips the next capture in between them.
+- Each texture refreshes at 1/3 rate. The draw side freezes the marker
+  layer's world pose (and warp inputs) between refreshes so world-anchored
+  icons stay glued to their world spots; the head-locked static and center
+  layers only see up to ~3 frames of content latency.
+
+What still needs an in-game pass: the layer visuals themselves, the refresh
+cadence (whether 1/3-rate updates read acceptably), and the intent tracking
+against the game's own show/hide traffic (wingsuit HUD, the POI pool).
 
 ## The problems
 

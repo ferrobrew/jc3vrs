@@ -9,7 +9,10 @@ use detours_macro::detour;
 use jc3gi::{
     graphics_engine::graphics_engine::HContext_t,
     types::math::{Matrix4, Vector2, Vector3},
-    ui::ui_manager::{ScreenPos, UIManager},
+    ui::{
+        scaleform::MovieImpl,
+        ui_manager::{ScreenPos, UIManager},
+    },
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -20,6 +23,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&GET_2D_INFO_BINDER)
         .with_static_binder(&UI_RENDER_BINDER)
         .with_static_binder(&CONVERT_3D_COORDS_DEFAULT_BINDER)
+        .with_static_binder(&MOVIE_CAPTURE_BINDER)
 }
 
 /// Marks the start of a game frame for the aim-depth recording: `UpdateGrappleReticle`'s *first*
@@ -85,23 +89,48 @@ fn convert_3d_coords_default(
     }
 }
 
-/// Replace the UI render with the multi-pass HUD split when it is active this frame; otherwise
-/// pass through. Runs on the UI render worker (kicked by `StartRender`). See
-/// [`crate::hud::split`].
+/// The seam for the split's game-thread visibility masking: `CUIManager::PreRender` calls this
+/// right after `Advance`, on the game update thread with the deferred render lock held -- the
+/// only point in the frame where every display-tree writer is quiescent. The mask for the frame's
+/// layer (and the issue #8 overlay suppression) is applied here so the engine's own capture
+/// carries it; the original then runs unchanged. Movies other than the main UI movie (the
+/// render-to-texture instances) pass through untouched. See [`crate::hud::split`].
+#[detour(address = MovieImpl::CaptureImpl_ADDRESS)]
+fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
+    // SAFETY: the UI manager is a live singleton past startup; the pointer comparison does not
+    // dereference `this`.
+    let is_main_movie =
+        unsafe { UIManager::get().is_some_and(|manager| std::ptr::eq(manager.m_Movie, this)) };
+    if is_main_movie {
+        let (split_enabled, suppress_overlays) = Config::lock_query(|c| {
+            (
+                c.hud.redirect && c.hud.quad && c.hud.split,
+                c.hud.suppress_overlays,
+            )
+        });
+        let split_active = split_enabled
+            && crate::hud::current_mode() == crate::hud::HudMode::Hud
+            && crate::hud::split_layers_ready();
+        crate::hud::split::apply_capture_mask(split_active, suppress_overlays);
+    }
+    MOVIE_CAPTURE.get().unwrap().call(this, if_changed)
+}
+
+/// Redirect the UI render into the frame's layer texture while the split is live; otherwise pass
+/// through. Runs on the UI render worker (kicked by `StartRender`). See [`crate::hud::split`].
 #[detour(address = UIManager::Render_ADDRESS)]
 fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
     let original = UI_RENDER.get().unwrap();
-    let Some((views, suppress_overlays)) = crate::hud::split_inputs() else {
+    let Some(views) = crate::hud::split_inputs() else {
         original.call(this, context);
         return;
     };
     // SAFETY: called from the detour with the detour's own arguments, on the UI render worker.
     unsafe {
-        crate::hud::split::render_split(
+        crate::hud::split::bind_layer_and_clear(
             this,
             context as *mut std::ffi::c_void,
             &views,
-            suppress_overlays,
             &|t, c| original.call(t, c as *mut HContext_t),
         );
     }
