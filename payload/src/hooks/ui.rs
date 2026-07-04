@@ -22,10 +22,23 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&CONVERT_3D_COORDS_DEFAULT_BINDER)
 }
 
+/// Marks the start of a game frame for the aim-depth recording: `UpdateGrappleReticle`'s *first*
+/// default-VP projection each frame is the game's smoothed aim position; its later calls (the
+/// wire-attachment point, the grip-radius sample) are different points and must not be recorded.
+/// Called from the game-thread tick.
+pub fn begin_frame_aim_recording() {
+    AIM_RECORDED_THIS_FRAME.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the current game frame already recorded its aim depth.
+static AIM_RECORDED_THIS_FRAME: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// The grapple reticle's world-to-screen (the default-VP wrapper whose only callers are in
 /// `CHUDUI::UpdateGrappleReticle`). Two jobs: reproject the reticle onto the floating panel (the
 /// wrapper's internal VP is not a parameter, so the reticle bypasses the `Get2DInfo` hook's panel
-/// reprojection), and record the aim point's depth for the center layer's aim-driven distance.
+/// reprojection), and record the aim point's depth -- from the first call of the frame only, the
+/// game's own smoothed aim position -- for the center layer's aim-driven distance.
 #[detour(address = UIManager::Convert3DCoordsDefault_ADDRESS)]
 fn convert_3d_coords_default(
     this: *mut UIManager,

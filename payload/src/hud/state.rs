@@ -12,7 +12,6 @@ use windows::Win32::Graphics::Direct3D11::{
 
 use super::{
     HudMode, binding,
-    depth_probe::DepthProbe,
     markers::MarkerDepth,
     quad::HudQuad,
     split,
@@ -52,11 +51,6 @@ pub struct HudState {
     quad: Option<HudQuad>,
     /// The marker-layer warp pass, built lazily on the first warped draw.
     warp: Option<HudWarp>,
-    /// The reticle scene-depth readback, built lazily on first use (and rebuilt on a depth-format
-    /// change). `None` after a failed build until the format changes.
-    probe: Option<DepthProbe>,
-    /// Whether the probe build already failed for the current format (avoid rebuilding hot).
-    probe_failed: bool,
     /// The frame's warp inputs (eye 0), or `None` when the warp is off this frame.
     warp_frame: Option<WarpFrame>,
     /// Lazy-follow damping state for the floating panel (gameplay HUD mode).
@@ -128,8 +122,6 @@ impl HudState {
             layer_preview_ids: [None, None],
             quad: None,
             warp: None,
-            probe: None,
-            probe_failed: false,
             warp_frame: None,
             follow: FollowState::new(),
             latched_pose: None,
@@ -290,76 +282,6 @@ impl HudState {
         if let Some(corners) = super::quad::compute_world_corners(params) {
             self.cached_corners = Some(corners);
         }
-    }
-
-    /// Sample the scene depth under the crosshair and feed the aim-depth smoother. Call on eye 0
-    /// with the engine context mutex held. Raw reverse-Z is converted to a view-space distance
-    /// through the render camera's inverse projection, clamped to `max_depth`; a far-plane value
-    /// (sky) records the clamp, which reads as "at infinity".
-    pub fn sample_depth_probe(
-        &mut self,
-        context: &ID3D11DeviceContext,
-        device: &Device,
-        max_depth: f32,
-    ) {
-        // SAFETY: the engine singleton and its depth texture are live on the render thread.
-        let (texture, width, height) = unsafe {
-            let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
-                return;
-            };
-            let Some(depth) = ge.m_MainDepthTexture.as_ref() else {
-                return;
-            };
-            let Ok(texture) = windows::core::Interface::cast::<
-                windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
-            >(&depth.m_Texture) else {
-                return;
-            };
-            (texture, u32::from(depth.m_Width), u32::from(depth.m_Height))
-        };
-        if width == 0 || height == 0 {
-            return;
-        }
-
-        if self.probe.as_ref().is_some_and(|p| !p.matches(&texture)) {
-            self.probe = None;
-            self.probe_failed = false;
-        }
-        if self.probe.is_none() && !self.probe_failed {
-            match DepthProbe::new(device, &texture) {
-                Ok(probe) => self.probe = Some(probe),
-                Err(e) => {
-                    tracing::warn!("HUD depth probe: {e:#}");
-                    self.probe_failed = true;
-                }
-            }
-        }
-        let Some(probe) = self.probe.as_mut() else {
-            return;
-        };
-        let Some(raw) = probe.sample(context, &texture, width, height) else {
-            return;
-        };
-
-        // Reverse-Z: 0.0 is the far plane (sky) -- record the clamp rather than dividing by zero.
-        let distance = if raw <= 0.0 {
-            max_depth
-        } else {
-            let Some(projection) = (unsafe {
-                jc3gi::camera::camera_manager::CameraManager::get()
-                    .and_then(|cm| cm.m_RenderCamera.as_ref())
-                    .map(|cam| cam.m_ProjectionF)
-            }) else {
-                return;
-            };
-            let inverse = glam::Mat4::from(projection).inverse();
-            let v = inverse * glam::Vec4::new(0.0, 0.0, raw, 1.0);
-            if v.w.abs() <= f32::EPSILON {
-                return;
-            }
-            (v.z / v.w).abs().clamp(0.5, max_depth)
-        };
-        super::aim::record_probe(distance);
     }
 
     /// Set (or clear) the frame's marker-warp inputs. Chosen on eye 0 alongside the corners.

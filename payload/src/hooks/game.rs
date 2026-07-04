@@ -62,6 +62,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // the game thread, which is the Scaleform capture thread.
         crate::hud::scaleform::process_requests();
 
+        // New game frame: the next grapple-reticle projection is the frame's aim position.
+        super::ui::begin_frame_aim_recording();
+
         crate::crash::mark(Phase::OriginalUpdateRender);
         GAME_UPDATE_RENDER
             .get()
