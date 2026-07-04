@@ -215,6 +215,7 @@ unsafe fn reconcile(p: &mut Partition) {
     unsafe {
         // Despawns: the display side removed the tombstone (its parent went null). Drop the real
         // node from its root; the display object's own reference decides its lifetime.
+        let mut despawned = 0usize;
         let mut index = 0;
         while index < p.moved.len() {
             if (*p.moved[index].tombstone.cast::<TreeNode>())
@@ -224,33 +225,72 @@ unsafe fn reconcile(p: &mut Partition) {
                 let entry = p.moved.swap_remove(index);
                 remove_from_root(p.roots[entry.root], entry.node);
                 release_entry(entry.tombstone.cast());
+                despawned += 1;
             } else {
                 index += 1;
             }
         }
 
         // Spawns: any child of the HUD container we do not know is a fresh pool clip; adopt it
-        // into the markers root. Collect first: moving mutates the child array.
+        // into the markers root. Collect first: moving mutates the child array. A node that is
+        // already moved must never be adopted again -- a second insert would put it in the root's
+        // child array twice, and the renderer's lockstep cache reconciliation never converges on
+        // a duplicated child (an infinite loop under the deferred render lock, hanging the game).
         let container = p.hud_container.as_mut().unwrap_unchecked();
         let mut fresh = Vec::new();
         for i in 0..container.GetSize() {
             let child = container.GetAt(i);
-            if child.is_null()
-                || p.known_static.contains(&child)
-                || p.moved
-                    .iter()
-                    .any(|m| m.tombstone.cast::<TreeNode>() == child)
+            if child.is_null() || p.known_static.contains(&child) {
+                continue;
+            }
+            if let Some(entry) = p
+                .moved
+                .iter()
+                .find(|m| m.tombstone.cast::<TreeNode>() == child || m.node == child)
             {
+                if entry.node == child {
+                    // The display side re-inserted a node we hold (a pool reattach racing our
+                    // bookkeeping). Give it back: it is now legitimately a child of the HUD
+                    // container, so it must leave our root before the capture publishes a
+                    // double-parented node.
+                    fresh.push(child);
+                }
                 continue;
             }
             fresh.push(child);
         }
+        let mut adopted = 0usize;
         for node in fresh {
-            // The movie pointer is only needed for the context; tombstones come from the node's
-            // own context via the container, so reuse the parent chain: create via the partition
-            // roots' context is equivalent. `move_node` takes the movie for entry creation.
+            if let Some(position) = p.moved.iter().position(|m| m.node == node) {
+                let entry = p.moved.swap_remove(position);
+                remove_from_root(p.roots[entry.root], entry.node);
+                reclaim_tombstone(p, &entry);
+                tracing::warn!("hud roots: the display side reclaimed a moved node; returned it");
+                continue;
+            }
             adopt(p, node);
+            adopted += 1;
         }
+        if adopted != 0 || despawned != 0 {
+            tracing::info!(
+                "hud roots: reconciled {adopted} adoption(s), {despawned} despawn(s) \
+                 ({} moved total)",
+                p.moved.len()
+            );
+        }
+    }
+}
+
+/// Retire a reclaimed node's tombstone. The display side re-owns the node elsewhere in the
+/// container while the tombstone may still be placed; pulling it out ourselves would shift the
+/// display side's cached indices (the very thing tombstones prevent), so only our reference is
+/// dropped -- the tombstone renders nothing, and the display side's own eventual removal destroys
+/// it.
+unsafe fn reclaim_tombstone(_p: &mut Partition, entry: &MovedNode) {
+    // SAFETY: capture seam per on_capture's contract; the container's reference keeps a placed
+    // tombstone alive after ours is gone.
+    unsafe {
+        release_entry(entry.tombstone.cast());
     }
 }
 
