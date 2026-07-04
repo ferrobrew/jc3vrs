@@ -164,6 +164,7 @@ fn run() -> Result<(), String> {
         }
     }
     prune_depfiles(&out_dir)?;
+    canonicalize_permutation_indexes(&out_dir)?;
     archive_headers(&out_dir)?;
     println!("regen-shaders: done -> {}", out_dir.display());
 
@@ -331,18 +332,141 @@ fn prune_depfiles(out_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Canonicalize each `<pass>_permutations.h` index so regeneration is reproducible.
+/// `FidelityFX_SC.exe` numbers the deduplicated blobs in whatever order it happens to process
+/// them, which differs on every run: the `#include` list, the `g_<pass>_PermutationInfo[]` entry
+/// order, and the `g_<pass>_IndirectionTable[]` values it holds all shuffle together, even though
+/// the content-hashed blob headers themselves are stable. Sorting the includes and the info
+/// entries, and remapping the indirection table through the same permutation, preserves the
+/// key-to-blob mapping while pinning the bytes.
+fn canonicalize_permutation_indexes(out_dir: &Path) -> Result<(), String> {
+    let entries = std::fs::read_dir(out_dir)
+        .map_err(|e| format!("could not read {}: {e}", out_dir.display()))?;
+    for entry in entries {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if !name.ends_with("_permutations.h") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+        let canonical = canonicalize_index(&text)
+            .map_err(|e| format!("could not canonicalize {}: {e}", path.display()))?;
+        if canonical != text {
+            std::fs::write(&path, canonical)
+                .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Rewrite one permutation index into its canonical form (see
+/// [`canonicalize_permutation_indexes`]). Each `PermutationInfo` entry line embeds its blob's
+/// content hash, so sorting the entry lines lexicographically is a stable, content-derived order.
+fn canonicalize_index(text: &str) -> Result<String, String> {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+
+    let includes = lines
+        .iter()
+        .take_while(|l| l.starts_with("#include"))
+        .count();
+    lines[..includes].sort_unstable();
+
+    let table = block_range(&lines, "_IndirectionTable[] = {")?;
+    let info = block_range(&lines, "_PermutationInfo[] = {")?;
+
+    let info_lines = lines[info.clone()].to_vec();
+    let mut order: Vec<usize> = (0..info_lines.len()).collect();
+    order.sort_by(|&a, &b| info_lines[a].cmp(&info_lines[b]));
+    let mut remap = vec![0usize; order.len()];
+    for (new, &old) in order.iter().enumerate() {
+        remap[old] = new;
+        lines[info.start + new] = info_lines[old].clone();
+    }
+
+    for line in &mut lines[table] {
+        let entry = line.trim().trim_end_matches(',');
+        let old: usize = entry
+            .parse()
+            .map_err(|_| format!("non-numeric IndirectionTable entry `{entry}`"))?;
+        let new = remap
+            .get(old)
+            .ok_or_else(|| format!("IndirectionTable entry {old} is out of range"))?;
+        *line = format!("    {new},");
+    }
+
+    let mut canonical = lines.join("\n");
+    if text.ends_with('\n') {
+        canonical.push('\n');
+    }
+    Ok(canonical)
+}
+
+/// Find the body of the array whose declaration line contains `marker`: the lines strictly between
+/// the declaration and its closing `};`.
+fn block_range(lines: &[String], marker: &str) -> Result<std::ops::Range<usize>, String> {
+    let start = lines
+        .iter()
+        .position(|l| l.contains(marker))
+        .ok_or_else(|| format!("missing a `{marker}` declaration"))?
+        + 1;
+    let len = lines[start..]
+        .iter()
+        .position(|l| l.starts_with("};"))
+        .ok_or_else(|| format!("unterminated `{marker}` array"))?;
+    Ok(start..start + len)
+}
+
 /// Pack the generated headers into a committed `dx11.tar.gz` next to the `dx11/` dir. The extracted
 /// headers are git-ignored (124 files, ~9 MB) but this archive (~0.7 MB) is committed, so a fresh
 /// checkout or CI builds without a shader compiler: `fsr-sys`'s `build.rs` unpacks it on demand.
+///
+/// The archive is byte-reproducible: entries are appended in sorted order with zeroed metadata
+/// (mtime, uid/gid, fixed modes) and the gzip header carries no timestamp, so re-running shadergen
+/// over unchanged headers leaves the committed archive untouched.
 fn archive_headers(out_dir: &Path) -> Result<(), String> {
     let archive_path = out_dir.with_file_name("dx11.tar.gz");
     let file = std::fs::File::create(&archive_path)
         .map_err(|e| format!("could not create {}: {e}", archive_path.display()))?;
-    let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::best());
+    let encoder = flate2::GzBuilder::new()
+        .mtime(0)
+        .write(file, flate2::Compression::best());
     let mut tar = tar::Builder::new(encoder);
+
+    let mut names = Vec::new();
+    let entries = std::fs::read_dir(out_dir)
+        .map_err(|e| format!("could not read {}: {e}", out_dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name();
+        let name = name
+            .to_str()
+            .ok_or_else(|| format!("non-UTF-8 file name in {}: {name:?}", out_dir.display()))?
+            .to_string();
+        names.push(name);
+    }
+    names.sort_unstable();
+
     // Store entries under `dx11/` so extraction into the parent recreates the headers directory.
-    tar.append_dir_all("dx11", out_dir)
-        .map_err(|e| format!("could not archive {}: {e}", out_dir.display()))?;
+    let mut dir_header = tar::Header::new_gnu();
+    dir_header.set_entry_type(tar::EntryType::Directory);
+    dir_header.set_mode(0o755);
+    dir_header.set_size(0);
+    dir_header.set_mtime(0);
+    tar.append_data(&mut dir_header, "dx11", std::io::empty())
+        .map_err(|e| format!("could not archive the dx11 directory entry: {e}"))?;
+    for name in &names {
+        let path = out_dir.join(name);
+        let data =
+            std::fs::read(&path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(data.len() as u64);
+        header.set_mtime(0);
+        tar.append_data(&mut header, format!("dx11/{name}"), data.as_slice())
+            .map_err(|e| format!("could not archive {}: {e}", path.display()))?;
+    }
+
     tar.into_inner()
         .and_then(|enc| enc.finish())
         .map_err(|e| format!("could not finish {}: {e}", archive_path.display()))?;
