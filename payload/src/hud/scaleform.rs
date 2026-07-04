@@ -7,7 +7,7 @@
 //! where the display tree is stable and the engine makes its own AS3 calls).
 //!
 //! The tree dump walks [`Movie::GetDisplayObjectsTree`] and logs one line per clip; the toggle
-//! writes `<path>._visible` through [`Movie::SetVariable`]. Both are read-modify operations on the
+//! writes `<path>.visible` through [`Movie::SetVariable`]. Both are read-modify operations on the
 //! live movie, guarded by a vtable check so a mismatched `m_Movie` model logs instead of calling
 //! through a wrong vtable.
 
@@ -23,7 +23,7 @@ use parking_lot::Mutex;
 enum Request {
     /// Log the movie's full display tree, one line per clip.
     DumpTree,
-    /// Set `<path>._visible` on the clip at the dot-separated `path` (from the root timeline).
+    /// Set `<path>.visible` on the clip at the dot-separated `path` (from the root timeline).
     SetClipVisible { path: String, visible: bool },
 }
 
@@ -151,14 +151,14 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
             .iter()
             .flat_map(|layer| layer.iter());
         for path in containers.chain(crate::hud::split::OVERLAY_CLIPS.iter()) {
-            let full = format!("{prefix}{path}._visible\0");
+            let full = format!("{prefix}{path}.visible\0");
             let mut value = Value::new_boolean(true);
             let ok = movie_root.GetVariable(&mut value, full.as_ptr());
             if ok && value.Type & 0x8F == Value::VT_BOOLEAN {
                 let visible = value.mValue & 0xFF != 0;
                 tracing::info!("scaleform: probe {path}: visible={visible}");
             } else if ok {
-                tracing::info!("scaleform: probe {path}: resolves (non-boolean _visible)");
+                tracing::info!("scaleform: probe {path}: resolves (non-boolean visible)");
             } else {
                 tracing::warn!("scaleform: probe {path}: does not resolve");
             }
@@ -302,9 +302,9 @@ unsafe fn find_hud_clip(
     }
 }
 
-/// Set `<path>._visible` through `Movie::SetVariable`, logging the outcome.
+/// Set `<path>.visible` through `Movie::SetVariable`, logging the outcome.
 fn set_clip_visible(movie: &Movie, path: &str, visible: bool) {
-    let full_path = format!("{path}._visible");
+    let full_path = format!("{path}.visible");
     let Ok(c_path) = CString::new(full_path.clone()) else {
         tracing::warn!("scaleform: the clip path {full_path:?} contains a NUL; ignoring");
         return;

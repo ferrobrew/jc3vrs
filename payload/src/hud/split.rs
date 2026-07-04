@@ -203,7 +203,7 @@ unsafe fn paths_resolve(movie_root: &Movie, prefix: &str) -> bool {
     /// 0 = unknown, 1 = resolving, 2 = not resolving.
     static STATE: AtomicU8 = AtomicU8::new(0);
 
-    let full = format!("{prefix}MCI_safe_area_center._visible\0");
+    let full = format!("{prefix}MCI_safe_area_center.visible\0");
     let mut value = Value::new_boolean(true);
     // SAFETY: NUL-terminated path bytes; an unmanaged stack value the movie fills in.
     let ok = unsafe { movie_root.GetVariable(&mut value, full.as_ptr()) };
@@ -242,7 +242,7 @@ const MAX_CONTAINERS: usize = 7;
 /// The overlay clip count.
 const MAX_OVERLAYS: usize = 7;
 
-/// Read each container's and overlay clip's current `_visible` (defaulting to visible when the
+/// Read each container's and overlay clip's current `visible` (defaulting to visible when the
 /// path does not resolve, which is also logged once by the write path).
 unsafe fn snapshot_visibility(movie_root: &Movie, prefix: &str) -> VisibilitySnapshot {
     // SAFETY: the caller holds the deferred-render lock and capture ownership.
@@ -322,10 +322,10 @@ unsafe fn restore_visibility(movie_root: &Movie, prefix: &str, snapshot: &Visibi
     }
 }
 
-/// Read `<prefix><path>._visible`, defaulting to `true` when the path does not resolve or the
+/// Read `<prefix><path>.visible`, defaulting to `true` when the path does not resolve or the
 /// value is not a boolean.
 unsafe fn get_visible(movie_root: &Movie, prefix: &str, path: &str) -> bool {
-    let full = format!("{prefix}{path}._visible\0");
+    let full = format!("{prefix}{path}.visible\0");
     let mut value = Value::new_boolean(true);
     // SAFETY: NUL-terminated path bytes; an unmanaged stack value the movie fills in. A boolean
     // result is unmanaged, so nothing needs releasing.
@@ -336,15 +336,15 @@ unsafe fn get_visible(movie_root: &Movie, prefix: &str, path: &str) -> bool {
     value.mValue & 0xFF != 0
 }
 
-/// Write `<prefix><path>._visible = visible` on the movie. Failures are logged once per path (the
+/// Write `<prefix><path>.visible = visible` on the movie. Failures are logged once per path (the
 /// prefix may be wrong until the in-game display-tree dump pins the attachment point).
 unsafe fn set_visible(movie_root: &Movie, prefix: &str, path: &str, visible: bool) {
-    let full = format!("{prefix}{path}._visible\0");
+    let full = format!("{prefix}{path}.visible\0");
     let value = Value::new_boolean(visible);
     // SAFETY: NUL-terminated path bytes; an unmanaged stack boolean the movie copies.
     let ok = unsafe { movie_root.SetVariable(full.as_ptr(), &value, 0) };
     if !ok {
-        log_path_failure_once(&full[..full.len() - "._visible\0".len()]);
+        log_path_failure_once(&full[..full.len() - ".visible\0".len()]);
     }
 }
 
