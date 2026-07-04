@@ -58,6 +58,10 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // has built them).
         super::graphics_engine::shader::process_reload_request();
 
+        // Execute queued Scaleform debug operations (display-tree dump, clip visibility) here on
+        // the game thread, which is the Scaleform capture thread.
+        crate::hud::scaleform::process_requests();
+
         crate::crash::mark(Phase::OriginalUpdateRender);
         GAME_UPDATE_RENDER
             .get()

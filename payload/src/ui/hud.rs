@@ -8,6 +8,10 @@ use crate::config;
 /// Preview size (px) for the redirected HUD texture, independent of the Render tab's preview size.
 static HUD_PREVIEW_WIDTH: Mutex<f32> = Mutex::new(512.0);
 
+/// The clip path the Scaleform visibility controls operate on. Editable so paths from a tree dump
+/// can be tried live without a rebuild.
+static SCALEFORM_CLIP_PATH: Mutex<String> = Mutex::new(String::new());
+
 pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
     // Redirect toggle and the quad placement/follow parameters. The CONFIG lock is scoped to this
     // block and dropped before HUD_STATE is locked for the preview.
@@ -70,4 +74,39 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 }
             });
     }
+
+    scaleform_debug_ui(ui);
+}
+
+/// The Scaleform display-tree debug controls: dump the live clip tree to the log, and toggle a
+/// clip's `_visible` by path. Requests are queued here and executed on the game thread.
+fn scaleform_debug_ui(ui: &mut egui::Ui) {
+    egui::CollapsingHeader::new("Scaleform display tree")
+        .default_open(false)
+        .show(ui, |ui| {
+            if ui
+                .button("Dump display tree to log")
+                .on_hover_text(
+                    "Walks the live movie's clip tree on the game thread and logs one line per \
+                     clip, as dot-joined paths.",
+                )
+                .clicked()
+            {
+                crate::hud::scaleform::request_dump_tree();
+            }
+            ui.horizontal(|ui| {
+                let mut path = SCALEFORM_CLIP_PATH.lock();
+                if path.is_empty() {
+                    *path = "MCI_poi_stage".to_string();
+                }
+                ui.label("Clip path");
+                ui.text_edit_singleline(&mut *path);
+                if ui.button("Hide").clicked() {
+                    crate::hud::scaleform::request_set_clip_visible(path.clone(), false);
+                }
+                if ui.button("Show").clicked() {
+                    crate::hud::scaleform::request_set_clip_visible(path.clone(), true);
+                }
+            });
+        });
 }

@@ -33,6 +33,7 @@
 mod binding;
 mod config;
 mod quad;
+pub mod scaleform;
 mod state;
 mod target;
 
