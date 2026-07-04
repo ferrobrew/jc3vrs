@@ -19,6 +19,57 @@ pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&GET_2D_INFO_BINDER)
         .with_static_binder(&UI_RENDER_BINDER)
+        .with_static_binder(&CONVERT_3D_COORDS_DEFAULT_BINDER)
+}
+
+/// The grapple reticle's world-to-screen (the default-VP wrapper whose only callers are in
+/// `CHUDUI::UpdateGrappleReticle`). Two jobs: reproject the reticle onto the floating panel (the
+/// wrapper's internal VP is not a parameter, so the reticle bypasses the `Get2DInfo` hook's panel
+/// reprojection), and record the aim point's depth for the center layer's aim-driven distance.
+#[detour(address = UIManager::Convert3DCoordsDefault_ADDRESS)]
+fn convert_3d_coords_default(
+    this: *mut UIManager,
+    world: *const Vector3,
+    out_x: *mut f32,
+    out_y: *mut f32,
+) -> bool {
+    let (panel_enabled, record_aim, max_depth) = Config::lock_query(|c| {
+        (
+            c.hud.redirect && c.hud.quad,
+            c.hud.split && c.hud.center_depth_from_aim,
+            c.hud.marker_max_depth,
+        )
+    });
+
+    // SAFETY: `world` is the caller's live aim point; panel_pose only reads cached state.
+    if record_aim
+        && let Some(world) = unsafe { world.as_ref() }
+        && let Some((anchor, _)) = crate::hud::HUD_STATE.lock().panel_pose()
+    {
+        let world = glam::Vec3::new(world.data[0], world.data[1], world.data[2]);
+        crate::hud::aim::record((world - anchor).length().clamp(0.5, max_depth.max(0.5)));
+    }
+
+    let aspect = crate::hud::current_aspect();
+    let panel = panel_enabled.then(crate::hud::compute_panel_vp).flatten();
+    match panel {
+        // Project through the panel VP with the aspect retarget, exactly like the Get2DInfo hook,
+        // so the grapple reticle lands at the correct spot on the panel surface.
+        Some((vp, _camera)) => unsafe {
+            let Some(manager) = this.as_mut() else {
+                return false;
+            };
+            let previous = manager.m_CachedViewportRatio;
+            manager.m_CachedViewportRatio = 1.0 / aspect.max(f32::EPSILON);
+            let ok = manager.Convert3DCoords(world, out_x, out_y, &vp);
+            manager.m_CachedViewportRatio = previous;
+            ok
+        },
+        None => CONVERT_3D_COORDS_DEFAULT
+            .get()
+            .unwrap()
+            .call(this, world, out_x, out_y),
+    }
 }
 
 /// Replace the UI render with the multi-pass HUD split when it is active this frame; otherwise

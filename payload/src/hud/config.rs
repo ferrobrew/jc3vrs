@@ -40,8 +40,12 @@ pub struct HudConfig {
     /// per-marker depth warp supersedes this as markers' effective depth when enabled.
     pub marker_distance: f32,
     /// Distance from the eye to the screen-center (reticle) layer while splitting, in meters.
-    /// Constant apparent size; superseded by the aim-driven depth when enabled.
+    /// Constant apparent size; the fallback (and easing target) while
+    /// [`center_depth_from_aim`](HudConfig::center_depth_from_aim) has no recent aim point.
     pub center_distance: f32,
+    /// Drive the center layer's depth from the grapple reticle's aim point (smoothed), so the
+    /// reticle group sits at the vergence of the surface it targets.
+    pub center_depth_from_aim: bool,
     /// While splitting, warp the marker layer per marker: each on-screen world marker's
     /// neighborhood is displaced to the marker's real world depth (recorded from the game's own
     /// world-to-screen calls), giving markers depth-correct stereo disparity individually.
@@ -79,6 +83,7 @@ impl HudConfig {
             follow: FollowConfig::new(),
             marker_distance: 3.0,
             center_distance: 3.0,
+            center_depth_from_aim: true,
             marker_warp: true,
             marker_radius: 0.08,
             marker_max_depth: 150.0,

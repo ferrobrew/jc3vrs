@@ -281,6 +281,28 @@ impl UIManager {
             f(self as *const Self as _, world, out_x, out_y, vp)
         }
     }
+    pub const Convert3DCoordsDefault_ADDRESS: usize = 0x140F899A0;
+    /// The default-VP world-to-screen wrapper `CHUDUI::UpdateGrappleReticle` uses for the grapple
+    /// reticle (its only callers): fetches the render camera's view-projection internally and
+    /// forwards to [`Convert3DCoords`](UIManager::Convert3DCoords). Because the VP is not a
+    /// parameter, the grapple reticle bypasses the floating panel's marker reprojection unless
+    /// this wrapper is hooked.
+    pub unsafe fn Convert3DCoordsDefault(
+        &mut self,
+        world: *const crate::types::math::Vector3,
+        out_x: *mut f32,
+        out_y: *mut f32,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                world: *const crate::types::math::Vector3,
+                out_x: *mut f32,
+                out_y: *mut f32,
+            ) -> bool = ::std::mem::transmute(Self::Convert3DCoordsDefault_ADDRESS);
+            f(self as *mut Self as _, world, out_x, out_y)
+        }
+    }
     pub const Get2DInfo_ADDRESS: usize = 0x140F69CB0;
     /// Marker placement: [`Convert3DCoords`](UIManager::Convert3DCoords) with the supplied `vp`, plus
     /// an on-screen test and an off-screen edge-clamp via [`ClampToScreen`](UIManager::ClampToScreen).

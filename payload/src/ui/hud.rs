@@ -64,6 +64,10 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                         egui::Slider::new(&mut cfg.hud.center_distance, 0.3..=10.0)
                             .text("Center layer distance (m)"),
                     );
+                    ui.checkbox(
+                        &mut cfg.hud.center_depth_from_aim,
+                        "Drive center layer depth from the grapple aim point",
+                    );
                     ui.horizontal(|ui| {
                         ui.label("Clip path prefix");
                         let mut prefix = cfg.hud.split_path_prefix.as_str().to_string();

@@ -30,6 +30,7 @@
 //! ([`binding`]), the quad draw pass ([`quad`]), the [`state`] machine that drives them, and the
 //! [`config`] types for tuning parameters.
 
+pub mod aim;
 mod binding;
 mod config;
 pub mod markers;
@@ -224,11 +225,18 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         // Per-layer corner sets while the split runs in gameplay: each layer keeps the panel's
         // apparent size at its own distance, so only the stereo depth differs.
         let split_active = cfg.split && mode == HudMode::Hud;
+        // The center layer's distance follows the smoothed aim depth when enabled, easing back to
+        // the configured distance while nothing is targeted.
+        let center_distance = if split_active && cfg.center_depth_from_aim {
+            aim::current(cfg.center_distance)
+        } else {
+            cfg.center_distance
+        };
         hud.compute_layer_corners(split_active.then(|| {
             [
                 params_at(cfg.distance),
                 params_at(cfg.marker_distance),
-                params_at(cfg.center_distance),
+                params_at(center_distance),
             ]
         }));
         // The frame's recorded marker depths for the warp (recorded on the game thread by the
