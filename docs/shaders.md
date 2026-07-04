@@ -100,10 +100,10 @@ there to the pass that binds it.
 ## How the engine creates shaders (the patch seam)
 
 `Graphics::CreateFragmentProgram(device, params)` is the only caller of
-`ID3D11Device::CreatePixelShader`. `params` (`CreateFragmentProgramParams`) is just `{ m_Code: *const u8
-@0x0, m_Size: u64 @0x8 }` — the DXBC bytecode and its length. The returned `HFragmentProgram_t` is an
-8-byte allocation holding the `ID3D11PixelShader*`; **no DXBC is retained**. `CreatePixelShader` copies
-the bytecode, so a hook can substitute a patched copy that only has to outlive the call.
+`ID3D11Device::CreatePixelShader`. `params` (`CreateFragmentProgramParams`, laid out in pyxis-defs) is
+just the DXBC bytecode and its length. The returned `HFragmentProgram_t` holds only the
+`ID3D11PixelShader*`; **no DXBC is retained**. `CreatePixelShader` copies the bytecode, so a hook can
+substitute a patched copy that only has to outlive the call.
 
 The mod uses this to patch shaders in memory (`payload/src/hooks/graphics_engine/shader.rs`):
 
@@ -116,7 +116,7 @@ The mod uses this to patch shaders in memory (`payload/src/hooks/graphics_engine
 2. **Force a reload** — because injection happens after the game has built its shaders, the hook only
    sees them when they are re-created. `CGraphicsEngine::LoadShaderBundle(name)` reloads a bundle (and
    re-creates every shader holder through `CreateFragmentProgram`), but only if `name` differs from the
-   current (`m_CurrentBundleName`, an `std::string` at `engine+0x1300`). The mod's "Reload shaders"
+   current (`m_CurrentBundleName`, laid out in pyxis-defs). The mod's "Reload shaders"
    button bounces the active bundle to its other quality variant and back, which re-creates everything
    through the hook. Changing shadow quality in the game's own graphics menu does the same.
 

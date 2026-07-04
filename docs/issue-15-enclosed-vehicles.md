@@ -3,6 +3,11 @@
 Research into the enclosed-vehicle problem and viable approaches to give the
 player external visibility when inside a vehicle with no windows.
 
+**Status: open research.** Nothing here has shipped — there is no
+enclosed-vehicle handling in the payload yet. The approaches below are
+candidates, and the "leading candidate" section names the current front-runner,
+not a committed design.
+
 ## The problem
 
 Some JC3 vehicles — the CS Baltdjur (armoured truck), tanks, and other
@@ -285,25 +290,28 @@ infrastructure.
 | Can we use the game's native TPS camera? | Yes — skip the mod's camera override for enclosed vehicles. But it's screen-locked (no head tracking). |
 | Can we make a floating external camera? | Yes — position the camera behind/above the vehicle, with the mod's per-eye parallax on top. |
 
-## Recommended approach
+## Leading candidate (not yet implemented)
 
-**Initial implementation:** Option B (floating third-person camera) for
-enclosed vehicles, with a curated list of enclosed vehicle name hashes. Skip
-the camera override, position the camera externally relative to the vehicle
-matrix, apply head tracking + per-eye parallax, and smooth the transition.
+None of the options below have been built. The current front-runner for an
+initial implementation is Option B (floating third-person camera) for enclosed
+vehicles, with a curated list of enclosed vehicle name hashes: skip the camera
+override, position the camera externally relative to the vehicle matrix, apply
+head tracking and per-eye parallax, and smooth the transition. It is the
+cheapest option and reuses the existing camera hook.
 
-**Later enhancement:** Option A (external camera render target) for players
-who want to stay in first-person. This requires the third-dispatch
-infrastructure and is a larger engineering effort.
+Option A (external camera render target) is a possible later enhancement for
+players who want to stay in first-person, but it requires the third-dispatch
+infrastructure and is a much larger engineering effort.
 
 ## Key release addresses
+
+`PushRenderContext`, `CRenderPass::SetRenderContextCamera`, and
+`CShadowManager::CommitRenderPassSettings` now live in pyxis-defs; consult the
+bindings for their addresses. The remaining symbol is not yet defined there:
 
 | Symbol | Release address |
 |---|---|
 | `CCharacter::IsInDrivingVehicleState` | `0x140_77E_AF0` |
-| `CGameCameraManager::PushRenderContext` | (search by name in IDB) |
-| `CRenderPass::SetRenderContextCamera` | `0x140_187_430` |
-| `CShadowManager::CommitRenderPassSettings` | `0x140_177_9C0` |
-| `CVehicle::m_VehicleType` | offset 39 in `CVehicle` |
-| `CVehicle::m_NameHash` | in `CVehicle` struct |
-| `CVehicle::m_Name` | in `CVehicle` struct |
+
+`CVehicle` (with `m_VehicleType`, `m_NameHash`, and `m_Name`) is not modelled
+in pyxis-defs yet; its layout is described in the prose above.

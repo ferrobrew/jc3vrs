@@ -5,6 +5,16 @@ panel) and issue #14 (dynamic HUD depth/scale based on scene geometry). The two
 share the same underlying Scaleform architecture and the same per-element
 separation question, so they're documented together.
 
+Both are open investigations. The floating panel itself ships (see
+`docs/hud.md`): the HUD is redirected into an offscreen texture, drawn as a
+floating quad per eye with correct stereo depth, and world markers are
+reprojected onto the panel surface. What is *not* yet done — and what this
+document covers — is suppressing the full-screen Scaleform overlays (#8) and
+choosing the panel distance from scene geometry / separating elements to
+per-element depths (#14). None of the overlay-suppression or per-element-depth
+mechanisms below are implemented; they are candidate approaches with the
+supporting reverse-engineering.
+
 ## The problems
 
 ### #8: Full-screen overlays
@@ -19,13 +29,14 @@ by `skip_player_damage` / `skip_fade` config toggles).
 
 ### #14: Dynamic panel distance
 
-The floating HUD panel sits at a fixed distance from the camera (3 m
-default). When geometry is closer than the panel (vehicle interiors, indoor
-corridors, near walls), the HUD overlaps that geometry and creates conflicting
-depth cues. The constant-apparent-size scaling is already implemented (the
-panel resizes with distance to maintain angular size). What remains is
-deciding the `distance` from scene depth, and ideally rendering individual
-elements at different depths.
+The floating HUD panel sits at a distance from the camera set by a manual
+slider (3 m default, 0.3–10 m range). When geometry is closer than the panel
+(vehicle interiors, indoor corridors, near walls), the HUD overlaps that
+geometry and creates conflicting depth cues. The constant-apparent-size scaling
+is implemented (the panel resizes with distance to maintain angular size), so
+the distance can be changed freely without the HUD growing or shrinking. What
+remains is deciding the `distance` from scene depth automatically, and ideally
+rendering individual elements at different depths.
 
 ## The Scaleform HUD architecture
 
@@ -186,7 +197,9 @@ their Scaleform Invoke calls, and `UpdateDirectionalDamageIndicators` to skip
 the indicator update. This is the engine's own mechanism for suppressing the
 health/damage UI — used during cutscenes and debug.
 
-## Approaches to suppressing overlays (#8)
+## Candidate approaches to suppressing overlays (#8)
+
+None of these is implemented; they are the candidate paths for closing out #8.
 
 ### A: Hook `CUIBase::Invoke` and filter method names
 
@@ -213,9 +226,12 @@ and amount. Use this to render alternative VR feedback (world-space directional
 quads at real depth, OpenXR haptics, panel-edge vignette). Suppress the
 original Scaleform overlays via Approach A. Most work, best VR experience.
 
-## Approaches to dynamic panel distance (#14)
+## Candidate approaches to dynamic panel distance (#14)
 
-### A: Near/far presets with smoothed transitions (recommended)
+Distance is currently a manual slider. The options below for deriving it
+automatically are future work.
+
+### A: Near/far presets with smoothed transitions
 
 Two discrete distance settings with exponential damping (~0.5 s halflife):
 - **Far (~3 m):** on-foot/flying.
@@ -239,16 +255,24 @@ multi-pass approach below.
 
 ## Can elements be separated for different depths?
 
-### World-to-screen: Get2DInfo and Convert3DCoords
+### World-to-screen: Get2DInfo and Convert3DCoords (shipped)
 
 World-anchored markers (objective markers, enemy pips, distance labels) are
-projected onto the panel via `CUIManager::Get2DInfo` / `Convert3DCoords`,
-which take the VP as a **parameter**. Feeding a per-eye VP relocates each
-marker. Callsites found in `CHUDUI.cpp`, `CPOI.cpp`, `CROMTrigger.cpp`,
+projected via `CUIManager::Get2DInfo` / `Convert3DCoords`, which take the VP as
+a **parameter**. This is now implemented for the floating panel: `Get2DInfo` is
+hooked (`payload/src/hooks/ui.rs`) and its VP and camera matrix are swapped for
+the panel's orientation (`hud::compute_panel_vp`), with `m_CachedViewportRatio`
+retargeted to the panel aspect so `Convert3DCoords`' aspect correction lands on
+the panel surface rather than the screen plane. See `docs/hud.md` for the full
+mechanism. The default (unhooked) callsites carry the render camera's VP;
+callsites are found in `CHUDUI.cpp`, `CPOI.cpp`, `CROMTrigger.cpp`,
 `CMissionTrigger.cpp`, `CUIMenu.cpp`, `NLandVehicle_Hidden.cpp`.
 
-This only affects world-anchored markers — static HUD elements (health, ammo,
-minimap) have no world position and are always baked into the panel texture.
+This reprojects markers onto the panel as a whole — it does not separate
+individual markers to their real world depths (see the multi-pass approach
+below, which remains a stretch goal). It only affects world-anchored markers;
+static HUD elements (health, ammo, minimap) have no world position and are
+always baked into the panel texture.
 
 ### Multi-pass: toggle element visibility, re-render to separate textures (most promising)
 
@@ -455,16 +479,21 @@ However, **coarse suppression** (filtering Invoke method names to prevent
 overlay elements from being driven) does not need clip paths at all — it works
 purely at the C++ → AS3 call boundary.
 
-## Recommended approach
+## Candidate approaches, summarized
+
+None of the below is implemented. They are the candidate directions for
+closing out #8 and #14; the world-marker reprojection is the one piece already
+shipped (see the world-to-screen subsection above).
 
 1. **For #8 (overlay suppression):** Hook `CUIBase::Invoke` and filter
    full-screen overlay method names (`OnOmniDamage`, `ShowDrowning`,
    `ShowSniperOverlay`). Optionally set `s_disable_health_ui = true` for
    damage indicators. Keep the hit marker (`OnPlayerDidDamage`).
 
-2. **For #14 (dynamic distance):** Implement near/far presets with
-   `IsInDrivingVehicleState` trigger + optional depth-buffer probing. Smooth
-   with exponential damping. The panel resizes automatically.
+2. **For #14 (dynamic distance):** Distance is currently a manual slider. To
+   drive it from scene geometry, near/far presets with an
+   `IsInDrivingVehicleState` trigger plus optional depth-buffer probing,
+   smoothed with exponential damping, would resize the panel automatically.
 
 3. **For per-element depth (stretch goal, both issues):** The multi-pass
    approach — hook `CUIManager::Render`, toggle `_visible` per clip between
@@ -472,7 +501,7 @@ purely at the C++ → AS3 call boundary.
    discovery (static `.gfx` analysis is insufficient — most elements are
    dynamically parented by ActionScript). Probe at runtime via `GetVariable`
    on candidate paths, or hook `addChild`/`addChildAt` to map the display
-   tree. Difficulty is now assessed as medium-high.
+   tree. Difficulty is assessed as medium-high.
 
 4. **For alternative feedback (#8):** Hook `CPlayerHealthEffects::OnDamage`
    for directional damage data. Render directional indicators as world-space

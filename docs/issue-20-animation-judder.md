@@ -154,11 +154,20 @@ in `docs/rendering.md` §2.2) does:
 Lerp(&m_TransformF, &m_TransformT0, &m_TransformT1, dtf);
 ```
 
-But the mod sets `m_TransformT0 = m_TransformT1` (via the
-`always_use_t1` config or by writing T0 from T1), which makes the Lerp a
-no-op — the camera transform is constant. This is intentional for the
-first-person camera (the mod writes the head-bone position into both), but
-it means the camera does not benefit from the engine's interpolation.
+The mod's `camera_update_render` hook (`payload/src/hooks/camera.rs`) now
+drives this Lerp deliberately: it writes `m_TransformT1` from the current
+headpose (`headpose::query()`) and `m_TransformT0` from the previous headpose
+(`headpose::query_prev()`), so the engine's own `Lerp` smooths the camera
+placement across the sim-tick cadence — the same T0≠T1 approach Approach C
+below recommends. The headpose module's own doc-comment
+(`payload/src/headpose/mod.rs`) explains the rationale: the engine polls input
+on its fixed-rate sim tick and its camera smooths that cadence by interpolating
+T0 → T1 by `dtf`, so handing it the previous/current pose pair lets it smooth
+the headpose exactly as it smooths its own camera.
+
+Setting `m_TransformT0 = m_TransformT1` — which collapses the Lerp to a
+constant transform — now only happens under the `always_use_t1` config flag
+(default `false`; see `payload/src/config.rs`).
 
 ### SkipSubframeInterpolation
 
@@ -198,8 +207,10 @@ pipeline:
    - Lerp the character world matrix between T0 and T1.
    - Call `UpdateSkinning(dtf)`, which calls `MakeSkinningPalette(dtf)` to
      blend the per-bone skinning palette between the T0 and T1 `hkaPose`.
-3. The camera uses `Lerp(TransformF, T0, T1, dtf)` — but the mod nullifies
-   this by setting T0 = T1.
+3. The camera uses `Lerp(TransformF, T0, T1, dtf)` — and the mod now drives
+   this with a previous/current headpose pair, so the engine smooths the
+   camera placement (see "The camera transform interpolation" above and
+   Approach C). This has shipped.
 
 **The critical question:** Is the mod's forced-UpdateRender path preserving
 `m_Dtf`? The mod hooks `Game::UpdateRender` and drives the eye Draw loop
@@ -217,15 +228,18 @@ the decoupled loop's accumulator and calls UpdateRender directly with a
 stale or zeroed `m_Dtf`), the interpolation alpha would be wrong.
 
 **Investigation steps:**
-1. Log `m_Dtf` in the `Game::UpdateRender` detour to confirm it is non-zero
-   and varying between 0.0 and 1.0 across render frames. If it is always 0.0
-   or always 1.0, the mod's path is bypassing the accumulator.
+1. Confirm `m_Dtf` is non-zero and varying between 0.0 and 1.0 across render
+   frames. This is now instrumented: `camera.rs` records the `dtf` the active
+   camera's `UpdateRender` receives via `last_dtf()`, surfaced in the debug
+   UI. If it sits at 0.0 or 1.0 every frame, the engine's T0 → T1 Lerp is
+   inert and the mod's path is bypassing the accumulator.
 2. Log `m_RunningFrameFraction` on the `Game` struct to confirm the
    accumulator is advancing.
-3. If `m_Dtf` is correct, the issue may be that the *camera* path is
-   nullifying the interpolation (T0 = T1), while the *body* is actually
-   interpolating correctly — and the perceived judder is the camera
-   snapping while the body smooths.
+3. The camera path no longer nullifies the interpolation: the mod feeds it a
+   previous/current headpose pair (Approach C, shipped), so if `m_Dtf` is
+   valid both the camera and the body root smooth. Any remaining judder is
+   therefore in the *body pose* — the per-bone skinning palette — not the
+   camera.
 
 **If `m_Dtf` is wrong:** The fix is to compute the correct frame fraction
 in the mod's `Game::UpdateRender` detour before calling the original, and
@@ -281,7 +295,7 @@ buffers or the skinning palette directly.
 // dtf = (time_since_last_sim_tick) / sim_tick, clamped [0, 1]
 ```
 
-### Approach C: Pose sampling vs. consumption (camera path)
+### Approach C: Pose sampling vs. consumption (camera path) — shipped
 
 **Finding:** The pose is finalized in SIM (`UpdatePassFinalizePose_Parallel`)
 and consumed in RENDER (`CCharacter::UpdateRender` → `UpdateSkinning(dtf)`).
@@ -290,27 +304,26 @@ reads from the model-space pose buffer.
 
 The `m_WorldMatrixT0` / `m_WorldMatrixT1` fields on `Character` are the
 character *root* world transforms for the previous and current sim ticks.
-The camera hook already reads T1 (or T0 via `always_use_t1`).
 
-**The issue may be that the camera reads the pose at the wrong time:**
-- If the camera reads the T1 pose (current sim tick) without
-  interpolation, and the body is rendered with T0→T1 interpolation (via
-  `MakeSkinningPalette(dtf)`), the camera and body are out of sync.
-- The mod's camera hook writes to `m_TransformT0` and `m_TransformT1` on
-  the active camera, and the engine lerps between them. If the mod sets
-  T0 = T1, the camera position is constant (no interpolation), while the
-  body interpolates — producing a mismatch where the body judders relative
-  to the camera.
+**The original diagnosis:** if the mod set the camera's `m_TransformT0 =
+m_TransformT1`, the camera position was constant (no interpolation) while the
+body interpolated via `MakeSkinningPalette(dtf)` — a mismatch where the body
+juddered relative to the camera.
 
-**Fix:** If the body is interpolating correctly (Approach A confirms `dtf`
-is valid), the camera should also interpolate. Instead of setting T0 = T1,
-the mod should set T0 to the previous frame's head position and T1 to the
-current frame's, letting the engine's `Lerp(TransformF, T0, T1, dtf)` smooth
-the camera position. The risk is that HMD-driven head movement should be
-1:1 with no interpolation lag (per `docs/head-and-body.md` — "no smoothing
-on the HMD→camera path"), so this approach trades body smoothness for head
-lag. The correct split: interpolate the *body root* position (which comes
-from the sim and judders), but keep the *HMD-driven head offset* 1:1.
+**This is now fixed.** `camera_update_render` (and the parallel context patch
+in `camera_tree_update_render_contexts`) writes T1 from the current headpose
+and T0 from the previous headpose, letting the engine's `Lerp(TransformF, T0,
+T1, dtf)` smooth the camera placement across the sim-tick cadence. Feeding it
+the previous/current *headpose* pair — rather than reading the finalized
+sim-rate bone matrices, which only carry the tick-rate pose — is what removed
+the camera-side judder. The `always_use_t1` flag (default `false`) still
+collapses this back to the constant-transform behaviour when set.
+
+With HMD-driven head control, the previous/current pose pair spans one input
+tick, so this is the engine smoothing the tick-rate headpose exactly as it
+smooths its own camera — not smoothing the HMD → camera path itself (per
+`docs/head-and-body.md`). What remains open is the *body pose*: the per-bone
+skinning-palette judder, independent of the now-smoothed camera and body root.
 
 ## Summary of findings
 
@@ -319,44 +332,46 @@ from the sim and judders), but keep the *HMD-driven head offset* 1:1.
 | Does the engine have pose interpolation? | Yes — `MakeSkinningPalette(dtf)` blends between T0 and T1 `hkaPose` objects by the frame fraction `m_Dtf`. |
 | Where is `m_Dtf` computed? | In `CGame::Update`'s decoupled loop, stored in `SGameObjectRenderContext.m_Dtf`. |
 | Is the mod's path preserving it? | Unknown — needs runtime logging. The mod forces UpdateRender but may be passing a stale/zeroed `m_Dtf`. |
-| Where does the camera nullify interpolation? | The mod sets `m_TransformT0 = m_TransformT1` (via `always_use_t1` or by writing both from the same head position), making the camera Lerp a no-op. |
+| Does the camera interpolate? | Yes, now — the mod writes T0/T1 from the previous/current headpose so the engine's `Lerp(TransformF, T0, T1, dtf)` smooths the camera (Approach C, shipped). It only collapses to a constant transform under `always_use_t1` (default `false`). |
 | Is `m_SkipSubframeInterpolation` relevant? | Only for ragdoll rotational discontinuities — not the general judder. |
 | Can the mod inject a custom `dtf`? | Yes — hook `CAnimationControl::UpdateSkinning` (release `0x140_43F_CA0`) and pass a computed sub-tick alpha. |
 
 ## Recommended next steps
 
-1. **Log `m_Dtf` and `m_RunningFrameFraction`** in the `Game::UpdateRender`
-   detour to determine whether the engine's interpolation is active. This is
-   the single most important diagnostic — it distinguishes "interpolation is
-   working but we can't see it" from "interpolation is disabled by the mod's
-   path."
+The **camera-interpolation** piece (Approach C) has shipped: the mod feeds the
+active camera a previous/current headpose pair so the engine's `dtf` Lerp
+smooths the camera placement, and `last_dtf()` (surfaced in the debug UI)
+already instruments the `dtf` the active camera receives. What remains open is
+the **body pose** — the per-bone skinning palette. The next steps:
+
+1. **Read `last_dtf()` in the debug UI** to confirm the engine's `dtf` is
+   non-zero and varying between 0.0 and 1.0. If it sits at 0.0 or 1.0 every
+   frame, the engine's interpolation is inert and the mod's forced-render path
+   is bypassing the accumulator. (Optionally cross-check `m_RunningFrameFraction`
+   on the `Game` struct.)
 
 2. **If `m_Dtf` is wrong:** compute the correct sub-tick alpha in the mod
    and write it into the render context before calling the original
    `UpdateRender`. The alpha is `(real_frame_time % sim_tick_period) /
    sim_tick_period`.
 
-3. **If `m_Dtf` is correct but the camera nullifies it:** consider letting
-   the camera position interpolate (set T0 to the previous frame's position)
-   while keeping the HMD rotation 1:1. The head-bone override (issue #5)
-   will change this landscape — once the head is HMD-driven, the body root
-   interpolation is the only remaining judder source.
-
-4. **If the engine's interpolation is fundamentally insufficient** (e.g.,
-   it only interpolates the root, not the bones): hook
-   `CAnimationControl::UpdateSkinning` and verify that
-   `MakeSkinningPalette` is actually blending the bones, not just the root.
+3. **Confirm the body pose actually interpolates.** With the camera smoothed,
+   any residual judder is in Rico's own body. Verify that
+   `MakeSkinningPalette(dtf)` is blending the per-bone `hkaPose` pair, not just
+   the character root — and if the engine's interpolation is insufficient here,
+   hook `CAnimationControl::UpdateSkinning` for the local player and pass a
+   computed sub-tick alpha (Approach B).
 
 ## Key release addresses
 
+`CCharacter::UpdatePropEffects`, `CShadowManager::CommitRenderPassSettings`, and
+`CRenderPass::SetRenderContextCamera` now live in pyxis-defs; consult the
+bindings for their addresses. The symbols below are not yet defined there:
+
 | Symbol | Release address |
 |---|---|
-| `CCharacter::UpdatePropEffects` | `0x140_7C2_380` |
 | `CCharacter::UpdatePassFinalizePose_Parallel` | `0x140_7F9_B10` |
 | `CCharacter::UpdateSkinning` | `0x140_77E_150` |
 | `CAnimationControl::UpdateSkinning` | `0x140_43F_CA0` |
 | `CPoseProducer::MakeSkinningPalette` | `0x140_C3A_FF0` |
 | `CCharacter::GetRenderTransform` | `0x140_75D_E50` |
-| `CCharacter::IsInDrivingVehicleState` | `0x140_77E_AF0` |
-| `CShadowManager::CommitRenderPassSettings` | `0x140_177_9C0` |
-| `CRenderPass::SetRenderContextCamera` | `0x140_187_430` |
