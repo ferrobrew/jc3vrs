@@ -35,7 +35,6 @@ mod binding;
 mod config;
 pub mod markers;
 mod quad;
-pub mod roots;
 pub mod scaleform;
 pub mod split;
 mod state;
@@ -162,7 +161,7 @@ pub fn tick(device: &Device, back_buffer_width: u32, back_buffer_height: u32) {
 /// detour never holds it across the render.
 pub fn split_inputs() -> Option<split::LayerViews> {
     let cfg = crate::config::Config::lock_query(|c| c.hud);
-    if !cfg.redirect || !cfg.split || current_mode() != HudMode::Hud || !roots::live() {
+    if !cfg.redirect || !cfg.split || current_mode() != HudMode::Hud || !split::roots::live() {
         return None;
     }
     HUD_STATE.lock().split_views()
@@ -232,7 +231,7 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         hud.compute_world_corners(&params_at(cfg.distance));
         // The split composites in gameplay while the render-root partition is live (the layer
         // textures then contain per-layer content, redrawn every frame).
-        let split_active = cfg.split && mode == HudMode::Hud && roots::live();
+        let split_active = cfg.split && mode == HudMode::Hud && split::roots::live();
         // The reticle depth (the split's center layer, or the single panel's center bubble)
         // follows the smoothed aim depth when enabled, easing back to a flat rest distance while
         // nothing is targeted: the center-layer distance under the split, the panel distance

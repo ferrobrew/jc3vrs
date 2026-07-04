@@ -43,9 +43,11 @@ The engine makes this directly doable because its world-to-screen takes the VP a
 
 One consumer bypasses `Get2DInfo` entirely: the grapple reticle projects through a default-VP wrapper (`CUIManager::Convert3DCoordsDefault`, whose only callers are in `CHUDUI::UpdateGrappleReticle`). That wrapper is hooked separately (`payload/src/hooks/ui.rs`) to route it through the same panel reprojection, and doubles as the source of the aim depth below.
 
-## Depth layers: the render-root partition
+## Depth layers: the render-root partition (parked)
 
-With one HUD texture, every element shares the panel's depth: a crosshair crossing a distant marker gets the marker's disparity, and Scaleform has already composited overlapping clips into the texture, so nothing texture-side can separate them. The split (`hud.split`, `payload/src/hud/roots.rs`) partitions the movie's render tree across three render roots, each drawn into its own texture every frame and composited at its own depth:
+**Parked, off by default**: gameplay works at full rate, but the first pause permanently stops the UI update pump — see the post-mortem in `docs/issue-08-14-hud-overlays-and-depth.md`. The code lives in `payload/src/hud/split/`, kept compiling behind the disabled `hud.split` flag. The shipped depth mechanism is the single-panel warp (previous section); dynamic panel distance from the depth distribution is the planned complement.
+
+With one HUD texture, every element shares the panel's depth: a crosshair crossing a distant marker gets the marker's disparity, and Scaleform has already composited overlapping clips into the texture, so nothing texture-side can separate them. The split (`hud.split`, `payload/src/hud/split/`) partitions the movie's render tree across three render roots, each drawn into its own texture every frame and composited at its own depth:
 
 - **Static** — the six corner/edge safe-area containers and the weapon-selection wheel — at the panel distance, as before.
 - **Markers** — `MCI_poi_stage` (all POIs, including the auto-aim marker) and `MCI_hud` (the target-tracker stage) — at its own distance, or per-marker depths with the warp below.
@@ -67,6 +69,6 @@ The composite draws the layers farthest-first (alpha-blended overlays without a 
 
 Shipped: the redirect, the in-scene floating quad per eye, the lazy-follow damping with sliders, constant-apparent-size scaling, and the per-eye marker reprojection. Manual distance control is a slider.
 
-Implemented but pending in-game verification (issue #14 branch): the time-multiplexed depth split, the per-marker warp (also available on the single panel, with a center bubble at the aim depth), the aim-driven center depth, and the overlay suppression — see `docs/issue-08-14-hud-overlays-and-depth.md` for the verification checklist and the reverse-engineering behind it.
+Shipped from the issue #14 branch: the single-panel per-marker warp with the aim-depth center bubble, the aim-driven center depth, and the overlay suppression (#8). Parked: the render-root depth split (`hud.split`, off by default; post-mortem in `docs/issue-08-14-hud-overlays-and-depth.md`). Next: dynamic panel distance from the marker/aim depth distribution.
 
 Future work: swap the static panel to an `XrCompositionLayerQuad` once in-headset for final sharpness; temporal damping for per-marker depths; automatic panel distance from scene depth; re-enabling the world-static full-screen panel once the head pose is valid outside gameplay (issue #5).

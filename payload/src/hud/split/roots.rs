@@ -37,7 +37,8 @@ use windows::{
     core::Interface as _,
 };
 
-use super::split::{ClipHandle, HudLayer, LAYER_COUNT, LayerViews};
+use super::{HudLayer, LAYER_COUNT, LayerViews};
+use crate::hud::scaleform::ClipHandle;
 
 /// The number of extra roots (every layer beyond the static one, which stays in the movie's own
 /// root).
@@ -141,7 +142,7 @@ pub fn teardown_now() {
 /// pool clips) behind tombstones. Returns `None` (leaving no side effects beyond empty roots)
 /// when the handles or nodes are not available yet.
 unsafe fn build(movie: &mut MovieImpl) -> Option<Partition> {
-    let mut handles = super::split::CLIP_HANDLES.lock();
+    let mut handles = crate::hud::scaleform::CLIP_HANDLES.lock();
     let Some(handles) = handles.as_mut() else {
         log_build_wait("the clip-handle registry is not resolved yet");
         return None;

@@ -14,7 +14,7 @@
 use std::ffi::CString;
 
 use jc3gi::ui::{
-    scaleform::{AmpMovieObjectDesc, Movie, MovieImpl, Value},
+    scaleform::{AmpMovieObjectDesc, DisplayInfo, Movie, MovieImpl, Value},
     ui_manager::UIManager,
 };
 use parking_lot::Mutex;
@@ -58,8 +58,205 @@ static DISCOVERED_IN_HUD: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 
 /// Whether the live handle registry was resolved during gameplay (see [`DISCOVERED_IN_HUD`]).
 pub fn handles_hud_fresh() -> bool {
-    DISCOVERED_IN_HUD.load(std::sync::atomic::Ordering::Relaxed)
-        && crate::hud::split::CLIP_HANDLES.lock().is_some()
+    DISCOVERED_IN_HUD.load(std::sync::atomic::Ordering::Relaxed) && CLIP_HANDLES.lock().is_some()
+}
+
+/// The number of HUD layers the registry groups containers into (see
+/// [`HudLayer`](super::split::HudLayer)).
+pub const LAYER_COUNT: usize = 3;
+
+/// The authored top-level containers of `hud.gfx` assigned to each layer. Paths are relative to
+/// the HUD movie's timeline; [`HudConfig::split_path_prefix`](crate::hud::HudConfig) is prepended
+/// at call time once the runtime attachment point is known.
+pub(crate) const LAYER_CONTAINERS: [&[&str]; LAYER_COUNT] = [
+    // Static: the six corner/edge safe-area groups and the selection wheel.
+    &[
+        "MCI_safe_area_top_left",
+        "MCI_safe_area_top_middle",
+        "MCI_safe_area_top_right",
+        "MCI_safe_area_bottom_left",
+        "MCI_safe_area_bottom_middle",
+        "MCI_safe_area_bottom_right",
+        "MCI_weapon_selection_wheel",
+    ],
+    // Markers: the POI stage, and MCI_hud (the target-tracker stage plus score/ghost data).
+    &["MCI_poi_stage", "MCI_hud"],
+    // Center: the whole screen-center group (reticles and center indicators).
+    &["MCI_safe_area_center"],
+];
+
+/// The full-screen overlay clips of issue #8, all children of the center container: held
+/// invisible while [`HudConfig::suppress_overlays`](crate::hud::HudConfig::suppress_overlays) is
+/// on. Paths confirmed against an in-game display-tree dump; `MCI_omni_damage` (the screen-wide
+/// damage flash) is a direct child of the center container, not of the health-damage manager.
+pub(crate) const OVERLAY_CLIPS: &[&str] = &[
+    "MCI_safe_area_center.MCI_omni_damage",
+    "MCI_safe_area_center.MCI_drowning_container",
+    "MCI_safe_area_center.MCI_health_damage_manager",
+    "MCI_safe_area_center.MCI_character_damage_indicators",
+    "MCI_safe_area_center.MCI_vehicle_damage_indicators",
+    "MCI_safe_area_center.MCI_inflict_damage",
+    "MCI_safe_area_center.MCI_sniper",
+];
+
+/// A heap-pinned managed [`Value`] handle to a clip, plus the game-intent tracking the mask needs.
+/// The `Value` is an intrusive list node on the movie's external-references list, so it must never
+/// move after `GetVariable` fills it -- hence the box. Release (on the capture thread) before
+/// dropping.
+pub(crate) struct ClipHandle {
+    /// The pinned managed value. Present until released; absent when the clip path did not
+    /// resolve at discovery (the handle then reads as visible and writes are no-ops).
+    pub value: Option<Box<Value>>,
+    /// The game's own visibility intent for this clip, tracked across our forced writes: refreshed
+    /// from a read-back whenever the current value differs from what we last wrote (meaning the
+    /// game wrote in between).
+    pub game_visible: bool,
+    /// The visibility we last forced, or `None` while unforced.
+    pub forced: Option<bool>,
+}
+
+impl ClipHandle {
+    /// Wrap a resolved (or unresolved) pinned value.
+    pub fn new(value: Option<Box<Value>>) -> Self {
+        Self {
+            value,
+            game_visible: true,
+            forced: None,
+        }
+    }
+
+    /// Release the managed value through its object interface. Must run on the capture thread
+    /// (the game update thread).
+    pub unsafe fn release(&mut self) {
+        if let Some(mut value) = self.value.take() {
+            // SAFETY: the value was filled in place by GetVariable and never moved; managed
+            // values carry their object interface.
+            unsafe {
+                if let Some(interface) = value.pObjectInterface.as_mut() {
+                    let data = value.mValue as *mut std::ffi::c_void;
+                    interface.ObjectRelease(value.as_mut(), data);
+                }
+            }
+        }
+    }
+}
+
+/// The clip handles the mask toggles, grouped by role. Built by the layout discovery on the game
+/// thread; masked on the game thread; replaced wholesale on rediscovery (old handles released
+/// first).
+pub(crate) struct ClipHandles {
+    /// Per layer, the named containers (in [`LAYER_CONTAINERS`] order, missing clips skipped).
+    pub containers: [Vec<ClipHandle>; LAYER_COUNT],
+    /// The issue #8 overlay clips.
+    pub overlays: Vec<ClipHandle>,
+    /// The anonymous POI pool (markers layer).
+    pub dynamic: Vec<ClipHandle>,
+}
+
+// SAFETY: the raw pointers inside the handles (the pinned Values and their object interfaces)
+// are only dereferenced on the capture (game update) thread, never concurrently -- the registry
+// mutex plus that thread discipline provide the synchronization the pointer types cannot express.
+unsafe impl Send for ClipHandle {}
+
+/// The live handle registry. `None` until a discovery succeeds.
+pub(crate) static CLIP_HANDLES: parking_lot::Mutex<Option<ClipHandles>> =
+    parking_lot::Mutex::new(None);
+
+/// Hold the issue #8 overlay clips hidden while `suppress` is on, tracking the game's own
+/// visibility intent across our writes and restoring it on the off-transition. Runs at the
+/// capture seam (game update thread, deferred render lock held).
+///
+/// # Safety
+/// Must be called from the [`MovieImpl::Capture`](jc3gi::ui::scaleform::MovieImpl) detour.
+pub unsafe fn apply_overlay_suppression(suppress: bool) {
+    let mut handles = CLIP_HANDLES.lock();
+    let Some(handles) = handles.as_mut() else {
+        return;
+    };
+    // SAFETY: capture-seam threading per the function contract; the handles are pinned managed
+    // values from the registry.
+    unsafe {
+        for handle in &mut handles.overlays {
+            if suppress {
+                refresh_intent(handle);
+                force_visible(handle, false);
+            } else if handle.forced.is_some() {
+                refresh_intent(handle);
+                unforce_visible(handle);
+            }
+        }
+    }
+}
+
+/// Re-read a clip's game intent: when the current value differs from what we last wrote (or we
+/// never wrote), the game changed it in between, so the read is its intent. Returns the intent.
+unsafe fn refresh_intent(handle: &mut ClipHandle) -> bool {
+    // SAFETY: forwarded to get_visible; see the caller's obligations.
+    let read = unsafe { get_visible(handle) };
+    if handle.forced != Some(read) {
+        handle.game_visible = read;
+    }
+    handle.game_visible
+}
+
+/// Force a clip's visibility, remembering the write for the intent tracking.
+unsafe fn force_visible(handle: &mut ClipHandle, visible: bool) {
+    // SAFETY: forwarded to set_visible; see the caller's obligations.
+    unsafe { set_visible(handle, visible) };
+    handle.forced = Some(visible);
+}
+
+/// Restore a clip to the game's intent and stop tracking it as forced.
+pub(crate) unsafe fn unforce_visible(handle: &mut ClipHandle) {
+    if handle.forced.take().is_some() {
+        let intent = handle.game_visible;
+        // SAFETY: forwarded to set_visible; see the caller's obligations.
+        unsafe { set_visible(handle, intent) };
+    }
+}
+
+/// Read a clip's visibility through its cached handle, defaulting to visible on failure.
+///
+/// # Safety
+/// The caller must be on the capture (game update) thread (see [`ClipHandle`]).
+pub(crate) unsafe fn get_visible(handle: &mut ClipHandle) -> bool {
+    // SAFETY: the handle's value is pinned and managed; the interface pointer comes from it.
+    unsafe {
+        let Some(value) = handle.value.as_mut() else {
+            return true;
+        };
+        let Some(interface) = value.pObjectInterface.as_mut() else {
+            return true;
+        };
+        let mut info = DisplayInfo::default();
+        let data = value.mValue as *mut std::ffi::c_void;
+        if !interface.GetDisplayInfo(data, &mut info) {
+            return true;
+        }
+        info.Visible
+    }
+}
+
+/// Write a clip's visibility through its cached handle (a `VarsSet = V_VISIBLE` display-info
+/// write: no AVM, no AS3 setters).
+///
+/// # Safety
+/// The caller must be on the capture (game update) thread (see [`ClipHandle`]).
+pub(crate) unsafe fn set_visible(handle: &mut ClipHandle, visible: bool) {
+    // SAFETY: as `get_visible`.
+    unsafe {
+        let Some(value) = handle.value.as_mut() else {
+            return;
+        };
+        let Some(interface) = value.pObjectInterface.as_mut() else {
+            return;
+        };
+        let mut info = DisplayInfo::default();
+        info.VarsSet = DisplayInfo::V_VISIBLE as u16;
+        info.Visible = visible;
+        let data = value.mValue as *mut std::ffi::c_void;
+        interface.SetDisplayInfo(data, &info);
+    }
 }
 
 /// Request the clip-handle registry's release (from the shutdown path; executed on the game
@@ -76,8 +273,8 @@ pub fn request_release_handles() {
 fn release_clip_handles() {
     // The render-root partition resolved its nodes through these handles; restore the render
     // tree before they go away (rebuilt from the fresh registry on the next capture).
-    crate::hud::roots::teardown_now();
-    if let Some(mut handles) = crate::hud::split::CLIP_HANDLES.lock().take() {
+    crate::hud::split::roots::teardown_now();
+    if let Some(mut handles) = CLIP_HANDLES.lock().take() {
         // SAFETY: called on the capture thread; each handle releases through its own interface.
         unsafe {
             for handle in handles
@@ -87,7 +284,7 @@ fn release_clip_handles() {
                 .chain(handles.overlays.iter_mut())
                 .chain(handles.dynamic.iter_mut())
             {
-                crate::hud::split::unforce_visible(handle);
+                unforce_visible(handle);
                 handle.release();
             }
         }
@@ -120,10 +317,10 @@ pub fn process_requests() {
     // frame), so the periodic refresh only runs before the partition takes.
     let handles_needed =
         crate::config::Config::lock_query(|c| c.hud.split || c.hud.suppress_overlays);
-    let handles_live = crate::hud::split::CLIP_HANDLES.lock().is_some();
+    let handles_live = CLIP_HANDLES.lock().is_some();
     if handles_needed
         && (!handles_live
-            || (!crate::hud::roots::live()
+            || (!crate::hud::split::roots::live()
                 && LAST_DISCOVERY
                     .lock()
                     .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0)))
@@ -221,10 +418,8 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
         let prefix = crate::config::Config::lock_query(|c| c.hud.split_path_prefix);
         let prefix = prefix.as_str();
         tracing::info!("scaleform: split path probe (prefix {prefix:?})");
-        let containers = crate::hud::split::LAYER_CONTAINERS
-            .iter()
-            .flat_map(|layer| layer.iter());
-        for path in containers.chain(crate::hud::split::OVERLAY_CLIPS.iter()) {
+        let containers = LAYER_CONTAINERS.iter().flat_map(|layer| layer.iter());
+        for path in containers.chain(OVERLAY_CLIPS.iter()) {
             let full = format!("{prefix}{path}.visible\0");
             let mut value = Value::new_boolean(true);
             let ok = movie_root.GetVariable(&mut value, full.as_ptr());
@@ -324,7 +519,7 @@ fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
         // boxed first and never moved afterwards.
         let mut resolved = 0usize;
         let mut total = 0usize;
-        let mut resolve = |path: &str| -> crate::hud::split::ClipHandle {
+        let mut resolve = |path: &str| -> ClipHandle {
             total += 1;
             let full = format!("{prefix}{path}\0");
             let mut value = Box::new(Value::new_boolean(false));
@@ -337,20 +532,17 @@ fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
             } else {
                 tracing::warn!("scaleform: layout discovery: {path} did not resolve to a clip");
             }
-            crate::hud::split::ClipHandle::new(is_display_object.then_some(value))
+            ClipHandle::new(is_display_object.then_some(value))
         };
 
-        let handles = crate::hud::split::ClipHandles {
+        let handles = ClipHandles {
             containers: std::array::from_fn(|layer| {
-                crate::hud::split::LAYER_CONTAINERS[layer]
+                LAYER_CONTAINERS[layer]
                     .iter()
                     .map(|path| resolve(path))
                     .collect()
             }),
-            overlays: crate::hud::split::OVERLAY_CLIPS
-                .iter()
-                .map(|path| resolve(path))
-                .collect(),
+            overlays: OVERLAY_CLIPS.iter().map(|path| resolve(path)).collect(),
             dynamic: anonymous.iter().map(|name| resolve(name)).collect(),
         };
         tracing::info!(
@@ -360,7 +552,7 @@ fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
         );
 
         release_clip_handles();
-        *crate::hud::split::CLIP_HANDLES.lock() = Some(handles);
+        *CLIP_HANDLES.lock() = Some(handles);
         DISCOVERED_IN_HUD.store(
             crate::hud::current_mode() == crate::hud::HudMode::Hud,
             std::sync::atomic::Ordering::Relaxed,

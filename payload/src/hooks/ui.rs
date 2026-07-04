@@ -95,7 +95,7 @@ fn convert_3d_coords_default(
 /// (build, per-frame reconcile against pool churn, teardown), and the issue #8 overlay
 /// suppression writes here, so the engine's own capture carries everything; the original then
 /// runs unchanged. Movies other than the main UI movie (the render-to-texture instances) pass
-/// through untouched. See [`crate::hud::roots`] and [`crate::hud::split`].
+/// through untouched. See [`crate::hud::split::roots`] and [`crate::hud::scaleform`].
 #[detour(address = MovieImpl::CaptureImpl_ADDRESS)]
 fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
     // SAFETY: the UI manager is a live singleton past startup; the pointer comparison does not
@@ -118,9 +118,9 @@ fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
             && crate::hud::split_layers_ready();
         // SAFETY: this is the capture seam both callees require; `this` is the live main movie.
         unsafe {
-            crate::hud::split::apply_overlay_suppression(suppress_overlays);
+            crate::hud::scaleform::apply_overlay_suppression(suppress_overlays);
             if let Some(movie) = this.as_mut() {
-                crate::hud::roots::on_capture(movie, split_active);
+                crate::hud::split::roots::on_capture(movie, split_active);
                 log_pipeline_lag(movie, split_active);
             }
         }
@@ -161,14 +161,14 @@ fn log_pipeline_lag(movie: &MovieImpl, split_active: bool) {
 
 /// Render the partitioned HUD (each render root into its own layer texture, full rate) while the
 /// partition is live; otherwise pass through. Runs on the UI render worker (kicked by
-/// `StartRender`). See [`crate::hud::roots`].
+/// `StartRender`). See [`crate::hud::split::roots`].
 #[detour(address = UIManager::Render_ADDRESS)]
 fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
     let original = UI_RENDER.get().unwrap();
     if let Some(views) = crate::hud::split_inputs() {
         // SAFETY: called from the detour with the detour's own arguments, on the UI render
         // worker.
-        if unsafe { crate::hud::roots::render_partitioned(this, &views) } {
+        if unsafe { crate::hud::split::roots::render_partitioned(this, &views) } {
             return;
         }
     }

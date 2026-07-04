@@ -59,10 +59,11 @@ pub struct HudConfig {
     /// Marker depths are clamped to this, in meters -- beyond it disparity is indistinguishable
     /// from infinity.
     pub marker_max_depth: f32,
-    /// Split the HUD into three depth layers -- static HUD, world markers, reticles -- each in
-    /// its own texture composited at its own depth, at full rate: the movie's render tree is
-    /// partitioned across extra render roots in its own context, drawn separately per frame from
-    /// the single vanilla capture. See `payload/src/hud/roots.rs`.
+    /// PARKED, off by default: split the HUD into three depth layers -- static HUD, world
+    /// markers, reticles -- each in its own texture composited at its own depth, at full rate
+    /// (the movie's render tree partitioned across extra render roots). Gameplay works, but the
+    /// first pause permanently stops the UI update pump; see the post-mortem in
+    /// `docs/issue-08-14-hud-overlays-and-depth.md` and `payload/src/hud/split/`.
     pub split: bool,
     /// Keep the full-screen Scaleform overlays -- drowning tint, damage flashes, directional
     /// damage indicators -- hidden (issue #8): they were authored to cover a flat screen and
@@ -93,7 +94,7 @@ impl HudConfig {
             center_bubble_radius: 0.12,
             marker_radius: 0.08,
             marker_max_depth: 150.0,
-            split: true,
+            split: false,
             suppress_overlays: true,
             split_path_prefix: SplitPathPrefix::new(),
         }

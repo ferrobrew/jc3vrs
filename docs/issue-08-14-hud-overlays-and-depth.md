@@ -5,152 +5,153 @@ panel) and issue #14 (dynamic HUD depth/scale based on scene geometry). The two
 share the same underlying Scaleform architecture and the same per-element
 separation question, so they're documented together.
 
-**Status: investigating a render-tree partition (multiple `TreeRoot`s in the
-one movie's render context) as the split mechanism.** Two implemented
-mechanisms preceded it on the `hud-depth-split` branch: the multi-pass
-visibility split (structurally unsound; see correction 2 below) and the
-time-multiplexed split (stable, but in-game testing showed the structural
-cost is visible: with each layer's texture refreshed at 1/3 rate from a
-different frame's camera/panel matrices, world-to-screen'd elements appear at
-disagreeing positions across layers under motion, and strobe at refresh
-boundaries within a layer -- pose freezing compensates camera rotation for
-the marker layer but not translation parallax nor the cross-layer projection
-disagreement). World-to-screen'd content fundamentally needs full-rate
-sampling, and one safe capture per frame means time multiplexing can never
-provide it. The single-panel warp (full-rate, per-marker depth on one
-texture) remains the working fallback throughout.
+**Status: the per-element depth split is parked (implemented but disabled by
+default; see the post-mortem below). The shipped depth mechanisms are the
+single-panel warp (per-marker depth plus an aim-depth center bubble on the
+one full-rate texture) and, next, dynamic panel distance from the depth
+distribution. Overlay suppression for #8 ships independently (game-thread
+display-info writes at the capture seam).**
 
-Actual multiple movie instances (one per layer) were considered and
-rejected: the game drives the HUD one-way through cached `GFx::Value`
-handles into specific objects of the main movie, so clones receive nothing;
-keeping them alive means mirroring every invoke and display-info write into
-per-clone object equivalents, and the anonymous POI pool's identity across
-movies only holds if the AS3 is perfectly deterministic -- a lockstep
-problem with divergence failure modes.
+## The split post-mortem
 
-**The render-root partition.** A movie's display tree mirrors into a render
-tree (`Render::TreeContainer`/`TreeShape` entries) inside its render
-context; `HAL::Draw` takes a `TreeRoot`, and the engine already draws
-multiple roots per frame through the same HAL (the off-screen UI movies,
-the debug-text handle). The context's snapshot pipeline covers all entries
-in the context, not just one root. So: create two extra `TreeRoot`s in the
-HUD movie's own context, reparent the layer containers' render nodes into
-them (on the game thread at the capture seam, once), and replace
-`CUIManager::Render`'s body with one `BeginFrame` / one `NextCapture` /
-three `HAL::Draw` calls -- main root into the static texture, the extra
-roots into the marker and center textures -- then `EndFrame`. Full rate,
-zero added latency, zero extra captures, no visibility masking (each
-element draws exactly once per frame), and the display side (hit-testing,
-AS3) is untouched.
+Three mechanisms were implemented for rendering HUD element groups into
+separate textures for per-layer depth compositing. Each is documented here
+with its design, its failure mode, and how the failure was diagnosed, because
+the constraints discovered are the real product of the work: they are what
+any future attempt has to design around. The reverse-engineering that
+supports each claim is in the sections after the post-mortem; the payload
+code lives in `payload/src/hud/split/` (kept compiling, off by default).
 
-**Investigation result: feasible.** Everything needed exists with symbols
-in the release binary, and the mechanics are verified against the debug
-sources:
+### Constraints established (the important part)
 
-- `TreeRoot` creation: `Context::CreateEntry<TreeRoot>` (`0x141994560`;
-  allocates the 208-byte `NodeData` from the context heap and registers the
-  entry via `createEntryHelper` `0x1419A57E0`). `TreeRoot`'s `NodeData` is a
-  `ContextData_ImplMixin<TreeRoot::NodeData, TreeContainer>`, so a root is a
-  container and takes children directly. Per frame, mirror the main root's
-  parameters: `TreeRoot::SetViewport` (`0x1419E6860`, self-comparing) from
-  the movie's `Viewport` at `MovieImpl+0xA0` (0x34 bytes), and
-  `TreeNode::SetMatrix` (`0x1419E7230`) from `ViewportMatrix` at
-  `MovieImpl+0x110` (a `Matrix2x4<float>`). `pRenderRoot` is at
-  `MovieImpl+0x88`.
-- Reparenting protocol: `TreeContainer::Insert` (`0x1419E6720`; change bit
-  `0x100`, refcounts the node, sets `Entry::pParent`, propagates) and
-  `TreeContainer::Remove` (`0x1419E6790`; change bit `0x200`, clears
-  `pParent`, *decrements the refcount*). Moving a node therefore takes an
-  AddRef around the Remove/Insert pair. `Entry` layout: refcount at `+0x8`
-  (u64), `pNative` `+0x10`, `pRenderer` `+0x18`, `pParent` `+0x20`; entries
-  are 56-byte slots in 0x1000-aligned pages. All structural writes go on
-  the game thread at the capture seam, like every display-side mutation.
-- **The display-side hazard and its dodge**: `GFx::DisplayList` tracks each
-  child's render-array position as a cached numeric `TreeIndex` and calls
-  `TreeContainer::Remove(container, entry->TreeIndex, 1)`. Removing our
-  nodes would shift every sibling's cached index in the shared container
-  (where the anonymous POI pool churns), corrupting subsequent structural
-  ops. Dodge: **tombstones** -- swap each moved node with a fresh empty
-  `TreeContainer` (`CreateEntry<TreeContainer>`, `0x141990AF0`) at the same
-  index, so the array length and all display-side indices stay valid.
-  Matrix/visibility/alpha updates are node-local (they reach the real node
-  in our root); only structural ops are index-based and hit the tombstone.
-  Reconcile at the capture seam each frame: a tombstone whose `pParent`
-  went null means the display side removed that child (pool despawn) --
-  remove the real node from our root; a new unknown child of the HUD clip's
-  container is a pool spawn -- adopt it (swap in a tombstone, move the node
-  to the markers root). Spawns happen during `Advance`/`UpdatePOIs`, before
-  the capture seam, so adoption lands the same frame.
-- Resolving nodes: from the discovery's cached `GFx::Value` clip handles,
-  the display object is `*(mValue+0x88)` (guarded by the traits check on
-  `*(mValue+0x28)`: type id `*(t+0x78)-24 < 12` and `!(*(t+0x70)&0x20)`;
-  verified identical in release `GetDisplayInfo`), then
-  `DisplayObjectBase::GetRenderNode` (`0x1419EB6F0`) yields the
-  `TreeNode*`.
-- Render side: reimplement `CUIManager::Render`'s body (fully decompiled)
-  in the detour -- thread-id bookkeeping and `CUiThreadCommandQueue::
-  Execute` (`0x140FFAD30`; queue at `UIManager+0x1368`, texture manager at
-  `+0x1370`), `SetRenderTarget(m_pDisplayRT)`, `BeginFrame`/`BeginScene`,
-  `NextCapture` on the movie's display handle, `HAL::Draw(TreeRoot)`
-  (`0x1419B4850`) for the main root, then per extra root the engine's own
-  off-screen pattern (`RenderOffScreenTextures`): `PushRenderTarget` /
-  `BeginScene` / `NextCapture` (latched no-op) + `GetRenderEntry`
-  (`0x1419A4620`) / `Draw` / `PopRenderTarget`, and finally
-  `EndScene`/`EndFrame`. Layer textures wrap into proper `RenderTarget`
-  objects via `HAL::CreateRenderTarget(color, depth)` once, on the render
-  worker. `RTHandle` ctor/dtor at `0x1419A6540`/`0x1419A4600` if handles
-  are kept per root.
+1. **One safe capture per frame.** `Render::Context::Capture` mutates the
+   active snapshot -- the same data every game-thread UI write touches, with
+   no writer lock. The capture lock only serializes `Capture` against
+   `NextCapture`. The engine is only safe because it captures exclusively
+   inside `CUIManager::PreRender` on the game thread, serialized with every
+   other UI writer by being the same thread. Any design needing more than one
+   *distinct* visibility configuration per frame cannot get it from captures.
+2. **The display side owns child indices.** `GFx::DisplayList` addresses each
+   child's render node by cached numeric `TreeIndex`. Any structural edit the
+   display list does not know about shifts its siblings' indices and corrupts
+   later operations. (Workaround that held: swap moved nodes with empty
+   "tombstone" containers at the same index; only structural ops are
+   index-based -- matrix/visibility/alpha writes are node-local and follow the
+   node.)
+3. **The renderer's cache reconciliation requires unique parentage.**
+   `TreeCacheContainer::HandleChanges` walks the child array and the cache
+   list in lockstep and only converges when every node is in exactly one
+   child array. Double-parenting (via display-side re-inserts of held nodes,
+   or stale registries after the game re-attaches the HUD around the
+   frontend/gameplay transition) hangs the render thread inside the deferred
+   render lock, which deadlocks the whole game.
+4. **The render-buffer manager is not built for churn.**
+   `RBGenericImpl::RenderBufferManager` allocates and links a cache-list
+   record per `CreateRenderTarget` and charges its budget; create/release per
+   draw at full HUD resolution degrades every subsequent call until the UI
+   worker is slow enough that the engine visibly skips UI updates. Wrap
+   targets once and reuse them.
+5. **World-to-screen'd content needs full-rate sampling.** Any scheme that
+   refreshes a layer's texture below frame rate shows it immediately under
+   camera motion: elements are projected with different frames' matrices
+   across layers (spatial disagreement) and strobe at refresh boundaries.
+   Pose-freezing a layer's quad compensates camera rotation only.
+6. **pyxis vftables are declaration-ordered.** An out-of-order `#[index]` is
+   silently ignored (ferrobrew/pyxis#108); the resulting wrong-slot call cost
+   three debugging rounds when "GetDisplayHandle" landed on a
+   `Context::Shutdown` thunk. Declare vftable entries in ascending index
+   order and, when a vtable call is on any suspect list, read the live vtable
+   slot from process memory and compare.
 
-Two corrections to the original analysis below, from in-game testing and
-release-binary verification:
+### Mechanism 1: multi-pass visibility rendering (removed)
 
-1. `HAL::Draw` renders a *captured* display-tree snapshot, so toggling
-   `_visible` between draws does nothing without a fresh `Movie::Capture` per
-   pass.
-2. **Capturing off the game thread is structurally unsafe, so a multi-pass
-   split (several capture+render cycles per frame) cannot work.**
-   `Render::Context::Capture` mutates the *active* snapshot — the same data
-   every game-thread UI write (invokes, `SetDisplayInfo`, the POI updates)
-   mutates, with no writer lock; the capture lock only serializes `Capture`
-   against `NextCapture`. Vanilla is safe because the engine captures
-   exclusively in `PreRender` on the game thread, serialized with all other
-   UI code by being the same thread. A first implementation that captured
-   per pass from the render worker (with capture-thread ownership borrowed,
-   as `RenderOffScreenTextures` does) raced every game-thread UI write:
-   flicker across all layers, updates surfacing seconds late (the ownership
-   claim also forced every `CUIBase::Invoke` through the queued-with-delay
-   path), and a crash in `PrimitiveBundle::InsertEntry`.
+Render the movie three times per render call, toggling clip visibility
+(cached display-info handles) and calling `Movie::Capture` between passes,
+with capture-thread ownership borrowed the way `RenderOffScreenTextures`
+does. **Failed structurally** per constraint 1: worker-side captures raced
+every game-thread UI write. Symptoms: flicker across all layers, updates
+surfacing seconds late (the ownership claim also diverted every
+`CUIBase::Invoke` into the queued-with-delay path), and a crash in
+`PrimitiveBundle::InsertEntry`. Removed.
 
-The time-multiplexed design (kept in the tree until the render-root
-partition proves itself) works as follows, with all Scaleform writes on the
-game thread and zero added captures:
+### Mechanism 2: time-multiplexed layer refresh (removed)
 
-- A detour on `GFx::MovieImpl::Capture` (`0x14198B7D0`; called at the end of
-  `CUIManager::PreRender`, after `UpdatePOIs` and `Advance`, deferred render
-  lock held) applies the visibility mask for *one* layer per frame,
-  round-robin, tracking the game's own visibility intent via read-backs. The
-  engine's own once-a-frame capture carries the mask. The schedule only
-  advances once the renderer consumed the previous mask, so a game thread
-  running ahead re-captures the same mask instead of skipping layers.
-- The `CUIManager::Render` detour binds the layer texture matching the mask
-  in the snapshot it is about to draw (a sequence number couples the two),
-  clears it on the HAL's own device context (`m_RenderHAL` at `+0x1328`,
-  `HAL::pDeviceContext` at `+0x473B0`), and calls the original once.
-- The UI renders once per eye; only the first render of an engine frame may
-  consume a pending capture. Later renders set the context's once-a-frame
-  consumption latch (`Context::NextCaptureCalledInFrame`, movie context
-  embedded at `MovieImpl+0x5350`, latch at `+0x99`; cleared by
-  `HAL::EndFrame` → `EndFrameContextNotify`) so both eyes draw the same
-  snapshot even when the game thread slips the next capture in between them.
-- Each texture refreshes at 1/3 rate. The draw side freezes the marker
-  layer's world pose (and warp inputs) between refreshes so world-anchored
-  icons stay glued to their world spots; the head-locked static and center
-  layers only see up to ~3 frames of content latency.
+One visibility mask per frame (applied at the capture seam -- a detour on
+`MovieImpl::Capture`, running after `UpdatePOIs`/`Advance` under the deferred
+render lock -- so the engine's own capture carries it), one layer texture
+redirected per frame round-robin, eye consistency via the context's
+once-a-frame consumption latch, game visibility intent tracked via
+read-backs. **Worked mechanically** (stable, correct threading, vanilla cost)
+but **failed visually** per constraint 5. Also produced one real bug worth
+remembering: releasing the clip-handle registry while the mask held clips
+hidden let the fresh handles read the mask back as game intent, blanking the
+HUD cumulatively (fixed by restoring intent before any release). Removed.
 
-In-game verification result: stable (after restoring clip intent across the
-periodic handle rediscovery, which otherwise baked the mask state in as game
-intent and darkened the HUD within seconds), but the 1/3-rate refresh is
-visibly wrong under motion, per the status section above.
+### Mechanism 3: render-root partition (parked, off by default)
+
+The surviving design, and the one that got closest. The movie's render tree
+is partitioned across two extra `TreeRoot`s created in the movie's own render
+context: layer containers' render nodes move behind index-preserving
+tombstones (constraint 2) at the capture seam; the `CUIManager::Render`
+detour reimplements the original's body (verified against its decompilation)
+and draws the main root plus each extra root into its own texture from the
+frame's single capture -- full rate, zero extra captures, no visibility
+masking, display side untouched. Structural churn (POI pool spawns/despawns,
+display-side re-inserts) reconciles at the seam per frame, including a
+double-parent detector (constraint 3).
+
+Bugs found and fixed along the way, in order:
+
+1. **Wrong vtable slot** (constraint 6): three identical "instant lockup"
+   rounds -- every partitioned render's first act called the context-shutdown
+   thunk at slot 28 believing it was `GetDisplayHandle` (26). Diagnosed by
+   walking the live hung process:
+   the spinning thread was `SyncRender`'s flag poll; the deferred lock's
+   owner was the UI worker; its live stack ended in `Event::Wait` under
+   `Context::Shutdown`.
+2. **Double-adoption of re-inserted nodes** (constraint 3): the reconciler
+   now returns display-reclaimed nodes instead of adopting them twice.
+3. **Menu-era registries**: handles resolved in the frontend point at a
+   detached tree the game re-attaches on entering gameplay; the partition
+   only builds from a registry resolved during gameplay, and validates at
+   build time that the container's parent chain reaches the movie's live
+   render root.
+4. **Render-target churn** (constraint 4): per-draw `CreateRenderTarget`/
+   `Release` collapsed the UI update rate within seconds (telemetry:
+   captures per window falling from ~780 to ~20). The wrapping targets are
+   now cached, keyed on RTV identity.
+
+With all of the above, gameplay is fully healthy: the HUD updates without
+lag, the three layers composite at their own depths with the per-marker warp
+on the marker layer, and the snapshot pipeline holds the ideal lag of one
+capture indefinitely.
+
+**The unresolved bug that parked it: the first pause permanently stops the
+UI update pump.** After pausing once, `MovieImpl::Capture` stops being
+called at all (the capture-seam telemetry goes silent); the pause menu never
+renders, and unpausing leaves the entire UI dead. Everything downstream was
+verified healthy in the wedged live process: the deferred lock free, every
+`m_Render*` flag set, the HAL state normal, the render tree and cache chain
+intact, the prerender-completion flag idle (nothing scheduled), the game
+state `E_GAME_RUN`, and the direct-`PreRender` gate byte open -- yet every
+`CGame::UpdateRender` dispatch path would pump `StartPrerender`/`PreRender`
+unconditionally from that state. The contradiction points at the frame-
+driving machinery the mod already patches (`CGame::Update`'s UpdateRender
+gating and post-render region, plus the stereo eye loop wrapped around
+`Game::UpdateRender`) interacting with the pause *transition*. The next
+diagnostic step, if the split is revived: add per-window counters for
+`game_update` calls, `game_update_render` calls, and captures to the
+existing 5 s telemetry line -- one pause reproduction then names the first
+link in the chain that stops.
+
+### Diagnostic infrastructure built along the way
+
+- **Capture-seam telemetry** (`hooks/ui.rs`): every 5 s, the snapshot
+  pipeline's active/displaying frame ids, their gap, and captures produced
+  in the window. Healthy gameplay reads `lag 1` at ~2 captures per engine
+  frame (the eye loop renders the UI once per eye).
+- **Partition reconciliation logs**: adoptions, despawns, reclaims, and
+  build-wait reasons.
 
 ## The problems
 
