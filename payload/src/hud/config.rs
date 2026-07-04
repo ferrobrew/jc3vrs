@@ -60,9 +60,9 @@ pub struct HudConfig {
     /// from infinity.
     pub marker_max_depth: f32,
     /// Split the HUD into three depth layers -- static HUD, world markers, reticles -- each in
-    /// its own texture composited at its own depth. Time-multiplexed: one layer's texture
-    /// refreshes per frame via a game-thread visibility mask ahead of the engine's own capture,
-    /// so the render cost and threading match vanilla. See `payload/src/hud/split.rs`.
+    /// its own texture composited at its own depth, at full rate: the movie's render tree is
+    /// partitioned across extra render roots in its own context, drawn separately per frame from
+    /// the single vanilla capture. See `payload/src/hud/roots.rs`.
     pub split: bool,
     /// Keep the full-screen Scaleform overlays -- drowning tint, damage flashes, directional
     /// damage indicators -- hidden (issue #8): they were authored to cover a flat screen and

@@ -68,6 +68,31 @@ impl std::convert::AsMut<AmpMovieObjectDesc> for AmpMovieObjectDesc {
         self
     }
 }
+#[repr(C, align(8))]
+/// A pinned `DisplayHandle<TreeRoot>` as returned by
+/// [`GetDisplayHandle`](MovieImpl::GetDisplayHandle): one refcounted `HandleData` pointer.
+pub struct DisplayHandle {
+    /// The refcounted `RTHandle::HandleData` (starts with `RefCountImpl`, so
+    /// [`RefCountImpl::AddRef`] pins a copied handle).
+    pub pData: *mut crate::ui::scaleform::RefCountImpl,
+}
+fn _DisplayHandle_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x8], DisplayHandle>([0u8; 0x8]);
+    }
+    unreachable!()
+}
+impl DisplayHandle {}
+impl std::convert::AsRef<DisplayHandle> for DisplayHandle {
+    fn as_ref(&self) -> &DisplayHandle {
+        self
+    }
+}
+impl std::convert::AsMut<DisplayHandle> for DisplayHandle {
+    fn as_mut(&mut self) -> &mut DisplayHandle {
+        self
+    }
+}
 #[derive(Default)]
 #[repr(C, align(16))]
 /// A display object's presentation state, read and written through
@@ -116,6 +141,43 @@ impl std::convert::AsRef<DisplayInfo> for DisplayInfo {
 }
 impl std::convert::AsMut<DisplayInfo> for DisplayInfo {
     fn as_mut(&mut self) -> &mut DisplayInfo {
+        self
+    }
+}
+#[repr(C, align(1))]
+/// A Scaleform `GFx::DisplayObjectBase`: the display-side object behind a display-list entry.
+/// Reached from a managed display-object [`Value`] at `mValue + 0x88` (guarded by the traits
+/// check `GetDisplayInfo` performs on `mValue + 0x28`).
+pub struct DisplayObjectBase {
+    _field_0: [u8; 8],
+}
+fn _DisplayObjectBase_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x8], DisplayObjectBase>([0u8; 0x8]);
+    }
+    unreachable!()
+}
+impl DisplayObjectBase {
+    pub const GetRenderNode_ADDRESS: usize = 0x1419EB6F0;
+    /// The object's render-tree node, created lazily. Capture (game update) thread only.
+    pub unsafe fn GetRenderNode(&self) -> *mut crate::ui::scaleform::TreeNode {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+            ) -> *mut crate::ui::scaleform::TreeNode = ::std::mem::transmute(
+                Self::GetRenderNode_ADDRESS,
+            );
+            f(self as *const Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<DisplayObjectBase> for DisplayObjectBase {
+    fn as_ref(&self) -> &DisplayObjectBase {
+        self
+    }
+}
+impl std::convert::AsMut<DisplayObjectBase> for DisplayObjectBase {
+    fn as_mut(&mut self) -> &mut DisplayObjectBase {
         self
     }
 }
@@ -279,7 +341,21 @@ pub struct MovieImpl {
     _field_48: [u8; 8],
     /// The root `DisplayObjContainer` (the main movie clip).
     pub pMainMovie: *mut ::std::ffi::c_void,
-    _field_58: [u8; 21240],
+    _field_58: [u8; 48],
+    /// The movie's render-tree root ([`TreeRoot`]): the entry `CUIManager::Render` draws via the
+    /// display handle. The whole display tree's render nodes hang off it.
+    pub pRenderRoot: *mut crate::ui::scaleform::TreeRoot,
+    _field_90: [u8; 16],
+    /// The movie's `GFx::Viewport` (0x34 bytes: buffer size, view rectangle, scissor, flags,
+    /// scale, and aspect). [`TreeRoot::SetViewport`] takes it directly (copying the 0x2C
+    /// `Render::Viewport` prefix).
+    pub Viewport: [u8; 52],
+    _field_d4: [u8; 60],
+    /// The stage-to-viewport matrix (`Matrix2x4<float>`: two rows of `[sx, shx, shy, sy? tx, ty]`
+    /// layout) the movie sets on [`pRenderRoot`](MovieImpl::pRenderRoot) via `TreeNode::SetMatrix`
+    /// whenever the viewport changes.
+    pub ViewportMatrix: [f32; 8],
+    _field_130: [u8; 21024],
     /// The movie's embedded `Render::Context` (the snapshot pipeline: active/pending/displaying
     /// snapshots, the capture locks, and the once-a-frame consumption latch).
     pub RenderContext: crate::ui::scaleform::RenderContext,
@@ -327,6 +403,17 @@ impl MovieImpl {
         unsafe {
             let f = (&raw const (*self.vftable()).SetCaptureThread).read();
             f(self as *mut Self as _, thread_id)
+        }
+    }
+    /// Returns the movie's display handle (`GFx::Movie` vtable slot 26): the pinned
+    /// `DisplayHandle<TreeRoot>` whose `pData` the renderer copies (with an `AddRef`) into a
+    /// stack [`RTHandle`] before consuming the frame's capture.
+    pub unsafe fn GetDisplayHandle(
+        &mut self,
+    ) -> *mut crate::ui::scaleform::DisplayHandle {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetDisplayHandle).read();
+            f(self as *mut Self as _)
         }
     }
 }
@@ -383,10 +470,16 @@ pub struct MovieImplVftable {
         this: *mut crate::ui::scaleform::MovieImpl,
         thread_id: u32,
     ),
+    /// Returns the movie's display handle (`GFx::Movie` vtable slot 26): the pinned
+    /// `DisplayHandle<TreeRoot>` whose `pData` the renderer copies (with an `AddRef`) into a
+    /// stack [`RTHandle`] before consuming the frame's capture.
+    pub GetDisplayHandle: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+    ) -> *mut crate::ui::scaleform::DisplayHandle,
 }
 fn _MovieImplVftable_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0xE0], MovieImplVftable>([0u8; 0xE0]);
+        ::std::mem::transmute::<[u8; 0xE8], MovieImplVftable>([0u8; 0xE8]);
     }
     unreachable!()
 }
@@ -464,6 +557,72 @@ impl std::convert::AsRef<MovieVftable> for MovieVftable {
 }
 impl std::convert::AsMut<MovieVftable> for MovieVftable {
     fn as_mut(&mut self) -> &mut MovieVftable {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// A stack `Render::ContextImpl::RTHandle` over a copied
+/// [`DisplayHandle::pData`] (AddRef'd first, destructed after use).
+pub struct RTHandle {
+    /// The shared, refcounted handle data.
+    pub pData: *mut crate::ui::scaleform::RefCountImpl,
+}
+fn _RTHandle_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x8], RTHandle>([0u8; 0x8]);
+    }
+    unreachable!()
+}
+impl RTHandle {
+    pub const NextCapture_ADDRESS: usize = 0x1419A7970;
+    /// Consumes the context's pending snapshot into the displaying one (at most once per HAL
+    /// frame: the context's [`NextCaptureCalledInFrame`](RenderContext::NextCaptureCalledInFrame)
+    /// latch short-circuits repeats). Returns whether the handle is valid to draw. `notify` is
+    /// the HAL's context notify ([`RenderHAL::GetContextNotify`]); `frame_id` is 0.
+    pub unsafe fn NextCapture(
+        &mut self,
+        notify: *mut ::std::ffi::c_void,
+        frame_id: u64,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                notify: *mut ::std::ffi::c_void,
+                frame_id: u64,
+            ) -> bool = ::std::mem::transmute(Self::NextCapture_ADDRESS);
+            f(self as *mut Self as _, notify, frame_id)
+        }
+    }
+    pub const GetRenderEntry_ADDRESS: usize = 0x1419A4620;
+    /// The handle's root entry in the current displaying snapshot, for `HAL::Draw`.
+    pub unsafe fn GetRenderEntry(&self) -> *mut crate::ui::scaleform::TreeRoot {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+            ) -> *mut crate::ui::scaleform::TreeRoot = ::std::mem::transmute(
+                Self::GetRenderEntry_ADDRESS,
+            );
+            f(self as *const Self as _)
+        }
+    }
+    pub const Destruct_ADDRESS: usize = 0x1419A4600;
+    /// The RTHandle destructor (releases the handle data).
+    pub unsafe fn Destruct(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::Destruct_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<RTHandle> for RTHandle {
+    fn as_ref(&self) -> &RTHandle {
+        self
+    }
+}
+impl std::convert::AsMut<RTHandle> for RTHandle {
+    fn as_mut(&mut self) -> &mut RTHandle {
         self
     }
 }
@@ -572,7 +731,38 @@ fn _RenderContext_size_check() {
     }
     unreachable!()
 }
-impl RenderContext {}
+impl RenderContext {
+    pub const CreateEntryTreeRoot_ADDRESS: usize = 0x141994560;
+    /// Creates a fresh [`TreeRoot`] entry in this context (`Context::CreateEntry<TreeRoot>`):
+    /// allocates its `NodeData` from the context heap and registers the entry. The root starts
+    /// parentless with no viewport; give it one via [`TreeRoot::SetViewport`] and a stage matrix
+    /// via [`TreeNode::SetMatrix`] before drawing it. Call on the capture (game update) thread.
+    pub unsafe fn CreateEntryTreeRoot(&mut self) -> *mut crate::ui::scaleform::TreeRoot {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+            ) -> *mut crate::ui::scaleform::TreeRoot = ::std::mem::transmute(
+                Self::CreateEntryTreeRoot_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub const CreateEntryTreeContainer_ADDRESS: usize = 0x141990AF0;
+    /// Creates a fresh empty [`TreeContainer`] entry in this context
+    /// (`Context::CreateEntry<TreeContainer>`). Call on the capture (game update) thread.
+    pub unsafe fn CreateEntryTreeContainer(
+        &mut self,
+    ) -> *mut crate::ui::scaleform::TreeContainer {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+            ) -> *mut crate::ui::scaleform::TreeContainer = ::std::mem::transmute(
+                Self::CreateEntryTreeContainer_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+}
 impl std::convert::AsRef<RenderContext> for RenderContext {
     fn as_ref(&self) -> &RenderContext {
         self
@@ -587,7 +777,8 @@ impl std::convert::AsMut<RenderContext> for RenderContext {
 /// The Scaleform `Render::D3D1x::HAL` behind `CUIManager::m_RenderHAL`: the D3D11 rendering
 /// backend the UI render worker draws through.
 pub struct RenderHAL {
-    _field_0: [u8; 291752],
+    vftable: *const crate::ui::scaleform::RenderHALVftable,
+    _field_8: [u8; 291744],
     /// The `ID3D11Device` the HAL was initialized with.
     pub pDevice: *mut ::std::ffi::c_void,
     /// The `ID3D11DeviceContext` every HAL draw goes through (possibly a deferred context; see
@@ -601,7 +792,116 @@ fn _RenderHAL_size_check() {
     }
     unreachable!()
 }
-impl RenderHAL {}
+impl RenderHAL {
+    pub fn vftable(&self) -> *const crate::ui::scaleform::RenderHALVftable {
+        self.vftable as *const crate::ui::scaleform::RenderHALVftable
+    }
+    pub const CreateRenderTarget_ADDRESS: usize = 0x141DE1110;
+    /// Builds a [`RenderTarget`] from D3D color/depth views (`ID3D11RenderTargetView*` /
+    /// `ID3D11DepthStencilView*`); the concrete implementation behind vtable slot 111.
+    /// `RenderOffScreenTextures` creates one per off-screen draw and releases it afterwards.
+    /// Render thread only.
+    pub unsafe fn CreateRenderTarget(
+        &mut self,
+        color: *mut ::std::ffi::c_void,
+        depth: *mut ::std::ffi::c_void,
+    ) -> *mut crate::ui::scaleform::RenderTarget {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                color: *mut ::std::ffi::c_void,
+                depth: *mut ::std::ffi::c_void,
+            ) -> *mut crate::ui::scaleform::RenderTarget = ::std::mem::transmute(
+                Self::CreateRenderTarget_ADDRESS,
+            );
+            f(self as *mut Self as _, color, depth)
+        }
+    }
+    pub const Draw_ADDRESS: usize = 0x1419B4850;
+    /// Draws a [`TreeRoot`]'s displaying-snapshot subtree into the bound target
+    /// (`Scaleform::Render::HAL::Draw`). Render thread only, within `BeginFrame`/`BeginScene`.
+    pub unsafe fn Draw(&mut self, root: *mut crate::ui::scaleform::TreeRoot) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                root: *mut crate::ui::scaleform::TreeRoot,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *mut Self as _, root)
+        }
+    }
+    /// Binds `target` as the frame's display render target (slot 3). `CUIManager::Render`
+    /// calls it with `m_RenderBuffer` before `BeginFrame`, paired with a trailing
+    /// [`PopRenderTarget`](RenderHAL::PopRenderTarget).
+    pub unsafe fn SetRenderTarget(
+        &mut self,
+        target: *mut crate::ui::scaleform::RenderTarget,
+        set_state: bool,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).SetRenderTarget).read();
+            f(self as *mut Self as _, target, set_state)
+        }
+    }
+    /// Pushes `target` for nested rendering within a frame (slot 4), as
+    /// `RenderOffScreenTextures` does per off-screen movie. `frame_rect` is `[x0, y0, x1,
+    /// y1]` floats; `clear_color` points at a packed color (0 = transparent).
+    pub unsafe fn PushRenderTarget(
+        &mut self,
+        target: *mut crate::ui::scaleform::RenderTarget,
+        flags: u64,
+        frame_rect: *const f32,
+        clear_color: *const u32,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).PushRenderTarget).read();
+            f(self as *mut Self as _, target, flags, frame_rect, clear_color)
+        }
+    }
+    /// Pops the pushed (or set) render target (slot 5).
+    pub unsafe fn PopRenderTarget(&mut self, flags: u32) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).PopRenderTarget).read();
+            f(self as *mut Self as _, flags)
+        }
+    }
+    /// Begins the HAL frame (slot 11). `EndFrame` clears every context's once-a-frame
+    /// consumption latch via `EndFrameContextNotify`.
+    pub unsafe fn BeginFrame(&mut self) -> bool {
+        unsafe {
+            let f = (&raw const (*self.vftable()).BeginFrame).read();
+            f(self as *mut Self as _)
+        }
+    }
+    /// Ends the HAL frame (slot 12).
+    pub unsafe fn EndFrame(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).EndFrame).read();
+            f(self as *mut Self as _)
+        }
+    }
+    /// Begins a scene (draw batch) within the frame (slot 15).
+    pub unsafe fn BeginScene(&mut self) -> bool {
+        unsafe {
+            let f = (&raw const (*self.vftable()).BeginScene).read();
+            f(self as *mut Self as _)
+        }
+    }
+    /// Ends the scene (slot 16).
+    pub unsafe fn EndScene(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).EndScene).read();
+            f(self as *mut Self as _)
+        }
+    }
+    /// The HAL's `Render::ContextImpl::RenderNotify` (slot 19), passed to
+    /// [`RTHandle::NextCapture`].
+    pub unsafe fn GetContextNotify(&mut self) -> *mut ::std::ffi::c_void {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetContextNotify).read();
+            f(self as *mut Self as _)
+        }
+    }
+}
 impl std::convert::AsRef<RenderHAL> for RenderHAL {
     fn as_ref(&self) -> &RenderHAL {
         self
@@ -609,6 +909,141 @@ impl std::convert::AsRef<RenderHAL> for RenderHAL {
 }
 impl std::convert::AsMut<RenderHAL> for RenderHAL {
     fn as_mut(&mut self) -> &mut RenderHAL {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct RenderHALVftable {
+    _vfunc_0: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_1: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_2: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    /// Binds `target` as the frame's display render target (slot 3). `CUIManager::Render`
+    /// calls it with `m_RenderBuffer` before `BeginFrame`, paired with a trailing
+    /// [`PopRenderTarget`](RenderHAL::PopRenderTarget).
+    pub SetRenderTarget: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::RenderHAL,
+        target: *mut crate::ui::scaleform::RenderTarget,
+        set_state: bool,
+    ),
+    /// Pushes `target` for nested rendering within a frame (slot 4), as
+    /// `RenderOffScreenTextures` does per off-screen movie. `frame_rect` is `[x0, y0, x1,
+    /// y1]` floats; `clear_color` points at a packed color (0 = transparent).
+    pub PushRenderTarget: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::RenderHAL,
+        target: *mut crate::ui::scaleform::RenderTarget,
+        flags: u64,
+        frame_rect: *const f32,
+        clear_color: *const u32,
+    ),
+    /// Pops the pushed (or set) render target (slot 5).
+    pub PopRenderTarget: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::RenderHAL,
+        flags: u32,
+    ),
+    _vfunc_6: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_7: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_8: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_9: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_10: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    /// Begins the HAL frame (slot 11). `EndFrame` clears every context's once-a-frame
+    /// consumption latch via `EndFrameContextNotify`.
+    pub BeginFrame: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::RenderHAL,
+    ) -> bool,
+    /// Ends the HAL frame (slot 12).
+    pub EndFrame: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_13: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_14: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    /// Begins a scene (draw batch) within the frame (slot 15).
+    pub BeginScene: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::RenderHAL,
+    ) -> bool,
+    /// Ends the scene (slot 16).
+    pub EndScene: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_17: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    _vfunc_18: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
+    /// The HAL's `Render::ContextImpl::RenderNotify` (slot 19), passed to
+    /// [`RTHandle::NextCapture`].
+    pub GetContextNotify: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::RenderHAL,
+    ) -> *mut ::std::ffi::c_void,
+}
+fn _RenderHALVftable_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xA0], RenderHALVftable>([0u8; 0xA0]);
+    }
+    unreachable!()
+}
+impl RenderHALVftable {}
+impl std::convert::AsRef<RenderHALVftable> for RenderHALVftable {
+    fn as_ref(&self) -> &RenderHALVftable {
+        self
+    }
+}
+impl std::convert::AsMut<RenderHALVftable> for RenderHALVftable {
+    fn as_mut(&mut self) -> &mut RenderHALVftable {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// A Scaleform `Render::RenderTarget`: the target wrapper `SetRenderTarget`/`PushRenderTarget`
+/// take. `RenderOffScreenTextures` creates one per draw from D3D views
+/// ([`RenderHAL::CreateRenderTarget`]) and releases it after the pop.
+pub struct RenderTarget {
+    vftable: *const crate::ui::scaleform::RenderTargetVftable,
+    _field_8: [u8; 16],
+}
+fn _RenderTarget_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x18], RenderTarget>([0u8; 0x18]);
+    }
+    unreachable!()
+}
+impl RenderTarget {
+    pub fn vftable(&self) -> *const crate::ui::scaleform::RenderTargetVftable {
+        self.vftable as *const crate::ui::scaleform::RenderTargetVftable
+    }
+    /// Releases the target (refcounted; slot 2).
+    pub unsafe fn Release(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Release).read();
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<RenderTarget> for RenderTarget {
+    fn as_ref(&self) -> &RenderTarget {
+        self
+    }
+}
+impl std::convert::AsMut<RenderTarget> for RenderTarget {
+    fn as_mut(&mut self) -> &mut RenderTarget {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct RenderTargetVftable {
+    _vfunc_0: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderTarget),
+    _vfunc_1: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderTarget),
+    /// Releases the target (refcounted; slot 2).
+    pub Release: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::RenderTarget,
+    ),
+}
+fn _RenderTargetVftable_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x18], RenderTargetVftable>([0u8; 0x18]);
+    }
+    unreachable!()
+}
+impl RenderTargetVftable {}
+impl std::convert::AsRef<RenderTargetVftable> for RenderTargetVftable {
+    fn as_ref(&self) -> &RenderTargetVftable {
+        self
+    }
+}
+impl std::convert::AsMut<RenderTargetVftable> for RenderTargetVftable {
+    fn as_mut(&mut self) -> &mut RenderTargetVftable {
         self
     }
 }
@@ -647,6 +1082,183 @@ impl std::convert::AsRef<ScaleformInfo> for ScaleformInfo {
 }
 impl std::convert::AsMut<ScaleformInfo> for ScaleformInfo {
     fn as_mut(&mut self) -> &mut ScaleformInfo {
+        self
+    }
+}
+#[repr(C, align(1))]
+/// A render-tree container node (`Render::TreeContainer`): a [`TreeNode`] whose `NodeData` holds
+/// a child `TreeNodeArray`. The display side mirrors every `DisplayObjContainer` into one, and
+/// addresses children by *cached numeric index* (`GFx::DisplayList`'s `TreeIndex`) -- so removing
+/// a child behind the display list's back shifts its siblings' cached indices; swap in a
+/// placeholder node instead when a child must leave without the display list knowing.
+pub struct TreeContainer {
+    _field_0: [u8; 56],
+}
+fn _TreeContainer_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x38], TreeContainer>([0u8; 0x38]);
+    }
+    unreachable!()
+}
+impl TreeContainer {
+    pub const Insert_ADDRESS: usize = 0x1419E6720;
+    /// Inserts `node` at `index` (entry-change bit 0x100): refcounts the node, sets its
+    /// [`pParent`](TreeNode::pParent), and propagates. Capture (game update) thread only.
+    pub unsafe fn Insert(
+        &mut self,
+        index: u64,
+        node: *mut crate::ui::scaleform::TreeNode,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                index: u64,
+                node: *mut crate::ui::scaleform::TreeNode,
+            ) -> bool = ::std::mem::transmute(Self::Insert_ADDRESS);
+            f(self as *mut Self as _, index, node)
+        }
+    }
+    pub const Remove_ADDRESS: usize = 0x1419E6790;
+    /// Removes `count` children starting at `index` (entry-change bit 0x200): nulls each child's
+    /// [`pParent`](TreeNode::pParent) and drops its refcount (destroying it at zero). Capture
+    /// (game update) thread only.
+    pub unsafe fn Remove(&mut self, index: u64, count: u64) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, index: u64, count: u64) = ::std::mem::transmute(
+                Self::Remove_ADDRESS,
+            );
+            f(self as *mut Self as _, index, count)
+        }
+    }
+    pub const GetAt_ADDRESS: usize = 0x1419EA460;
+    /// The child at `index` of the active snapshot's child array, or null out of range.
+    pub unsafe fn GetAt(&self, index: u64) -> *mut crate::ui::scaleform::TreeNode {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                index: u64,
+            ) -> *mut crate::ui::scaleform::TreeNode = ::std::mem::transmute(
+                Self::GetAt_ADDRESS,
+            );
+            f(self as *const Self as _, index)
+        }
+    }
+    pub const GetSize_ADDRESS: usize = 0x14197DA10;
+    /// The active snapshot's child count.
+    pub unsafe fn GetSize(&self) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *const Self) -> u64 = ::std::mem::transmute(
+                Self::GetSize_ADDRESS,
+            );
+            f(self as *const Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<TreeContainer> for TreeContainer {
+    fn as_ref(&self) -> &TreeContainer {
+        self
+    }
+}
+impl std::convert::AsMut<TreeContainer> for TreeContainer {
+    fn as_mut(&mut self) -> &mut TreeContainer {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// A Scaleform render-tree node: a `Render::ContextImpl::Entry` (a 56-byte slot in a
+/// 0x1000-aligned entry page) whose per-snapshot `NodeData` carries the transform, visibility,
+/// and bounds. [`TreeContainer`] and [`TreeRoot`] share this header; a pointer to either casts to
+/// this freely.
+pub struct TreeNode {
+    _field_0: [u8; 8],
+    /// The entry's reference count. [`TreeContainer::Insert`] increments it and
+    /// [`TreeContainer::Remove`] decrements it (destroying the entry at zero), so moving a node
+    /// between containers must hold an extra count across the remove.
+    pub RefCount: u64,
+    /// The displaying-snapshot `EntryData` the renderer reads (low bit carries a flag).
+    pub pNative: *mut ::std::ffi::c_void,
+    /// The renderer's `TreeCacheNode` for this entry, once drawn.
+    pub pRenderer: *mut ::std::ffi::c_void,
+    /// The parent container entry, or null while detached. [`TreeContainer::Remove`] nulls it;
+    /// a null parent on a node the display side owned means the display list dropped it.
+    pub pParent: *mut crate::ui::scaleform::TreeNode,
+    _field_28: [u8; 16],
+}
+fn _TreeNode_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x38], TreeNode>([0u8; 0x38]);
+    }
+    unreachable!()
+}
+impl TreeNode {
+    pub const SetMatrix_ADDRESS: usize = 0x1419E7230;
+    /// Writes the node's 2D transform (`Matrix2x4<float>`, 8 floats) through the entry-change
+    /// protocol. Call on the capture (game update) thread.
+    pub unsafe fn SetMatrix(&mut self, matrix: *const f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, matrix: *const f32) = ::std::mem::transmute(
+                Self::SetMatrix_ADDRESS,
+            );
+            f(self as *mut Self as _, matrix)
+        }
+    }
+    pub const DestroyHelper_ADDRESS: usize = 0x1419A6110;
+    /// Destroys the entry (`Entry::destroyHelper`): queues its `NodeData` on the context's
+    /// destroyed-nodes list (freed at the next capture) and frees the slot. Call only when
+    /// [`RefCount`](TreeNode::RefCount) reached zero, on the capture (game update) thread.
+    pub unsafe fn DestroyHelper(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::DestroyHelper_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<TreeNode> for TreeNode {
+    fn as_ref(&self) -> &TreeNode {
+        self
+    }
+}
+impl std::convert::AsMut<TreeNode> for TreeNode {
+    fn as_mut(&mut self) -> &mut TreeNode {
+        self
+    }
+}
+#[repr(C, align(1))]
+/// A render-tree root (`Render::TreeRoot`): a [`TreeContainer`] whose `NodeData` adds the
+/// viewport and background color. `HAL::Draw` takes one; the engine draws several per frame
+/// through the same HAL (the UI movie, the off-screen movies, the debug text).
+pub struct TreeRoot {
+    _field_0: [u8; 56],
+}
+fn _TreeRoot_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x38], TreeRoot>([0u8; 0x38]);
+    }
+    unreachable!()
+}
+impl TreeRoot {
+    pub const SetViewport_ADDRESS: usize = 0x1419E6860;
+    /// Writes the root's viewport (entry-change bit 0x1000, self-comparing). `viewport` is a
+    /// `GFx::Viewport` (e.g. [`MovieImpl::Viewport`]); the 0x2C `Render::Viewport` prefix is
+    /// copied. Capture (game update) thread only.
+    pub unsafe fn SetViewport(&mut self, viewport: *const u8) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, viewport: *const u8) = ::std::mem::transmute(
+                Self::SetViewport_ADDRESS,
+            );
+            f(self as *mut Self as _, viewport)
+        }
+    }
+}
+impl std::convert::AsRef<TreeRoot> for TreeRoot {
+    fn as_ref(&self) -> &TreeRoot {
+        self
+    }
+}
+impl std::convert::AsMut<TreeRoot> for TreeRoot {
+    fn as_mut(&mut self) -> &mut TreeRoot {
         self
     }
 }

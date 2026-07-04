@@ -79,11 +79,6 @@ pub struct HudState {
     cached_layer_corners: [Option<([[f32; 4]; 4], f32)>; split::LAYER_COUNT],
     /// Whether the split composite is live this frame (chosen on eye 0; also gates the clear).
     split_composite: bool,
-    /// The marker layer's refresh generation last seen by
-    /// [`begin_split_frame`](HudState::begin_split_frame).
-    marker_gen_seen: u64,
-    /// The marker layer's frozen warp inputs, refreshed with its corners.
-    frozen_marker_warp: Option<WarpFrame>,
 }
 
 /// Damped follow state: tracks the panel's eased orientation via quaternion slerp.
@@ -138,8 +133,6 @@ impl HudState {
             cached_corners: None,
             cached_layer_corners: [None, None, None],
             split_composite: false,
-            marker_gen_seen: 0,
-            frozen_marker_warp: None,
             layer_targets: [None, None],
         }
     }
@@ -238,6 +231,7 @@ impl HudState {
         let center = self.layer_targets[1].as_ref()?;
         Some(split::LayerViews {
             views: [main, markers, center].map(|t| (t.color_rtv().clone(), t.depth_dsv().clone())),
+            sizes: [main, markers, center].map(HudTarget::size),
         })
     }
 
@@ -301,48 +295,22 @@ impl HudState {
         self.warp_frame = frame;
     }
 
-    /// Begin the split's per-frame bookkeeping (eye 0): record whether the composite is live and
-    /// whether the marker layer's texture was refreshed since the last frame (its pose and warp
-    /// should then be re-frozen via [`set_marker_layer`](HudState::set_marker_layer)). While the
-    /// composite is inactive the per-layer state is dropped, so a re-entry starts fresh.
-    pub fn begin_split_frame(&mut self, active: bool, marker_gen: u64) -> bool {
-        self.split_composite = active;
-        if !active {
-            self.cached_layer_corners = [None, None, None];
-            self.frozen_marker_warp = None;
-            self.marker_gen_seen = marker_gen;
-            return false;
-        }
-        let refreshed = marker_gen != self.marker_gen_seen;
-        self.marker_gen_seen = marker_gen;
-        refreshed
-    }
-
-    /// Compute the head-locked layers' world-space corners (the static and center layers), every
-    /// frame while the split composite is live.
-    pub fn set_layer_corners(
+    /// Set the frame's split state (eye 0): whether the composite is live, and every layer's
+    /// world-space corner set (all recomputed per frame -- the partition redraws every texture
+    /// every frame, so nothing freezes).
+    pub fn set_split_frame(
         &mut self,
-        static_params: &super::quad::PanelParams,
-        center_params: &super::quad::PanelParams,
+        active: bool,
+        params: Option<[super::quad::PanelParams; split::LAYER_COUNT]>,
     ) {
-        for (slot, params) in [
-            (split::HudLayer::Static, static_params),
-            (split::HudLayer::Center, center_params),
-        ]
-        .map(|(layer, params)| (layer as usize, params))
-        {
-            self.cached_layer_corners[slot] =
-                super::quad::compute_world_corners(params).map(|c| (c, params.distance));
+        self.split_composite = active;
+        self.cached_layer_corners = [None, None, None];
+        let Some(params) = params else {
+            return;
+        };
+        for (slot, params) in self.cached_layer_corners.iter_mut().zip(params.iter()) {
+            *slot = super::quad::compute_world_corners(params).map(|c| (c, params.distance));
         }
-    }
-
-    /// Freeze the marker layer's world-space corners and warp inputs at a texture refresh; they
-    /// hold until the next refresh so the stale texture stays at the world pose it was rendered
-    /// for.
-    pub fn set_marker_layer(&mut self, params: &super::quad::PanelParams, warp: Option<WarpFrame>) {
-        self.cached_layer_corners[split::HudLayer::Markers as usize] =
-            super::quad::compute_world_corners(params).map(|c| (c, params.distance));
-        self.frozen_marker_warp = warp;
     }
 
     /// Draw the redirected HUD as a floating quad for `eye` over `target` (the eye's linear back
@@ -434,10 +402,10 @@ impl HudState {
         for i in order {
             let (layer_corners, distance) = self.cached_layer_corners[i].unwrap();
             let srv = layer_srvs[i].as_ref().unwrap();
-            // The marker layer draws depth-warped when it has frozen warp inputs; the warp
+            // The marker layer draws depth-warped when the frame has warp inputs; the warp
             // pipeline is built lazily and a build failure falls back to the flat quad.
             if i == split::HudLayer::Markers as usize
-                && let Some(frame) = self.frozen_marker_warp.as_ref()
+                && let Some(frame) = self.warp_frame.as_ref()
             {
                 if self.warp.is_none() {
                     match HudWarp::new(device) {

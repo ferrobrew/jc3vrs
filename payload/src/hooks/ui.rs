@@ -89,12 +89,13 @@ fn convert_3d_coords_default(
     }
 }
 
-/// The seam for the split's game-thread visibility masking: `CUIManager::PreRender` calls this
-/// right after `Advance`, on the game update thread with the deferred render lock held -- the
-/// only point in the frame where every display-tree writer is quiescent. The mask for the frame's
-/// layer (and the issue #8 overlay suppression) is applied here so the engine's own capture
-/// carries it; the original then runs unchanged. Movies other than the main UI movie (the
-/// render-to-texture instances) pass through untouched. See [`crate::hud::split`].
+/// The capture seam: `CUIManager::PreRender` calls `MovieImpl::Capture` right after `Advance`,
+/// on the game update thread with the deferred render lock held -- the only point in the frame
+/// where every display-tree writer is quiescent. The render-root partition maintains itself here
+/// (build, per-frame reconcile against pool churn, teardown), and the issue #8 overlay
+/// suppression writes here, so the engine's own capture carries everything; the original then
+/// runs unchanged. Movies other than the main UI movie (the render-to-texture instances) pass
+/// through untouched. See [`crate::hud::roots`] and [`crate::hud::split`].
 #[detour(address = MovieImpl::CaptureImpl_ADDRESS)]
 fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
     // SAFETY: the UI manager is a live singleton past startup; the pointer comparison does not
@@ -111,29 +112,31 @@ fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
         let split_active = split_enabled
             && crate::hud::current_mode() == crate::hud::HudMode::Hud
             && crate::hud::split_layers_ready();
-        crate::hud::split::apply_capture_mask(split_active, suppress_overlays);
+        // SAFETY: this is the capture seam both callees require; `this` is the live main movie.
+        unsafe {
+            crate::hud::split::apply_overlay_suppression(suppress_overlays);
+            if let Some(movie) = this.as_mut() {
+                crate::hud::roots::on_capture(movie, split_active);
+            }
+        }
     }
     MOVIE_CAPTURE.get().unwrap().call(this, if_changed)
 }
 
-/// Redirect the UI render into the frame's layer texture while the split is live; otherwise pass
-/// through. Runs on the UI render worker (kicked by `StartRender`). See [`crate::hud::split`].
+/// Render the partitioned HUD (each render root into its own layer texture, full rate) while the
+/// partition is live; otherwise pass through. Runs on the UI render worker (kicked by
+/// `StartRender`). See [`crate::hud::roots`].
 #[detour(address = UIManager::Render_ADDRESS)]
 fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
     let original = UI_RENDER.get().unwrap();
-    let Some(views) = crate::hud::split_inputs() else {
-        original.call(this, context);
-        return;
-    };
-    // SAFETY: called from the detour with the detour's own arguments, on the UI render worker.
-    unsafe {
-        crate::hud::split::bind_layer_and_clear(
-            this,
-            context as *mut std::ffi::c_void,
-            &views,
-            &|t, c| original.call(t, c as *mut HContext_t),
-        );
+    if let Some(views) = crate::hud::split_inputs() {
+        // SAFETY: called from the detour with the detour's own arguments, on the UI render
+        // worker.
+        if unsafe { crate::hud::roots::render_partitioned(this, &views) } {
+            return;
+        }
     }
+    original.call(this, context);
 }
 
 /// Replace the VP and camera matrix in `Get2DInfo` with the floating panel's orientation, so

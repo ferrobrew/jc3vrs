@@ -63,7 +63,7 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
             });
             ui.checkbox(
                 &mut cfg.hud.split,
-                "Split the HUD into depth layers (one layer refreshed per frame)",
+                "Split the HUD into depth layers (render-root partition, full rate)",
             );
             ui.add_enabled_ui(cfg.hud.split, |ui| {
                 ui.indent("hud_split", |ui| {

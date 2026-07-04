@@ -61,6 +61,9 @@ pub fn request_release_handles() {
 /// that mask state back as the game's intent -- baking the clips permanently invisible, a few
 /// layers' worth per rediscovery until the whole HUD is dark.
 fn release_clip_handles() {
+    // The render-root partition resolved its nodes through these handles; restore the render
+    // tree before they go away (rebuilt from the fresh registry on the next capture).
+    crate::hud::roots::teardown_now();
     if let Some(mut handles) = crate::hud::split::CLIP_HANDLES.lock().take() {
         // SAFETY: called on the capture thread; each handle releases through its own interface.
         unsafe {
@@ -98,17 +101,19 @@ pub fn process_requests() {
         release_clip_handles();
     }
 
-    // The capture-mask hook (the split and the overlay suppression) needs the handle registry;
-    // request the initial discovery when either wants it, and refresh periodically while it is
-    // live (the anonymous POI pool is assumed stable, but the game can grow or rebuild it).
+    // The capture-seam hooks (the render-root partition and the overlay suppression) need the
+    // handle registry; request the initial discovery when either wants it. While the partition
+    // is live the registry must stay stable (a rebuild would tear the partition down for a
+    // frame), so the periodic refresh only runs before the partition takes.
     let handles_needed =
         crate::config::Config::lock_query(|c| c.hud.split || c.hud.suppress_overlays);
     let handles_live = crate::hud::split::CLIP_HANDLES.lock().is_some();
     if handles_needed
         && (!handles_live
-            || LAST_DISCOVERY
-                .lock()
-                .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0))
+            || (!crate::hud::roots::live()
+                && LAST_DISCOVERY
+                    .lock()
+                    .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0)))
     {
         DISCOVERY_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
     }

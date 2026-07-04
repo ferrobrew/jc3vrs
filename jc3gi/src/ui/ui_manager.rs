@@ -131,7 +131,14 @@ pub struct UIManager {
     _field_12f0: [u8; 56],
     /// The Scaleform `Render::D3D1x::HAL` the UI render worker draws through.
     pub m_RenderHAL: *mut crate::ui::scaleform::RenderHAL,
-    _field_1330: [u8; 96],
+    _field_1330: [u8; 56],
+    /// The UI render worker's command queue; `Render` executes it (and stamps its
+    /// [`m_RenderThreadId`](UiThreadCommandQueue::m_RenderThreadId)) at the top of every call.
+    pub m_ThreadCommandQueue: *mut crate::ui::ui_manager::UiThreadCommandQueue,
+    /// The Scaleform `D3D1x::TextureManager`; `Render` stamps its
+    /// [`RenderThreadId`](UITextureManager::RenderThreadId) at the top of every call.
+    pub m_TextureManager: *mut crate::ui::ui_manager::UITextureManager,
+    _field_1378: [u8; 24],
     /// The Scaleform render buffer the UI HAL renders into, set up by
     /// [`InitPlatformRT`](UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`] rebinds which
     /// views it renders into.
@@ -456,6 +463,69 @@ impl std::convert::AsRef<UIManager> for UIManager {
 }
 impl std::convert::AsMut<UIManager> for UIManager {
     fn as_mut(&mut self) -> &mut UIManager {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The Scaleform `Render::D3D1x::TextureManager` behind the UI (only the render-thread id is
+/// modeled).
+pub struct UITextureManager {
+    _field_0: [u8; 72],
+    /// The render thread id; `CUIManager::Render` sets it to the calling thread each call.
+    pub RenderThreadId: u32,
+    _field_4c: [u8; 4],
+}
+fn _UITextureManager_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x50], UITextureManager>([0u8; 0x50]);
+    }
+    unreachable!()
+}
+impl UITextureManager {}
+impl std::convert::AsRef<UITextureManager> for UITextureManager {
+    fn as_ref(&self) -> &UITextureManager {
+        self
+    }
+}
+impl std::convert::AsMut<UITextureManager> for UITextureManager {
+    fn as_mut(&mut self) -> &mut UITextureManager {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The `CUiThreadCommandQueue`: commands queued for execution on the UI render worker.
+pub struct UiThreadCommandQueue {
+    _field_0: [u8; 152],
+    /// The thread id the queue's render interfaces report; `CUIManager::Render` sets it to the
+    /// calling thread before executing.
+    pub m_RenderThreadId: u32,
+    _field_9c: [u8; 4],
+}
+fn _UiThreadCommandQueue_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xA0], UiThreadCommandQueue>([0u8; 0xA0]);
+    }
+    unreachable!()
+}
+impl UiThreadCommandQueue {
+    pub const Execute_ADDRESS: usize = 0x140FFAD30;
+    /// Executes the queued render-thread commands. UI render worker only.
+    pub unsafe fn Execute(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::Execute_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<UiThreadCommandQueue> for UiThreadCommandQueue {
+    fn as_ref(&self) -> &UiThreadCommandQueue {
+        self
+    }
+}
+impl std::convert::AsMut<UiThreadCommandQueue> for UiThreadCommandQueue {
+    fn as_mut(&mut self) -> &mut UiThreadCommandQueue {
         self
     }
 }
