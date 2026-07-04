@@ -250,7 +250,16 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
     }
 
     hud.draw_quad(context, device, target, eye);
-    hud.clear(context);
+    // The UI renders once per game frame (see the Render detour), so the textures must survive
+    // until the last eye has composited them; clear only then.
+    let last_eye = if crate::stereo::STEREO_STATE.lock().active {
+        1
+    } else {
+        0
+    };
+    if eye == last_eye {
+        hud.clear(context);
+    }
 }
 
 /// Extract the head's world-space pose `(position, rotation)` from the render camera's world

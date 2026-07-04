@@ -93,6 +93,17 @@ pub fn process_requests() {
         release_clip_handles();
     }
 
+    // The anonymous POI pool is assumed stable, but the game can grow or rebuild it; refresh the
+    // handle registry periodically while the split is active so new clips join the markers layer.
+    if crate::config::Config::lock_query(|c| c.hud.split)
+        && crate::hud::split::CLIP_HANDLES.lock().is_some()
+        && LAST_DISCOVERY
+            .lock()
+            .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0)
+    {
+        DISCOVERY_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     let requests = std::mem::take(&mut *REQUESTS.lock());
     if requests.is_empty() && !DISCOVERY_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
         return;
