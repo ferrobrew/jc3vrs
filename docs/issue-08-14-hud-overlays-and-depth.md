@@ -5,15 +5,31 @@ panel) and issue #14 (dynamic HUD depth/scale based on scene geometry). The two
 share the same underlying Scaleform architecture and the same per-element
 separation question, so they're documented together.
 
-Both are open investigations. The floating panel itself ships (see
-`docs/hud.md`): the HUD is redirected into an offscreen texture, drawn as a
-floating quad per eye with correct stereo depth, and world markers are
-reprojected onto the panel surface. What is *not* yet done — and what this
-document covers — is suppressing the full-screen Scaleform overlays (#8) and
-choosing the panel distance from scene geometry / separating elements to
-per-element depths (#14). None of the overlay-suppression or per-element-depth
-mechanisms below are implemented; they are candidate approaches with the
-supporting reverse-engineering.
+**Status: implemented on the `hud-depth-split` branch, pending in-game
+verification.** The multi-pass split renders the HUD in three visibility
+passes (static / markers / center) into separate textures composited at
+per-layer depths, with a per-marker depth warp on the marker layer, an
+aim-driven depth for the center layer, and overlay suppression for #8 — see
+`docs/hud.md` ("Depth layers") for the shipped design. This document keeps the
+underlying reverse-engineering and records what still needs an in-game pass:
+
+1. The display-tree dump (HUD tab, Scaleform section) must confirm the runtime
+   clip paths — the authored `MCI_*` names and the attachment prefix under the
+   root movie (`hud.split_path_prefix`). `SetVariable` failures are logged
+   once per path.
+2. The MovieRoot vtable guard (`Movie::VFTABLE`, `0x1426216B0`) must match the
+   live object; a mismatch logs and disables every Scaleform-side operation.
+3. The capture-per-pass mechanism, the deferred-render-lock reentrancy, and
+   the per-layer visuals themselves.
+
+One correction to the original analysis below: `HAL::Draw` renders a
+*captured* display-tree snapshot, so toggling `_visible` between draws does
+nothing without a fresh `Movie::Capture` per pass (with capture-thread
+ownership borrowed, as `RenderOffScreenTextures` does). The implemented
+sequence per pass is: set visibility, capture, rebind the render buffer's
+views, call the original `Render` — all under `m_DeferredRenderLock`, which
+`PreRender` also holds across `Advance`+`Capture`, making the split race-free
+against the update thread.
 
 ## The problems
 
@@ -509,6 +525,23 @@ shipped (see the world-to-screen subsection above).
    red vignette on the panel edges for low health.
 
 ## Key addresses and symbols
+
+Release ground truth recovered for the implementation (all bound in
+`pyxis-defs`):
+
+| Symbol | Address / offset | Notes |
+|---|---|---|
+| `CUIManager::Render` | `0x141007B70` | `IUIManager` vtable slot 4; the split detour target. |
+| `UIManager::m_DeferredRenderLock` | `+0x12B8` | Held by both `PreRender` (`Advance`+`Capture`) and `Render`; re-entrant. |
+| `UIManager::m_MainThreadId` | `+0x44` | The capture thread to hand ownership back to. |
+| Render gates | `+0x212`, `+0x213`, `+0x147F` | `m_RenderReady` / `m_RenderActive` / `m_RenderingEnabled`. |
+| `UIManager::m_Movie` | `+0x12E8` | The `GFx::MovieImpl` (the trio was previously bound 0x10 low). |
+| `MovieImpl::pASMovieRoot` | `+0x18` | The AS3 `MovieRoot` (SetVariable/Invoke/display tree). |
+| `MovieImpl` vtable | slots 24-27, 48 | `Advance`, `Capture`, `GetDisplayHandle`, `SetCaptureThread`, `GetHeap`. |
+| `MovieRoot` vtable | `0x1426216B0` | Standard `ASMovieRootBase` layout: `GetDisplayObjectsTree` 35, `SetVariable` 49, `GetVariable` 50, `Invoke` 57. |
+| `CUIManager::Convert3DCoordsDefault` | `0x140F899A0` | The grapple reticle's default-VP world-to-screen; hooked for panel reprojection + aim depth. |
+
+Original static-analysis reference:
 
 | Symbol | Notes |
 |---|---|
