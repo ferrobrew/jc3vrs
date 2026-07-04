@@ -22,19 +22,6 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&CONVERT_3D_COORDS_DEFAULT_BINDER)
 }
 
-/// Whether the UI has already rendered this game frame. Under the stereo double-Draw the engine
-/// kicks `CUIManager::Render` once per eye; rendering the UI twice per frame lets game-thread
-/// events land between the runs, so the two eyes capture -- and composite -- different HUD
-/// states (binocular rivalry: the HUD appears to flicker). The detour renders on the first run
-/// and skips the second; both eyes then composite the same textures.
-static UI_RENDERED_THIS_FRAME: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-/// Marks the start of a game frame for the UI-render dedup. Called from the game-thread tick.
-pub fn begin_frame_ui_render() {
-    UI_RENDERED_THIS_FRAME.store(false, std::sync::atomic::Ordering::Relaxed);
-}
-
 /// Marks the start of a game frame for the aim-depth recording: `UpdateGrappleReticle`'s *first*
 /// default-VP projection each frame is the game's smoothed aim position; its later calls (the
 /// wire-attachment point, the grip-radius sample) are different points and must not be recorded.
@@ -104,12 +91,6 @@ fn convert_3d_coords_default(
 #[detour(address = UIManager::Render_ADDRESS)]
 fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
     let original = UI_RENDER.get().unwrap();
-    // One UI render per game frame: the second (per-eye) run would recapture a possibly-changed
-    // display list and desynchronize the eyes. The textures persist; the composite draws them
-    // for both eyes and clears after the last.
-    if UI_RENDERED_THIS_FRAME.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
     let Some((views, suppress_overlays)) = crate::hud::split_inputs() else {
         original.call(this, context);
         return;

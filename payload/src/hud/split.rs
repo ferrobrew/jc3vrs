@@ -218,7 +218,10 @@ pub unsafe fn render_split(
 
         for layer in LAYERS {
             set_layer_visibility(handles, &snapshot, layer, suppress_overlays);
-            movie_impl.Capture(true);
+            // Unconditional: `true` is capture-on-change-only, gated on the render context's
+            // change buffer -- the pass must never draw a stale snapshot because a mask happened
+            // to produce no recorded change.
+            movie_impl.Capture(false);
             rebind_views(manager, &views.views[layer as usize]);
             original(this, context);
         }
@@ -227,7 +230,7 @@ pub unsafe fn render_split(
         // and a mid-frame split disable all see the HUD exactly as the game left it; hand capture
         // ownership back to its previous owner.
         restore_visibility(handles, &snapshot);
-        movie_impl.Capture(true);
+        movie_impl.Capture(false);
         manager.m_CurrentCaptureThread = previous_capture_thread;
         movie_impl.SetCaptureThread(previous_capture_thread);
         rebind_views(manager, &views.views[HudLayer::Static as usize]);
