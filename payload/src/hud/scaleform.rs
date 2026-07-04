@@ -30,6 +30,21 @@ enum Request {
 /// The pending requests. UI thread pushes, game thread drains.
 static REQUESTS: Mutex<Vec<Request>> = Mutex::new(Vec::new());
 
+/// Whether a layout discovery is wanted (set by the split when its paths do not resolve, or by
+/// the debug UI). Throttled to one walk per second by [`process_requests`].
+static DISCOVERY_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The last discovery attempt, for the once-per-second throttle.
+static LAST_DISCOVERY: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Request a display-tree layout discovery: derive the split's clip-path prefix from the live
+/// tree (by locating `MCI_safe_area_center`'s parent) and collect the HUD clip's anonymous
+/// children (the POI pool) for the markers layer.
+pub fn request_layout_discovery() {
+    DISCOVERY_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Queue a display-tree dump (from the debug UI).
 pub fn request_dump_tree() {
     REQUESTS.lock().push(Request::DumpTree);
@@ -47,11 +62,15 @@ pub fn request_set_clip_visible(path: String, visible: bool) {
 /// capture thread), before the frame's UI advance.
 pub fn process_requests() {
     let requests = std::mem::take(&mut *REQUESTS.lock());
-    if requests.is_empty() {
+    if requests.is_empty() && !DISCOVERY_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
     let Some((movie_impl, movie_root)) = live_movie() else {
-        tracing::warn!("scaleform: the UI movie is not available; dropping the queued requests");
+        if !requests.is_empty() {
+            tracing::warn!(
+                "scaleform: the UI movie is not available; dropping the queued requests"
+            );
+        }
         return;
     };
     for request in requests {
@@ -60,6 +79,20 @@ pub fn process_requests() {
             Request::SetClipVisible { path, visible } => {
                 set_clip_visible(movie_root, &path, visible)
             }
+        }
+    }
+
+    if DISCOVERY_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+        let due = {
+            let mut last = LAST_DISCOVERY.lock();
+            let due = last.is_none_or(|t| t.elapsed().as_secs_f32() >= 1.0);
+            if due {
+                *last = Some(std::time::Instant::now());
+            }
+            due
+        };
+        if due && discover_layout(movie_impl, movie_root) {
+            DISCOVERY_REQUESTED.store(false, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
@@ -133,21 +166,29 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
     }
 }
 
+/// A tree node's instance name. The `name` field is a `Scaleform::String`: its `pData` carries
+/// heap flags in the pointer's low bits, and the characters live at `+0xC` past the `DataDesc`
+/// header (u64 size, i32 refcount), NUL-terminated.
+unsafe fn node_name(node: &AmpMovieObjectDesc) -> String {
+    if node.name.is_null() {
+        return "<null>".to_string();
+    }
+    // SAFETY: forwarded from the tree walk; the string data outlives the node.
+    unsafe {
+        let desc = (node.name as usize & !7) as *const u8;
+        std::ffi::CStr::from_ptr(desc.add(0xC) as *const i8)
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
 /// Log one tree node and recurse into its children. `prefix` is the dot-joined path of the
 /// ancestors; `lines` counts emitted nodes.
 unsafe fn dump_node(node: &AmpMovieObjectDesc, prefix: &mut String, lines: &mut usize) {
     // SAFETY (whole body): the node came from a live GetDisplayObjectsTree result that is not
     // released until the walk completes; `name` points into the node's own string allocation.
     unsafe {
-        let name = if node.name.is_null() {
-            "<null>".to_string()
-        } else {
-            // The name is a Scaleform::String: a DataDesc header (u64 size, i32 refcount) with
-            // the NUL-terminated characters inline at +0xC.
-            std::ffi::CStr::from_ptr(node.name.add(0xC) as *const i8)
-                .to_string_lossy()
-                .into_owned()
-        };
+        let name = node_name(node);
         let path = if prefix.is_empty() {
             name.clone()
         } else {
@@ -171,6 +212,93 @@ unsafe fn dump_node(node: &AmpMovieObjectDesc, prefix: &mut String, lines: &mut 
                 prefix.truncate(saved);
             }
         }
+    }
+}
+
+/// Walk the live display tree once: locate `MCI_safe_area_center`, derive the split path prefix
+/// from its parent's path, and collect that parent's anonymous (`instanceNNNN`) children -- the
+/// POI pool -- as the split's dynamic marker clips. Returns whether the layout was found (the
+/// HUD movie may not be attached yet).
+fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
+    // SAFETY: called on the capture thread; the heap is live; the tree is released after the walk.
+    unsafe {
+        if movie_impl.pHeap.is_null() {
+            return false;
+        }
+        let root = movie_root.GetDisplayObjectsTree(movie_impl.pHeap);
+        let Some(root_ref) = root.as_ref() else {
+            return false;
+        };
+        let found = find_hud_clip(root_ref, &mut String::new());
+        root_ref.Release();
+
+        let Some((prefix, anonymous)) = found else {
+            return false;
+        };
+        tracing::info!(
+            "scaleform: layout discovery: prefix {prefix:?}, {} anonymous marker clips",
+            anonymous.len()
+        );
+        if let Err(e) = crate::config::CONFIG
+            .lock()
+            .hud
+            .split_path_prefix
+            .set(&prefix)
+        {
+            tracing::warn!("scaleform: layout discovery: {e}");
+            return false;
+        }
+        *crate::hud::split::DYNAMIC_MARKER_CLIPS.lock() = anonymous;
+        true
+    }
+}
+
+/// Recursively search for the node named `MCI_safe_area_center`; on a hit, return its parent's
+/// dot-path prefix (ending in a dot, or empty at the root) and the parent's anonymous children.
+unsafe fn find_hud_clip(
+    node: &AmpMovieObjectDesc,
+    path: &mut String,
+) -> Option<(String, Vec<String>)> {
+    // SAFETY (whole body): the tree is live for the duration of the walk.
+    unsafe {
+        if node.children.is_null() {
+            return None;
+        }
+        let count = node.child_count as usize;
+        let children: Vec<&AmpMovieObjectDesc> = (0..count)
+            .filter_map(|i| (*node.children.add(i)).as_ref())
+            .collect();
+
+        if children
+            .iter()
+            .any(|c| node_name(c) == "MCI_safe_area_center")
+        {
+            let prefix = if path.is_empty() {
+                String::new()
+            } else {
+                format!("{path}.")
+            };
+            let anonymous = children
+                .iter()
+                .map(|c| node_name(c))
+                .filter(|name| !name.starts_with("MCI_") && name != "<null>")
+                .collect();
+            return Some((prefix, anonymous));
+        }
+
+        for child in children {
+            let name = node_name(child);
+            let saved = path.len();
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(&name);
+            if let Some(found) = find_hud_clip(child, path) {
+                return Some(found);
+            }
+            path.truncate(saved);
+        }
+        None
     }
 }
 

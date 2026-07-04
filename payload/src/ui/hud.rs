@@ -153,6 +153,16 @@ fn scaleform_debug_ui(ui: &mut egui::Ui) {
         .default_open(false)
         .show(ui, |ui| {
             if ui
+                .button("Auto-configure split from display tree")
+                .on_hover_text(
+                    "Finds the HUD clip in the live tree, sets the split path prefix, and \
+                     collects the anonymous POI pool for the markers layer.",
+                )
+                .clicked()
+            {
+                crate::hud::scaleform::request_layout_discovery();
+            }
+            if ui
                 .button("Dump display tree to log")
                 .on_hover_text(
                     "Walks the live movie's clip tree on the game thread and logs one line per \

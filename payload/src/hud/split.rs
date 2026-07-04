@@ -75,14 +75,25 @@ pub(crate) const LAYER_CONTAINERS: [&[&str]; LAYER_COUNT] = [
 
 /// The full-screen overlay clips of issue #8, all children of the center container: held
 /// invisible in every pass while
-/// [`HudConfig::suppress_overlays`](crate::hud::HudConfig::suppress_overlays) is on.
+/// [`HudConfig::suppress_overlays`](crate::hud::HudConfig::suppress_overlays) is on. Paths
+/// confirmed against an in-game display-tree dump; `MCI_omni_damage` (the screen-wide damage
+/// flash) is a direct child of the center container, not of the health-damage manager.
 pub(crate) const OVERLAY_CLIPS: &[&str] = &[
+    "MCI_safe_area_center.MCI_omni_damage",
     "MCI_safe_area_center.MCI_drowning_container",
     "MCI_safe_area_center.MCI_health_damage_manager",
     "MCI_safe_area_center.MCI_character_damage_indicators",
     "MCI_safe_area_center.MCI_vehicle_damage_indicators",
     "MCI_safe_area_center.MCI_inflict_damage",
+    "MCI_safe_area_center.MCI_sniper",
 ];
+
+/// The anonymous (auto-named `instanceNNNN`) children of the HUD clip, discovered from the live
+/// display tree: the POI pool is instantiated there, not under `MCI_poi_stage` (which stays
+/// empty). These belong to the markers layer. Written by the layout discovery on the game thread;
+/// read by the split passes on the render worker.
+pub(crate) static DYNAMIC_MARKER_CLIPS: parking_lot::Mutex<Vec<String>> =
+    parking_lot::Mutex::new(Vec::new());
 
 /// The per-pass render-target views, snapshotted from the HUD state before the passes run (so the
 /// state lock is not held across the original `Render` calls). The views are COM clones, so they
@@ -207,25 +218,29 @@ unsafe fn paths_resolve(movie_root: &Movie, prefix: &str) -> bool {
         } else {
             tracing::warn!(
                 "hud split: the HUD clip paths do not resolve (prefix {prefix:?}); rendering \
-                 single-texture until they do (expected before the HUD activates; otherwise set \
-                 the split path prefix from a display-tree dump)"
+                 single-texture and requesting layout discovery"
             );
         }
+    }
+    if !ok {
+        super::scaleform::request_layout_discovery();
     }
     ok
 }
 
 /// The game-driven visibility snapshot: one flag per container (in [`LAYERS`]/
-/// [`LAYER_CONTAINERS`] order, flattened) and one per overlay clip.
+/// [`LAYER_CONTAINERS`] order, flattened), one per overlay clip, and one per dynamic marker clip
+/// (paired with its name, snapshotted together so the sets cannot drift mid-frame).
 struct VisibilitySnapshot {
     containers: [[bool; MAX_CONTAINERS]; LAYER_COUNT],
     overlays: [bool; MAX_OVERLAYS],
+    dynamic: Vec<(String, bool)>,
 }
 
 /// The largest per-layer container list.
 const MAX_CONTAINERS: usize = 7;
 /// The overlay clip count.
-const MAX_OVERLAYS: usize = 5;
+const MAX_OVERLAYS: usize = 7;
 
 /// Read each container's and overlay clip's current `_visible` (defaulting to visible when the
 /// path does not resolve, which is also logged once by the write path).
@@ -235,6 +250,7 @@ unsafe fn snapshot_visibility(movie_root: &Movie, prefix: &str) -> VisibilitySna
         let mut snapshot = VisibilitySnapshot {
             containers: [[true; MAX_CONTAINERS]; LAYER_COUNT],
             overlays: [true; MAX_OVERLAYS],
+            dynamic: Vec::new(),
         };
         for layer in LAYERS {
             for (i, container) in LAYER_CONTAINERS[layer as usize].iter().enumerate() {
@@ -244,6 +260,11 @@ unsafe fn snapshot_visibility(movie_root: &Movie, prefix: &str) -> VisibilitySna
         for (i, clip) in OVERLAY_CLIPS.iter().enumerate() {
             snapshot.overlays[i] = get_visible(movie_root, prefix, clip);
         }
+        let dynamic = DYNAMIC_MARKER_CLIPS.lock();
+        snapshot.dynamic = dynamic
+            .iter()
+            .map(|name| (name.clone(), get_visible(movie_root, prefix, name)))
+            .collect();
         snapshot
     }
 }
@@ -264,6 +285,11 @@ unsafe fn set_layer_visibility(
                 let visible = other == layer && snapshot.containers[other as usize][i];
                 set_visible(movie_root, prefix, container, visible);
             }
+        }
+        // The anonymous POI pool belongs to the markers layer.
+        for (name, was_visible) in &snapshot.dynamic {
+            let visible = layer == HudLayer::Markers && *was_visible;
+            set_visible(movie_root, prefix, name, visible);
         }
         if suppress_overlays {
             for clip in OVERLAY_CLIPS {
@@ -289,6 +315,9 @@ unsafe fn restore_visibility(movie_root: &Movie, prefix: &str, snapshot: &Visibi
         }
         for (i, clip) in OVERLAY_CLIPS.iter().enumerate() {
             set_visible(movie_root, prefix, clip, snapshot.overlays[i]);
+        }
+        for (name, was_visible) in &snapshot.dynamic {
+            set_visible(movie_root, prefix, name, *was_visible);
         }
     }
 }
