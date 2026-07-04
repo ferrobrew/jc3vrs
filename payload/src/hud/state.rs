@@ -47,6 +47,11 @@ pub struct HudState {
     /// World-space panel corners, computed once per frame on eye 0 and reused for eye 1 so both
     /// eyes project the same world position through their own per-eye VP (correct stereo depth).
     cached_corners: Option<[[f32; 4]; 4]>,
+    /// While split: per-layer world-space corners and their distances, computed alongside
+    /// [`cached_corners`](HudState::cached_corners) on eye 0. Index matches
+    /// [`split::LAYERS`]; layer 0 (static) reuses `cached_corners`' geometry but is duplicated
+    /// here so the draw can sort all layers by distance.
+    cached_layer_corners: [Option<([[f32; 4]; 4], f32)>; split::LAYER_COUNT],
 }
 
 /// Damped follow state: tracks the panel's eased orientation via quaternion slerp.
@@ -96,6 +101,7 @@ impl HudState {
             latched_pose: None,
             current_pose: None,
             cached_corners: None,
+            cached_layer_corners: [None, None, None],
             layer_targets: [None, None],
         }
     }
@@ -242,6 +248,24 @@ impl HudState {
         self.cached_corners = None;
         if let Some(corners) = super::quad::compute_world_corners(params) {
             self.cached_corners = Some(corners);
+        }
+    }
+
+    /// Compute the split layers' world-space corners (one set per layer, each at its own
+    /// distance), cached for both eyes like [`compute_world_corners`](HudState::compute_world_corners).
+    /// Pass `None` to clear (split off this frame).
+    pub fn compute_layer_corners(
+        &mut self,
+        params: Option<[super::quad::PanelParams; split::LAYER_COUNT]>,
+    ) {
+        self.cached_layer_corners = [None, None, None];
+        let Some(params) = params else {
+            return;
+        };
+        for (slot, params) in self.cached_layer_corners.iter_mut().zip(params.iter()) {
+            if let Some(corners) = super::quad::compute_world_corners(params) {
+                *slot = Some((corners, params.distance));
+            }
         }
     }
 

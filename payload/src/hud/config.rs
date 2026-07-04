@@ -35,6 +35,13 @@ pub struct HudConfig {
     pub panel_scale: f32,
     /// Lazy-follow damping parameters for the floating panel.
     pub follow: FollowConfig,
+    /// Distance from the eye to the world-marker layer while splitting, in meters. Markers keep a
+    /// constant apparent size (like the panel), so this only changes their stereo depth. The
+    /// per-marker depth warp supersedes this as markers' effective depth when enabled.
+    pub marker_distance: f32,
+    /// Distance from the eye to the screen-center (reticle) layer while splitting, in meters.
+    /// Constant apparent size; superseded by the aim-driven depth when enabled.
+    pub center_distance: f32,
     /// Render the HUD in three visibility passes -- static HUD, world markers, reticles -- into
     /// separate textures, so the composite can place each group at its own depth (issue #14).
     /// Requires [`redirect`](HudConfig::redirect); ignored during full-screen UI
@@ -61,6 +68,8 @@ impl HudConfig {
             distance: 3.0,
             panel_scale: 1.0,
             follow: FollowConfig::new(),
+            marker_distance: 3.0,
+            center_distance: 3.0,
             split: false,
             suppress_overlays: false,
             split_path_prefix: SplitPathPrefix::new(),

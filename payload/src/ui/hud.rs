@@ -40,6 +40,15 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                         &mut cfg.hud.suppress_overlays,
                         "Suppress full-screen overlays (damage flash, drowning) in every layer",
                     );
+                    ui.add(
+                        egui::Slider::new(&mut cfg.hud.marker_distance, 0.3..=50.0)
+                            .logarithmic(true)
+                            .text("Marker layer distance (m)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut cfg.hud.center_distance, 0.3..=10.0)
+                            .text("Center layer distance (m)"),
+                    );
                     ui.horizontal(|ui| {
                         ui.label("Clip path prefix");
                         let mut prefix = cfg.hud.split_path_prefix.as_str().to_string();

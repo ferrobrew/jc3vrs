@@ -211,13 +211,24 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         let mode = current_mode();
         let aspect = aspect_for(&cfg, mode);
         let (pos, rot) = hud.update_pose(mode, head_pos, head_rotation, &cfg.follow);
-        hud.compute_world_corners(&quad::PanelParams {
+        let params_at = |distance: f32| quad::PanelParams {
             pos,
             rot,
             aspect,
-            distance: cfg.distance,
-            panel_height: panel_height(cfg.panel_scale, cfg.distance, aspect),
-        });
+            distance,
+            panel_height: panel_height(cfg.panel_scale, distance, aspect),
+        };
+        hud.compute_world_corners(&params_at(cfg.distance));
+        // Per-layer corner sets while the split runs in gameplay: each layer keeps the panel's
+        // apparent size at its own distance, so only the stereo depth differs.
+        let split_active = cfg.split && mode == HudMode::Hud;
+        hud.compute_layer_corners(split_active.then(|| {
+            [
+                params_at(cfg.distance),
+                params_at(cfg.marker_distance),
+                params_at(cfg.center_distance),
+            ]
+        }));
     }
 
     hud.draw_quad(context, device, target, eye);
