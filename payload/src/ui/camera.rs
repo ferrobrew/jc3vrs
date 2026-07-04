@@ -92,6 +92,8 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
             .text("Mouse sensitivity (°/unit)"),
     );
     ui.checkbox(&mut hp.invert_y, "Invert Y");
+    ui.add(Slider::new(&mut hp.neck_twist_start_deg, 0.0..=120.0).text("Neck twist start (°)"));
+    ui.add(Slider::new(&mut hp.neck_twist_max_deg, 0.0..=90.0).text("Neck twist max (°)"));
     ui.checkbox(&mut hp.posture_enabled, "Body posture (invert with hangs)")
         .on_hover_text(
             "Fold the animated neck axis's swing away from body-up into the view, so hanging \

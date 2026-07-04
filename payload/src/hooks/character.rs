@@ -8,7 +8,7 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::{config::Config, headpose};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -55,8 +55,9 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         };
         let animated_head_world = character_world.transform_point3(joint_translation(&joint));
 
+        let neck_index = character.GetSafeIndex(SafeBoneIndex::NECK);
         let mut neck_joint = Joint::default();
-        animation_controller.GetJoint(character.GetSafeIndex(SafeBoneIndex::NECK), &mut neck_joint);
+        animation_controller.GetJoint(neck_index, &mut neck_joint);
         let animated_neck_world = character_world.transform_point3(joint_translation(&neck_joint));
 
         // The animated eye midpoint, expressed as a body-frame arm from the neck pivot: rotating
@@ -73,7 +74,7 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         let eye_mid_world = character_world.transform_point3(eye_mid_model);
         let eye_arm = character_rotation.inverse() * (eye_mid_world - animated_neck_world);
 
-        crate::headpose::set_anchors(crate::headpose::Anchors {
+        headpose::set_anchors(headpose::Anchors {
             head: animated_head_world,
             neck: animated_neck_world,
             eye_arm,
@@ -83,8 +84,8 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
 
         // Only override the pose once a valid anchor exists; until then (loading screens, garbage
         // bone data) the bone keeps its animated pose and only the head-hide scale applies.
-        if crate::headpose::is_active() && crate::headpose::anchor().is_some() {
-            let headpose = crate::headpose::query();
+        if headpose::is_active() && headpose::anchor().is_some() {
+            let headpose = headpose::query();
             let desired_head_world = headpose.to_mat4();
             let desired_head_model = character_world.inverse() * desired_head_world;
             let (_, rotation, translation) = desired_head_model.to_scale_rotation_translation();
@@ -96,6 +97,32 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         }
 
         animation_controller.SetJoint(head_index, &mut joint);
+
+        // Twist the neck along with the head beyond the configured start: the head bone carries
+        // the whole body-relative yaw, and past a real head's range the neck must follow or the
+        // skinning between the (hidden) head and the animated neck knots up — this is what makes
+        // the extended free-look yaw range anatomically plausible. Body-relative yaw is exactly a
+        // model-space Y rotation, so the twist pre-multiplies the *animated* model-space neck
+        // orientation captured above — no rest-frame knowledge needed, and the neck's translation
+        // (its own origin) is untouched.
+        if headpose::is_active() && headpose::anchor().is_some() {
+            let (yaw, _, _) = headpose::sim::euler_angles();
+            let (start_deg, max_deg) = Config::lock_query(|c| {
+                (
+                    c.headpose.neck_twist_start_deg,
+                    c.headpose.neck_twist_max_deg,
+                )
+            });
+            let excess_deg = (yaw.abs().to_degrees() - start_deg).clamp(0.0, max_deg.max(0.0));
+            if excess_deg > 0.0 {
+                let twist = excess_deg.to_radians().copysign(yaw);
+                let [qx, qy, qz, qw] = neck_joint.m_Orientation.data;
+                let animated = glam::Quat::from_xyzw(qx, qy, qz, qw);
+                let twisted = glam::Quat::from_rotation_y(twist) * animated;
+                neck_joint.m_Orientation.data = [twisted.x, twisted.y, twisted.z, twisted.w];
+                animation_controller.SetJoint(neck_index, &mut neck_joint);
+            }
+        }
 
         // Facial bones: scale only (the existing head-hide behaviour).
         let facial_indices = [

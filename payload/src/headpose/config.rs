@@ -16,7 +16,9 @@ pub struct HeadPoseConfig {
     /// [`latch_threshold_deg`](Self::latch_threshold_deg) to provide hysteresis and prevent jitter
     /// at the boundary.
     pub latch_disengage_threshold_deg: f32,
-    /// Non-on-foot: maximum body-relative yaw (degrees) in either direction.
+    /// Non-on-foot: maximum body-relative yaw (degrees) in either direction. Ranges beyond a real
+    /// head's ~80° are made anatomically plausible by the neck twist
+    /// ([`neck_twist_start_deg`](Self::neck_twist_start_deg)).
     pub free_look_yaw_limit_deg: f32,
     /// Maximum pitch (degrees) in either direction, applied in every mode: a real head cannot
     /// pitch past vertical, and letting the euler pitch cross ±90° flips the yaw/roll
@@ -27,6 +29,14 @@ pub struct HeadPoseConfig {
     pub mouse_sensitivity: f32,
     /// Whether to invert the Y axis (pitch).
     pub invert_y: bool,
+    /// The body-relative yaw (degrees) beyond which the neck bone twists along with the head. A
+    /// real head only turns so far before the neck must follow — and with the (hidden) head bone
+    /// carrying the whole yaw, leaving the neck animated knots the visible neck skinning once the
+    /// head turns past it.
+    pub neck_twist_start_deg: f32,
+    /// The maximum yaw (degrees) the neck takes: the excess beyond
+    /// [`neck_twist_start_deg`](Self::neck_twist_start_deg) goes to the neck up to this cap.
+    pub neck_twist_max_deg: f32,
     /// Fold the animation-driven body posture into the view. Hanging, ledge grabs, and similar
     /// authored animations invert the body in the *bone pose* over a root matrix that stays
     /// upright, so the body-frame composition alone never sees them (unlike the wingsuit, whose
@@ -59,10 +69,12 @@ impl HeadPoseConfig {
             enabled: true,
             latch_threshold_deg: 75.0,
             latch_disengage_threshold_deg: 65.0,
-            free_look_yaw_limit_deg: 80.0,
+            free_look_yaw_limit_deg: 135.0,
             free_look_pitch_limit_deg: 70.0,
             mouse_sensitivity: 7.5,
             invert_y: false,
+            neck_twist_start_deg: 60.0,
+            neck_twist_max_deg: 55.0,
             posture_enabled: false,
             posture_deadband_deg: 25.0,
             posture_full_deg: 60.0,
