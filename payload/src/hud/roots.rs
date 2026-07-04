@@ -391,6 +391,61 @@ unsafe fn teardown(p: &mut Partition) {
     }
 }
 
+/// The cached per-layer [`RenderTarget`](jc3gi::ui::scaleform::RenderTarget) wrappers for the
+/// render detour, keyed by the layer's RTV identity (a new RTV means the layer texture was
+/// recreated, e.g. on a resize). Touched only on the UI render worker, inside the deferred
+/// render lock.
+static RENDER_TARGETS: parking_lot::Mutex<CachedRenderTargets> =
+    parking_lot::Mutex::new(CachedRenderTargets {
+        slots: [None, None],
+    });
+
+/// See [`RENDER_TARGETS`].
+struct CachedRenderTargets {
+    slots: [Option<CachedRenderTarget>; EXTRA_ROOT_COUNT],
+}
+
+/// One cached wrapper and the RTV it was built around.
+struct CachedRenderTarget {
+    target: *mut jc3gi::ui::scaleform::RenderTarget,
+    rtv: *mut std::ffi::c_void,
+}
+
+// SAFETY: the pointers are only dereferenced on the UI render worker inside the deferred render
+// lock; the mutex serializes the (single-threaded in practice) access.
+unsafe impl Send for CachedRenderTarget {}
+
+impl CachedRenderTargets {
+    /// The cached wrapper for `slot`, rebuilt if the layer's RTV changed.
+    ///
+    /// # Safety
+    /// UI render worker, deferred render lock held; `rtv`/`dsv` must be live views.
+    unsafe fn get_or_create(
+        &mut self,
+        hal: &mut jc3gi::ui::scaleform::RenderHAL,
+        slot: usize,
+        rtv: *mut std::ffi::c_void,
+        dsv: *mut std::ffi::c_void,
+    ) -> Option<*mut jc3gi::ui::scaleform::RenderTarget> {
+        // SAFETY: per the function contract.
+        unsafe {
+            if let Some(cached) = &self.slots[slot] {
+                if cached.rtv == rtv {
+                    return Some(cached.target);
+                }
+                (*cached.target).Release();
+                self.slots[slot] = None;
+            }
+            let target = hal.CreateRenderTarget(rtv, dsv);
+            if target.is_null() {
+                return None;
+            }
+            self.slots[slot] = Some(CachedRenderTarget { target, rtv });
+            Some(target)
+        }
+    }
+}
+
 /// Log why the partition is still waiting to build, once per distinct reason per activation
 /// attempt streak (the build retries every frame, so an unconditional log would spam).
 fn log_build_wait(reason: &'static str) {
@@ -545,12 +600,18 @@ pub unsafe fn render_partitioned(this: *mut UIManager, views: &LayerViews) -> bo
         handle.Destruct();
         hal.EndScene();
 
-        // The extra roots, each into its own texture (the off-screen pattern).
+        // The extra roots, each into its own texture (the off-screen pattern). The wrapping
+        // `RenderTarget`s are cached and reused: creating and releasing one per draw (the
+        // engine's pattern for its rare, small render-to-texture movies) churns the render
+        // buffer manager hundreds of times per second at full HUD resolution, which degrades
+        // until the UI worker takes so long per pass that the engine skips UI updates for
+        // seconds at a time.
+        let mut cached_targets = RENDER_TARGETS.lock();
         for (slot, root) in roots.into_iter().enumerate() {
             let (rtv, dsv) = &views.views[slot + 1];
             let (width, height) = views.sizes[slot + 1];
-            let target = hal.CreateRenderTarget(rtv.as_raw(), dsv.as_raw());
-            let Some(target_ref) = target.as_mut() else {
+            let target = cached_targets.get_or_create(hal, slot, rtv.as_raw(), dsv.as_raw());
+            let Some(target) = target else {
                 continue;
             };
             let frame_rect = [0.0f32, 0.0, width as f32, height as f32];
@@ -560,8 +621,8 @@ pub unsafe fn render_partitioned(this: *mut UIManager, views: &LayerViews) -> bo
             hal.Draw(root);
             hal.EndScene();
             hal.PopRenderTarget(0);
-            target_ref.Release();
         }
+        drop(cached_targets);
 
         hal.EndFrame();
         hal.PopRenderTarget(0);
