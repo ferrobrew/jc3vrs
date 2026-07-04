@@ -32,11 +32,13 @@
 
 mod binding;
 mod config;
+pub mod markers;
 mod quad;
 pub mod scaleform;
 pub mod split;
 mod state;
 mod target;
+mod warp;
 
 pub use config::HudConfig;
 pub use state::HUD_STATE;
@@ -228,6 +230,14 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
                 params_at(cfg.marker_distance),
                 params_at(cfg.center_distance),
             ]
+        }));
+        // The frame's recorded marker depths for the warp (recorded on the game thread by the
+        // Get2DInfo hook); taken whether or not the warp draws, so stale markers never linger.
+        let frame_markers = markers::take_frame();
+        hud.set_warp_frame((split_active && cfg.marker_warp).then(|| state::WarpFrame {
+            anchor: pos.to_array(),
+            markers: frame_markers,
+            radius: cfg.marker_radius,
         }));
     }
 

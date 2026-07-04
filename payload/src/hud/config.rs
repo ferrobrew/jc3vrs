@@ -42,6 +42,15 @@ pub struct HudConfig {
     /// Distance from the eye to the screen-center (reticle) layer while splitting, in meters.
     /// Constant apparent size; superseded by the aim-driven depth when enabled.
     pub center_distance: f32,
+    /// While splitting, warp the marker layer per marker: each on-screen world marker's
+    /// neighborhood is displaced to the marker's real world depth (recorded from the game's own
+    /// world-to-screen calls), giving markers depth-correct stereo disparity individually.
+    pub marker_warp: bool,
+    /// The warp falloff radius around each marker, in texture-uv units.
+    pub marker_radius: f32,
+    /// Marker depths are clamped to this, in meters -- beyond it disparity is indistinguishable
+    /// from infinity.
+    pub marker_max_depth: f32,
     /// Render the HUD in three visibility passes -- static HUD, world markers, reticles -- into
     /// separate textures, so the composite can place each group at its own depth (issue #14).
     /// Requires [`redirect`](HudConfig::redirect); ignored during full-screen UI
@@ -70,6 +79,9 @@ impl HudConfig {
             follow: FollowConfig::new(),
             marker_distance: 3.0,
             center_distance: 3.0,
+            marker_warp: true,
+            marker_radius: 0.08,
+            marker_max_depth: 150.0,
             split: false,
             suppress_overlays: false,
             split_path_prefix: SplitPathPrefix::new(),

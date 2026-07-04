@@ -65,7 +65,13 @@ fn get_2d_info(
     a10: bool,
     offset: Vector2,
 ) {
-    let panel_enabled = Config::lock_query(|c| c.hud.redirect && c.hud.quad);
+    let (panel_enabled, record_depths, max_depth) = Config::lock_query(|c| {
+        (
+            c.hud.redirect && c.hud.quad,
+            c.hud.redirect && c.hud.quad && c.hud.split && c.hud.marker_warp,
+            c.hud.marker_max_depth,
+        )
+    });
     let aspect = crate::hud::current_aspect();
     let panel = panel_enabled.then(crate::hud::compute_panel_vp).flatten();
     let (vp, camera) = panel
@@ -97,6 +103,32 @@ fn get_2d_info(
         unsafe {
             if let Some(manager) = this.as_mut() {
                 manager.m_CachedViewportRatio = previous;
+            }
+        }
+    }
+
+    // Record on-screen markers for the marker-layer depth warp: where the marker landed on the
+    // panel texture (stage coordinates over the cached stage size) and how far its world point is
+    // from the panel anchor. Edge-clamped markers are directional indicators, not world points,
+    // and stay at the layer's base depth.
+    // SAFETY: the original call populated the out pointers; `this` and `world` are the caller's
+    // live arguments.
+    if record_depths && panel.is_some() {
+        unsafe {
+            if let (Some(manager), Some(world), Some(&pos)) =
+                (this.as_ref(), world.as_ref(), out_pos.as_ref())
+                && pos == ScreenPos::SCREEN_POS_ONSCREEN
+                && manager.m_CachedStageWidth > 0.0
+                && manager.m_CachedStageHeight > 0.0
+                && let Some((anchor, _)) = crate::hud::HUD_STATE.lock().panel_pose()
+            {
+                let world = glam::Vec3::new(world.data[0], world.data[1], world.data[2]);
+                let depth = (world - anchor).length().clamp(0.5, max_depth.max(0.5));
+                crate::hud::markers::record(crate::hud::markers::MarkerDepth {
+                    u: *out_x / manager.m_CachedStageWidth,
+                    v: *out_y / manager.m_CachedStageHeight,
+                    depth,
+                });
             }
         }
     }

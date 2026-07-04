@@ -45,6 +45,21 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                             .logarithmic(true)
                             .text("Marker layer distance (m)"),
                     );
+                    ui.checkbox(
+                        &mut cfg.hud.marker_warp,
+                        "Warp markers to their world depth (per-marker disparity)",
+                    );
+                    ui.add_enabled_ui(cfg.hud.marker_warp, |ui| {
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.marker_radius, 0.01..=0.3)
+                                .text("Marker warp radius (uv)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.marker_max_depth, 10.0..=1000.0)
+                                .logarithmic(true)
+                                .text("Marker depth clamp (m)"),
+                        );
+                    });
                     ui.add(
                         egui::Slider::new(&mut cfg.hud.center_distance, 0.3..=10.0)
                             .text("Center layer distance (m)"),

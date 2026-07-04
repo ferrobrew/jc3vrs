@@ -10,7 +10,24 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CLEAR_DEPTH, D3D11_CLEAR_STENCIL, ID3D11DeviceContext,
 };
 
-use super::{HudMode, binding, quad::HudQuad, split, target::HudTarget};
+use super::{
+    HudMode, binding,
+    markers::MarkerDepth,
+    quad::HudQuad,
+    split,
+    target::HudTarget,
+    warp::{HudWarp, WarpInputs},
+};
+
+/// The per-frame inputs for the marker-layer warp, chosen on eye 0.
+pub struct WarpFrame {
+    /// The panel anchor (head position) the layer corners were built around.
+    pub anchor: [f32; 3],
+    /// The frame's recorded on-screen markers.
+    pub markers: Vec<MarkerDepth>,
+    /// Falloff radius around each marker, in uv units.
+    pub radius: f32,
+}
 
 /// Global HUD state. Locked briefly on the render thread.
 pub static HUD_STATE: Mutex<HudState> = Mutex::new(HudState::new());
@@ -30,6 +47,10 @@ pub struct HudState {
     preview_id: Option<egui::TextureId>,
     /// The quad pass that draws the redirected HUD back into the scene, built lazily on first draw.
     quad: Option<HudQuad>,
+    /// The marker-layer warp pass, built lazily on the first warped draw.
+    warp: Option<HudWarp>,
+    /// The frame's warp inputs (eye 0), or `None` when the warp is off this frame.
+    warp_frame: Option<WarpFrame>,
     /// Lazy-follow damping state for the floating panel (gameplay HUD mode).
     follow: FollowState,
     /// The latched world-static pose `(position, rotation)` for [`HudMode::Movie`](crate::hud::HudMode::Movie):
@@ -97,6 +118,8 @@ impl HudState {
             back_buffer_size: None,
             preview_id: None,
             quad: None,
+            warp: None,
+            warp_frame: None,
             follow: FollowState::new(),
             latched_pose: None,
             current_pose: None,
@@ -251,6 +274,11 @@ impl HudState {
         }
     }
 
+    /// Set (or clear) the frame's marker-warp inputs. Chosen on eye 0 alongside the corners.
+    pub fn set_warp_frame(&mut self, frame: Option<WarpFrame>) {
+        self.warp_frame = frame;
+    }
+
     /// Compute the split layers' world-space corners (one set per layer, each at its own
     /// distance), cached for both eyes like [`compute_world_corners`](HudState::compute_world_corners).
     /// Pass `None` to clear (split off this frame).
@@ -298,20 +326,69 @@ impl HudState {
                 }
             }
         }
-        if let Some(quad) = self.quad.as_ref() {
-            quad.draw(context, device, target, &hud_srv, &corners);
-            // While split, composite the extra layers over the static panel with the same
-            // world-space corners (bottom to top: markers, then the center/reticle group). The
-            // per-layer depth arrives with the depth-composite step; identical corners keep the
-            // split visually equivalent to the single-texture panel until then.
-            for layer in self.layer_targets.iter().flatten() {
-                quad.draw(
-                    context,
-                    device,
-                    target,
-                    &layer.color_srv().clone(),
-                    &corners,
-                );
+        if self.quad.is_none() {
+            return;
+        }
+
+        // While split (all layer corner sets and textures present), draw every layer at its own
+        // distance, farthest first: the quads are alpha-blended overlays without a depth test, so
+        // painter's order is what makes a near layer (the reticle group) occlude a far one (a
+        // distant marker) and not vice versa. Otherwise, the single flat panel.
+        let layer_srvs = [
+            Some(hud_srv.clone()),
+            self.layer_targets[0]
+                .as_ref()
+                .map(|t| t.color_srv().clone()),
+            self.layer_targets[1]
+                .as_ref()
+                .map(|t| t.color_srv().clone()),
+        ];
+        let split_ready = self.cached_layer_corners.iter().all(Option::is_some)
+            && layer_srvs.iter().all(Option::is_some);
+        if !split_ready {
+            if let Some(quad) = self.quad.as_ref() {
+                quad.draw(context, device, target, &hud_srv, &corners);
+            }
+            return;
+        }
+
+        let distances: [f32; split::LAYER_COUNT] =
+            std::array::from_fn(|i| self.cached_layer_corners[i].map_or(0.0, |(_, d)| d));
+        let mut order: [usize; split::LAYER_COUNT] = [0, 1, 2];
+        order.sort_by(|&a, &b| {
+            distances[b]
+                .partial_cmp(&distances[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for i in order {
+            let (layer_corners, distance) = self.cached_layer_corners[i].unwrap();
+            let srv = layer_srvs[i].as_ref().unwrap();
+            // The marker layer draws depth-warped when the frame has warp inputs; the warp
+            // pipeline is built lazily and a build failure falls back to the flat quad.
+            if i == split::HudLayer::Markers as usize
+                && let Some(frame) = self.warp_frame.as_ref()
+            {
+                if self.warp.is_none() {
+                    match HudWarp::new(device) {
+                        Ok(warp) => self.warp = Some(warp),
+                        Err(e) => tracing::error!("HUD warp: {e:#}"),
+                    }
+                }
+                if let Some(warp) = self.warp.as_ref() {
+                    let inputs = WarpInputs {
+                        corners: layer_corners,
+                        anchor: frame.anchor,
+                        base_distance: distance,
+                        markers: frame.markers.clone(),
+                        radius: frame.radius,
+                    };
+                    if warp.draw(context, device, target, srv, &inputs) {
+                        continue;
+                    }
+                }
+            }
+            if let Some(quad) = self.quad.as_ref() {
+                quad.draw(context, device, target, srv, &layer_corners);
             }
         }
     }
