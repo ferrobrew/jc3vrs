@@ -132,46 +132,92 @@ pub unsafe fn render_split(
 
         EnterCriticalSection(lock as *mut _);
 
-        // Borrow capture ownership for the visibility+capture sequence, exactly like the engine's
-        // RenderOffScreenTextures does on its thread.
+        // Borrow capture ownership for the visibility+capture sequence. This must mirror the
+        // engine's own `CUIManager::SetCaptureThread`: write `m_CurrentCaptureThread` *and* the
+        // movie's capture thread. `CUIBase::Invoke` runs the AVM immediately when the calling
+        // thread matches the field, so leaving it on the game thread lets event-driven invokes
+        // (damage flashes, UI activations) mutate the display list concurrently with our
+        // captures -- which corrupts the renderer's tree cache (elements vanish, then a crash in
+        // `PrimitiveBundle::InsertEntry`). With the field pointing at this thread, those invokes
+        // queue into the UI command queue and drain on the next game-thread update.
         let render_thread = GetCurrentThreadId();
+        let previous_capture_thread = manager.m_CurrentCaptureThread;
+        manager.m_CurrentCaptureThread = render_thread;
         movie_impl.SetCaptureThread(render_thread);
 
+        // Snapshot each container's game-driven visibility: the game shows and hides these
+        // (wingsuit HUD, state-driven groups) and only writes on state changes, so forcing them
+        // visible would desync its bookkeeping. Each pass shows a container only if the game had
+        // it visible *and* it belongs to the pass's layer; the exact snapshot is restored after.
+        let visibility = snapshot_visibility(movie_root, prefix);
+
         for layer in LAYERS {
-            set_layer_visibility(movie_root, prefix, layer, suppress_overlays);
+            set_layer_visibility(movie_root, prefix, layer, &visibility, suppress_overlays);
             movie_impl.Capture(true);
             rebind_views(manager, &views.views[layer as usize]);
             original(this, context);
         }
 
-        // Restore the all-visible display list (and a clean capture of it) so menus, the movie
-        // mode, and a mid-frame split disable all see the full HUD; hand capture ownership back
-        // to the update thread. The overlay suppression is re-applied on the next split frame.
-        set_all_visible(movie_root, prefix);
+        // Restore the game's own visibility (and a clean capture of it) so menus, the movie mode,
+        // and a mid-frame split disable all see the HUD exactly as the game left it; hand capture
+        // ownership back to its previous owner.
+        restore_visibility(movie_root, prefix, &visibility);
         movie_impl.Capture(true);
-        let main_thread = manager.m_MainThreadId;
-        if main_thread != 0 {
-            movie_impl.SetCaptureThread(main_thread);
-        }
+        manager.m_CurrentCaptureThread = previous_capture_thread;
+        movie_impl.SetCaptureThread(previous_capture_thread);
         rebind_views(manager, &views.views[HudLayer::Static as usize]);
 
         LeaveCriticalSection(lock as *mut _);
     }
 }
 
-/// Set the display list to show exactly `layer`'s containers (plus, optionally, keep the overlay
-/// clips hidden even in their own layer's pass).
+/// The game-driven visibility snapshot: one flag per container (in [`LAYERS`]/
+/// [`LAYER_CONTAINERS`] order, flattened) and one per overlay clip.
+struct VisibilitySnapshot {
+    containers: [[bool; MAX_CONTAINERS]; LAYER_COUNT],
+    overlays: [bool; MAX_OVERLAYS],
+}
+
+/// The largest per-layer container list.
+const MAX_CONTAINERS: usize = 7;
+/// The overlay clip count.
+const MAX_OVERLAYS: usize = 5;
+
+/// Read each container's and overlay clip's current `_visible` (defaulting to visible when the
+/// path does not resolve, which is also logged once by the write path).
+unsafe fn snapshot_visibility(movie_root: &Movie, prefix: &str) -> VisibilitySnapshot {
+    // SAFETY: the caller holds the deferred-render lock and capture ownership.
+    unsafe {
+        let mut snapshot = VisibilitySnapshot {
+            containers: [[true; MAX_CONTAINERS]; LAYER_COUNT],
+            overlays: [true; MAX_OVERLAYS],
+        };
+        for layer in LAYERS {
+            for (i, container) in LAYER_CONTAINERS[layer as usize].iter().enumerate() {
+                snapshot.containers[layer as usize][i] = get_visible(movie_root, prefix, container);
+            }
+        }
+        for (i, clip) in OVERLAY_CLIPS.iter().enumerate() {
+            snapshot.overlays[i] = get_visible(movie_root, prefix, clip);
+        }
+        snapshot
+    }
+}
+
+/// Set the display list to show exactly `layer`'s containers that the game itself had visible
+/// (plus, optionally, keep the overlay clips hidden even in their own layer's pass).
 unsafe fn set_layer_visibility(
     movie_root: &Movie,
     prefix: &str,
     layer: HudLayer,
+    snapshot: &VisibilitySnapshot,
     suppress_overlays: bool,
 ) {
     // SAFETY: the caller holds the deferred-render lock and capture ownership.
     unsafe {
         for other in LAYERS {
-            let visible = other == layer;
-            for container in LAYER_CONTAINERS[other as usize] {
+            for (i, container) in LAYER_CONTAINERS[other as usize].iter().enumerate() {
+                let visible = other == layer && snapshot.containers[other as usize][i];
                 set_visible(movie_root, prefix, container, visible);
             }
         }
@@ -183,19 +229,38 @@ unsafe fn set_layer_visibility(
     }
 }
 
-/// Show every container and overlay clip.
-unsafe fn set_all_visible(movie_root: &Movie, prefix: &str) {
+/// Restore every container and overlay clip to its snapshotted game-driven visibility.
+unsafe fn restore_visibility(movie_root: &Movie, prefix: &str, snapshot: &VisibilitySnapshot) {
     // SAFETY: the caller holds the deferred-render lock and capture ownership.
     unsafe {
         for layer in LAYERS {
-            for container in LAYER_CONTAINERS[layer as usize] {
-                set_visible(movie_root, prefix, container, true);
+            for (i, container) in LAYER_CONTAINERS[layer as usize].iter().enumerate() {
+                set_visible(
+                    movie_root,
+                    prefix,
+                    container,
+                    snapshot.containers[layer as usize][i],
+                );
             }
         }
-        for clip in OVERLAY_CLIPS {
-            set_visible(movie_root, prefix, clip, true);
+        for (i, clip) in OVERLAY_CLIPS.iter().enumerate() {
+            set_visible(movie_root, prefix, clip, snapshot.overlays[i]);
         }
     }
+}
+
+/// Read `<prefix><path>._visible`, defaulting to `true` when the path does not resolve or the
+/// value is not a boolean.
+unsafe fn get_visible(movie_root: &Movie, prefix: &str, path: &str) -> bool {
+    let full = format!("{prefix}{path}._visible\0");
+    let mut value = Value::new_boolean(true);
+    // SAFETY: NUL-terminated path bytes; an unmanaged stack value the movie fills in. A boolean
+    // result is unmanaged, so nothing needs releasing.
+    let ok = unsafe { movie_root.GetVariable(&mut value, full.as_ptr()) };
+    if !ok || value.Type & 0x8F != Value::VT_BOOLEAN {
+        return true;
+    }
+    value.mValue & 0xFF != 0
 }
 
 /// Write `<prefix><path>._visible = visible` on the movie. Failures are logged once per path (the

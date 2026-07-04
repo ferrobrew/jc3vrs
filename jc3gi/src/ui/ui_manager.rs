@@ -98,10 +98,13 @@ pub struct UIManager {
     /// The movie render rectangle's height; see [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth).
     pub m_MovieScaleHeight: i32,
     _field_3c: [u8; 8],
-    /// The update thread's id, recorded at init and refreshed by `PreRender`: the thread that owns
-    /// the Scaleform capture (`Advance`/`Capture` run there). Hand capture ownership back to it
-    /// after borrowing the capture thread.
-    pub m_MainThreadId: u32,
+    /// The id of the thread that currently owns the Scaleform capture (`m_CurrentCaptureThread`);
+    /// `PreRender` claims it for the update thread each frame via `CUIManager::SetCaptureThread`,
+    /// which writes this field and the movie's capture thread together. `CUIBase::Invoke` runs the
+    /// AVM immediately only when the calling thread matches this field, and queues into the UI's
+    /// command queue otherwise -- so a hook that borrows capture ownership must write this field
+    /// too, or game-thread invokes keep mutating the display list concurrently.
+    pub m_CurrentCaptureThread: u32,
     _field_48: [u8; 458],
     /// Whether the render system is initialized. One of the three gates `Render` checks before
     /// drawing.
