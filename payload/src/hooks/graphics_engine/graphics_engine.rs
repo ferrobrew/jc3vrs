@@ -15,8 +15,8 @@ use windows::Win32::System::Threading::{EnterCriticalSection, LeaveCriticalSecti
 
 use crate::debug::trace::{TraceEvent, TraceState};
 
-pub(super) fn extend(library: HookLibrary) -> HookLibrary {
-    library
+pub(super) fn hook_library() -> HookLibrary {
+    HookLibrary::new()
         .with_static_binder(&GRAPHICS_FLIP_BINDER)
         .with_static_binder(&GRAPHICS_ENGINE_DRAW_BINDER)
         .with_static_binder(&RENDER_ENGINE_POST_DRAW_BINDER)

@@ -20,8 +20,8 @@ use crate::{
     stereo::{draw_index, is_second_eye},
 };
 
-pub(super) fn extend(library: HookLibrary) -> HookLibrary {
-    library
+pub(super) fn hook_library() -> HookLibrary {
+    HookLibrary::new()
         .with_static_binder(&SMOOTHED_EXPOSURE_UPDATE_BINDER)
         .with_static_binder(&CALC_HISTOGRAM_MID_BRIGHT_BINDER)
         .with_static_binder(&TONEMAPPING_UPDATE_BINDER)

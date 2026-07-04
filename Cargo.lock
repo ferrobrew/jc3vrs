@@ -332,7 +332,7 @@ dependencies = [
 [[package]]
 name = "detours-macro"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#ce4a9cd712c69ffd1e8e8b0b8495d888ba7b48f0"
+source = "git+https://github.com/ferrobrew/re-utilities.git#db66882b67f3d21ceb7807d346351ce0bd142538"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1154,7 +1154,7 @@ dependencies = [
 [[package]]
 name = "re-utilities"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#ce4a9cd712c69ffd1e8e8b0b8495d888ba7b48f0"
+source = "git+https://github.com/ferrobrew/re-utilities.git#db66882b67f3d21ceb7807d346351ce0bd142538"
 dependencies = [
  "patternscan",
  "retour",
@@ -1164,7 +1164,7 @@ dependencies = [
 [[package]]
 name = "re-utilities-injector"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/re-utilities.git#ce4a9cd712c69ffd1e8e8b0b8495d888ba7b48f0"
+source = "git+https://github.com/ferrobrew/re-utilities.git#db66882b67f3d21ceb7807d346351ce0bd142538"
 dependencies = [
  "dunce",
  "steamlocate",

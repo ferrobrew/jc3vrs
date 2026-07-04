@@ -1,5 +1,5 @@
-//! CGraphicsEngine-area detours, mirroring `jc3gi::graphics_engine`. Each leaf owns its detours and
-//! contributes them via `extend`; [`hook_library`] bundles the four into one library.
+//! CGraphicsEngine-area detours, mirroring `jc3gi::graphics_engine`. Each leaf owns its detours in
+//! its own [`HookLibrary`]; [`hook_library`] nests them into one parent library.
 
 use re_utilities::hook_library::HookLibrary;
 
@@ -22,14 +22,11 @@ mod tone_mapping;
 /// Bundle every CGraphicsEngine-area detour into one hook library, mirroring how the game groups
 /// these classes.
 pub(crate) fn hook_library() -> HookLibrary {
-    [
-        graphics_engine::extend,
-        render_pass::extend,
-        tone_mapping::extend,
-        post_effects::extend,
-        ssao::extend,
-        shader::extend,
-    ]
-    .into_iter()
-    .fold(HookLibrary::new(), |library, extend| extend(library))
+    HookLibrary::new()
+        .with_hook_library(graphics_engine::hook_library())
+        .with_hook_library(render_pass::hook_library())
+        .with_hook_library(tone_mapping::hook_library())
+        .with_hook_library(post_effects::hook_library())
+        .with_hook_library(ssao::hook_library())
+        .with_hook_library(shader::hook_library())
 }

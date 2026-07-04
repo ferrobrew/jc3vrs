@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use parking_lot::{Mutex, MutexGuard};
-use re_utilities::{ThreadSuspender, hook_library::HookLibraries};
+use re_utilities::{ThreadSuspender, hook_library::HookLibrary};
 
 pub mod camera;
 pub mod character;
@@ -16,46 +16,45 @@ pub mod wndproc;
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
 struct HookState {
     patcher: Mutex<re_utilities::Patcher>,
-    hook_libraries: HookLibraries,
+    hook_library: HookLibrary,
 }
 unsafe impl Send for HookState {}
 unsafe impl Sync for HookState {}
 
 pub(super) fn install() {
     let mut patcher = re_utilities::Patcher::new();
-    let hook_libraries = ThreadSuspender::for_block(|| {
-        Ok(HookLibraries::new([
-            game::hook_library(),
-            clock::hook_library(),
-            graphics_engine::hook_library(),
-            draw_count::hook_library(),
-            camera::hook_library(),
-            wndproc::hook_library(),
-            character::hook_library(),
-            input::hook_library(),
-            ui::hook_library(),
-        ])
-        .enable(&mut patcher)?)
+    let hook_library = ThreadSuspender::for_block(|| {
+        Ok(HookLibrary::new()
+            .with_hook_library(game::hook_library())
+            .with_hook_library(clock::hook_library())
+            .with_hook_library(graphics_engine::hook_library())
+            .with_hook_library(draw_count::hook_library())
+            .with_hook_library(camera::hook_library())
+            .with_hook_library(wndproc::hook_library())
+            .with_hook_library(character::hook_library())
+            .with_hook_library(input::hook_library())
+            .with_hook_library(ui::hook_library())
+            .enable(&mut patcher)?)
     });
-    let hook_libraries = match hook_libraries {
-        Ok(hook_libraries) => hook_libraries,
+    let hook_library = match hook_library {
+        Ok(hook_library) => hook_library,
         Err(e) => {
-            tracing::error!("Failed to enable hook libraries: {e:?}");
+            tracing::error!("Failed to enable the hook library: {e:?}");
             return;
         }
     };
     let _ = HOOK_STATE.set(HookState {
         patcher: Mutex::new(patcher),
-        hook_libraries,
+        hook_library,
     });
 }
 
 pub(super) fn uninstall() {
-    let hook_libraries = HOOK_STATE.get().unwrap();
+    let state = HOOK_STATE.get().unwrap();
     let _ = ThreadSuspender::for_block(|| {
-        Ok(hook_libraries
-            .hook_libraries
-            .set_enabled(&mut hook_libraries.patcher.lock(), false)?)
+        Ok(state
+            .hook_library
+            .set_enabled(&mut state.patcher.lock(), false)?)
     });
 }
 

@@ -23,8 +23,8 @@ use crate::{
     stereo::is_second_eye,
 };
 
-pub(super) fn extend(library: HookLibrary) -> HookLibrary {
-    library
+pub(super) fn hook_library() -> HookLibrary {
+    HookLibrary::new()
         .with_static_binder(&SETUP_RENDER_FRAME_DATA_BINDER)
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
         .with_static_binder(&DRAW_RENDER_PASS_RANGE_BINDER)

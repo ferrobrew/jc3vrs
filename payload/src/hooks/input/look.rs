@@ -12,10 +12,16 @@ use jc3gi::input::{
     input_device_manager::InputDeviceManager,
 };
 
+use re_utilities::hook_library::HookLibrary;
+
 use crate::headpose;
 
+pub(super) fn hook_library() -> HookLibrary {
+    HookLibrary::new().with_static_binder(&INPUT_DEVICE_MANAGER_UPDATE_BINDER)
+}
+
 #[detour(address = jc3gi::input::input_device_manager::InputDeviceManager::Update_ADDRESS)]
-pub(super) fn input_device_manager_update(manager: *mut InputDeviceManager, dt: f32) {
+fn input_device_manager_update(manager: *mut InputDeviceManager, dt: f32) {
     INPUT_DEVICE_MANAGER_UPDATE.get().unwrap().call(manager, dt);
 
     if !headpose::is_active() {

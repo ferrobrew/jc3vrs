@@ -38,8 +38,8 @@ pub(crate) fn ssao_pass() -> *mut SSAOPass {
     SSAO_PASS.load(Ordering::Relaxed)
 }
 
-pub(super) fn extend(library: HookLibrary) -> HookLibrary {
-    library.with_static_binder(&SSAO_DRAW_BINDER)
+pub(super) fn hook_library() -> HookLibrary {
+    HookLibrary::new().with_static_binder(&SSAO_DRAW_BINDER)
 }
 
 // SSAOPass::Draw -- the per-dispatch SSAO pass. Its history double-steps across the two stereo

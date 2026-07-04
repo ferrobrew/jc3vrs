@@ -71,8 +71,8 @@ static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
 const BUNDLE_NAME_DATA: usize = 0x1300;
 const BUNDLE_NAME_SIZE: usize = 0x1310;
 
-pub(super) fn extend(library: HookLibrary) -> HookLibrary {
-    library.with_static_binder(&CREATE_FRAGMENT_PROGRAM_BINDER)
+pub(super) fn hook_library() -> HookLibrary {
+    HookLibrary::new().with_static_binder(&CREATE_FRAGMENT_PROGRAM_BINDER)
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::CreateFragmentProgram_ADDRESS)]

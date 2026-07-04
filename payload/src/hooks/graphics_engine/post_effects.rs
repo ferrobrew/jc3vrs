@@ -25,8 +25,8 @@ use crate::{
     stereo::{self, draw_index, is_second_eye},
 };
 
-pub(super) fn extend(library: HookLibrary) -> HookLibrary {
-    library
+pub(super) fn hook_library() -> HookLibrary {
+    HookLibrary::new()
         .with_static_binder(&RENDER_BLOCK_POST_EFFECTS_DRAW_BINDER)
         .with_static_binder(&APPLY_WORLD_FILTERS_BINDER)
         .with_static_binder(&APPLY_GLOBAL_FILTERS_BINDER)
