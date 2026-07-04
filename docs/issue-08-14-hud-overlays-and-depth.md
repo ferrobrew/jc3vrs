@@ -41,12 +41,65 @@ three `HAL::Draw` calls -- main root into the static texture, the extra
 roots into the marker and center textures -- then `EndFrame`. Full rate,
 zero added latency, zero extra captures, no visibility masking (each
 element draws exactly once per frame), and the display side (hit-testing,
-AS3) is untouched. Open questions under investigation: `TreeRoot` creation
-in the live context (allocation and viewport setup copied from the main
-root), the `TreeContainer::Remove`/`Insert` change-bit protocol so
-snapshots stay consistent, and whether any display-side event re-inserts a
-moved container under its original parent (re-detectable per frame at the
-capture seam if so).
+AS3) is untouched.
+
+**Investigation result: feasible.** Everything needed exists with symbols
+in the release binary, and the mechanics are verified against the debug
+sources:
+
+- `TreeRoot` creation: `Context::CreateEntry<TreeRoot>` (`0x141994560`;
+  allocates the 208-byte `NodeData` from the context heap and registers the
+  entry via `createEntryHelper` `0x1419A57E0`). `TreeRoot`'s `NodeData` is a
+  `ContextData_ImplMixin<TreeRoot::NodeData, TreeContainer>`, so a root is a
+  container and takes children directly. Per frame, mirror the main root's
+  parameters: `TreeRoot::SetViewport` (`0x1419E6860`, self-comparing) from
+  the movie's `Viewport` at `MovieImpl+0xA0` (0x34 bytes), and
+  `TreeNode::SetMatrix` (`0x1419E7230`) from `ViewportMatrix` at
+  `MovieImpl+0x110` (a `Matrix2x4<float>`). `pRenderRoot` is at
+  `MovieImpl+0x88`.
+- Reparenting protocol: `TreeContainer::Insert` (`0x1419E6720`; change bit
+  `0x100`, refcounts the node, sets `Entry::pParent`, propagates) and
+  `TreeContainer::Remove` (`0x1419E6790`; change bit `0x200`, clears
+  `pParent`, *decrements the refcount*). Moving a node therefore takes an
+  AddRef around the Remove/Insert pair. `Entry` layout: refcount at `+0x8`
+  (u64), `pNative` `+0x10`, `pRenderer` `+0x18`, `pParent` `+0x20`; entries
+  are 56-byte slots in 0x1000-aligned pages. All structural writes go on
+  the game thread at the capture seam, like every display-side mutation.
+- **The display-side hazard and its dodge**: `GFx::DisplayList` tracks each
+  child's render-array position as a cached numeric `TreeIndex` and calls
+  `TreeContainer::Remove(container, entry->TreeIndex, 1)`. Removing our
+  nodes would shift every sibling's cached index in the shared container
+  (where the anonymous POI pool churns), corrupting subsequent structural
+  ops. Dodge: **tombstones** -- swap each moved node with a fresh empty
+  `TreeContainer` (`CreateEntry<TreeContainer>`, `0x141990AF0`) at the same
+  index, so the array length and all display-side indices stay valid.
+  Matrix/visibility/alpha updates are node-local (they reach the real node
+  in our root); only structural ops are index-based and hit the tombstone.
+  Reconcile at the capture seam each frame: a tombstone whose `pParent`
+  went null means the display side removed that child (pool despawn) --
+  remove the real node from our root; a new unknown child of the HUD clip's
+  container is a pool spawn -- adopt it (swap in a tombstone, move the node
+  to the markers root). Spawns happen during `Advance`/`UpdatePOIs`, before
+  the capture seam, so adoption lands the same frame.
+- Resolving nodes: from the discovery's cached `GFx::Value` clip handles,
+  the display object is `*(mValue+0x88)` (guarded by the traits check on
+  `*(mValue+0x28)`: type id `*(t+0x78)-24 < 12` and `!(*(t+0x70)&0x20)`;
+  verified identical in release `GetDisplayInfo`), then
+  `DisplayObjectBase::GetRenderNode` (`0x1419EB6F0`) yields the
+  `TreeNode*`.
+- Render side: reimplement `CUIManager::Render`'s body (fully decompiled)
+  in the detour -- thread-id bookkeeping and `CUiThreadCommandQueue::
+  Execute` (`0x140FFAD30`; queue at `UIManager+0x1368`, texture manager at
+  `+0x1370`), `SetRenderTarget(m_pDisplayRT)`, `BeginFrame`/`BeginScene`,
+  `NextCapture` on the movie's display handle, `HAL::Draw(TreeRoot)`
+  (`0x1419B4850`) for the main root, then per extra root the engine's own
+  off-screen pattern (`RenderOffScreenTextures`): `PushRenderTarget` /
+  `BeginScene` / `NextCapture` (latched no-op) + `GetRenderEntry`
+  (`0x1419A4620`) / `Draw` / `PopRenderTarget`, and finally
+  `EndScene`/`EndFrame`. Layer textures wrap into proper `RenderTarget`
+  objects via `HAL::CreateRenderTarget(color, depth)` once, on the render
+  worker. `RTHandle` ctor/dtor at `0x1419A6540`/`0x1419A4600` if handles
+  are kept per root.
 
 Two corrections to the original analysis below, from in-game testing and
 release-binary verification:
