@@ -33,10 +33,20 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
             return;
         };
 
-        let scale = 0.001;
         let head_index = character.GetSafeIndex(SafeBoneIndex::HEAD);
 
-        // HEAD: override scale (head-hide) + full pose (headpose), in a single SetJoint.
+        // Publish the facial classification bones for the render-block head-hide (the draws run
+        // on the render thread and only load these).
+        crate::hooks::graphics_engine::render_block::publish_facial_bones([
+            animation_controller.GetBoneIndex(hashlittle(b"fJaw") as u32) as u32,
+            animation_controller.GetBoneIndex(hashlittle(b"fLeftEye") as u32) as u32,
+            animation_controller.GetBoneIndex(hashlittle(b"fRightEye") as u32) as u32,
+        ]);
+
+        // HEAD: optionally the legacy scale-hide, plus the full headpose pose, in a single
+        // SetJoint.
+        let hide_scale = crate::config::Config::lock_query(|c| c.camera.hide_head_scale);
+        let scale = 0.001;
         let mut joint = Joint::default();
         animation_controller.GetJoint(head_index, &mut joint);
 
@@ -80,7 +90,9 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
             eye_arm,
         });
 
-        joint.m_Scale.data = [scale, scale, scale];
+        if hide_scale {
+            joint.m_Scale.data = [scale, scale, scale];
+        }
 
         // Only override the pose once a valid anchor exists; until then (loading screens, garbage
         // bone data) the bone keeps its animated pose and only the head-hide scale applies.
@@ -124,7 +136,10 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
             }
         }
 
-        // Facial bones: scale only (the existing head-hide behaviour).
+        // Facial bones: scale only (the legacy head-hide behaviour).
+        if !hide_scale {
+            return;
+        }
         let facial_indices = [
             // "offset_facialOrienter",
             "fJaw",

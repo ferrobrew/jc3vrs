@@ -287,6 +287,15 @@ pub struct CameraConfig {
     pub use_eye_matrices: bool,
     pub blurs_enabled: bool,
     pub always_use_t1: bool,
+    /// Hide the player's head by skipping its facial render blocks' draw calls in non-shadow
+    /// passes (see `hooks::graphics_engine::render_block`): the whole head — face, eyes, and any
+    /// geometry weighted to facial bones — disappears from the view, while the shadow passes keep
+    /// drawing it, so the shadow keeps its head.
+    pub hide_head_draws: bool,
+    /// The legacy head-hide: scale the HEAD bone and a facial-bone list to 0.001. Kept as a
+    /// fallback; superseded by `hide_head_draws` (the scale approach also removed the head from
+    /// the shadow, and its unscaled child bones leaked the eyes into view).
+    pub hide_head_scale: bool,
 }
 impl CameraConfig {
     pub const fn new() -> Self {
@@ -302,6 +311,8 @@ impl CameraConfig {
             use_eye_matrices: true,
             blurs_enabled: false,
             always_use_t1: false,
+            hide_head_draws: true,
+            hide_head_scale: false,
         }
     }
 }

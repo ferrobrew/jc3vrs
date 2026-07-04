@@ -11,6 +11,11 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
     ui.checkbox(&mut cs.always_use_t1, "Always use T1");
     ui.checkbox(&mut cs.blurs_enabled, "Blurs");
     ui.checkbox(&mut cs.use_eye_matrices, "Use eye matrices");
+    ui.checkbox(
+        &mut cs.hide_head_draws,
+        "Hide head (skip facial draws; shadow keeps it)",
+    );
+    ui.checkbox(&mut cs.hide_head_scale, "Hide head (legacy bone scale)");
 
     // With eye matrices on, the head sliders are a correction relative to the measured eye
     // position; with them off, they are the whole arm from the neck pivot.

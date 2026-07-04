@@ -11,6 +11,8 @@ pub mod graphics_engine;
 // `post_effects` is crate-visible so hooks::game can re-arm the once-per-dispatch world post-block
 // gate at each dispatch begin.
 pub(crate) mod post_effects;
+// `render_block` is crate-visible so hooks::character can publish the facial classification bones.
+pub(crate) mod render_block;
 mod render_pass;
 // `shader` is public so the debug UI can read its patched-shader count.
 pub mod shader;
@@ -24,6 +26,7 @@ mod tone_mapping;
 pub(crate) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_hook_library(graphics_engine::hook_library())
+        .with_hook_library(render_block::hook_library())
         .with_hook_library(render_pass::hook_library())
         .with_hook_library(tone_mapping::hook_library())
         .with_hook_library(post_effects::hook_library())

@@ -237,7 +237,49 @@ head, which brings us back to Approach A's palette rebuild challenge.
 | Can we restore the head between shadow and main? | Only by rebuilding the skinning palette mid-dispatch, which is thread-unsafe without care. |
 | Is there a separate shadow render block for characters? | No — `CRenderBlockCharacter::Draw` branches on `m_RenderStatus` internally. |
 
+### Approach E: skip the head render blocks in non-shadow passes
+
+*(Added after issue #5 landed, superseding the recommendation below.)*
+
+Rather than mutilating bones at all, skip the head's *draw calls* outside the
+shadow passes. The findings above already establish the machinery: the same
+render blocks are drawn for every pass, and each `Draw` branches on
+`rc->m_RenderStatus & 6` to detect shadow versus main. A hook on
+`CRenderBlockCharacter::Draw` / `CRenderBlockCharacterSkin::Draw` that
+early-outs for the head blocks when `(m_RenderStatus & 6) == 0` yields:
+
+- the head, hair, and eyes fully hidden from the colour, depth, and GBuffer
+  passes (no more eye-conflict — the eye and facial geometry lives in the head
+  blocks, so the per-bone scale list and its uncovered children disappear);
+- the shadow passes untouched: full-headed shadow with zero palette work;
+- the entire scale-based head-hide deleted (the head bone override for the
+  camera/pose remains).
+
+**Identifying the head blocks:** Rico's model ships distinct head materials —
+`mc_rico_head_dif/mpm/nrm`, `mc_rico_hair_*`, `mc_eye_gloss_alpha_dif` under
+`models/jc_characters/main_characters/rico/textures/` — and an RBM model is
+one render block per material, so the head/hair/eyes are their own blocks.
+`CRenderBlockCharacter` carries its material (`CMaterial_N<11>`) with
+texture-holder accessors on the vtable (`GetMaterialTextureHolders`), so a
+block can be classified once (cached by block pointer) by matching its texture
+names against the head set. Because only Rico uses `rico_body_lod*.rbm`, a
+texture-name match alone identifies the player's head — no block-to-character
+ownership mapping is needed. (Rico skins/DLC variants need their texture names
+checked; the cinematic model `rico_cin_body_lod1.rbm` is separate.)
+
+**To establish during implementation:** the release addresses of
+`CRenderBlockCharacter::Draw` / `CRenderBlockCharacterSkin::Draw` (and whether
+a separate depth/`DrawZ` entry point needs the same gate), the
+`m_RenderStatus` offset in the render-context type, and the texture-holder
+walk. Reflections and other non-shadow passes inherit the skip (headless in
+mirrors — matches today's behaviour).
+
 ## Recommended approach
+
+**Superseding note:** with issue #5 landed (the head bone is player-driven and
+the camera is placed from the animated anchors), the up-to-date recommendation
+is **Approach E** — it removes the bone-scale hack instead of extending it,
+fixes the visible-eyes conflict, and leaves the skinning palette alone.
 
 **Short-term (before issue #5 lands):** Approach A with the palette rebuild.
 Hook `CShadowManager::CommitRenderPassSettings` (release `0x140_177_9C0`),
