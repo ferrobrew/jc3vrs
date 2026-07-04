@@ -396,15 +396,6 @@ impl MovieImpl {
             f(self as *mut Self as _, if_changed)
         }
     }
-    /// Reassigns which thread owns the capture (`GFx::Movie` vtable slot 27). The engine hands
-    /// ownership between the update thread and the render thread this way
-    /// (`RenderOffScreenTextures` does exactly this per frame).
-    pub unsafe fn SetCaptureThread(&mut self, thread_id: u32) {
-        unsafe {
-            let f = (&raw const (*self.vftable()).SetCaptureThread).read();
-            f(self as *mut Self as _, thread_id)
-        }
-    }
     /// Returns the movie's display handle (`GFx::Movie` vtable slot 26): the pinned
     /// `DisplayHandle<TreeRoot>` whose `pData` the renderer copies (with an `AddRef`) into a
     /// stack [`RTHandle`] before consuming the frame's capture.
@@ -414,6 +405,15 @@ impl MovieImpl {
         unsafe {
             let f = (&raw const (*self.vftable()).GetDisplayHandle).read();
             f(self as *mut Self as _)
+        }
+    }
+    /// Reassigns which thread owns the capture (`GFx::Movie` vtable slot 27). The engine hands
+    /// ownership between the update thread and the render thread this way
+    /// (`RenderOffScreenTextures` does exactly this per frame).
+    pub unsafe fn SetCaptureThread(&mut self, thread_id: u32) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).SetCaptureThread).read();
+            f(self as *mut Self as _, thread_id)
         }
     }
 }
@@ -462,7 +462,12 @@ pub struct MovieImplVftable {
         this: *mut crate::ui::scaleform::MovieImpl,
         if_changed: bool,
     ) -> u64,
-    _vfunc_26: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    /// Returns the movie's display handle (`GFx::Movie` vtable slot 26): the pinned
+    /// `DisplayHandle<TreeRoot>` whose `pData` the renderer copies (with an `AddRef`) into a
+    /// stack [`RTHandle`] before consuming the frame's capture.
+    pub GetDisplayHandle: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+    ) -> *mut crate::ui::scaleform::DisplayHandle,
     /// Reassigns which thread owns the capture (`GFx::Movie` vtable slot 27). The engine hands
     /// ownership between the update thread and the render thread this way
     /// (`RenderOffScreenTextures` does exactly this per frame).
@@ -470,16 +475,10 @@ pub struct MovieImplVftable {
         this: *mut crate::ui::scaleform::MovieImpl,
         thread_id: u32,
     ),
-    /// Returns the movie's display handle (`GFx::Movie` vtable slot 26): the pinned
-    /// `DisplayHandle<TreeRoot>` whose `pData` the renderer copies (with an `AddRef`) into a
-    /// stack [`RTHandle`] before consuming the frame's capture.
-    pub GetDisplayHandle: unsafe extern "system" fn(
-        this: *mut crate::ui::scaleform::MovieImpl,
-    ) -> *mut crate::ui::scaleform::DisplayHandle,
 }
 fn _MovieImplVftable_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0xE8], MovieImplVftable>([0u8; 0xE8]);
+        ::std::mem::transmute::<[u8; 0xE0], MovieImplVftable>([0u8; 0xE0]);
     }
     unreachable!()
 }
