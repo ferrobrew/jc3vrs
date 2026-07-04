@@ -56,10 +56,6 @@ static RELEASE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// live tree double-parents them, which hangs the renderer's cache reconciliation).
 static DISCOVERED_IN_HUD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// The [`HudMode`](crate::hud::HudMode) seen by the previous [`process_requests`] call, for the
-/// menu-to-gameplay transition detection (`true` = gameplay).
-static LAST_MODE_WAS_HUD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 /// Whether the live handle registry was resolved during gameplay (see [`DISCOVERED_IN_HUD`]).
 pub fn handles_hud_fresh() -> bool {
     DISCOVERED_IN_HUD.load(std::sync::atomic::Ordering::Relaxed)
@@ -118,16 +114,6 @@ pub fn process_requests() {
         release_clip_handles();
     }
 
-    // The game re-attaches the HUD clips around the frontend/gameplay transition, so a registry
-    // resolved in a menu points at a soon-to-be-stale tree. Rebuild it on entering gameplay.
-    let in_hud = crate::hud::current_mode() == crate::hud::HudMode::Hud;
-    if in_hud && !LAST_MODE_WAS_HUD.swap(in_hud, std::sync::atomic::Ordering::Relaxed) {
-        release_clip_handles();
-        DISCOVERY_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
-    } else {
-        LAST_MODE_WAS_HUD.store(in_hud, std::sync::atomic::Ordering::Relaxed);
-    }
-
     // The capture-seam hooks (the render-root partition and the overlay suppression) need the
     // handle registry; request the initial discovery when either wants it. While the partition
     // is live the registry must stay stable (a rebuild would tear the partition down for a
@@ -142,6 +128,10 @@ pub fn process_requests() {
                     .lock()
                     .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0)))
     {
+        // Menu-era handles resolve against a tree the game re-attaches on entering gameplay, so
+        // the partition refuses to build from them (and its build-time root-chain walk catches a
+        // stale registry regardless); the periodic refresh here re-resolves until a discovery
+        // lands during gameplay.
         DISCOVERY_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 

@@ -89,7 +89,9 @@ pub fn live() -> bool {
 
 /// The capture-seam step (game update thread, deferred render lock held, display writers
 /// quiescent). While `active`, builds the partition when possible and reconciles it against the
-/// display side's structural changes; while not, tears it down (restoring every node).
+/// display side's structural changes; while not, tears it down (restoring every node). The
+/// partition persists across menus and pauses -- `active` tracks the split being enabled with a
+/// gameplay-fresh registry, not the current mode -- so mode changes cause no structural churn.
 ///
 /// # Safety
 /// Must be called from the [`MovieImpl::Capture`] detour on the main UI movie, before the
