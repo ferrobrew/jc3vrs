@@ -22,7 +22,12 @@ fn _AimState_size_check() {
 pub struct AnimatedModel {
     _field_0: [u8; 376],
     pub m_AnimationController: *mut crate::character::character::AnimationController,
-    _field_180: [u8; 192],
+    _field_180: [u8; 128],
+    /// The model-instance slots (`NModelSystem::CModelInstance*`, null when unused): the base
+    /// body model plus attachments and variants. `CAnimatedModel::GetModel`/`SetModel` index this
+    /// array directly. Each instance embeds its render-block-instance info (`CRBIInfo`) at
+    /// instance + 0x50, which is the `info` pointer its render blocks are drawn with.
+    pub m_ModelInstances: [u64; 8],
 }
 fn _AnimatedModel_size_check() {
     unsafe {

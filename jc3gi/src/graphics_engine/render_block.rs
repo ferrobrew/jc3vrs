@@ -1,4 +1,32 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[derive(Copy, Clone)]
+#[repr(C, align(4))]
+/// A 3x4 skinning-palette bone matrix. The layout differs per render block (empirically, by the
+/// block's vertex format/shader variant): some blocks store four 3-float columns with the
+/// translation in the final three floats, others three 4-float rows with the translation in each
+/// row's fourth element. The 3x3 rotation is orthonormal under the correct reading, which is how
+/// a consumer can detect the layout. The skinning palette is an array of these, one per skeleton
+/// bone, built per frame by `CPoseProducer::MakeSkinningPalette`.
+pub struct Matrix3x4 {
+    pub m: [f32; 12],
+}
+fn _Matrix3x4_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x30], Matrix3x4>([0u8; 0x30]);
+    }
+    unreachable!()
+}
+impl Matrix3x4 {}
+impl std::convert::AsRef<Matrix3x4> for Matrix3x4 {
+    fn as_ref(&self) -> &Matrix3x4 {
+        self
+    }
+}
+impl std::convert::AsMut<Matrix3x4> for Matrix3x4 {
+    fn as_mut(&mut self) -> &mut Matrix3x4 {
+        self
+    }
+}
 #[repr(C, align(8))]
 /// The per-draw render block instance info: the instance's constant buffers, LOD state, and world
 /// transforms.
@@ -89,6 +117,28 @@ impl RenderBlockCharacter {
             f(self as *const Self as _, rc, info)
         }
     }
+    pub const SetMatrixPalette_ADDRESS: usize = 0x140108200;
+    /// Uploads one batch's bone matrices to the vertex-program palette constants: for each batch
+    /// slot, copies `matrices[BatchToSkeletonLookup[slot]]` into the constant registers starting
+    /// at `register`. Called from the block's internal `DrawBatches` before each batch's draw.
+    pub unsafe fn SetMatrixPalette(
+        &self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        matrices: *const crate::graphics_engine::render_block::Matrix3x4,
+        batch: *const crate::graphics_engine::render_block::SkinBatch,
+        register: u32,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+                matrices: *const crate::graphics_engine::render_block::Matrix3x4,
+                batch: *const crate::graphics_engine::render_block::SkinBatch,
+                register: u32,
+            ) = ::std::mem::transmute(Self::SetMatrixPalette_ADDRESS);
+            f(self as *const Self as _, ctx, matrices, batch, register)
+        }
+    }
 }
 impl std::convert::AsRef<RenderBlockCharacter> for RenderBlockCharacter {
     fn as_ref(&self) -> &RenderBlockCharacter {
@@ -147,6 +197,26 @@ impl RenderBlockCharacterSkin {
                 info: *const crate::graphics_engine::render_block::RBIInfo,
             ) = ::std::mem::transmute(Self::DrawZ_ADDRESS);
             f(self as *const Self as _, rc, info)
+        }
+    }
+    pub const SetMatrixPalette_ADDRESS: usize = 0x140108DD0;
+    /// See [`RenderBlockCharacter::SetMatrixPalette`].
+    pub unsafe fn SetMatrixPalette(
+        &self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        matrices: *const crate::graphics_engine::render_block::Matrix3x4,
+        batch: *const crate::graphics_engine::render_block::SkinBatch,
+        register: u32,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+                matrices: *const crate::graphics_engine::render_block::Matrix3x4,
+                batch: *const crate::graphics_engine::render_block::SkinBatch,
+                register: u32,
+            ) = ::std::mem::transmute(Self::SetMatrixPalette_ADDRESS);
+            f(self as *const Self as _, ctx, matrices, batch, register)
         }
     }
 }

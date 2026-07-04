@@ -105,6 +105,7 @@ pub mod character;
 pub mod clock;
 pub mod cpu_fragment;
 pub mod environment;
+pub mod event;
 pub mod game;
 pub mod graphics_engine;
 pub mod hash;
