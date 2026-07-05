@@ -53,6 +53,8 @@ pub struct HudState {
     quad: Option<HudQuad>,
     /// The marker-layer warp pass, built lazily on the first warped draw.
     warp: Option<HudWarp>,
+    /// The dynamic-distance depth sampler, built lazily on the first enabled frame.
+    depth_shift: Option<super::depth::DepthShift>,
     /// The frame's warp inputs (eye 0), or `None` when the warp is off this frame.
     warp_frame: Option<WarpFrame>,
     /// Lazy-follow damping state for the floating panel (gameplay HUD mode).
@@ -126,6 +128,7 @@ impl HudState {
             layer_preview_ids: [None, None],
             quad: None,
             warp: None,
+            depth_shift: None,
             warp_frame: None,
             follow: FollowState::new(),
             latched_pose: None,
@@ -244,6 +247,52 @@ impl HudState {
             self.redirected = false;
         }
         self.target = None;
+    }
+
+    /// The frame's dynamic panel distance: dispatch the depth-histogram pass, pick up the async
+    /// readback, and ease toward the policy's target (see [`super::depth`]). Falls back to
+    /// `base` when the pipeline cannot be built. Call once per frame (eye 0) with the engine
+    /// context mutex held.
+    pub fn depth_distance(
+        &mut self,
+        context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+        device: &jc3gi::graphics_engine::device::Device,
+        cfg: &super::config::DepthShiftConfig,
+        mode: super::HudMode,
+        base: f32,
+    ) -> f32 {
+        if self.depth_shift.is_none() {
+            match super::depth::DepthShift::new(device) {
+                Ok(shift) => self.depth_shift = Some(shift),
+                Err(e) => {
+                    // Log the build failure once, not per frame; the next attempt happens on the
+                    // next frame regardless.
+                    static LOGGED: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::error!("hud depth: {e:#}");
+                    }
+                    return base;
+                }
+            }
+        }
+        let Some(shift) = self.depth_shift.as_mut() else {
+            return base;
+        };
+        // SAFETY: the graphics engine is the live singleton on the render thread.
+        if let Some(graphics_engine) =
+            unsafe { jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() }
+        {
+            shift.sample(context, graphics_engine, cfg);
+        }
+        shift.distance(cfg, mode, base)
+    }
+
+    /// The dynamic-distance state's live snapshot, for the debug UI.
+    pub fn depth_status(&self) -> Option<super::depth::DepthShiftStatus> {
+        self.depth_shift
+            .as_ref()
+            .map(super::depth::DepthShift::status)
     }
 
     /// Choose the panel pose `(position, rotation)` for the current frame from the head pose and the

@@ -33,6 +33,7 @@
 pub mod aim;
 mod binding;
 mod config;
+pub mod depth;
 pub mod markers;
 mod quad;
 pub mod scaleform;
@@ -221,6 +222,14 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         let mode = current_mode();
         let aspect = aspect_for(&cfg, mode);
         let (pos, rot) = hud.update_pose(mode, head_pos, head_rotation, &cfg.follow);
+        // Dynamic panel distance: histogram the frame's depth distribution and ease the panel
+        // toward the near field when the scene is close (see `depth`). The base (far) distance
+        // is the manual slider; full-screen UI always reads far.
+        let panel_distance = if cfg.depth_shift.enabled {
+            hud.depth_distance(context, device, &cfg.depth_shift, mode, cfg.distance)
+        } else {
+            cfg.distance
+        };
         let params_at = |distance: f32| quad::PanelParams {
             pos,
             rot,
@@ -228,7 +237,7 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
             distance,
             panel_height: panel_height(cfg.panel_scale, distance, aspect),
         };
-        hud.compute_world_corners(&params_at(cfg.distance));
+        hud.compute_world_corners(&params_at(panel_distance));
         // The split composites in gameplay while the render-root partition is live (the layer
         // textures then contain per-layer content, redrawn every frame).
         let split_active = cfg.split && mode == HudMode::Hud && split::roots::live();
@@ -239,7 +248,7 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         let center_rest = if split_active {
             cfg.center_distance
         } else {
-            cfg.distance
+            panel_distance
         };
         let center_distance = if cfg.center_depth_from_aim && mode == HudMode::Hud {
             aim::current(center_rest)
@@ -284,7 +293,7 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
             hud.set_warp_frame(warp_active.then(|| state::WarpFrame {
                 anchor: pos.to_array(),
                 markers: frame_markers,
-                base_distance: cfg.distance,
+                base_distance: panel_distance,
             }));
         }
     }

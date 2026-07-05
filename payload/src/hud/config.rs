@@ -70,6 +70,8 @@ pub struct HudConfig {
     /// cover the whole panel in VR instead. Enforced per frame on the game thread through the
     /// discovered clip handles, ahead of each capture.
     pub suppress_overlays: bool,
+    /// Dynamic panel distance from the scene depth distribution.
+    pub depth_shift: DepthShiftConfig,
     /// The clip-path prefix from the root movie's timeline to the HUD movie's clips, ending in a
     /// dot when non-empty (e.g. `"hud."`). The HUD movie is attached by `root.gfx`'s ActionScript
     /// under a runtime name the display-tree dump reveals; until confirmed in-game, the authored
@@ -90,14 +92,73 @@ impl HudConfig {
             marker_distance: 3.0,
             center_distance: 3.0,
             center_depth_from_aim: true,
-            marker_warp: true,
+            marker_warp: false,
             center_bubble_radius: 0.12,
             marker_radius: 0.08,
             marker_max_depth: 150.0,
             split: false,
+            depth_shift: DepthShiftConfig::new(),
             suppress_overlays: true,
             split_path_prefix: SplitPathPrefix::new(),
         }
+    }
+}
+
+/// Dynamic panel distance from the scene depth distribution (issue #14): a compute pass
+/// histograms the whole main depth buffer each frame, and the panel eases toward
+/// [`near_distance`](DepthShiftConfig::near_distance) while enough of the frame sits nearer than
+/// [`near_threshold`](DepthShiftConfig::near_threshold) (a vehicle interior, a corridor, a
+/// wall), back to the base [`distance`](HudConfig::distance) otherwise, and always far during
+/// full-screen UI. See `payload/src/hud/depth.rs`.
+#[derive(Copy, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DepthShiftConfig {
+    /// Master toggle.
+    pub enabled: bool,
+    /// Depths nearer than this count as near-field, in meters.
+    pub near_threshold: f32,
+    /// The fraction of the frame that must be near-field to engage the near shift.
+    pub near_occupancy: f32,
+    /// The occupancy slack below the engage level before the shift releases (hysteresis, so the
+    /// panel does not flap at the boundary).
+    pub hysteresis: f32,
+    /// The panel distance while the near shift is engaged, in meters.
+    pub near_distance: f32,
+    /// The easing halflife between distances, in seconds.
+    pub halflife: f32,
+    /// EXPERIMENTAL: follow the scene continuously instead of the threshold policy -- the panel
+    /// sits [`margin`](DepthShiftConfig::margin) inside the configured percentile of the depth
+    /// distribution, clamped to [`near_distance`](DepthShiftConfig::near_distance) and the base
+    /// distance.
+    pub continuous: bool,
+    /// The depth percentile the continuous policy follows (0-1).
+    pub percentile: f32,
+    /// How far inside the percentile depth the continuous policy sits, in meters.
+    pub margin: f32,
+    /// Sample every Nth pixel of the depth buffer on both axes.
+    pub sample_stride: u32,
+}
+
+impl DepthShiftConfig {
+    pub const fn new() -> Self {
+        Self {
+            enabled: true,
+            near_threshold: 2.0,
+            near_occupancy: 0.2,
+            hysteresis: 0.05,
+            near_distance: 1.1,
+            halflife: 0.35,
+            continuous: false,
+            percentile: 0.10,
+            margin: 0.3,
+            sample_stride: 4,
+        }
+    }
+}
+
+impl Default for DepthShiftConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

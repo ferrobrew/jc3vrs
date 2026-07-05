@@ -13,6 +13,10 @@ static HUD_PREVIEW_WIDTH: Mutex<f32> = Mutex::new(512.0);
 static SCALEFORM_CLIP_PATH: Mutex<String> = Mutex::new(String::new());
 
 pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
+    // Live dynamic-distance readout, taken before the CONFIG lock (HUD_STATE and CONFIG are
+    // never nested in the draw path, but keeping them disjoint here avoids the question).
+    let depth_status = crate::hud::HUD_STATE.lock().depth_status();
+
     // Redirect toggle and the quad placement/follow parameters. The CONFIG lock is scoped to this
     // block and dropped before HUD_STATE is locked for the preview.
     let redirect = {
@@ -38,7 +42,7 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 &mut cfg.hud.marker_warp,
                 "Warp the panel to per-element world depths (markers + center bubble)",
             );
-            ui.add_enabled_ui(cfg.hud.marker_warp, |ui| {
+            if cfg.hud.marker_warp {
                 ui.indent("hud_warp", |ui| {
                     ui.add(
                         egui::Slider::new(&mut cfg.hud.marker_radius, 0.01..=0.3)
@@ -53,19 +57,19 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                         &mut cfg.hud.center_depth_from_aim,
                         "Drive the center bubble's depth from the aim point",
                     );
-                    ui.add_enabled_ui(cfg.hud.center_depth_from_aim, |ui| {
+                    if cfg.hud.center_depth_from_aim {
                         ui.add(
                             egui::Slider::new(&mut cfg.hud.center_bubble_radius, 0.01..=0.4)
                                 .text("Center bubble radius (uv)"),
                         );
-                    });
+                    }
                 });
-            });
+            }
             ui.checkbox(
                 &mut cfg.hud.split,
                 "PARKED: split the HUD into depth layers (breaks the UI on pause)",
             );
-            ui.add_enabled_ui(cfg.hud.split, |ui| {
+            if cfg.hud.split {
                 ui.indent("hud_split", |ui| {
                     ui.add(
                         egui::Slider::new(&mut cfg.hud.marker_distance, 0.3..=50.0)
@@ -86,11 +90,70 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                         }
                     });
                 });
-            });
-            ui.add_enabled_ui(cfg.hud.quad, |ui| {
+            }
+            ui.checkbox(
+                &mut cfg.hud.depth_shift.enabled,
+                "Dynamic distance from the scene depth distribution",
+            );
+            if cfg.hud.depth_shift.enabled {
+                ui.indent("hud_depth_shift", |ui| {
+                    match depth_status {
+                        Some(status) => {
+                            let stats = status.stats;
+                            ui.label(format!(
+                                "Live: {} at {:.2} m (near {:.0}%, p{:.2} m)",
+                                if status.near_engaged { "near" } else { "base" },
+                                status.smoothed.unwrap_or(f32::NAN),
+                                stats.map_or(0.0, |s| s.near_occupancy * 100.0),
+                                stats.map_or(f32::NAN, |s| s.percentile_depth),
+                            ));
+                        }
+                        None => {
+                            ui.label("Live: no depth samples yet");
+                        }
+                    }
+                    ui.checkbox(
+                        &mut cfg.hud.depth_shift.continuous,
+                        "EXPERIMENTAL: follow the depth percentile continuously",
+                    );
+                    if cfg.hud.depth_shift.continuous {
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.depth_shift.percentile, 0.01..=0.5)
+                                .text("Percentile"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.depth_shift.margin, 0.0..=2.0)
+                                .text("Margin inside (m)"),
+                        );
+                    } else {
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.depth_shift.near_threshold, 0.3..=10.0)
+                                .text("Near-field threshold (m)"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.depth_shift.near_occupancy, 0.01..=0.9)
+                                .text("Near occupancy to engage"),
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.depth_shift.hysteresis, 0.0..=0.3)
+                                .text("Release hysteresis"),
+                        );
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut cfg.hud.depth_shift.near_distance, 0.3..=3.0)
+                            .text("Near distance (m)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut cfg.hud.depth_shift.halflife, 0.05..=2.0)
+                            .text("Easing halflife (s)"),
+                    );
+                });
+            }
+            if cfg.hud.quad {
                 ui.indent("hud_sliders", |ui| {
                     ui.add(
-                        egui::Slider::new(&mut cfg.hud.distance, 0.3..=10.0).text("Distance (m)"),
+                        egui::Slider::new(&mut cfg.hud.distance, 0.3..=10.0)
+                            .text("Base distance (m)"),
                     );
                     ui.add(egui::Slider::new(&mut cfg.hud.panel_scale, 0.2..=3.0).text("Size (x)"));
                     ui.add(
@@ -102,7 +165,7 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                             .text("Position halflife (s)"),
                     );
                 });
-            });
+            }
         });
         cfg.hud.redirect
     };
@@ -130,25 +193,28 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                     ui.label("(redirect not yet applied)");
                 }
             });
-        egui::CollapsingHeader::new("Split layer textures")
-            .default_open(false)
-            .show(ui, |ui| {
-                let ids = hud.layer_preview_ids(renderer);
-                let size = egui::vec2(preview_width, preview_width / aspect.max(f32::EPSILON));
-                for (id, label) in ids.iter().zip(["Markers", "Center"]) {
-                    ui.label(label);
-                    match id {
-                        Some(id) => {
-                            ui.add(egui::Image::new(egui::ImageSource::Texture(
-                                egui::load::SizedTexture { id: *id, size },
-                            )));
-                        }
-                        None => {
-                            ui.label("(layer target not created)");
+        let split_enabled = crate::config::Config::lock_query(|c| c.hud.split);
+        if split_enabled {
+            egui::CollapsingHeader::new("Split layer textures")
+                .default_open(false)
+                .show(ui, |ui| {
+                    let ids = hud.layer_preview_ids(renderer);
+                    let size = egui::vec2(preview_width, preview_width / aspect.max(f32::EPSILON));
+                    for (id, label) in ids.iter().zip(["Markers", "Center"]) {
+                        ui.label(label);
+                        match id {
+                            Some(id) => {
+                                ui.add(egui::Image::new(egui::ImageSource::Texture(
+                                    egui::load::SizedTexture { id: *id, size },
+                                )));
+                            }
+                            None => {
+                                ui.label("(layer target not created)");
+                            }
                         }
                     }
-                }
-            });
+                });
+        }
     }
 
     scaleform_debug_ui(ui);
