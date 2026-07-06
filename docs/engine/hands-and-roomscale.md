@@ -244,7 +244,7 @@ In a vehicle the character is **attached**: `CCharacter::m_Attachable` (`CAttach
 `m_attachType` (`CCharacter::AttachType`), and `m_attachedObject` hold the parent binding; the
 `AttachTo` virtual (vtable slot `+320`, wrapped by `SetYAlignedAttachTo` **0x14079D540**) sets it,
 and while attached the character's transform is parented to the vehicle seat rather than driven by
-the character proxy. `m_NumFramesSinceTeleport` tracks post-warp settling. Roomscale locomotion must
+the character proxy. Roomscale locomotion must
 be gated off whenever the character is seat-attached (`m_attachType != NONE` / the in-vehicle state):
 the body is fixed to the seat, the head stays free (this is the "easy case" from
 `docs/mod/head-and-body.md` — no body-yaw decoupling in vehicles), and adding wanted velocity to a
@@ -400,17 +400,19 @@ collision-filter-info word (0 for a plain query). Backend is Havok `hknpWorld::c
   `SweptSphereCast` (**0x140738670**) filling a `CCastResult`. `CMagnetWeaponComponent::CastSphereAgainstStatic`
   (**0x14098A850**) is a worked consumer to copy for magnetism candidate scoring.
 
-### 4.3 Teleport / discontinuity detection — `m_NumFramesSinceTeleport == 0`
+### 4.3 Teleport / discontinuity detection — the `+0x2B08` flag bit
 
 The character teleport writers (all bypass the collision solve):
 
-- **Fast travel / mission warps:** `CGameWorld::TeleportPlayer` (**0x1409AF820**) and
-  `TeleportPlayerInstant` (**0x140A126C0**). Both call the object's virtual world-transform setter
-  (vtable slot `+0x90` / index 18 on the character's transform subobject `CCharacter + 8`), then
-  `CCharacter::ForceNeutralState` (**0x1407FD120**), set the teleport flag `CCharacter + 0x2B08 |= 4`,
-  and re-base the camera via `CGameCameraManager::ResetCamera` (**0x14077BCE0**). They also bracket
-  the move with `NEvent::CPostEvent::PostMsg("game_teleporting_initiated" / "…_completed")` — a clean
-  string-keyed choke point if event-level notification is wanted.
+- **Fast travel / mission warps:** `CGameWorld::TeleportPlayer` (**0x1409AF820**) *queues* a deferred
+  request on `CGameWorld` (applied later by `UpdateTeleport`) and never touches the character
+  directly; `TeleportPlayerInstant` (**0x140A126C0**) does the actual move — it calls the object's
+  virtual world-transform setter (vtable slot `+0x90` / index 18 on the character's transform
+  subobject `CCharacter + 8`), then `CCharacter::ForceNeutralState` (**0x1407FD120**), sets the
+  teleport flag `CCharacter + 0x2B08 |= 4` (verified in the release decompile), and re-bases the
+  camera via `CGameCameraManager::ResetCamera` (**0x14077BCE0**). The warps are bracketed with
+  `NEvent::CPostEvent::PostMsg("game_teleporting_initiated" / "…_completed")` — a clean string-keyed
+  choke point if event-level notification is wanted.
 - **Scripted teleport objects:** `CTeleport::Teleport` (**0x14050E360**), `CGameWorld::UpdateTeleport`
   (**0x140A128A0**), `NStateTask_InputVehicleExitTask::TeleportUpwards` (**0x14081A3C0**).
 - **Vehicle:** `CVehicle::TeleportVehicle` (**0x140F4FC60**) (the seated character rides via the
@@ -419,16 +421,20 @@ The character teleport writers (all bypass the collision solve):
   (**0x1408D73A0**, sole caller `SetOrientation(CQuaternion)` **0x140803C10**) and the animation warp
   tasks (`NPhysicalAnchorWarpTask`, `NStateTask_MovementHeightWarpTask`).
 
-**Cheapest reliable per-tick detector: `CCharacter::m_NumFramesSinceTeleport`.** The character's
-per-tick update does `++m_NumFramesSinceTeleport` at its very top, and every teleport writer resets
-it to `-1` (confirmed in the dump: `m_NumFramesSinceTeleport = -1` in the teleport paths, `++` at the
-tick head). So **`m_NumFramesSinceTeleport == 0` means "teleported on this exact tick"**, and small
-values (`< N`) mean "settling after a warp" — this is a single int read, covers *all* the writers
-above uniformly (they all funnel through the reset), and needs no hook on the writers themselves. Use
-it to suppress the roomscale add and hard-recenter the VR rig for one tick. A per-tick
-`length(T1.translation − prevT1.translation) > threshold` distance heuristic is the fallback if the
-field is ever missed, but the counter is strictly better (no threshold tuning, no false positives on
-fast legitimate motion like wingsuit).
+**Correction (release-verified): the `m_NumFramesSinceTeleport` counter does NOT work as a
+detector.** An earlier draft of this section recommended `m_NumFramesSinceTeleport == 0`; independent
+verification falsified it. The field is `++`'d each tick (in `CCharacter::DebugVerifyCharacter`,
+called unconditionally), but **no writer ever resets it** — the apparent `= -1` in the dump is a
+local-variable fallback inside a warning-log call, not a field write. With no reset, the field counts
+frames since spawn and `== 0` never fires on a teleport.
+
+**The verified uniform signal is the flag bit `CCharacter + 0x2B08 & 4`**, set by
+`TeleportPlayerInstant`. Caveat: the flag-*setter* set has not been exhaustively enumerated (raw
+offset xrefs are not a single choke point), so combine it with the robust fallback: a per-tick
+`length(T1.translation − prevT1.translation) > threshold` distance heuristic (threshold well above
+wingsuit speed × tick), which catches any writer the flag misses. Use either firing to suppress the
+roomscale add and re-base the VR rig for one tick. The `game_teleporting_initiated` /
+`…_completed` `PostMsg` events remain the clean choke point for the scripted warps.
 
 ### 4.4 Seat pose reference — `m_AttachBone` + `m_AttachOffset` on the character
 
@@ -538,7 +544,7 @@ gate the sim update, rather than invoking the game's own pause, which darkens th
 - **Penetration / magnetism probe — EASY.** `CPhysicsSystem::CastRaySimple` (boolean LOS) and
   `CastRay`/`CastSphere` (full hit info) are directly callable from a sim-phase hook with world-space
   args and material-pass filtering (§4.2).
-- **Teleport detect — EASY.** `m_NumFramesSinceTeleport == 0` is a one-int per-tick test covering all
+- **Teleport detect — MODERATE (revised).** The `+0x2B08 & 4` flag bit plus a distance-delta fallback covers the
   warp writers uniformly, no writer hooks or thresholds (§4.3).
 - **Seat re-base — EASY.** The seat eye reference is the character's own head/eye bones (already read
   on foot), riding the vehicle via `m_AttachBone` + `m_AttachOffset`; no vehicle-side read needed, and
@@ -553,3 +559,229 @@ gate the sim update, rather than invoking the game's own pause, which darkens th
   `CClock::Update` and skipping the sim tick while staying out of `CGameStateRun`'s paused sub-state
   (which otherwise freezes the camera seam); not a one-liner, but the clock split and the hook both
   already exist (§4.6b).
+
+## 5. Per-tick mode detection — the action-set selector
+
+The recon for the mode detector the controllers-and-roomscale phase 0 (`docs/mod/controllers-and-roomscale.md`)
+depends on: reliable per-tick signals, readable from the local `CCharacter` (or a cheap singleton),
+that discriminate the player's mode finely enough to drive OpenXR action-set selection — on foot,
+in a vehicle (and its class), wingsuit, parachute, grapple traversal, and game-UI-up. Today's headpose
+detector is binary (on-foot vs. other, from the `EvaluateCharacterOrientation` counter, `sim.rs`); this
+section replaces it with a direct read of the engine's own state. Same conventions: release-build RVAs
+from the 2026 no-Denuvo IDB, 2016 symbol dump as locator only.
+
+### 5.1 The central mechanism — the character state-bitflag words
+
+Almost every "what is the player doing" predicate the game ships (`CCharacter::IsUsingWingsuit`,
+`IsReelingIn`, `IsSwimming`, …) is a one-bit read of a small array of 64-bit **state-bitflag words**
+owned by the character's control parameters. The mod can read the same words directly and skip the
+call overhead entirely.
+
+- `CCharacter::m_ControlParameters` is a pointer at **`CCharacter + 0x2718`** (`*(character + 1251)`
+  in qwords — confirmed in the release decompile of `IsInVehicleAttachState`).
+- The state-bitflag array (`m_ControlParameters->m_UserVM.m_CurrentStateBitFlags`) begins at
+  **`m_ControlParameters + 0xE8`**: **word0 = `+0xE8`**, **word1 = `+0xF0`**, **word2 = `+0xF8`**
+  (each a `u64`). So the whole read is `flags = *(u64*)(*(u64*)(character+0x2718) + 0xE8 + 8*word)`.
+- A handful of the flags additionally gate on `m_AnimatedModel.m_InstanceData` being non-null
+  (`*(character + 0x1958)`); the animation instance must exist for the bit to be meaningful (matters
+  only in the first frames after spawn/stream-in).
+
+The bit assignments below are read straight from the release accessors (verified against the release
+IDB, not just transcribed from the dump), so they are the ground-truth bit layout for this build:
+
+| Predicate | Release addr | Word | Bit (mask) | Notes |
+|---|---|---|---|---|
+| `IsUsingWingsuit` | `0x14075F630` | 0 | 0 (`0x1`) | gated on `m_InstanceData` (`+0x1958`) |
+| `IsUsingParachute` | `0x14075F550` | 0 | 35 | parachute deployed and controlling descent |
+| `IsFreefalling` | `0x14075F570` | 0 | 5 (`0x20`) | |
+| `IsFalling` | — | 0 | 4 or 5 (`0x30`) | freefall OR fall |
+| `IsFastfalling` | `0x14075F910` | 0 | 33 | dive |
+| `IsReelingIn` | `0x14075F530` | 1 | 44 | grapple reel traversal in progress |
+| `IsRidingMC` | `0x14075F380` | 1 | 37 | on a motorcycle |
+| `IsSwimming` | `0x14075F450` | 1 | 56 | |
+| `IsUnderwaterSwimming` | `0x14075F470` | 1 | 57 | |
+| `IsInAttachedToParachute` | `0x14075F7C0` | 1 | 26 (`0x4000000`) | attached-to-vehicle-parachute variant |
+| `IsPreReelingIn` | `0x14075F770` | 1 | 27 (`0x8000000`) | reel-in wind-up |
+| `IsPreHang` | `0x14075F790` | 2 | 7 (`0x80`) | |
+
+These are pure reads of game-thread data; do them on the sim tick (the same phase the headpose sim
+already runs), never off a render worker — the words are written during the character's animation-graph
+evaluation.
+
+### 5.2 The state-machine-hash predicates (vehicle-riding, reeled-in, hang)
+
+A second class of predicate is not a single bit: it walks the animation rule system
+(`m_AnimatedModel.m_RuleSystems[0]->m_StateMachineInstance->m_CurrentState->m_HashID.m_Hash`) and
+compares the current animation state hash against a set of known state ids, sometimes OR-ed with a
+bitflag or the grapple-hook state. These cost a few pointer chases but are still cheap, and they are
+the authoritative signal where a raw bit is ambiguous:
+
+| Predicate | Release addr | What it establishes |
+|---|---|---|
+| `IsInRidingInVehicleState` | `0x14077EA60` | seated-and-riding (idle/driver/passenger/reverse states, or word1 bit37 set) |
+| `IsInDrivingVehicleState` | `0x14077EAF0` | specifically the driver seat's driving states |
+| `IsInVehicleAttachState` | `0x14077F080` | riding **or** the enter/exit/switch-seat/eject transitions (already pyxis-bound) |
+| `IsReeledIn` | `0x14077ED10` | fully reeled onto an attach point (reads hook `m_State` ∈ {3,4,5,6} + word0 bits 32/42 + stunt/hang state hashes) |
+| `IsGrappleHanging` | `0x14079E290` | hanging from a reeled grapple (hook `m_State == GHS_REELED_HANG`, or `S_GRAPPLE_HANG`/`S_IDLE_HANG_STUNT`, or word0 bit42) |
+| `IsStuntTraversing` | `0x14077EF60` | stunt-position traversal (`S_STUNT_FWD/RIGHT/LEFT/BWD`) |
+| `IsInMountedGunState` | `0x1407B0F60` | manning a mounted/emplaced gun |
+
+`IsInVehicleAttachState` is the widest "the body is bound to a vehicle" test (it returns true through
+the whole enter/exit animation, not only when settled), which is exactly what roomscale wants to gate
+off (§3, §4.4): the mount animation is part of the seated envelope.
+
+### 5.3 Vehicle presence and class
+
+The seated vehicle and its class come from the interaction graph, not a flag:
+
+- `CCharacter::GetVehicle` (`0x1407D5D90`) fills a `boost::shared_ptr<CVehicle>` (walks the interaction
+  graph's top-root object, `rtti_cast<CVehicle>`); `GetVehiclePtr` (`0x1407D5E30`) is the raw-pointer
+  wrapper. Both take/release a shared-ptr refcount (an interlocked inc/dec), so they are a touch heavier
+  than a field read — fine per tick, but cache the pointer within a tick rather than calling repeatedly.
+- **Class** is decided by RTTI `IsType` against the vehicle's class-hierarchy `TYPE_ID`, exposed as
+  ready-made character predicates:
+
+| Class predicate | Release addr | `TYPE_ID` tested |
+|---|---|---|
+| `IsAttachedToVehicle` | `0x1407D5EA0` | any (has a `CVehicle` and is graph-attached) |
+| `IsAttachedToLandVehicle` | `0x1407D5FA0` | `CLandVehicle` (car + motorcycle) |
+| `IsAttachedToAirVehicle` | `0x1407D6060` | `CAirVehicle` (plane + helicopter) |
+| `IsAttachedToSeaVehicle` | `0x1407D6120` | `CSeaVehicle` (boat + jetski) |
+| `IsAttachedToHelicopter` | `0x1407D61E0` | `CHelicopter` |
+| `IsAttachedToMech` | `0x1407D62A0` | via `CVehicle::IsMech` (`0x140F23990`) |
+
+These give the coarse split directly. The `CButtonMapping::EMapping` sections split finer than the RTTI
+bases do — car vs. motorcycle, boat vs. jetski, plane vs. helicopter — so map the six action-set classes
+as:
+
+- **Helicopter** = `IsAttachedToHelicopter`.
+- **Plane** = `IsAttachedToAirVehicle && !IsAttachedToHelicopter` (both derive from `CAirVehicle`).
+- **Motorcycle** = `IsAttachedToLandVehicle && IsRidingMC` (word1 bit37).
+- **Land car** = `IsAttachedToLandVehicle && !IsRidingMC`.
+- **Boat/jetski** = `IsAttachedToSeaVehicle`; boat-vs-jetski is the one class RTTI does **not** split at
+  the `CSeaVehicle` base. The exact 7-way engine enum is `NVehicle::EVehicleType` (`ECAR=0, EHELICOPTER=1,
+  EBOAT=2, EAIRPLANE=3, EMOTORCYCLE=4, ESUB=5, ETRAIN=6`), stored on the vehicle as
+  `CVehicle::m_VehicleType` and returned by `CVehicle::GetVehicleType` (inlined everywhere in this build —
+  the field offset is not yet pinned). Note this enum still folds jetski into `EBOAT`; the game keys the
+  jetski mapping band off a jetski-specific type elsewhere. **TODO:** pin the `m_VehicleType` offset and
+  the jetski discriminator if the boat/jetski action sets need to differ; until then treat sea vehicles
+  as one class.
+- **Seat matters for input, not class**: `CVehicle::m_LocalPlayerSeat` (`NVehicle::ESeat`, `EDriverSeat=0`,
+  `ENoSeatIdentifier=0xFFFFFFFF`) is what the game's own context predicates test (`m_LocalPlayerSeat ==
+  EDriverSeat`) to decide whether driver controls apply — a passenger/gunner gets a different mapping even
+  in the same vehicle. `CVehicle::GetSeat` is `0x140F24FB0`.
+
+### 5.4 Grapple traversal states (`GHS_*`)
+
+The grappling-hook state machine is the finest grapple-traversal signal, orthogonal to the character
+animation flags. `CCharacter::GetGrapplingHook` (`0x140760830`) returns the hook shared-ptr; the raw hook
+pointer is cached at **`CCharacter + 0xA40`** (`m_Inventory.m_GrapplingHook.px`), and its state is a
+`u32` at **`hook + 0x234`** (`CGrapplingHook::m_State`):
+
+```
+enum EGrapplingHookState { GHS_INITIALIZING=0, GHS_INACTIVE=1, GHS_REELING_IN=2, GHS_REELED_ATTACHED=3,
+                           GHS_REELED_HANG=4, GHS_REELED_UPSIDEDOWN=5, GHS_REELED_STUNT=6,
+                           GHS_CUSTOM_ACTIVE_WIRE=7 };
+```
+
+So `m_State ∈ {3,4,5,6}` is "reeled onto something" (the `IsReeledIn` predicate), `GHS_REELED_HANG`
+is hanging, `GHS_REELING_IN` (2) is mid-reel. The character-level `IsReelingIn` / `IsGrappleHanging` /
+`IsReeledIn` above compose this hook state with the animation state and are the recommended readers;
+the raw `hook->m_State` is the fallback if the hook pointer is present but the character predicate is
+ambiguous during a transition.
+
+### 5.5 Game-UI-up / gameplay-input-suspended
+
+The engine suspends gameplay input through two distinct mechanisms; a robust UI action-set trigger reads
+both:
+
+1. **Hard pause (pause menu).** `CGameStateRun` propagates an update-context `m_Paused` flag into
+   `CPhysicsSystem::m_Pause` (`Base::CSingle<CPhysicsSystem>::Instance->m_Pause = m_Paused`) and
+   `CClock::Pause(true)` (the game-clock game-pause bool, `docs/engine/hands-and-roomscale.md` §4.6b). The
+   physics-system singleton is `qword_142EDC120` (§4.2); its `m_Pause` byte is nonzero for the whole real
+   pause. This is the cleanest per-tick "gameplay is frozen" read. **Caveat:** a real pause also freezes
+   the camera seam (§4.6b) — the VR pause must *not* enter this state, so when the mod owns the freeze it
+   reads its own state, and `m_Pause` is the detector only for the *game's* pause menu.
+2. **Slow-mo / radial pause.** `CGamePauseUtility` (a `Base::CSingle` singleton) drives the
+   pause-until-action flow (weapon wheel / prompt). `m_state` is its first field (offset 0);
+   `m_state == 2` (`E_STATE_PAUSED`) is up. `SetState` is `0x1409BA270` (xref its `this` to recover the
+   singleton `Instance` address).
+3. **Input focus (map, commlink — no physics pause).** Opening the map or commlink does *not* hard-pause;
+   the game instead switches input focus to the UI action map. `CSteeringUI` holds a static UI action map
+   (`CSteeringUI::GetActionMap` → `m_ActionMapUI`) that becomes the focused consumer while a UI screen is
+   up, and the `CButtonMapping` `FIRST_UI_MAPPING..END_UI_MAPPINGS` band (the game's own `END_UI_MAPPINGS`
+   boundary) is what applies. In practice the mod already owns its floating-panel UI and the virtual
+   cursor, so it *knows* when its own panel/menu is up without an engine read; the engine-side UI-focus
+   read (is `CSteeringUI` the active steering) is the signal for the game's *own* screens (map/commlink/
+   pause) that the mod did not open. **TODO:** if the game's map/commlink must independently trigger the
+   `ui` action set, pin the "UI steering active" global (`CSteeringUI::m_SteeringUI` presence plus a
+   focus check); the pause flag alone does not cover the non-pausing screens.
+
+### 5.6 Recommended mode-derivation recipe
+
+Per sim tick, read `character = GetLocalPlayerCharacter()` once (null → no mode / keep last), snapshot the
+three state-bitflag words once (`§5.1`), and resolve the action-set mode by the **first** matching check —
+order matters because states overlap (a reeled grapple is also airborne; a wingsuit dive is also falling):
+
+1. **UI up** → `ui` action set. `CPhysicsSystem::m_Pause != 0` (`qword_142EDC120`) **or**
+   `CGamePauseUtility.m_state == 2` **or** the mod's own panel is open **or** (for game screens) the UI
+   steering is focused. Highest priority: a menu overrides everything beneath it.
+2. **Teleport this tick** → hold/recenter, do not switch mode. The `+0x2B08 & 4` flag or the distance-delta fallback (§4.3) —
+   suppress mode transitions for the settling frame.
+3. **Seated in a vehicle** → `vehicle` action set + class. `IsInVehicleAttachState` (covers the enter/exit
+   animation too). Class via §5.3: helicopter → plane → motorcycle → car → sea, using
+   `IsAttachedToHelicopter` / `IsAttachedToAirVehicle` / `IsRidingMC` / `IsAttachedToLandVehicle` /
+   `IsAttachedToSeaVehicle`. Seat (`m_LocalPlayerSeat == EDriverSeat`) selects driver vs. passenger/gunner
+   sub-mapping.
+4. **Grapple traversal** → keep gameplay (`onfoot`/`airborne`) but flag the reel/hang sub-state for the
+   arm-IK and comfort handling. `IsReelingIn` (word1 bit44) / `IsGrappleHanging` (`0x14079E290`) /
+   `IsReeledIn` (`0x14077ED10`) / `IsPreReelingIn` (word1 bit27) / `IsPreHang` (word2 bit7). The
+   `GHS_*` hook state (`hook+0x234`) is the fine discriminator.
+5. **Wingsuit** → `airborne` action set (wingsuit variant). `IsUsingWingsuit` (word0 bit0, `m_InstanceData`
+   gated).
+6. **Parachute** → `airborne` action set (parachute variant). `IsUsingParachute` (word0 bit35), or
+   `IsInAttachedToParachute` (word1 bit26) for the vehicle-parachute case.
+7. **Airborne (free)** → `airborne`. `IsFreefalling` / `IsFalling` / `IsFastfalling` (word0 bits 5/4/33).
+8. **Swimming** → `onfoot` (swim variant if wanted). `IsSwimming` / `IsUnderwaterSwimming` (word1 bits
+   56/57).
+9. **On foot (default)** → `onfoot`. Nothing above matched; the `EvaluateCharacterOrientation` counter the
+   sim already watches remains a good corroborating idle/on-foot heartbeat (it advances every on-foot tick
+   including idle, §4.1), but the state-word read is now the primary source and resolves the modes the
+   counter cannot.
+
+The whole recipe is one pointer chase plus a fixed set of bit tests and a `GetVehiclePtr` (only when a
+vehicle bit/state indicates a vehicle), so it is comfortably a per-tick cost.
+
+### 5.7 Edge cases
+
+- **Transitions hijack mid-animation.** Vehicle enter/exit, grapple wind-up (`IsPreReelingIn`/`IsPreHang`),
+  and reel release all pass through animation states where the *coarse* bit is not yet set but the body is
+  already committed. `IsInVehicleAttachState` deliberately spans the transition; for grapple, the pre-*
+  predicates catch the wind-up. Prefer the state-machine-hash predicates (§5.2) over the raw bit during a
+  known transition, and debounce mode switches by a frame or two so a one-tick flicker (e.g. a blend
+  frame) does not thrash the action set.
+- **Overlapping states.** Reel/hang is simultaneously "airborne"; wingsuit and parachute are both
+  "falling"; a vehicle-parachute is both attach and parachute. The priority order in §5.6 is the
+  disambiguator — vehicle before grapple before wingsuit before parachute before generic airborne.
+- **Swimming.** `IsSwimming` is set independently of the on-foot locomotion counter; the counter alone
+  (today's detector) reads a swimmer as `Other`. The explicit swim bits fix that.
+- **Spawn / stream-in.** The `m_InstanceData`-gated bits (wingsuit) read false until the animation
+  instance exists; treat a null `m_ControlParameters` or `m_InstanceData` as "no reliable mode, hold last"
+  for the first frames.
+- **Teleport spike.** Gate mode transitions on the §4.3 teleport signals so a fast-travel or
+  mission warp does not momentarily misclassify the frame the character is being re-based.
+
+### 5.8 Confidence
+
+| Signal | Confidence | Basis |
+|---|---|---|
+| On foot (state words + orientation counter) | **High** | word reads verified in release; counter already proven in `sim.rs` |
+| Vehicle presence + coarse class (land/air/sea/heli) | **High** | RTTI predicates release-addressed and decompiled (`IsAttachedTo*`) |
+| Vehicle fine class (car/mc, plane/heli) | **High** | `IsRidingMC` bit + `IsAttachedToHelicopter` cleanly split their pairs |
+| Boat vs. jetski | **Low** | not split at the `CSeaVehicle` RTTI base; needs the `m_VehicleType`/jetski discriminator (TODO) |
+| Wingsuit active | **High** | `IsUsingWingsuit` word0 bit0 verified in release |
+| Parachute open | **High** | `IsUsingParachute` word0 bit35 verified; `IsInAttachedToParachute` covers the vehicle case |
+| Reel/grapple traversal (`GHS_*`) | **High** | hook `m_State` offset (`+0x234`) and the character predicates verified |
+| Hard pause (pause menu) | **High** | `CPhysicsSystem::m_Pause`/`CClock` pause path decompiled (§4.6b) |
+| Radial/slow-mo pause | **Medium** | `CGamePauseUtility.m_state == 2` established; singleton `Instance` address still to xref |
+| Map/commlink UI focus (non-pausing) | **Medium** | mechanism understood (`CSteeringUI` focus + UI mapping band); no single clean per-tick global pinned yet |

@@ -187,3 +187,44 @@ Weapon:
 `CTarget::ETargetType` slots: `TARGET_WEAPONS=0`, `TARGET_STICKY_AIM=1`, `TARGET_GRAPPLE=2`, `TARGET_MELEE=3`, `TARGET_GRENADE=4`, `TARGET_SNAP=5`. `CInventory::EWeaponSlot`: `E_SLOT_DUAL_WIELD=0`, `E_SLOT_TWO_HANDED=1`, `E_SLOT_HEAVY=2`, `E_SLOT_HAND_GRENADE=3`, … `E_NUM_WEAPON_SLOTS=8`.
 
 Interface points with adjacent docs: the grapple aim target is slot `TARGET_GRAPPLE=2` (`GetActiveGrappleTargetPosition` → `m_AimPos[2]`), fed by the same `CPlayerAimControl` raycast and grapple-fitness scoring — grapple targeting internals belong to `docs/engine/grapple-pipeline.md`. Weapon *grip*/hand attachment (`GetGripPosition`, muzzle bones) belongs to `docs/engine/hands-and-roomscale.md`; this doc treats the muzzle only as the fire origin.
+
+## Verification notes
+
+Independent re-verification of this doc's offsets and assertions against the release IDB (`JustCause3.exe.i64`, No-Denuvo), read directly from the decompiles.
+
+### Offsets — all verified
+
+- `CWeaponBase::m_AimTargetPosition @ +0x3FC` — **verified.** `GetShotMatrix` (`0x140985AA0`) reads the aim point from `this[255]/this[256]/this[257]` floats = `0x3FC/0x400/0x404`.
+- `CCharacter::m_AimTargetPositionWeapons @ +0x26BC` — **verified.** `CCharacter::UpdateWeaponAiming` (`0x1407602C0`) writes the `CVector3f` to `this[2479..2481]` = `0x26BC/0x26C0/0x26C4` and raises the flag.
+- `CCharacter::m_AimTargetPositionGrenade @ +0x26C8` — **verified.** `CCharacter::UpdateGrenadeAiming` (`0x1407602F0`) writes `this[2482..2484]` = `0x26C8/0x26CC/0x26D0`. (Written from aim slot 4 via `UpdatePostCamera`, which passes `aim_control + 380`, not through `UpdateWeaponAiming`.)
+- `CCharacter::m_AimTargetPositionWeaponWasSetThisFrame @ +0x2714` — **verified.** `UpdateWeaponAiming` sets `this + 10004 = 1` = `0x2714`.
+- `GetShotMatrix` at `0x140985AA0` builds muzzle → target — **verified.** Origin from the `GetFireFromPosition` virtual (vtable +200), aim point from `+0x3FC`, then `CMatrix4f::CreateOrientation(from = muzzle, at = aim point)`. The barrel-direction fallback (`m_ProjectileFireDirection @ +0x168`, temp `@ +0x16C`), the ~0.3 m near-muzzle collapse, `m_ProjectileOffsetFromAimPos @ +0x1A4` (read as `this[105]`), and the scatter `RotationYawPitchRoll` all match the "Fire direction" section as written.
+
+### Dual-wield barrel bookkeeping — the doc's `MarkNextWeaponComponentForFire` claim is WRONG
+
+The "Dual-wield" section (and the `GetShotMatrix` intro) credit `MarkNextWeaponComponentForFire` with alternating the two akimbo fire-points. That is **incorrect**. `CWeaponBase::MarkNextWeaponComponentForFire` (`0x140F6F8F0`) is a misnamed **const predicate**: it mutates nothing and returns `bool` — specifically `this[5352] (== CWeaponBase + 0x53A0, a vehicle-type hash) == HashString("v1706_boat_na_rocketboat")`. In `Fire_Projectile` it is called **only inside the `IsHolderVehicle` branch** to select which `CPlayerActionObserver::OnAction` enum to post (57/32 vs 58/33 for the rocket boat). It has nothing to do with akimbo pistols.
+
+The **actual** barrel/fire-point alternation is inlined at the tail of `CWeaponBase::Fire_Projectile` (`0x140991FF0`, `~0x140992524–0x1409925D8`):
+
+- `this + 0x160` (byte) — current weapon-*component* index; `this + 0x161` (byte) — set to the current index *before* advancing (last-fired component).
+- The component array (`CWeaponData*`) spans `this[173]..this[174]` (`+0x568..+0x570`, 8-byte ptrs); `count = (end − begin) >> 3`.
+- Within the current component, its fire-position cursor `CWeaponData + 0x120` advances: `cursor = (cursor + 1) % nFirePositions`, where `nFirePositions = (comp[+0x108] − comp[+0x100]) / 80` (the `m_InternalFirePositions` array, stride 0x50). A dword at the selected fire position `+72` is cleared first.
+- Then `this+0x160 = (this+0x160 + 1) % count`, with a special-case reset to 0 when `this[264]==0 && this[265]==1`.
+- `GetFireFromPosition` (`0x140966940`) reads `comp[+0x120]` (the cursor) to pick which `m_InternalFirePositions[cursor]` is the muzzle. So "which barrel" for the current shot = the component index + that component's cursor as they stand when the shot is built; the tail advance sets up the *next* shot.
+
+### Static answer: forcing the same barrel on consecutive shots
+
+**Nothing double-counts.** All the per-shot bookkeeping is per-`Fire_Projectile`-call, keyed off the weapon (`this`) and the `CWeaponData` component passed as `a2` — *not* off the barrel/fire-point index:
+
+- Ammo: `this[96]` (`+0x180`) decremented once per call; the projectile-offset-use counter `this[107]` (`+0x1AC`) likewise.
+- Recoil accumulators (`this[154/155/157/158]`, `+0x268/+0x26C/+0x274/+0x278`) advance once per call.
+- Effects/heat/stats: `CWeaponData::PlayFireEffect(a2, …)`, `RumbleFire`, `CameraShakeFire`, `AddHeatPoints`, `Fire_Projectile_Log_Statistics` — all once per call.
+
+The barrel index (`+0x160`/`+0x161`) and the fire-position cursor (`comp+0x120`) are a **purely spatial/cosmetic selector**: they choose the muzzle *origin* (`GetFireFromPosition` reads the cursor) and where the muzzle-flash plays (the `a2` component and its cursor), plus which fire position's `+72` flag is re-cleared. Forcing the same barrel just repeats the same muzzle bone and re-clears the same harmless flag — it neither adds nor skips an ammo decrement or a recoil kick.
+
+Two things to get right when pinning a barrel for per-hand triggers:
+
+1. Pin the choice **consistently for both** the origin (the cursor `comp+0x120` that `GetFireFromPosition` reads) **and** the `CWeaponData` component handed in as `a2` (chosen upstream in the inventory fire dispatch, and what `PlayFireEffect`/the cursor advance operate on). Pinning only `this+0x160` while the dispatcher still passes the alternate component as `a2` desyncs the muzzle origin from the flash/cursor.
+2. `this+0x161` (last-fired component) is the natural hook for per-hand cosmetic/animation events; pinning it makes the same hand's flash/anim fire each time — which is what per-hand triggering wants. For *two* independent triggers you would instead route each trigger to its own distinct component, not force one shared barrel.
+
+Net: JC3 barrel alternation has **no** ammo/recoil/heat coupling, so forcing a barrel is safe from a double-count standpoint; the work is keeping the forced component consistent across origin and effect.
