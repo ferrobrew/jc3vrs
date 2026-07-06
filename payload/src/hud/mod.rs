@@ -30,11 +30,17 @@
 //! ([`binding`]), the quad draw pass ([`quad`]), the [`state`] machine that drives them, and the
 //! [`config`] types for tuning parameters.
 
+pub mod aim;
 mod binding;
 mod config;
+pub mod depth;
+pub mod markers;
 mod quad;
+pub mod scaleform;
+pub mod split;
 mod state;
 mod target;
+mod warp;
 
 pub use config::HudConfig;
 pub use state::HUD_STATE;
@@ -143,9 +149,30 @@ pub fn tick(device: &Device, back_buffer_width: u32, back_buffer_height: u32) {
             back_buffer_height,
         );
         hud.ensure_redirected(device, width, height, back_buffer_width, back_buffer_height);
+        hud.ensure_layers(device, cfg.split);
     } else {
         hud.restore(back_buffer_width, back_buffer_height);
+        hud.ensure_layers(device, false);
     }
+}
+
+/// The layer views the `CUIManager::Render` detour needs for a partitioned frame, or `None` when
+/// the split must not run this frame (disabled, not redirected, layer targets missing,
+/// full-screen UI, or the partition not live yet). Snapshotted under the state lock so the
+/// detour never holds it across the render.
+pub fn split_inputs() -> Option<split::LayerViews> {
+    let cfg = crate::config::Config::lock_query(|c| c.hud);
+    if !cfg.redirect || !cfg.split || current_mode() != HudMode::Hud || !split::roots::live() {
+        return None;
+    }
+    HUD_STATE.lock().split_views()
+}
+
+/// Whether the redirect and every layer target are in place, so the game-thread capture mask has
+/// textures to land in. Gates the masking itself: masking without the redirected layer textures
+/// would strip the visible HUD down to one layer's clips.
+pub fn split_layers_ready() -> bool {
+    HUD_STATE.lock().split_views().is_some()
 }
 
 /// Compute the HUD texture dimensions from the render scale, the configured aspect (width / height),
@@ -195,13 +222,80 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
         let mode = current_mode();
         let aspect = aspect_for(&cfg, mode);
         let (pos, rot) = hud.update_pose(mode, head_pos, head_rotation, &cfg.follow);
-        hud.compute_world_corners(&quad::PanelParams {
+        // Dynamic panel distance: histogram the frame's depth distribution and ease the panel
+        // toward the near field when the scene is close (see `depth`). The base (far) distance
+        // is the manual slider; full-screen UI always reads far.
+        let panel_distance = if cfg.depth_shift.enabled {
+            hud.depth_distance(context, device, &cfg.depth_shift, mode, cfg.distance)
+        } else {
+            cfg.distance
+        };
+        let params_at = |distance: f32| quad::PanelParams {
             pos,
             rot,
             aspect,
-            distance: cfg.distance,
-            panel_height: panel_height(cfg.panel_scale, cfg.distance, aspect),
-        });
+            distance,
+            panel_height: panel_height(cfg.panel_scale, distance, aspect),
+        };
+        hud.compute_world_corners(&params_at(panel_distance));
+        // The split composites in gameplay while the render-root partition is live (the layer
+        // textures then contain per-layer content, redrawn every frame).
+        let split_active = cfg.split && mode == HudMode::Hud && split::roots::live();
+        // The reticle depth (the split's center layer, or the single panel's center bubble)
+        // follows the smoothed aim depth when enabled, easing back to a flat rest distance while
+        // nothing is targeted: the center-layer distance under the split, the panel distance
+        // otherwise (so a stale bubble flattens into the panel instead of poking out of it).
+        let center_rest = if split_active {
+            cfg.center_distance
+        } else {
+            panel_distance
+        };
+        let center_distance = if cfg.center_depth_from_aim && mode == HudMode::Hud {
+            aim::current(center_rest)
+        } else {
+            center_rest
+        };
+        // The frame's recorded marker depths for the warp (recorded on the game thread by the
+        // Get2DInfo hook); taken whether or not the warp draws, so stale markers never linger.
+        let mut frame_markers = markers::take_frame();
+        let warp_active = cfg.marker_warp && mode == HudMode::Hud;
+        if split_active {
+            // Every layer redraws every frame, so every corner set (and the marker warp) is
+            // fresh per frame; only the stereo depth differs between layers.
+            hud.set_split_frame(
+                true,
+                Some([
+                    params_at(cfg.distance),
+                    params_at(cfg.marker_distance),
+                    params_at(center_distance),
+                ]),
+            );
+            hud.set_warp_frame(warp_active.then(|| state::WarpFrame {
+                anchor: pos.to_array(),
+                markers: frame_markers.clone(),
+                base_distance: cfg.marker_distance,
+            }));
+        } else {
+            hud.set_split_frame(false, None);
+            // Single-panel mode: the reticle region joins the depth field as a center bubble at
+            // the aim depth (under the split, the center layer carries the aim depth instead).
+            if warp_active && cfg.center_depth_from_aim {
+                frame_markers.insert(
+                    0,
+                    markers::MarkerDepth {
+                        u: 0.5,
+                        v: 0.5,
+                        depth: center_distance,
+                        radius: cfg.center_bubble_radius,
+                    },
+                );
+            }
+            hud.set_warp_frame(warp_active.then(|| state::WarpFrame {
+                anchor: pos.to_array(),
+                markers: frame_markers,
+                base_distance: panel_distance,
+            }));
+        }
     }
 
     hud.draw_quad(context, device, target, eye);
@@ -297,5 +391,8 @@ pub fn install() {
     crate::lifecycle::on_cleanup(|renderer| {
         crate::config::CONFIG.lock().hud.redirect = false;
         HUD_STATE.lock().release_preview(renderer);
+        // The clip handles must be released on the capture (game) thread; the shutdown path lets
+        // a few more frames tick before the hooks come down, which drains this request.
+        scaleform::request_release_handles();
     });
 }

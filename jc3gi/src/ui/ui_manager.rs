@@ -1,4 +1,6 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[allow(unused_imports)]
+use crate::ui::scaleform::Movie;
 #[repr(C, align(8))]
 /// A Scaleform render buffer: what [`UIManager::m_RenderBuffer`] points at. It holds the
 /// render-target and depth-stencil views the UI HAL renders into; [`UpdateData`](RenderTargetData::UpdateData)
@@ -95,22 +97,56 @@ pub struct UIManager {
     pub m_MovieScaleWidth: i32,
     /// The movie render rectangle's height; see [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth).
     pub m_MovieScaleHeight: i32,
-    _field_3c: [u8; 4748],
+    _field_3c: [u8; 8],
+    /// The id of the thread that currently owns the Scaleform capture (`m_CurrentCaptureThread`);
+    /// `PreRender` claims it for the update thread each frame via `CUIManager::SetCaptureThread`,
+    /// which writes this field and the movie's capture thread together. `CUIBase::Invoke` runs the
+    /// AVM immediately only when the calling thread matches this field, and queues into the UI's
+    /// command queue otherwise -- so a hook that borrows capture ownership must write this field
+    /// too, or game-thread invokes keep mutating the display list concurrently.
+    pub m_CurrentCaptureThread: u32,
+    _field_48: [u8; 458],
+    /// Whether the render system is initialized. One of the three gates `Render` checks before
+    /// drawing.
+    pub m_RenderReady: bool,
+    /// Whether rendering is active (cleared during device resets). The second `Render` gate.
+    pub m_RenderActive: bool,
+    _field_214: [u8; 4260],
+    /// The lock serializing the UI update (`PreRender`: `Advance` + `Capture`) against the UI
+    /// render (`Render`, `RenderOffScreenTextures`). A Win32 critical section, so re-entrant on
+    /// the owning thread: a `Render` hook can hold it across visibility writes, captures, and
+    /// calls to the original (which re-enters it).
+    pub m_DeferredRenderLock: *mut crate::graphics_engine::device::CRITICAL_SECTION,
+    _field_12c0: [u8; 24],
     /// The Scaleform `GFx::Loader`, created in `InitializeSystem`. Loads `.gfx` files via
     /// `Loader::CreateMovie`.
     pub m_Loader: *mut ::std::ffi::c_void,
     /// The `GFx::MovieDef` for `ui/root.gfx` -- the definition object, not the live instance.
     pub m_MovieDef: *mut ::std::ffi::c_void,
-    /// The live `GFx::Movie` instance (a `MovieRoot` under the hood), created by
-    /// `MovieDef::CreateInstance` in `InitializeSystem`. All `CUIBase` subclasses share this
-    /// single movie.
-    pub m_Movie: *mut crate::ui::scaleform::Movie,
-    _field_12e0: [u8; 176],
+    /// The live `GFx::Movie` instance (a [`MovieImpl`]), created by `MovieDef::CreateInstance` in
+    /// `InitializeSystem`. All `CUIBase` subclasses share this single movie. The AS3 side (the
+    /// [`Movie`](ui::scaleform::Movie) interface: SetVariable, Invoke, the display tree) hangs off
+    /// [`MovieImpl::pASMovieRoot`].
+    pub m_Movie: *mut crate::ui::scaleform::MovieImpl,
+    _field_12f0: [u8; 56],
+    /// The Scaleform `Render::D3D1x::HAL` the UI render worker draws through.
+    pub m_RenderHAL: *mut crate::ui::scaleform::RenderHAL,
+    _field_1330: [u8; 56],
+    /// The UI render worker's command queue; `Render` executes it (and stamps its
+    /// [`m_RenderThreadId`](UiThreadCommandQueue::m_RenderThreadId)) at the top of every call.
+    pub m_ThreadCommandQueue: *mut crate::ui::ui_manager::UiThreadCommandQueue,
+    /// The Scaleform `D3D1x::TextureManager`; `Render` stamps its
+    /// [`RenderThreadId`](UITextureManager::RenderThreadId) at the top of every call.
+    pub m_TextureManager: *mut crate::ui::ui_manager::UITextureManager,
+    _field_1378: [u8; 24],
     /// The Scaleform render buffer the UI HAL renders into, set up by
     /// [`InitPlatformRT`](UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`] rebinds which
     /// views it renders into.
     pub m_RenderBuffer: *mut crate::ui::ui_manager::RenderTargetData,
-    _field_1398: [u8; 236],
+    _field_1398: [u8; 231],
+    /// The third `Render` gate: whether UI rendering is enabled at all.
+    pub m_RenderingEnabled: bool,
+    _field_1480: [u8; 4],
     /// The movie stage's authored width (`m_CachedStageSize.x`), refreshed every frame from the loaded
     /// movie. The world-to-screen mapping ([`Convert3DCoords`](UIManager::Convert3DCoords)) maps NDC
     /// into this.
@@ -145,12 +181,31 @@ impl UIManager {
     }
 }
 impl UIManager {
-    pub const InitPlatformRT_ADDRESS: usize = 0x140F696E0;
+    pub const Render_ADDRESS: usize = 0x141007B70;
     /// Binds the UI render target: builds a [`RenderTargetData`] from the engine surface's
     /// render-target and depth-stencil views via [`RenderTargetData::UpdateData`]. Called at startup
     /// and on every device or resolution reset; `a2` carries the target side length (the buffer is
     /// square: width = height = a2). This only creates the render buffer -- the Scaleform movie's
     /// viewport is set separately by [`SetMovieViewport`](UIManager::SetMovieViewport).
+    /// The UI render: takes [`m_DeferredRenderLock`](UIManager::m_DeferredRenderLock), checks the
+    /// three render gates, retargets the Scaleform render-thread ids, drains the thread command
+    /// queue, binds the display render target, and draws the movie's latest captured display tree
+    /// (`GetDisplayHandle` -> `RTHandle::NextCapture` -> `HAL::Draw`) within a
+    /// `BeginFrame`/`BeginScene` pair. Runs on a CPU-fragment worker (kicked by `StartRender`,
+    /// joined by `SyncRender`). `IUIManager` vtable slot 4.
+    pub unsafe fn Render(
+        &mut self,
+        context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            ) = ::std::mem::transmute(Self::Render_ADDRESS);
+            f(self as *mut Self as _, context)
+        }
+    }
+    pub const InitPlatformRT_ADDRESS: usize = 0x140F696E0;
     pub unsafe fn InitPlatformRT(&mut self, a2: i32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, a2: i32) = ::std::mem::transmute(
@@ -237,6 +292,28 @@ impl UIManager {
                 vp: *const crate::types::math::Matrix4,
             ) -> bool = ::std::mem::transmute(Self::Convert3DCoords_ADDRESS);
             f(self as *const Self as _, world, out_x, out_y, vp)
+        }
+    }
+    pub const Convert3DCoordsDefault_ADDRESS: usize = 0x140F899A0;
+    /// The default-VP world-to-screen wrapper `CHUDUI::UpdateGrappleReticle` uses for the grapple
+    /// reticle (its only callers): fetches the render camera's view-projection internally and
+    /// forwards to [`Convert3DCoords`](UIManager::Convert3DCoords). Because the VP is not a
+    /// parameter, the grapple reticle bypasses the floating panel's marker reprojection unless
+    /// this wrapper is hooked.
+    pub unsafe fn Convert3DCoordsDefault(
+        &mut self,
+        world: *const crate::types::math::Vector3,
+        out_x: *mut f32,
+        out_y: *mut f32,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                world: *const crate::types::math::Vector3,
+                out_x: *mut f32,
+                out_y: *mut f32,
+            ) -> bool = ::std::mem::transmute(Self::Convert3DCoordsDefault_ADDRESS);
+            f(self as *mut Self as _, world, out_x, out_y)
         }
     }
     pub const Get2DInfo_ADDRESS: usize = 0x140F69CB0;
@@ -386,6 +463,69 @@ impl std::convert::AsRef<UIManager> for UIManager {
 }
 impl std::convert::AsMut<UIManager> for UIManager {
     fn as_mut(&mut self) -> &mut UIManager {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The Scaleform `Render::D3D1x::TextureManager` behind the UI (only the render-thread id is
+/// modeled).
+pub struct UITextureManager {
+    _field_0: [u8; 72],
+    /// The render thread id; `CUIManager::Render` sets it to the calling thread each call.
+    pub RenderThreadId: u32,
+    _field_4c: [u8; 4],
+}
+fn _UITextureManager_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x50], UITextureManager>([0u8; 0x50]);
+    }
+    unreachable!()
+}
+impl UITextureManager {}
+impl std::convert::AsRef<UITextureManager> for UITextureManager {
+    fn as_ref(&self) -> &UITextureManager {
+        self
+    }
+}
+impl std::convert::AsMut<UITextureManager> for UITextureManager {
+    fn as_mut(&mut self) -> &mut UITextureManager {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The `CUiThreadCommandQueue`: commands queued for execution on the UI render worker.
+pub struct UiThreadCommandQueue {
+    _field_0: [u8; 152],
+    /// The thread id the queue's render interfaces report; `CUIManager::Render` sets it to the
+    /// calling thread before executing.
+    pub m_RenderThreadId: u32,
+    _field_9c: [u8; 4],
+}
+fn _UiThreadCommandQueue_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xA0], UiThreadCommandQueue>([0u8; 0xA0]);
+    }
+    unreachable!()
+}
+impl UiThreadCommandQueue {
+    pub const Execute_ADDRESS: usize = 0x140FFAD30;
+    /// Executes the queued render-thread commands. UI render worker only.
+    pub unsafe fn Execute(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::Execute_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<UiThreadCommandQueue> for UiThreadCommandQueue {
+    fn as_ref(&self) -> &UiThreadCommandQueue {
+        self
+    }
+}
+impl std::convert::AsMut<UiThreadCommandQueue> for UiThreadCommandQueue {
+    fn as_mut(&mut self) -> &mut UiThreadCommandQueue {
         self
     }
 }
