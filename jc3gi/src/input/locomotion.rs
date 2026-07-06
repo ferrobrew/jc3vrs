@@ -1,6 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::character::character::AimState;
 #[repr(C, align(8))]
 /// `SCharacterMovementSettings`: the per-character movement tuning block. Only passed through
 /// opaquely so far; its first float is the walk/run speed threshold the start-act selection
@@ -29,6 +27,15 @@ impl std::convert::AsMut<InstanceProperties> for InstanceProperties {
     fn as_mut(&mut self) -> &mut InstanceProperties {
         self
     }
+}
+pub unsafe fn get_LocoUtil_NoAimStrafeMaxAngle() -> &'static mut f32 {
+    unsafe { &mut *(0x142D65F90 as *mut f32) }
+}
+pub unsafe fn get_LocoUtil_NoAimStrafeMaxAngleAlt() -> &'static mut f32 {
+    unsafe { &mut *(0x142D65F94 as *mut f32) }
+}
+pub unsafe fn get_NCharacter_ActMoveNoAim() -> &'static mut u32 {
+    unsafe { &mut *(0x142F2FB64 as *mut u32) }
 }
 #[repr(C, align(8))]
 /// The locomotion move task active while the character is aim-relative (strafing). Mirrors
@@ -430,13 +437,4 @@ for NStateTask_MovementLocomotionTask {
     fn as_mut(&mut self) -> &mut NStateTask_MovementLocomotionTask {
         self
     }
-}
-pub unsafe fn get_LocoUtil_NoAimStrafeMaxAngle() -> &'static mut f32 {
-    unsafe { &mut *(0x142D65F90 as *mut f32) }
-}
-pub unsafe fn get_LocoUtil_NoAimStrafeMaxAngleAlt() -> &'static mut f32 {
-    unsafe { &mut *(0x142D65F94 as *mut f32) }
-}
-pub unsafe fn get_NCharacter_ActMoveNoAim() -> &'static mut u32 {
-    unsafe { &mut *(0x142F2FB64 as *mut u32) }
 }

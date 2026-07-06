@@ -1,8 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::{
-    camera::camera_manager::CameraManager, graphics_engine::render_pass::RenderPassState,
-};
 #[repr(C, align(8))]
 /// One cascade's bookkeeping in [`ShadowManager`]: the render passes that draw its atlas slice,
 /// followed by the per-parity fit state.

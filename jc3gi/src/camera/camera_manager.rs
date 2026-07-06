@@ -1,6 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::graphics_engine::shadow_manager::ShadowManager;
 #[repr(C, align(8))]
 pub struct CameraManager {
     _field_0: [u8; 16],

@@ -1,6 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::{camera::camera_manager::CameraManager, camera::camera_tree::CameraTree};
 #[repr(C, align(8))]
 /// An opaque node in the camera pipeline.
 pub struct CameraPipeline {}

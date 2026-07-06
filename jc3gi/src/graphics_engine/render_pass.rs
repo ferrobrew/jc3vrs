@@ -1,6 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::graphics_engine::shadow_manager::ShadowManager;
 #[repr(C, align(8))]
 /// The per-frame constant-buffer ring.
 pub struct ConstantBufferPool {}

@@ -1,6 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::character::character::Character;
 #[repr(C, align(8))]
 /// The animation-system event-id (act) symbol table: maps act names (`ACT_*`) to the sequential
 /// runtime ids that the animation state machines and [`Character::QueueAct`](character::character::Character::QueueAct)

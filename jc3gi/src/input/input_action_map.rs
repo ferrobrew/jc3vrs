@@ -1,7 +1,7 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// An action ID, indexing [`action_name_table`]. The numbering is fixed at build time, so action IDs
+/// An action ID, indexing [`get_action_name_table`]. The numbering is fixed at build time, so action IDs
 /// can be hardcoded. The engine takes a raw int, and this enum is int-repr, so it converts cleanly
 /// into the action parameters.
 pub enum Action {

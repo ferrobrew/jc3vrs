@@ -1,8 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::{
-    graphics_engine::render_block::RBIInfo, graphics_engine::render_pass::RenderPass,
-};
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
 pub enum ActiveCursor {
@@ -226,6 +222,37 @@ impl GraphicsEngine {
                 Self::LoadShaderBundle_ADDRESS,
             );
             f(self as *mut Self as _, name)
+        }
+    }
+    pub const SetCursor_ADDRESS: usize = 0x1400A1AB0;
+    /// Sets [`m_ActiveCursor`](GraphicsEngine::m_ActiveCursor) and, when it changed, posts
+    /// `WM_SETCURSOR` to the game window so `WndProc` runs
+    /// [`UpdateCursor`](GraphicsEngine::UpdateCursor). `COverlayUI` drives it: `Arrow` when the
+    /// overlay cursor becomes visible, `None` when it hides.
+    pub unsafe fn SetCursor(
+        &mut self,
+        cursor: crate::graphics_engine::graphics_engine::ActiveCursor,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                cursor: crate::graphics_engine::graphics_engine::ActiveCursor,
+            ) = ::std::mem::transmute(Self::SetCursor_ADDRESS);
+            f(self as *mut Self as _, cursor)
+        }
+    }
+    pub const UpdateCursor_ADDRESS: usize = 0x1400A1AF0;
+    /// Applies [`m_ActiveCursor`](GraphicsEngine::m_ActiveCursor) to the OS: for `None` it sets a
+    /// null `HCURSOR` and clips the cursor to the client rect (when the window is foreground);
+    /// otherwise it unclips and sets `GraphicsParams::m_Cursors[cursor]`. The four entries are
+    /// loaded at startup as the system `IDC_ARROW`, `IDC_CROSS`, `IDC_HAND`, and `IDC_NO`
+    /// cursors. Called from `WndProc` on `WM_SETCURSOR`.
+    pub unsafe fn UpdateCursor(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::UpdateCursor_ADDRESS,
+            );
+            f(self as *mut Self as _)
         }
     }
 }

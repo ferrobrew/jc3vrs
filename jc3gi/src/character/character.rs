@@ -310,6 +310,12 @@ impl std::convert::AsMut<Character> for Character {
         self
     }
 }
+pub unsafe fn get_Character_EnableLocoStrafing() -> &'static mut bool {
+    unsafe { &mut *(0x142F2F300 as *mut bool) }
+}
+pub unsafe fn get_Character_GoreEnabled() -> &'static mut bool {
+    unsafe { &mut *(0x142F2F301 as *mut bool) }
+}
 #[derive(Copy, Clone, Default)]
 #[repr(C, align(16))]
 pub struct Joint {
@@ -393,10 +399,4 @@ fn _SafeBoneIndex_size_check() {
         ::std::mem::transmute::<[u8; 0x4], SafeBoneIndex>([0u8; 0x4]);
     }
     unreachable!()
-}
-pub unsafe fn get_Character_EnableLocoStrafing() -> &'static mut bool {
-    unsafe { &mut *(0x142F2F300 as *mut bool) }
-}
-pub unsafe fn get_Character_GoreEnabled() -> &'static mut bool {
-    unsafe { &mut *(0x142F2F301 as *mut bool) }
 }

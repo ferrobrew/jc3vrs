@@ -1,6 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::ui::ui_manager::UIManager;
 #[repr(C, align(8))]
 /// A node in the display tree returned by `Movie::GetDisplayObjectsTree`. Inherits from
 /// [`RefCountImpl`] and embeds a `Scaleform::String` for the name and a
@@ -201,6 +199,57 @@ impl std::convert::AsRef<MemoryHeap> for MemoryHeap {
 }
 impl std::convert::AsMut<MemoryHeap> for MemoryHeap {
     fn as_mut(&mut self) -> &mut MemoryHeap {
+        self
+    }
+}
+#[derive(Copy, Clone)]
+#[repr(C, align(4))]
+/// A `GFx::MouseEvent` (a `GFx::Event` with the mouse payload): the argument
+/// `CUIManager::SendMouseEvents` builds for [`MovieImpl::HandleEvent`]. `x` and `y` are in
+/// movie-viewport pixels: window-client pixels minus the centering offset
+/// `(cached viewport size - movie rectangle size) / 2`, i.e. relative to the top-left corner of
+/// the centered movie rectangle (see
+/// [`UIManager::m_MovieScaleWidth`](ui::ui_manager::UIManager::m_MovieScaleWidth)).
+pub struct MouseEvent {
+    /// The `GFx::Event::Type` tag (`TYPE_MOUSE_*`).
+    pub Type: u32,
+    /// `GFx::KeyModifiers::States` (ctrl/alt/shift bits); the engine always sends 0.
+    pub Modifiers: u8,
+    _field_5: [u8; 3],
+    pub x: f32,
+    pub y: f32,
+    /// The wheel amount in Flash line units; the engine sends `lZ / 120 * 3` from the DirectInput
+    /// mouse's z axis.
+    pub ScrollDelta: f32,
+    /// The button index for down/up events: `0` left, `1` right.
+    pub Button: u32,
+    pub MouseIndex: u32,
+}
+fn _MouseEvent_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x1C], MouseEvent>([0u8; 0x1C]);
+    }
+    unreachable!()
+}
+impl MouseEvent {}
+impl MouseEvent {
+    /// The [`Type`](MouseEvent::Type) of a button-press event.
+    pub const TYPE_MOUSE_DOWN: u32 = 2;
+    /// The [`Type`](MouseEvent::Type) of a mouse-move event.
+    pub const TYPE_MOUSE_MOVE: u32 = 1;
+    /// The [`Type`](MouseEvent::Type) of a button-release event.
+    pub const TYPE_MOUSE_UP: u32 = 3;
+    /// The [`Type`](MouseEvent::Type) of a wheel event ([`ScrollDelta`](MouseEvent::ScrollDelta)
+    /// carries the amount).
+    pub const TYPE_MOUSE_WHEEL: u32 = 4;
+}
+impl std::convert::AsRef<MouseEvent> for MouseEvent {
+    fn as_ref(&self) -> &MouseEvent {
+        self
+    }
+}
+impl std::convert::AsMut<MouseEvent> for MouseEvent {
+    fn as_mut(&mut self) -> &mut MouseEvent {
         self
     }
 }
@@ -416,6 +465,46 @@ impl MovieImpl {
             f(self as *mut Self as _, thread_id)
         }
     }
+    /// Routes a `GFx::Event` to the movie (`GFx::Movie` vtable slot 35). For a
+    /// [`MouseEvent`] the movie records the new mouse state, which the next `Advance`
+    /// processes into AS3 mouse events (hover, press, release). Call on the capture (game
+    /// update) thread. `CUIManager::SendMouseEvents` is the engine's only mouse feeder, and
+    /// only emits a move event on frames where the DirectInput mouse reported a non-zero
+    /// delta.
+    pub unsafe fn HandleEvent(
+        &mut self,
+        event: *const crate::ui::scaleform::MouseEvent,
+    ) -> u32 {
+        unsafe {
+            let f = (&raw const (*self.vftable()).HandleEvent).read();
+            f(self as *mut Self as _, event)
+        }
+    }
+    /// Directly overwrites one mouse's state (`GFx::Movie` vtable slot 37): position in
+    /// movie-viewport pixels (the same space as [`MouseEvent`]) plus a button bitmask (bit 0
+    /// left, bit 1 right), bypassing the event objects. Processed on the next `Advance`, like
+    /// [`HandleEvent`](MovieImpl::HandleEvent).
+    pub unsafe fn NotifyMouseState(
+        &mut self,
+        x: f32,
+        y: f32,
+        buttons: u32,
+        mouse_index: u32,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).NotifyMouseState).read();
+            f(self as *mut Self as _, x, y, buttons, mouse_index)
+        }
+    }
+    /// Sets how many mice the movie tracks (`GFx::Movie` vtable slot 43); `0` disables mouse
+    /// processing entirely. `CUIManager::RestoreAfterReset` sets `1` when a DirectInput mouse
+    /// device exists and `0` otherwise.
+    pub unsafe fn SetMouseCursorCount(&mut self, count: u32) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).SetMouseCursorCount).read();
+            f(self as *mut Self as _, count)
+        }
+    }
 }
 impl std::convert::AsRef<MovieImpl> for MovieImpl {
     fn as_ref(&self) -> &MovieImpl {
@@ -475,10 +564,51 @@ pub struct MovieImplVftable {
         this: *mut crate::ui::scaleform::MovieImpl,
         thread_id: u32,
     ),
+    _vfunc_28: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_29: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_30: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_31: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_32: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_33: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_34: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    /// Routes a `GFx::Event` to the movie (`GFx::Movie` vtable slot 35). For a
+    /// [`MouseEvent`] the movie records the new mouse state, which the next `Advance`
+    /// processes into AS3 mouse events (hover, press, release). Call on the capture (game
+    /// update) thread. `CUIManager::SendMouseEvents` is the engine's only mouse feeder, and
+    /// only emits a move event on frames where the DirectInput mouse reported a non-zero
+    /// delta.
+    pub HandleEvent: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+        event: *const crate::ui::scaleform::MouseEvent,
+    ) -> u32,
+    _vfunc_36: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    /// Directly overwrites one mouse's state (`GFx::Movie` vtable slot 37): position in
+    /// movie-viewport pixels (the same space as [`MouseEvent`]) plus a button bitmask (bit 0
+    /// left, bit 1 right), bypassing the event objects. Processed on the next `Advance`, like
+    /// [`HandleEvent`](MovieImpl::HandleEvent).
+    pub NotifyMouseState: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+        x: f32,
+        y: f32,
+        buttons: u32,
+        mouse_index: u32,
+    ),
+    _vfunc_38: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_39: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_40: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_41: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    _vfunc_42: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    /// Sets how many mice the movie tracks (`GFx::Movie` vtable slot 43); `0` disables mouse
+    /// processing entirely. `CUIManager::RestoreAfterReset` sets `1` when a DirectInput mouse
+    /// device exists and `0` otherwise.
+    pub SetMouseCursorCount: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+        count: u32,
+    ),
 }
 fn _MovieImplVftable_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0xE0], MovieImplVftable>([0u8; 0xE0]);
+        ::std::mem::transmute::<[u8; 0x160], MovieImplVftable>([0u8; 0x160]);
     }
     unreachable!()
 }

@@ -1,6 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::ui::scaleform::Movie;
 #[repr(C, align(8))]
 /// A Scaleform render buffer: what [`UIManager::m_RenderBuffer`] points at. It holds the
 /// render-target and depth-stencil views the UI HAL renders into; [`UpdateData`](RenderTargetData::UpdateData)
@@ -88,7 +86,24 @@ fn _ScreenPos_size_check() {
 /// render rectangle, [`SetMovieViewport`](UIManager::SetMovieViewport) sets the Scaleform movie
 /// viewport, and [`ComputeSafeArea`](UIManager::ComputeSafeArea) derives the UI safe area.
 pub struct UIManager {
-    _field_0: [u8; 52],
+    _field_0: [u8; 40],
+    /// The horizontal mouse letterbox offset from the engine's `MovieScaleInfo`
+    /// (`m_MouseDeltaX`), in movie-viewport pixels.
+    /// [`GetMovieSpaceMouseCursor`](UIManager::GetMovieSpaceMouseCursor) maps a movie-viewport
+    /// mouse position into stage coordinates as `(pos - delta) * scale`.
+    /// [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize) writes it: always
+    /// zero today (only the non-clipping path computes a non-trivial
+    /// [`m_MouseDeltaY`](UIManager::m_MouseDeltaY)).
+    pub m_MouseDeltaX: i32,
+    /// The vertical mouse letterbox offset from the engine's `MovieScaleInfo` (`m_MouseDeltaY`),
+    /// in movie-viewport pixels. In `ComputeMovieSizeOnViewSize`'s non-clipping path it is half
+    /// the vertical letterbox, `(movie height - stage height * movie width / stage width) / 2`;
+    /// in the clipping path it is zero.
+    pub m_MouseDeltaY: i32,
+    /// The movie-viewport-pixels-to-stage-coordinates mouse scale from the engine's
+    /// `MovieScaleInfo` (`m_MouseScaleFac`): `stage width / movie rectangle width` in the
+    /// non-clipping path of `ComputeMovieSizeOnViewSize`, `1.0` in the clipping path.
+    pub m_MouseScaleFac: f32,
     /// The movie render rectangle's width, from the engine's `MovieScaleInfo`. The movie is rendered
     /// into a `m_MovieScaleWidth` x `m_MovieScaleHeight` rectangle, centered within the viewport
     /// passed to [`SetMovieViewport`](UIManager::SetMovieViewport).
@@ -105,13 +120,26 @@ pub struct UIManager {
     /// command queue otherwise -- so a hook that borrows capture ownership must write this field
     /// too, or game-thread invokes keep mutating the display list concurrently.
     pub m_CurrentCaptureThread: u32,
-    _field_48: [u8; 458],
+    _field_48: [u8; 108],
+    /// The last mouse position's x, in window-client pixels. `WndProc` writes it on every
+    /// `WM_MOUSEMOVE` via [`SetMousePos`](UIManager::SetMousePos) -- the only writer, so the OS
+    /// message stream is the sole source of the UI mouse position (the DirectInput mouse device
+    /// only contributes deltas, buttons, and the wheel).
+    pub m_MouseX: i32,
+    /// The last mouse position's y, in window-client pixels; see
+    /// [`m_MouseX`](UIManager::m_MouseX).
+    pub m_MouseY: i32,
+    _field_bc: [u8; 342],
     /// Whether the render system is initialized. One of the three gates `Render` checks before
     /// drawing.
     pub m_RenderReady: bool,
     /// Whether rendering is active (cleared during device resets). The second `Render` gate.
     pub m_RenderActive: bool,
-    _field_214: [u8; 4260],
+    _field_214: [u8; 12],
+    /// The active `CSteering`, whose action map [`SendMouseEvents`](UIManager::SendMouseEvents)
+    /// polls for the mouse-button actions (`MOUSE1` = 249, `MOUSE2` = 250).
+    pub m_Steering: *mut ::std::ffi::c_void,
+    _field_228: [u8; 4240],
     /// The lock serializing the UI update (`PreRender`: `Advance` + `Capture`) against the UI
     /// render (`Render`, `RenderOffScreenTextures`). A Win32 critical section, so re-entrant on
     /// the owning thread: a `Render` hook can hold it across visibility writes, captures, and
@@ -125,7 +153,7 @@ pub struct UIManager {
     pub m_MovieDef: *mut ::std::ffi::c_void,
     /// The live `GFx::Movie` instance (a [`MovieImpl`]), created by `MovieDef::CreateInstance` in
     /// `InitializeSystem`. All `CUIBase` subclasses share this single movie. The AS3 side (the
-    /// [`Movie`](ui::scaleform::Movie) interface: SetVariable, Invoke, the display tree) hangs off
+    /// [`Movie`](crate::ui::scaleform::Movie) interface: SetVariable, Invoke, the display tree) hangs off
     /// [`MovieImpl::pASMovieRoot`].
     pub m_Movie: *mut crate::ui::scaleform::MovieImpl,
     _field_12f0: [u8; 56],
@@ -143,7 +171,13 @@ pub struct UIManager {
     /// [`InitPlatformRT`](UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`] rebinds which
     /// views it renders into.
     pub m_RenderBuffer: *mut crate::ui::ui_manager::RenderTargetData,
-    _field_1398: [u8; 231],
+    _field_1398: [u8; 229],
+    /// Whether the player is currently driving the UI with a gamepad. While set,
+    /// [`SendMouseEvents`](UIManager::SendMouseEvents) parks the Scaleform mouse at
+    /// `(-1000, -1000)` and [`MousePointerVisibility`](UIManager::MousePointerVisibility) hides
+    /// the overlay cursor.
+    pub m_IsUsingGamepad: bool,
+    _field_147e: [u8; 1],
     /// The third `Render` gate: whether UI rendering is enabled at all.
     pub m_RenderingEnabled: bool,
     _field_1480: [u8; 4],
@@ -453,6 +487,113 @@ impl UIManager {
                 Self::IsUsingStaticBackGround_ADDRESS,
             );
             f(self as *const Self as _)
+        }
+    }
+    pub const PreUpdate_ADDRESS: usize = 0x141049000;
+    /// The per-frame UI input step: computes gamepad use, runs
+    /// [`MousePointerVisibility`](UIManager::MousePointerVisibility), dispatches the
+    /// highest-input-priority `CUIBase`'s input management, then calls
+    /// [`SendMouseEvents`](UIManager::SendMouseEvents) and drains the queued key events.
+    pub unsafe fn PreUpdate(&mut self, dt: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
+                Self::PreUpdate_ADDRESS,
+            );
+            f(self as *mut Self as _, dt)
+        }
+    }
+    pub const SetMousePos_ADDRESS: usize = 0x140F46810;
+    /// Stores a window-client-pixel mouse position into [`m_MouseX`](UIManager::m_MouseX) /
+    /// [`m_MouseY`](UIManager::m_MouseY) and immediately runs
+    /// [`SendMouseEvents`](UIManager::SendMouseEvents). Called by `WndProc` on `WM_MOUSEMOVE`
+    /// with the `lParam` client coordinates.
+    pub unsafe fn SetMousePos(&mut self, x: i32, y: i32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, x: i32, y: i32) = ::std::mem::transmute(
+                Self::SetMousePos_ADDRESS,
+            );
+            f(self as *mut Self as _, x, y)
+        }
+    }
+    pub const GetMousePos_ADDRESS: usize = 0x140F1B1F0;
+    /// Reads back [`m_MouseX`](UIManager::m_MouseX) / [`m_MouseY`](UIManager::m_MouseY).
+    pub unsafe fn GetMousePos(&self, x: *mut i32, y: *mut i32) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                x: *mut i32,
+                y: *mut i32,
+            ) = ::std::mem::transmute(Self::GetMousePos_ADDRESS);
+            f(self as *const Self as _, x, y)
+        }
+    }
+    pub const SendMouseEvents_ADDRESS: usize = 0x140F1BA60;
+    /// Feeds the frame's mouse state to the Scaleform movie. Converts
+    /// [`m_MouseX`](UIManager::m_MouseX) / [`m_MouseY`](UIManager::m_MouseY) to movie-viewport
+    /// pixels by subtracting the centering offset
+    /// `(m_CachedViewportSize - m_MovieScale size) / 2`, then sends
+    /// [`MouseEvent`](ui::scaleform::MouseEvent)s through
+    /// [`MovieImpl::HandleEvent`](ui::scaleform::MovieImpl::HandleEvent): a move event only when
+    /// the DirectInput mouse reported a non-zero x or y delta this frame (also repositioning the
+    /// overlay cursor sprite via `COverlayUI::SetMouseCursorPosition`), a wheel event from the z
+    /// delta, and down/up events from the steering action map's `MOUSE1` (249) / `MOUSE2` (250)
+    /// effector states (2 = pressed edge, 4 = released edge). When
+    /// [`m_IsUsingGamepad`](UIManager::m_IsUsingGamepad) is set it instead parks the mouse at
+    /// `(-1000, -1000)`. Returns false without the movie, the steering, or a mouse device.
+    pub unsafe fn SendMouseEvents(&mut self, steering: *mut ::std::ffi::c_void) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                steering: *mut ::std::ffi::c_void,
+            ) -> bool = ::std::mem::transmute(Self::SendMouseEvents_ADDRESS);
+            f(self as *mut Self as _, steering)
+        }
+    }
+    pub const GetMovieSpaceMouseCursor_ADDRESS: usize = 0x140F1BA30;
+    /// Maps a movie-viewport-pixel mouse position into movie stage coordinates:
+    /// `out = (pos - m_MouseDelta) * m_MouseScaleFac` per axis (see
+    /// [`m_MouseDeltaX`](UIManager::m_MouseDeltaX)).
+    pub unsafe fn GetMovieSpaceMouseCursor(
+        &self,
+        viewport_x: f32,
+        viewport_y: f32,
+        out: *mut crate::types::math::Vector2,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                viewport_x: f32,
+                viewport_y: f32,
+                out: *mut crate::types::math::Vector2,
+            ) = ::std::mem::transmute(Self::GetMovieSpaceMouseCursor_ADDRESS);
+            f(self as *const Self as _, viewport_x, viewport_y, out)
+        }
+    }
+    pub const MousePointerVisibility_ADDRESS: usize = 0x140F46E60;
+    /// Shows or hides the overlay mouse cursor from the frame's UI state: visible only when the
+    /// overlay UI is active, no gamepad is in use, and no cursor-hiding HUD state or message box
+    /// applies (via `COverlayUI::ShowMouseCursor` / `HideMouseCursor`).
+    pub unsafe fn MousePointerVisibility(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::MousePointerVisibility_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub const UpdateCachedValues_ADDRESS: usize = 0x140F1AEA0;
+    /// Refreshes [`m_CachedStageWidth`](UIManager::m_CachedStageWidth) /
+    /// [`m_CachedStageHeight`](UIManager::m_CachedStageHeight) from the loaded movie and
+    /// [`m_CachedViewportWidth`](UIManager::m_CachedViewportWidth) /
+    /// [`m_CachedViewportHeight`](UIManager::m_CachedViewportHeight) /
+    /// [`m_CachedViewportRatio`](UIManager::m_CachedViewportRatio) from the graphics device.
+    /// First step of [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize).
+    pub unsafe fn UpdateCachedValues(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::UpdateCachedValues_ADDRESS,
+            );
+            f(self as *mut Self as _)
         }
     }
 }

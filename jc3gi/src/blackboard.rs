@@ -1,6 +1,4 @@
 #![cfg_attr(any(), rustfmt::skip)]
-#[allow(unused_imports)]
-use crate::character::character::Character;
 #[repr(C, align(8))]
 /// A keyed value store attached to game objects (`CObjectBlackboard`); the character's instance
 /// lives at [`Character::m_Blackboard`](Character::m_Blackboard) and carries
