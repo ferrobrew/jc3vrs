@@ -86,6 +86,17 @@ pub struct VrConfig {
     /// [`resolution_scale`]: VrConfig::resolution_scale
     #[serde(default = "default_true")]
     pub native_resolution: bool,
+    /// Mirror one eye to the game's own desktop window while a session is running. The engine's
+    /// present stays blocked (`BLOCK_FLIP`); the mirror draws the configured eye's capture into the
+    /// game swapchain's back buffer, letterboxed to the window aspect, and presents it unsynced (see
+    /// [`crate::vr::mirror`]). On by default; disabled automatically at runtime on any draw/present
+    /// fault, after which the game window simply shows the last mirrored (or stale) frame.
+    #[serde(default = "default_true")]
+    pub mirror: bool,
+    /// Which eye the desktop [`mirror`](VrConfig::mirror) shows (`0` = left, `1` = right). Clamped to
+    /// a valid eye at use.
+    #[serde(default)]
+    pub mirror_eye: u8,
 }
 
 /// The serde default for [`VrConfig::native_resolution`] (the manual [`Default`] via
@@ -107,6 +118,8 @@ impl VrConfig {
             projection_convention: ProjectionConvention::EnginePreReverseZ,
             blit_srgb_gamma: BlitGamma::Linearize,
             native_resolution: true,
+            mirror: true,
+            mirror_eye: 0,
         }
     }
 }

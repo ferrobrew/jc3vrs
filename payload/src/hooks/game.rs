@@ -288,6 +288,19 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // captured in stereo, eye 0 in non-stereo). No-op when capture is inactive.
         crate::crash::mark(Phase::Present);
         crate::capture::present_frame();
+
+        // Desktop mirror: while a session runs the engine's own present is fully blocked (BLOCK_FLIP,
+        // both eyes) so the game window would freeze on a stale frame. Draw one eye into the game
+        // swapchain's back buffer, letterboxed to the window aspect, composite the egui overlay, and
+        // present it ourselves -- the only present this frame. This must come after the XR submit
+        // (the compositor paces the loop) and after the F10 capture (a separate window/swapchain that
+        // does not conflict), so the mirror never delays the HMD path. The present is unsynced by
+        // mandate: a vsynced mirror on a 60 Hz monitor would throttle the 90 Hz HMD loop (see
+        // `crate::vr::mirror::present_mirror`). When no session runs the engine presents normally, so
+        // the mirror is skipped and flatscreen behaviour (including present_eye_0) is unchanged.
+        if vr_running && vr_cfg.mirror {
+            crate::vr::present_mirror(usize::from(vr_cfg.mirror_eye));
+        }
         crate::crash::mark(Phase::FrameEnd);
     }
 }

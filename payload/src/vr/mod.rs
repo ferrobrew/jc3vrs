@@ -49,9 +49,11 @@ pub use projection::{Fov, OffAxisProjection};
 mod blit;
 mod config;
 mod frame;
+mod mirror;
 mod resolution;
 
 pub use blit::present_and_submit;
+pub use mirror::present_mirror;
 pub use resolution::apply_native_resolution;
 
 /// The OpenXR view configuration: standard stereo, two views (one per eye).
@@ -74,6 +76,7 @@ pub fn install() {
     resolution::install();
     crate::lifecycle::on_cleanup(|_renderer| {
         blit::teardown();
+        mirror::teardown();
         uninstall();
     });
 }
