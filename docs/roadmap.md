@@ -24,12 +24,10 @@ The VR runtime is now built: the OpenXR session comes up against the game's own 
 4. **Floating HUD, flatscreen** — render the HUD into a texture and float it as an in-engine quad per eye, with world-anchored markers reprojected against the live view. Working on the flat desktop: the redirect, the per-eye quad, the lazy follow, and per-eye marker reprojection are in, tunable in the desktop preview before a headset. (`hud.md`)
 5. **The VR runtime** — bring up the OpenXR session and per-eye swapchains, drive the camera from real HMD pose, build per-eye off-axis projections from the HMD field of view, and render at the per-eye resolution. This swaps the desktop present and the mouse stand-in for the headset. Built: the session lifecycle, the frame loop (pace, pose, per-eye render, submit), the off-axis projection, the deferred per-eye resize, the desktop mirror, and body IK via HumanIK are in, degrading gracefully to flatscreen when no runtime is present, with the headset-only conventions left as runtime knobs plus a playtest checklist. (`vr-runtime.md`)
 6. **FSR upscaling** — once the VR runtime can re-init the scene at a chosen per-eye resolution, drop FSR's render scale below 1:1 so the scene renders cheaper and reconstructs to panel resolution. This is the same FSR integration from step 2 with a render-scale slider; the per-eye resolution re-init (the VR runtime's blocker) is the only new dependency. Reuses the per-eye motion-vector path proven at native AA. (`fsr.md`, `vr-runtime.md`)
-7. **VR controllers and comfort** — map controller input onto the game's action effectors, add the comfort options (turning, vignette) and the debug/environment tooling. (`input.md`, `environment.md`)
-8. **Embodiment depth** (deferred) — full-body IK so the body follows crouch and lean, and the physics-head collision response. Out of near-term scope.
+7. **VR controllers and roomscale** — motion-controller input through the game's action effectors, per-hand aiming (left-hand grapple, right-hand gunfire, dual-wield at two targets), controller-held weapons, roomscale locomotion through the character physics, and the comfort options. Scoped in full, with per-mode input tables and the engine recon done: `mod/controllers-and-roomscale.md` is the plan of record (it supersedes this roadmap wherever they disagree). Crouch ships here, in stages, as part of roomscale — not in step 8.
+8. **Embodiment depth** (deferred) — the remainder of full-body IK beyond the shipped upper-body follow and phase-5 crouch (lean-through-geometry response, physics-head collision). Out of near-term scope.
 
 ## Out of scope (for now)
-
-- Controller-driven hand aiming — tractable, but a major separate project.
 - A full first-person mesh rework — the third-person assets weren't built for it.
 - Multiplayer / network sync — JC3 is single-player.
 

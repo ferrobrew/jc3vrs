@@ -217,12 +217,16 @@ proxy wrapper (`m_Avatar` is the `CAvatar`; `m_PendingProxyState`/`m_DefaultProx
 capsule/quadruped shape). `SetWantedVelocity`'s other callers are the grapple/jump/stunt/ragdoll
 tasks that drive the proxy directly.
 
-**Roomscale can ride the displacement path so collision is respected for free.** Two ride points:
+**Roomscale can ride the displacement path so collision is respected for free.** Two ride points —
+but note before choosing: §4.1 below supersedes option 1. The on-foot path does *not* go through
+`SetWantedVelocity` (that channel serves the proxy-driven states); the on-foot task writes its solved
+world velocity directly to `CPfxCharacterInstance + 0x3C`, and the roomscale add belongs there.
 
-1. **Additive wanted velocity** — the least invasive: add `roomscaleDeltaXZ / dt` to the wanted
-   velocity that the on-foot locomotion task passes to `SetWantedVelocity` (hook `SetWantedVelocity`
-   for the local player, add the roomscale term), so the physics proxy walks the extra distance and
-   resolves collision. The capsule follows automatically because the proxy *is* the capsule.
+1. **Additive wanted velocity** — superseded by §4.1: add `roomscaleDeltaXZ / dt` to the wanted
+   velocity. Originally scoped against `SetWantedVelocity`; the verified on-foot seam is the
+   post-task write to the proxy-input velocity at `+0x3C`. The physics proxy walks the extra
+   distance and resolves collision either way; the capsule follows because the proxy *is* the
+   capsule.
 2. **Code-driven displacement direction** — set `m_CodeDrivenDisplacement` and publish the roomscale
    direction to blackboard `0x7DF24A88`, letting `EvaluateCharacterDisplacement` produce the wanted
    velocity. Heavier (interacts with the game's own code-driven displacement users) and mainly a fit
