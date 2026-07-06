@@ -14,7 +14,7 @@
 use std::ffi::CString;
 
 use jc3gi::ui::{
-    scaleform::{AmpMovieObjectDesc, DisplayInfo, Movie, MovieImpl, Value},
+    scaleform::{AmpMovieObjectDesc, DisplayInfo, MOVIE_VFTABLE, Movie, MovieImpl, Value},
     ui_manager::UIManager,
 };
 use parking_lot::Mutex;
@@ -379,11 +379,11 @@ fn live_movie() -> Option<(&'static mut MovieImpl, &'static Movie)> {
         let movie_impl = UIManager::get()?.m_Movie.as_mut()?;
         let movie_root = movie_impl.pASMovieRoot.as_ref()?;
         let vftable = movie_root.vftable() as usize as u64;
-        if vftable != Movie::VFTABLE {
+        if vftable != MOVIE_VFTABLE {
             tracing::error!(
                 "scaleform: the AS3 root's vtable is {vftable:#x}, expected the MovieRoot vtable \
                  {:#x}; refusing to operate on it",
-                Movie::VFTABLE
+                MOVIE_VFTABLE
             );
             return None;
         }
