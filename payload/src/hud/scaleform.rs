@@ -545,7 +545,7 @@ fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
             overlays: OVERLAY_CLIPS.iter().map(|path| resolve(path)).collect(),
             dynamic: anonymous.iter().map(|name| resolve(name)).collect(),
         };
-        tracing::info!(
+        tracing::debug!(
             "scaleform: layout discovery: prefix {prefix:?}, {resolved}/{total} clips resolved \
              ({} anonymous marker clips)",
             anonymous.len()

@@ -152,7 +152,7 @@ fn log_pipeline_lag(movie: &MovieImpl, split_active: bool) {
     }
     let ids = movie.RenderContext.SnapshotFrameIds;
     let produced_in_window = ids[0].wrapping_sub(LAST_ACTIVE.swap(ids[0], Ordering::Relaxed));
-    tracing::info!(
+    tracing::debug!(
         "scaleform pipeline: active {} displaying {} (lag {}), {} captures in window, \
          partition {}",
         ids[0],
