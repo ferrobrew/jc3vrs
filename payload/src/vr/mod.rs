@@ -1,0 +1,985 @@
+//! The OpenXR runtime: session lifecycle, event pump, and the per-frame API surface the wave-2 Draw
+//! wiring will drive. This module owns the OpenXR instance, session, reference spaces, and stereo
+//! swapchain; it does **not** yet render -- the per-frame blit of the game's eye captures into the
+//! swapchain, and feeding HMD poses into the camera, land in a later wave (`docs/vr-runtime.md`).
+//! The public surface here ([`frame_begin`] → [`FrameContext`] → [`frame_end`]) is designed for that
+//! caller but has none today.
+//!
+//! ## Loader route
+//!
+//! The OpenXR loader is **dynamically loaded at runtime** (`xr::Entry::load_from`), not linked. The
+//! `static` loader route (build the Khronos loader through cmake against the xwin/clang-cl cross
+//! toolchain) does not build in this environment -- cmake selects the Ninja generator, which the
+//! cross toolchain lacks -- so the portable choice is the runtime loader. The loader DLL defaults to
+//! `openxr_loader.dll` next to the payload DLL ([`crate::module::get_path`]) and is overridable via
+//! [`crate::config::VrConfig::loader_path`]. When the loader is absent the mod stays in flatscreen
+//! stereo and retries on the configured cadence.
+//!
+//! ## Threading
+//!
+//! Everything runs on the game's main thread, the same model as [`crate::capture`]: a single
+//! [`Mutex<VrState>`] singleton, locked briefly on that thread. The game's `ID3D11Device` is fetched
+//! from the graphics engine singleton at session-create time under the same null-guarding
+//! [`crate::capture`] uses; the device is never stored (so the state carries no raw device pointer
+//! across threads). All OpenXR handles are `Send` (`Arc`-backed handles), so the state is a safe
+//! singleton.
+//!
+//! ## Degradation and retry
+//!
+//! Bring-up failure at any stage logs on target `"vr"` and leaves the mod in flatscreen stereo;
+//! [`update`] retries the whole bring-up every [`crate::config::VrConfig::retry_interval_secs`] while
+//! `vr.enabled`. Turning `vr.enabled` off, or [`crate::lifecycle`] shutdown, tears the runtime down
+//! in order (swapchain → session → instance) so the OpenXR instance never outlives the DLL.
+
+pub mod projection;
+
+use std::time::Instant;
+
+use anyhow::Context as _;
+use openxr as xr;
+use parking_lot::{Mutex, MutexGuard};
+use windows::core::Interface as _;
+
+use crate::config::Config;
+
+pub use config::VrConfig;
+pub use projection::{Fov, OffAxisProjection};
+
+mod config;
+
+/// The OpenXR view configuration: standard stereo, two views (one per eye).
+const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
+/// The number of views (eyes), and the swapchain array size (one slice per eye).
+const VIEW_COUNT: u32 = 2;
+
+/// The live VR runtime state, on the game's main thread. Locked briefly by [`update`] and held for a
+/// frame by [`FrameContext`]. A const-constructible [`Mutex`] singleton, the same pattern
+/// [`crate::capture`] uses.
+static VR_STATE: Mutex<VrState> = Mutex::new(VrState::new());
+
+/// Register the VR runtime's shutdown cleanup. Call once at init (from [`crate::initialize_from_game`]
+/// via the module declaration wiring). The cleanup fully tears the runtime down so the OpenXR
+/// instance never outlives the DLL on uninject → reinject.
+pub fn install() {
+    crate::lifecycle::on_cleanup(|_renderer| {
+        uninstall();
+    });
+}
+
+/// The once-per-frame entry point, intended to be called from the game thread by the wave-2 Draw
+/// wiring (no caller today). Pumps OpenXR events, drives bring-up/retry/teardown per config, and
+/// returns whether a session is currently running (so the caller can decide whether to submit VR
+/// frames). Never panics on OpenXR failure -- failures degrade to flatscreen stereo and are retried.
+pub fn update() -> bool {
+    let cfg = Config::lock_query(|c| c.vr.clone());
+    let mut state = VR_STATE.lock();
+
+    if !cfg.enabled {
+        if state.instance.is_some() {
+            tracing::info!(target: "vr", "vr.enabled turned off; tearing down the OpenXR runtime");
+            state.teardown();
+        }
+        return false;
+    }
+
+    if state.instance.is_none() {
+        state.try_bring_up(&cfg);
+        return state.is_running();
+    }
+
+    state.pump_events();
+    state.is_running()
+}
+
+/// Whether an OpenXR session is currently running (READY..STOPPING). Cheap; locks the state briefly.
+pub fn is_running() -> bool {
+    VR_STATE.lock().is_running()
+}
+
+/// Recenter the cockpit: re-base the stored baseline from the latest located VIEW-space pose, taking
+/// its position and yaw only (the cockpit model). The wave-2 frame loop consumes the baseline when
+/// mapping per-eye poses. No-op until a frame has located a head pose.
+pub fn recenter() {
+    let mut state = VR_STATE.lock();
+    match state.latest_head_pose {
+        Some(pose) => {
+            state.baseline = Some(Baseline::from_pose(pose));
+            tracing::info!(target: "vr", "recentered the cockpit baseline");
+        }
+        None => {
+            tracing::warn!(target: "vr", "recenter requested before any head pose was located");
+        }
+    }
+}
+
+/// Fully tear the runtime down (swapchain → session → instance) and clear all state. Idempotent.
+/// Called from the `vr.enabled` toggle-off path and registered with [`crate::lifecycle`] so
+/// uninject → reinject starts clean and the OpenXR instance never outlives the DLL.
+pub fn uninstall() {
+    let mut state = VR_STATE.lock();
+    if state.instance.is_some() {
+        tracing::info!(target: "vr", "uninstalling the OpenXR runtime");
+    }
+    state.teardown();
+}
+
+/// Begin an OpenXR frame: `wait_frame` + `begin_frame` + `locate_views`, returning a [`FrameContext`]
+/// that holds the runtime lock for the duration of the frame. Returns `None` when no session is
+/// running or the frame could not begin (the caller then renders flatscreen). The returned context
+/// carries the per-eye poses (relative to the recenter baseline), FOVs, off-axis projections, and the
+/// predicted display time; call [`FrameContext::should_render`] to decide whether to render or submit
+/// an empty frame. The wave-2 Draw wiring is the intended caller; there is none today.
+pub fn frame_begin() -> Option<FrameContext> {
+    let mut guard = VR_STATE.lock();
+
+    if !guard.is_running() {
+        return None;
+    }
+
+    let cfg = Config::lock_query(|c| c.vr.clone());
+    match guard.begin_frame(&cfg) {
+        Ok(frame) => Some(FrameContext {
+            guard,
+            frame,
+            image_acquired: false,
+        }),
+        Err(e) => {
+            tracing::warn!(target: "vr", "frame begin failed: {e:#}");
+            None
+        }
+    }
+}
+
+/// A per-eye view for the frame in flight: pose relative to the recenter baseline, the raw HMD FOV,
+/// and the off-axis projection built from it (both depth conventions, see [`projection`]).
+#[derive(Copy, Clone)]
+pub struct EyeView {
+    /// The eye pose (position + orientation) relative to the recenter baseline, in the cockpit
+    /// frame. When no baseline is set this is the raw LOCAL-space pose.
+    pub pose: xr::Posef,
+    /// The eye's field of view, as reported by `locate_views`.
+    pub fov: xr::Fovf,
+    /// The off-axis projection for [`fov`](Self::fov). Write [`standard_depth`]
+    /// (`OffAxisProjection::standard_depth`) into `m_Projection` before `SetupRenderCamera`
+    /// (`docs/rendering.md` §2.7 / blocker 1).
+    pub projection: OffAxisProjection,
+}
+
+/// A swapchain image reference for one eye, handed to the wave-2 blit. The swapchain is a single
+/// 2-slice texture array; both eyes share the same acquired texture and are distinguished by
+/// [`array_index`](Self::array_index). The texture is runtime-owned -- wrap it borrowed (no `AddRef`)
+/// and do not release it.
+#[derive(Copy, Clone)]
+pub struct EyeImage {
+    /// The acquired swapchain texture (`ID3D11Texture2D`), as a raw COM pointer. Wrap with
+    /// `ID3D11Texture2D::from_raw` borrowed for the blit; the runtime owns it.
+    pub texture: *mut std::ffi::c_void,
+    /// The array slice for this eye (`0` = left, `1` = right).
+    pub array_index: u32,
+    /// The swapchain's DXGI format, so the wave-2 blit can build a matching view / conversion.
+    pub format: u32,
+}
+
+/// The frame in flight. Holds the runtime lock, so it must be dropped (or consumed via [`frame_end`])
+/// before [`update`] or another [`frame_begin`] is called on the same thread. Carries the per-eye
+/// views and the predicted display time; exposes the swapchain acquire/release the wave-2 blit needs.
+pub struct FrameContext {
+    guard: MutexGuard<'static, VrState>,
+    frame: FrameData,
+    image_acquired: bool,
+}
+
+impl FrameContext {
+    /// Whether the runtime wants the scene rendered this frame. When `false` the caller should skip
+    /// rendering and call [`frame_end`] to submit an empty frame (the runtime is idle/occluded).
+    pub fn should_render(&self) -> bool {
+        self.frame.should_render
+    }
+
+    /// The predicted display time for this frame, for pose-dependent work and the frame submit.
+    pub fn predicted_display_time(&self) -> xr::Time {
+        self.frame.predicted_display_time
+    }
+
+    /// The per-eye view (pose relative to the recenter baseline, FOV, off-axis projection). `eye` is
+    /// `0` (left) or `1` (right).
+    pub fn eye_view(&self, eye: usize) -> EyeView {
+        self.frame.eyes[eye]
+    }
+
+    /// Acquire and wait on the stereo swapchain image (created lazily on first use). Call once per
+    /// frame before rendering; the two eyes are array slices of the returned image
+    /// ([`eye_image`](Self::eye_image)). No-op if already acquired this frame.
+    pub fn acquire(&mut self) -> anyhow::Result<()> {
+        if self.image_acquired {
+            return Ok(());
+        }
+        let cfg = Config::lock_query(|c| c.vr.clone());
+        self.guard.acquire_swapchain_image(&cfg)?;
+        self.image_acquired = true;
+        self.frame.image_ever_acquired = true;
+        Ok(())
+    }
+
+    /// The swapchain image for `eye` (`0` = left, `1` = right), valid only between [`acquire`] and
+    /// [`release`]. `None` until [`acquire`] has run. The wave-2 blit copies the game's captured eye
+    /// texture into this image's `array_index` slice.
+    ///
+    /// [`acquire`]: Self::acquire
+    /// [`release`]: Self::release
+    pub fn eye_image(&self, eye: usize) -> Option<EyeImage> {
+        if !self.image_acquired {
+            return None;
+        }
+        let sc = self.guard.session.as_ref()?.swapchain.as_ref()?;
+        Some(EyeImage {
+            texture: sc.acquired_texture()?,
+            array_index: eye as u32,
+            format: sc.format,
+        })
+    }
+
+    /// Release the swapchain image after the blit. No-op if not acquired.
+    pub fn release(&mut self) -> anyhow::Result<()> {
+        if !self.image_acquired {
+            return Ok(());
+        }
+        self.guard.release_swapchain_image()?;
+        self.image_acquired = false;
+        Ok(())
+    }
+
+    /// End the frame: submit the world projection layer (or an empty frame when
+    /// [`should_render`](Self::should_render) is false or the swapchain was never acquired) and
+    /// consume the context, releasing the runtime lock. HUD quad layers become additional layers here
+    /// in a later wave (`docs/hud.md`); the surface takes only the world layer today.
+    pub fn frame_end(mut self) -> anyhow::Result<()> {
+        // Release any still-held image before submitting, so a caller that forgot to release does
+        // not deadlock the swapchain.
+        if self.image_acquired {
+            self.release()?;
+        }
+        let submit_world = self.frame.should_render && self.frame.image_ever_acquired;
+        self.guard.end_frame(&self.frame, submit_world)
+    }
+}
+
+/// The per-frame data captured at [`frame_begin`], carried by the [`FrameContext`].
+struct FrameData {
+    predicted_display_time: xr::Time,
+    should_render: bool,
+    eyes: [EyeView; 2],
+    /// Whether the swapchain image was acquired at some point this frame (so `frame_end` knows
+    /// whether a world layer can be submitted).
+    image_ever_acquired: bool,
+}
+
+/// An owned reduction of a pumped OpenXR event, decoupled from the borrowed [`xr::Event`] so the
+/// event pump can act on `self` after the event buffer borrow ends.
+enum PumpAction {
+    /// A session-state transition to act on (READY → begin, STOPPING → end, EXITING → teardown).
+    StateChanged(xr::SessionState),
+    /// The instance is being lost; tear down.
+    InstanceLost,
+}
+
+/// The recenter baseline: a position and a yaw-only orientation, re-based from the latest VIEW-space
+/// pose. Per-eye poses are expressed relative to this transform (the cockpit model).
+#[derive(Copy, Clone)]
+struct Baseline {
+    /// The world-from-baseline transform (position + yaw). Per-eye poses are re-based by its inverse.
+    position: glam::Vec3,
+    /// Yaw-only orientation (rotation about the up axis).
+    yaw: glam::Quat,
+}
+
+impl Baseline {
+    /// Extract the position and yaw-only orientation from a located VIEW-space pose.
+    fn from_pose(pose: xr::Posef) -> Self {
+        let orientation = glam::Quat::from_xyzw(
+            pose.orientation.x,
+            pose.orientation.y,
+            pose.orientation.z,
+            pose.orientation.w,
+        );
+        // Yaw only: project the orientation onto rotation about the Y (up) axis. Zero the X/Z
+        // components of the quaternion and renormalize; a degenerate (looking straight up/down)
+        // quaternion falls back to identity yaw.
+        let yaw = glam::Quat::from_xyzw(0.0, orientation.y, 0.0, orientation.w);
+        let yaw = if yaw.length_squared() > 1e-6 {
+            yaw.normalize()
+        } else {
+            glam::Quat::IDENTITY
+        };
+        Self {
+            position: glam::Vec3::new(pose.position.x, pose.position.y, pose.position.z),
+            yaw,
+        }
+    }
+
+    /// Re-base a located pose into the baseline (cockpit) frame: `baseline⁻¹ · pose`.
+    fn rebase(&self, pose: xr::Posef) -> xr::Posef {
+        let pos = glam::Vec3::new(pose.position.x, pose.position.y, pose.position.z);
+        let rot = glam::Quat::from_xyzw(
+            pose.orientation.x,
+            pose.orientation.y,
+            pose.orientation.z,
+            pose.orientation.w,
+        );
+        let inv_yaw = self.yaw.conjugate();
+        let rel_pos = inv_yaw * (pos - self.position);
+        let rel_rot = inv_yaw * rot;
+        xr::Posef {
+            orientation: xr::Quaternionf {
+                x: rel_rot.x,
+                y: rel_rot.y,
+                z: rel_rot.z,
+                w: rel_rot.w,
+            },
+            position: xr::Vector3f {
+                x: rel_pos.x,
+                y: rel_pos.y,
+                z: rel_pos.z,
+            },
+        }
+    }
+}
+
+/// The runtime state singleton. `instance == None` means the runtime is torn down (flatscreen); a
+/// present `instance` with `session == None` should not occur (the session is created together with
+/// the instance during bring-up), but the state models them separately for ordered teardown.
+struct VrState {
+    instance: Option<xr::Instance>,
+    system: Option<xr::SystemId>,
+    blend_mode: xr::EnvironmentBlendMode,
+    session: Option<Session>,
+    /// The last bring-up attempt, for the retry cadence.
+    last_attempt: Option<Instant>,
+    /// The recenter baseline (cockpit frame). `None` until first recenter.
+    baseline: Option<Baseline>,
+    /// The latest located head pose in LOCAL space, for [`recenter`]. `None` until a frame locates.
+    latest_head_pose: Option<xr::Posef>,
+}
+
+impl VrState {
+    const fn new() -> Self {
+        Self {
+            instance: None,
+            system: None,
+            blend_mode: xr::EnvironmentBlendMode::OPAQUE,
+            session: None,
+            last_attempt: None,
+            baseline: None,
+            latest_head_pose: None,
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| s.running)
+    }
+
+    /// Attempt the full bring-up (loader → instance → system → session → reference spaces) if the
+    /// retry cadence allows. Any failure logs and leaves the state torn down for the next retry.
+    fn try_bring_up(&mut self, cfg: &VrConfig) {
+        let now = Instant::now();
+        if let Some(last) = self.last_attempt
+            && now.duration_since(last).as_secs() < cfg.retry_interval_secs
+        {
+            return;
+        }
+        self.last_attempt = Some(now);
+
+        if let Err(e) = self.bring_up(cfg) {
+            tracing::warn!(
+                target: "vr",
+                "OpenXR bring-up failed (staying in flatscreen stereo, retrying in {}s): {e:#}",
+                cfg.retry_interval_secs,
+            );
+            self.teardown();
+        }
+    }
+
+    /// The bring-up steps, each surfacing a context-prefixed error. On success the instance, system,
+    /// blend mode, and session (not yet running -- the event pump begins it on READY) are stored.
+    fn bring_up(&mut self, cfg: &VrConfig) -> anyhow::Result<()> {
+        let entry = load_entry(cfg).context("vr: loading the OpenXR loader")?;
+
+        let available = entry
+            .enumerate_extensions()
+            .context("vr: enumerating OpenXR extensions")?;
+        if !available.khr_d3d11_enable {
+            anyhow::bail!("vr: the OpenXR runtime lacks XR_KHR_D3D11_enable");
+        }
+
+        let mut extensions = xr::ExtensionSet::default();
+        extensions.khr_d3d11_enable = true;
+        let instance = entry
+            .create_instance(
+                &xr::ApplicationInfo {
+                    application_name: "jc3vrs",
+                    application_version: 0,
+                    engine_name: "jc3vrs",
+                    engine_version: 0,
+                    api_version: xr::Version::new(1, 0, 0),
+                },
+                &extensions,
+                &[],
+            )
+            .context("vr: creating the OpenXR instance")?;
+
+        let system = instance
+            .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
+            .context("vr: acquiring the HMD system")?;
+
+        let blend_mode = *instance
+            .enumerate_environment_blend_modes(system, VIEW_TYPE)
+            .context("vr: enumerating environment blend modes")?
+            .first()
+            .context("vr: the runtime reported no environment blend modes")?;
+
+        let session = Session::create(&instance, system, cfg)?;
+
+        if let Ok(props) = instance.properties() {
+            tracing::info!(
+                target: "vr",
+                runtime = %props.runtime_name,
+                version = %props.runtime_version,
+                "OpenXR runtime brought up",
+            );
+        }
+
+        self.instance = Some(instance);
+        self.system = Some(system);
+        self.blend_mode = blend_mode;
+        self.session = Some(session);
+        Ok(())
+    }
+
+    /// Pump OpenXR events: session-state transitions (READY → begin, STOPPING → end), instance loss,
+    /// and lost events. On a transition to a lost/exiting state, or instance loss, tear the runtime
+    /// down so the next [`update`] retries a clean bring-up.
+    fn pump_events(&mut self) {
+        // Take the instance out to satisfy the borrow checker (poll_event borrows the instance while
+        // the handlers mutate `self`); restore it unless a handler cleared the session.
+        let Some(instance) = self.instance.take() else {
+            return;
+        };
+        // `xr::EventDataBuffer` is not `Send`, so it cannot live in the singleton; a fresh one per
+        // pump is cheap (a fixed-size scratch buffer) and keeps `VrState: Send`.
+        let mut events = xr::EventDataBuffer::new();
+        let mut lost = false;
+        loop {
+            // Reduce each event to an owned action before touching `self`, so the `&mut events`
+            // borrow held by the returned `Event` ends before the state handlers run.
+            let action = match instance.poll_event(&mut events) {
+                Ok(Some(xr::Event::SessionStateChanged(e))) => PumpAction::StateChanged(e.state()),
+                Ok(Some(xr::Event::InstanceLossPending(_))) => PumpAction::InstanceLost,
+                Ok(Some(xr::Event::EventsLost(e))) => {
+                    tracing::warn!(target: "vr", "lost {} OpenXR events", e.lost_event_count());
+                    continue;
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!(target: "vr", "poll_event failed: {e}");
+                    break;
+                }
+            };
+            match action {
+                PumpAction::StateChanged(new_state) => {
+                    if self.on_session_state(new_state) {
+                        lost = true;
+                        break;
+                    }
+                }
+                PumpAction::InstanceLost => {
+                    tracing::warn!(target: "vr", "OpenXR instance loss pending; tearing down");
+                    lost = true;
+                    break;
+                }
+            }
+        }
+        if lost {
+            // Restore the instance so `teardown` destroys handles in order.
+            self.instance = Some(instance);
+            self.teardown();
+        } else {
+            self.instance = Some(instance);
+        }
+    }
+
+    /// Handle a session-state transition. Returns `true` if the runtime should be torn down
+    /// (EXITING / LOSS_PENDING).
+    fn on_session_state(&mut self, state: xr::SessionState) -> bool {
+        tracing::info!(target: "vr", "session state -> {state:?}");
+        let Some(session) = self.session.as_mut() else {
+            return false;
+        };
+        match state {
+            xr::SessionState::READY => {
+                if let Err(e) = session.handle.begin(VIEW_TYPE) {
+                    tracing::error!(target: "vr", "session begin failed: {e}");
+                    return true;
+                }
+                session.running = true;
+            }
+            xr::SessionState::STOPPING => {
+                if let Err(e) = session.handle.end() {
+                    tracing::error!(target: "vr", "session end failed: {e}");
+                }
+                session.running = false;
+            }
+            xr::SessionState::EXITING | xr::SessionState::LOSS_PENDING => {
+                return true;
+            }
+            _ => {}
+        }
+        false
+    }
+
+    /// Begin a frame and locate the per-eye views, re-based into the cockpit frame. Updates the
+    /// latest head pose (for [`recenter`]) from the mid-eye pose.
+    fn begin_frame(&mut self, cfg: &VrConfig) -> anyhow::Result<FrameData> {
+        let session = self
+            .session
+            .as_mut()
+            .context("vr: no session for frame begin")?;
+
+        let frame_state = session.frame_wait.wait().context("vr: wait_frame failed")?;
+        session
+            .frame_stream
+            .begin()
+            .context("vr: begin_frame failed")?;
+
+        let mut eyes = [EyeView {
+            pose: xr::Posef::IDENTITY,
+            fov: xr::Fovf {
+                angle_left: 0.0,
+                angle_right: 0.0,
+                angle_up: 0.0,
+                angle_down: 0.0,
+            },
+            projection: OffAxisProjection::new(
+                Fov {
+                    left: 0.0,
+                    right: 0.0,
+                    up: 0.0,
+                    down: 0.0,
+                },
+                cfg.near_clip,
+                cfg.far_clip,
+            ),
+        }; 2];
+
+        let mut head_pose = None;
+        if frame_state.should_render {
+            let (_flags, views) = session
+                .handle
+                .locate_views(
+                    VIEW_TYPE,
+                    frame_state.predicted_display_time,
+                    &session.local,
+                )
+                .context("vr: locate_views failed")?;
+            if views.len() >= 2 {
+                head_pose = Some(mid_pose(views[0].pose, views[1].pose));
+                for (eye, view) in eyes.iter_mut().zip(views.iter()) {
+                    let pose = match self.baseline {
+                        Some(b) => b.rebase(view.pose),
+                        None => view.pose,
+                    };
+                    *eye = EyeView {
+                        pose,
+                        fov: view.fov,
+                        projection: OffAxisProjection::new(
+                            fov_from_xr(view.fov),
+                            cfg.near_clip,
+                            cfg.far_clip,
+                        ),
+                    };
+                }
+            }
+        }
+
+        if let Some(p) = head_pose {
+            self.latest_head_pose = Some(p);
+        }
+
+        Ok(FrameData {
+            predicted_display_time: frame_state.predicted_display_time,
+            should_render: frame_state.should_render,
+            eyes,
+            image_ever_acquired: false,
+        })
+    }
+
+    /// Acquire and wait on the swapchain image, creating the swapchain lazily on first use.
+    fn acquire_swapchain_image(&mut self, cfg: &VrConfig) -> anyhow::Result<()> {
+        let instance = self
+            .instance
+            .as_ref()
+            .context("vr: no instance for swapchain acquire")?
+            .clone();
+        let system = self.system.context("vr: no system for swapchain acquire")?;
+        let session = self
+            .session
+            .as_mut()
+            .context("vr: no session for swapchain acquire")?;
+        if session.swapchain.is_none() {
+            session.swapchain = Some(Swapchain::create(&instance, system, &session.handle, cfg)?);
+        }
+        let sc = session
+            .swapchain
+            .as_mut()
+            .expect("swapchain was just ensured");
+        sc.acquire()
+    }
+
+    /// Release the swapchain image.
+    fn release_swapchain_image(&mut self) -> anyhow::Result<()> {
+        let session = self
+            .session
+            .as_mut()
+            .context("vr: no session for swapchain release")?;
+        let sc = session
+            .swapchain
+            .as_mut()
+            .context("vr: no swapchain to release")?;
+        sc.release()
+    }
+
+    /// End the frame, submitting the world projection layer when `submit_world`, else an empty
+    /// frame. Borrows the session's fields disjointly so the layer can reference the swapchain and
+    /// local space while `frame_stream` is borrowed mutably.
+    fn end_frame(&mut self, frame: &FrameData, submit_world: bool) -> anyhow::Result<()> {
+        let blend_mode = self.blend_mode;
+        let session = self
+            .session
+            .as_mut()
+            .context("vr: no session for frame end")?;
+
+        if !submit_world {
+            return session
+                .frame_stream
+                .end(frame.predicted_display_time, blend_mode, &[])
+                .context("vr: end_frame (empty) failed");
+        }
+
+        let sc = session
+            .swapchain
+            .as_ref()
+            .context("vr: no swapchain for world layer")?;
+        let extent = xr::Extent2Di {
+            width: sc.width as i32,
+            height: sc.height as i32,
+        };
+        let rect = xr::Rect2Di {
+            offset: xr::Offset2Di { x: 0, y: 0 },
+            extent,
+        };
+        let views = [
+            xr::CompositionLayerProjectionView::new()
+                .pose(frame.eyes[0].pose)
+                .fov(frame.eyes[0].fov)
+                .sub_image(
+                    xr::SwapchainSubImage::new()
+                        .swapchain(&sc.handle)
+                        .image_array_index(0)
+                        .image_rect(rect),
+                ),
+            xr::CompositionLayerProjectionView::new()
+                .pose(frame.eyes[1].pose)
+                .fov(frame.eyes[1].fov)
+                .sub_image(
+                    xr::SwapchainSubImage::new()
+                        .swapchain(&sc.handle)
+                        .image_array_index(1)
+                        .image_rect(rect),
+                ),
+        ];
+        let layer = xr::CompositionLayerProjection::new()
+            .space(&session.local)
+            .views(&views);
+        session
+            .frame_stream
+            .end(frame.predicted_display_time, blend_mode, &[&layer])
+            .context("vr: end_frame failed")
+    }
+
+    /// Tear the runtime down in order: swapchain → session → instance. Ending a running session
+    /// first is best-effort (the runtime may already be stopping). Clears all derived state.
+    fn teardown(&mut self) {
+        if let Some(mut session) = self.session.take() {
+            session.swapchain = None;
+            if session.running
+                && let Err(e) = session.handle.request_exit()
+            {
+                tracing::debug!(target: "vr", "request_exit during teardown: {e}");
+            }
+            // Dropping `session` drops the frame stream/waiter and the session handle.
+        }
+        self.instance = None;
+        self.system = None;
+        self.baseline = None;
+        self.latest_head_pose = None;
+    }
+}
+
+/// A created OpenXR session and its per-session resources. `running` tracks the READY..STOPPING
+/// window driven by the event pump.
+struct Session {
+    handle: xr::Session<xr::D3D11>,
+    frame_wait: xr::FrameWaiter,
+    frame_stream: xr::FrameStream<xr::D3D11>,
+    /// The LOCAL reference space -- the cockpit-relative world frame.
+    local: xr::Space,
+    /// The stereo swapchain, created lazily once the session is running and first rendered.
+    swapchain: Option<Swapchain>,
+    running: bool,
+}
+
+impl Session {
+    /// Create the session against the game's `ID3D11Device`, after checking the D3D11 graphics
+    /// requirements the spec requires. The device is fetched from the graphics engine singleton
+    /// under [`crate::capture`]'s null-guarding and is not stored.
+    fn create(
+        instance: &xr::Instance,
+        system: xr::SystemId,
+        _cfg: &VrConfig,
+    ) -> anyhow::Result<Self> {
+        // The spec requires querying graphics requirements before create_session; the returned
+        // min feature level is informational for us (we share the engine's already-created device).
+        let requirements = instance
+            .graphics_requirements::<xr::D3D11>(system)
+            .context("vr: querying D3D11 graphics requirements")?;
+        tracing::info!(
+            target: "vr",
+            min_feature_level = requirements.min_feature_level,
+            "D3D11 graphics requirements",
+        );
+
+        let device_ptr = with_engine_device(|device| device.m_Device.as_raw())?;
+
+        let (handle, frame_wait, frame_stream) = unsafe {
+            instance
+                .create_session::<xr::D3D11>(
+                    system,
+                    &xr::d3d::SessionCreateInfoD3D11 {
+                        device: device_ptr.cast(),
+                    },
+                )
+                .context("vr: create_session failed")?
+        };
+
+        let local = handle
+            .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
+            .context("vr: creating the LOCAL reference space")?;
+
+        Ok(Self {
+            handle,
+            frame_wait,
+            frame_stream,
+            local,
+            swapchain: None,
+            running: false,
+        })
+    }
+}
+
+/// The stereo swapchain: a single 2-slice texture array (one slice per eye), sized from the
+/// runtime's recommended per-eye resolution scaled by `vr.resolution_scale`, in a negotiated format.
+struct Swapchain {
+    handle: xr::Swapchain<xr::D3D11>,
+    width: u32,
+    height: u32,
+    /// The DXGI format actually chosen (recorded for the wave-2 blit, which must match/convert).
+    format: u32,
+    /// The enumerated swapchain images (raw `ID3D11Texture2D` pointers as `usize`, so the state stays
+    /// `Send`; runtime-owned). Cast back to a pointer at [`Swapchain::acquired_texture`].
+    images: Vec<usize>,
+    /// The index returned by the most recent `acquire_image`, valid until `release_image`.
+    acquired_index: Option<u32>,
+}
+
+impl Swapchain {
+    /// Create the swapchain from the recommended view-configuration resolution × `resolution_scale`,
+    /// negotiating a format from `enumerate_swapchain_formats` (preferring sRGB 8-bit).
+    fn create(
+        instance: &xr::Instance,
+        system: xr::SystemId,
+        session: &xr::Session<xr::D3D11>,
+        cfg: &VrConfig,
+    ) -> anyhow::Result<Self> {
+        let views = instance
+            .enumerate_view_configuration_views(system, VIEW_TYPE)
+            .context("vr: enumerating view configuration views")?;
+        let view = views
+            .first()
+            .context("vr: the runtime reported no view configuration views")?;
+
+        let scale = cfg.resolution_scale.max(0.1);
+        let width = ((view.recommended_image_rect_width as f32) * scale).round() as u32;
+        let height = ((view.recommended_image_rect_height as f32) * scale).round() as u32;
+
+        let formats = session
+            .enumerate_swapchain_formats()
+            .context("vr: enumerating swapchain formats")?;
+        let format = negotiate_format(&formats)?;
+
+        let handle = session
+            .create_swapchain(&xr::SwapchainCreateInfo {
+                create_flags: xr::SwapchainCreateFlags::EMPTY,
+                usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
+                    | xr::SwapchainUsageFlags::SAMPLED
+                    | xr::SwapchainUsageFlags::TRANSFER_DST,
+                format,
+                sample_count: 1,
+                width,
+                height,
+                face_count: 1,
+                array_size: VIEW_COUNT,
+                mip_count: 1,
+            })
+            .context("vr: create_swapchain failed")?;
+
+        let images: Vec<usize> = handle
+            .enumerate_images()
+            .context("vr: enumerating swapchain images")?
+            .into_iter()
+            .map(|ptr| ptr as usize)
+            .collect();
+
+        tracing::info!(
+            target: "vr",
+            width,
+            height,
+            format,
+            image_count = images.len(),
+            "created the stereo swapchain",
+        );
+
+        Ok(Self {
+            handle,
+            width,
+            height,
+            format,
+            images,
+            acquired_index: None,
+        })
+    }
+
+    fn acquire(&mut self) -> anyhow::Result<()> {
+        let index = self
+            .handle
+            .acquire_image()
+            .context("vr: acquire_image failed")?;
+        self.handle
+            .wait_image(xr::Duration::INFINITE)
+            .context("vr: wait_image failed")?;
+        self.acquired_index = Some(index);
+        Ok(())
+    }
+
+    fn release(&mut self) -> anyhow::Result<()> {
+        self.handle
+            .release_image()
+            .context("vr: release_image failed")?;
+        self.acquired_index = None;
+        Ok(())
+    }
+
+    /// The currently acquired texture, or `None` when no image is acquired.
+    fn acquired_texture(&self) -> Option<*mut std::ffi::c_void> {
+        let index = self.acquired_index? as usize;
+        self.images.get(index).map(|&p| p as *mut std::ffi::c_void)
+    }
+}
+
+/// Load the OpenXR loader (dynamic route). Uses [`VrConfig::loader_path`] if set, else
+/// `openxr_loader.dll` next to the payload DLL, falling back to the platform default search
+/// (`xr::Entry::load`) if the payload path cannot be resolved.
+fn load_entry(cfg: &VrConfig) -> anyhow::Result<xr::Entry> {
+    let path = cfg
+        .loader_path
+        .clone()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            crate::module::get_path().and_then(|p| p.parent().map(|d| d.join("openxr_loader.dll")))
+        });
+
+    let entry = match path {
+        Some(path) => {
+            tracing::info!(target: "vr", loader = %path.display(), "loading the OpenXR loader");
+            unsafe { xr::Entry::load_from(&path) }
+                .with_context(|| format!("vr: loading the OpenXR loader at {}", path.display()))?
+        }
+        None => {
+            tracing::info!(target: "vr", "loading the OpenXR loader from the default search path");
+            unsafe { xr::Entry::load() }.context("vr: loading the OpenXR loader (default path)")?
+        }
+    };
+    Ok(entry)
+}
+
+/// Negotiate a swapchain color format from the runtime's supported list, preferring an 8-bit sRGB
+/// format (the eye captures resolve through the engine's LDR path). Falls back to the runtime's
+/// first offered format, logging the choice. The game's captures may be a different format; the
+/// wave-2 blit bridges them.
+fn negotiate_format(formats: &[u32]) -> anyhow::Result<u32> {
+    use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+    };
+    const PREFERRED: [u32; 2] = [
+        DXGI_FORMAT_R8G8B8A8_UNORM_SRGB.0 as u32,
+        DXGI_FORMAT_B8G8R8A8_UNORM_SRGB.0 as u32,
+    ];
+
+    if let Some(&format) = PREFERRED.iter().find(|f| formats.contains(f)) {
+        tracing::info!(target: "vr", format, "negotiated a preferred sRGB swapchain format");
+        return Ok(format);
+    }
+    let format = *formats
+        .first()
+        .context("vr: the runtime offered no swapchain formats")?;
+    tracing::warn!(
+        target: "vr",
+        format,
+        "no preferred sRGB format available; using the runtime's first offered format",
+    );
+    Ok(format)
+}
+
+/// Fetch the game's `ID3D11Device` from the graphics engine singleton, null-guarded exactly as
+/// [`crate::capture`] does, and run `f` against it. The device is not retained past `f`.
+fn with_engine_device<R>(
+    f: impl FnOnce(&jc3gi::graphics_engine::device::Device) -> R,
+) -> anyhow::Result<R> {
+    let ge = unsafe { jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() }
+        .context("vr: the graphics engine is unavailable")?;
+    let device =
+        unsafe { ge.m_Device.as_ref() }.context("vr: the graphics device is unavailable")?;
+    Ok(f(device))
+}
+
+/// Convert an `xr::Fovf` (radian half-angles) into a [`Fov`] for the projection builder.
+fn fov_from_xr(fov: xr::Fovf) -> Fov {
+    Fov {
+        left: fov.angle_left,
+        right: fov.angle_right,
+        up: fov.angle_up,
+        down: fov.angle_down,
+    }
+}
+
+/// The midpoint pose of the two eyes (position averaged, orientation from the left eye): a stand-in
+/// head pose for the recenter baseline.
+fn mid_pose(a: xr::Posef, b: xr::Posef) -> xr::Posef {
+    xr::Posef {
+        orientation: a.orientation,
+        position: xr::Vector3f {
+            x: 0.5 * (a.position.x + b.position.x),
+            y: 0.5 * (a.position.y + b.position.y),
+            z: 0.5 * (a.position.z + b.position.z),
+        },
+    }
+}

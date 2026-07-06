@@ -7,7 +7,7 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::{headpose::HeadPoseConfig, hud::HudConfig};
+use crate::{headpose::HeadPoseConfig, hud::HudConfig, vr::VrConfig};
 
 /// The global runtime configuration. Cheap to lock (uncontended `parking_lot::Mutex`); read it at the
 /// top of a hook and release before doing engine work.
@@ -28,6 +28,7 @@ pub struct Config {
     pub fsr: FsrConfig,
     pub hud: HudConfig,
     pub headpose: HeadPoseConfig,
+    pub vr: VrConfig,
 }
 impl Config {
     pub const fn new() -> Self {
@@ -40,6 +41,7 @@ impl Config {
             fsr: FsrConfig::new(),
             hud: HudConfig::new(),
             headpose: HeadPoseConfig::new(),
+            vr: VrConfig::new(),
         }
     }
 

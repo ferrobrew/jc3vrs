@@ -14,6 +14,11 @@ glam = { workspace = true }
 
 jc3gi = { path = "../jc3gi" }
 fsr-sys = { path = "../fsr-sys" }
+# Runtime-loaded (`loaded` default feature): the OpenXR loader is opened at runtime via
+# `xr::Entry::load_from`, not linked. The `static` loader (build the loader through cmake against the
+# xwin/clang-cl cross toolchain) does not build here -- cmake requires Ninja, which the cross
+# environment lacks -- so the dynamic route is the portable choice. See `vr` module docs.
+openxr = "0.21"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
