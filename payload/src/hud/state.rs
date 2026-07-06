@@ -279,11 +279,31 @@ impl HudState {
         let Some(shift) = self.depth_shift.as_mut() else {
             return base;
         };
-        // SAFETY: the graphics engine is the live singleton on the render thread.
-        if let Some(graphics_engine) =
-            unsafe { jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() }
+        // The histogram dispatch only runs for the histogram policy; the vehicle policy needs
+        // no GPU work. The mask uses the previous frame's corners (this frame's depend on the
+        // distance being computed) and the redirected HUD texture's alpha.
+        if cfg.use_depth_histogram
+            && let Some(graphics_engine) =
+                // SAFETY: the graphics engine is the live singleton on the render thread.
+                unsafe { jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() }
         {
-            shift.sample(context, graphics_engine, cfg);
+            let hud_srv = self.target.as_ref().map(|t| t.color_srv().clone());
+            let mask = match (
+                cfg.mask_by_hud,
+                self.cached_corners,
+                self.current_pose,
+                &hud_srv,
+            ) {
+                (true, Some(corners), Some((pos, _)), Some(srv)) => {
+                    Some(super::depth::MaskInputs {
+                        camera_pos: pos.to_array(),
+                        corners,
+                        hud_srv: srv,
+                    })
+                }
+                _ => None,
+            };
+            shift.sample(context, graphics_engine, cfg, mask);
         }
         shift.distance(cfg, mode, base)
     }

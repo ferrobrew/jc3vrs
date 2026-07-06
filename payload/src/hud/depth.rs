@@ -50,7 +50,40 @@ struct Params {
     proj_a: f32,
     proj_b: f32,
     stride: u32,
-    _pad: [u32; 3],
+    mask_by_hud: u32,
+    min_depth: f32,
+    _pad0: f32,
+    camera_pos: [f32; 4],
+    panel_origin: [f32; 4],
+    panel_right: [f32; 4],
+    panel_up: [f32; 4],
+    inv_view_projection: [f32; 16],
+}
+
+/// The fixed-point weight the shader uses for an unmasked sample (matches `WEIGHT_ONE`).
+const WEIGHT_ONE: u32 = 256;
+
+/// The panel-mask inputs for one dispatch: the ray origin, the panel's world corners (top-left,
+/// top-right, bottom-left as the HUD texture maps), and the HUD texture to weight by.
+pub struct MaskInputs<'a> {
+    pub camera_pos: [f32; 3],
+    pub corners: [[f32; 4]; 4],
+    pub hud_srv: &'a windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
+}
+
+/// Whether the local player is attached to a vehicle, polled on the game thread (the accessor
+/// walks game-thread animation state) and read by the render-side policy.
+static IN_VEHICLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Poll the local player's vehicle-attach state. Call once per frame on the game update thread.
+pub fn poll_vehicle_state() {
+    // SAFETY: game update thread; the accessor reads the character's own animation state.
+    let in_vehicle = unsafe {
+        jc3gi::character::character::Character::GetLocalPlayerCharacter()
+            .as_ref()
+            .is_some_and(|c| c.IsInVehicleAttachState())
+    };
+    IN_VEHICLE.store(in_vehicle, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// A live snapshot of the dynamic-distance state, for the debug UI.
@@ -67,7 +100,8 @@ pub struct DepthShiftStatus {
 /// The frame's depth-distribution statistics, derived from a read-back histogram.
 #[derive(Clone, Copy, Debug)]
 pub struct DepthStats {
-    /// Total samples in the histogram.
+    /// The approximate sample count (the shader accumulates fixed-point alpha weights; this is
+    /// the total weight normalized back to whole samples).
     pub total: u32,
     /// Fraction of samples nearer than the configured near threshold.
     pub near_occupancy: f32,
@@ -79,6 +113,7 @@ pub struct DepthStats {
 /// smoothing state.
 pub struct DepthShift {
     shader: ID3D11ComputeShader,
+    sampler: windows::Win32::Graphics::Direct3D11::ID3D11SamplerState,
     params: ID3D11Buffer,
     histogram: ID3D11Buffer,
     histogram_uav: ID3D11UnorderedAccessView,
@@ -107,6 +142,21 @@ impl DepthShift {
             d3d.CreateComputeShader(COMPUTE_DXBC, None, Some(&mut shader))
                 .context("creating the depth-histogram compute shader")?;
             let shader = shader.context("the depth-histogram compute shader was not created")?;
+
+            let mut sampler = None;
+            d3d.CreateSamplerState(
+                &windows::Win32::Graphics::Direct3D11::D3D11_SAMPLER_DESC {
+                    Filter: windows::Win32::Graphics::Direct3D11::D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+                    AddressU: windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE_ADDRESS_CLAMP,
+                    AddressV: windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE_ADDRESS_CLAMP,
+                    AddressW: windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE_ADDRESS_CLAMP,
+                    MaxLOD: f32::MAX,
+                    ..Default::default()
+                },
+                Some(&mut sampler),
+            )
+            .context("creating the depth-histogram HUD sampler")?;
+            let sampler = sampler.context("the depth-histogram HUD sampler was not created")?;
 
             let mut params: Option<ID3D11Buffer> = None;
             d3d.CreateBuffer(
@@ -179,6 +229,7 @@ impl DepthShift {
 
             Ok(Self {
                 shader,
+                sampler,
                 params,
                 histogram,
                 histogram_uav,
@@ -201,6 +252,7 @@ impl DepthShift {
         context: &ID3D11DeviceContext,
         graphics_engine: &GraphicsEngine,
         cfg: &DepthShiftConfig,
+        mask: Option<MaskInputs<'_>>,
     ) {
         // SAFETY: the depth texture and its SRV belong to the live graphics engine; the buffers
         // are ours; the context is the engine's immediate context under its mutex.
@@ -214,6 +266,44 @@ impl DepthShift {
             }
             let Some((proj_a, proj_b)) = projection_z_row() else {
                 return;
+            };
+
+            // The panel-plane mapping for the HUD-alpha mask: the top-left corner as origin,
+            // the u and v spans pre-divided by their squared lengths so the shader's dot
+            // products yield UVs directly, and the inverse view-projection for the pixel rays.
+            let (mask_by_hud, camera_pos, origin, right, up) = match &mask {
+                Some(inputs) => {
+                    let c = |i: usize| glam::Vec3::from_slice(&inputs.corners[i][..3]);
+                    let (tl, tr, bl) = (c(0), c(1), c(2));
+                    let (u_span, v_span) = (tr - tl, bl - tl);
+                    let pack = |v: glam::Vec3| {
+                        let len_sq = v.length_squared().max(f32::EPSILON);
+                        [v.x, v.y, v.z, 1.0 / len_sq]
+                    };
+                    (
+                        1u32,
+                        [
+                            inputs.camera_pos[0],
+                            inputs.camera_pos[1],
+                            inputs.camera_pos[2],
+                            0.0,
+                        ],
+                        [tl.x, tl.y, tl.z, 0.0],
+                        pack(u_span),
+                        pack(v_span),
+                    )
+                }
+                None => (0u32, [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]),
+            };
+            let inv_view_projection = match super::quad::fetch_view_projection() {
+                Some(vp) if mask_by_hud != 0 => {
+                    // Invert in f64: the view-projection carries world-scale translations that
+                    // lose precision in f32 (see the stereo reprojection).
+                    let engine = jc3gi::types::math::Matrix4 { data: vp };
+                    let inv = glam::Mat4::from(engine).as_dmat4().inverse().as_mat4();
+                    jc3gi::types::math::Matrix4::from(inv).data
+                }
+                _ => [0.0; 16],
             };
 
             // Upload the frame's parameters.
@@ -236,7 +326,14 @@ impl DepthShift {
                 proj_a,
                 proj_b,
                 stride,
-                _pad: [0; 3],
+                mask_by_hud,
+                min_depth: cfg.min_depth.max(0.0),
+                _pad0: 0.0,
+                camera_pos,
+                panel_origin: origin,
+                panel_right: right,
+                panel_up: up,
+                inv_view_projection,
             });
             context.Unmap(&self.params, 0);
 
@@ -253,12 +350,19 @@ impl DepthShift {
             context.ClearUnorderedAccessViewUint(&self.histogram_uav, &[0u32; 4]);
             context.CSSetShader(&self.shader, None);
             context.CSSetConstantBuffers(0, Some(&[Some(self.params.clone())]));
-            context.CSSetShaderResources(0, Some(&[Some(depth.m_SRV.clone())]));
+            context.CSSetShaderResources(
+                0,
+                Some(&[
+                    Some(depth.m_SRV.clone()),
+                    mask.as_ref().map(|inputs| inputs.hud_srv.clone()),
+                ]),
+            );
+            context.CSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
             context.CSSetUnorderedAccessViews(0, 1, Some(&Some(self.histogram_uav.clone())), None);
             let groups_x = ((width / stride as f32).ceil() as u32).div_ceil(8).max(1);
             let groups_y = ((height / stride as f32).ceil() as u32).div_ceil(8).max(1);
             context.Dispatch(groups_x, groups_y, 1);
-            context.CSSetShaderResources(0, Some(&[None]));
+            context.CSSetShaderResources(0, Some(&[None, None]));
             context.CSSetUnorderedAccessViews(0, 1, Some(&None), None);
             context.CSSetShader(None, None);
             context.OMSetRenderTargets(Some(&saved_rtvs), saved_dsv.as_ref());
@@ -319,6 +423,16 @@ impl DepthShift {
         if mode != HudMode::Hud {
             self.near_engaged = false;
             return base;
+        }
+        if !cfg.use_depth_histogram {
+            // Deterministic vehicle policy: near while attached to a vehicle. No hysteresis
+            // needed -- the flag does not flap -- and the easing covers mount/dismount.
+            self.near_engaged = IN_VEHICLE.load(std::sync::atomic::Ordering::Relaxed);
+            return if self.near_engaged {
+                cfg.near_distance
+            } else {
+                base
+            };
         }
         let Some(stats) = self.stats else {
             return base;
@@ -381,6 +495,7 @@ fn derive_stats(bins: &[u32; SLOT_COUNT], cfg: &DepthShiftConfig) -> Option<Dept
     if total == 0 {
         return None;
     }
+    let total_samples = total / WEIGHT_ONE;
     // Near occupancy: bins whose upper edge is below the threshold, plus a linear share of the
     // bin containing it.
     let mut near = 0.0f32;
@@ -404,7 +519,7 @@ fn derive_stats(bins: &[u32; SLOT_COUNT], cfg: &DepthShiftConfig) -> Option<Dept
         }
     }
     Some(DepthStats {
-        total,
+        total: total_samples,
         near_occupancy: near / total as f32,
         percentile_depth,
     })

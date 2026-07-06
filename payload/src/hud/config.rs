@@ -115,6 +115,11 @@ impl HudConfig {
 pub struct DepthShiftConfig {
     /// Master toggle.
     pub enabled: bool,
+    /// Drive the near shift from the scene depth histogram instead of the vehicle state. The
+    /// vehicle flag (the default) is deterministic -- near while riding, base otherwise -- and
+    /// immune to the histogram's false positives (a first-person weapon filling the view); the
+    /// histogram generalizes to corridors and interiors the flag cannot see.
+    pub use_depth_histogram: bool,
     /// Depths nearer than this count as near-field, in meters.
     pub near_threshold: f32,
     /// The fraction of the frame that must be near-field to engage the near shift.
@@ -137,12 +142,20 @@ pub struct DepthShiftConfig {
     pub margin: f32,
     /// Sample every Nth pixel of the depth buffer on both axes.
     pub sample_stride: u32,
+    /// Weight histogram samples by the HUD texture's alpha where the sample's camera ray meets
+    /// the panel, so the statistics describe the depth behind visible HUD content rather than
+    /// the whole frame.
+    pub mask_by_hud: bool,
+    /// Ignore depth samples nearer than this, in meters (a floor for first-person viewmodel
+    /// geometry; 0 disables).
+    pub min_depth: f32,
 }
 
 impl DepthShiftConfig {
     pub const fn new() -> Self {
         Self {
             enabled: true,
+            use_depth_histogram: false,
             near_threshold: 2.0,
             near_occupancy: 0.2,
             hysteresis: 0.05,
@@ -152,6 +165,8 @@ impl DepthShiftConfig {
             percentile: 0.10,
             margin: 0.3,
             sample_stride: 4,
+            mask_by_hud: true,
+            min_depth: 0.0,
         }
     }
 }

@@ -65,6 +65,10 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // New game frame: the next grapple-reticle projection is the frame's aim position.
         super::ui::begin_frame_aim_recording();
 
+        // The vehicle-attach state drives the HUD's near shift; it reads game-thread animation
+        // state, so it is polled here and read by the render side.
+        crate::hud::depth::poll_vehicle_state();
+
         crate::crash::mark(Phase::OriginalUpdateRender);
         GAME_UPDATE_RENDER
             .get()

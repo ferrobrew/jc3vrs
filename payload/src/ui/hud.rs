@@ -99,24 +99,56 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 ui.indent("hud_depth_shift", |ui| {
                     match depth_status {
                         Some(status) => {
-                            let stats = status.stats;
-                            ui.label(format!(
-                                "Live: {} at {:.2} m (near {:.0}%, p{:.2} m)",
-                                if status.near_engaged { "near" } else { "base" },
-                                status.smoothed.unwrap_or(f32::NAN),
-                                stats.map_or(0.0, |s| s.near_occupancy * 100.0),
-                                stats.map_or(f32::NAN, |s| s.percentile_depth),
-                            ));
+                            let state = if status.near_engaged { "near" } else { "base" };
+                            let distance = status
+                                .smoothed
+                                .map_or("-".to_string(), |d| format!("{d:.2} m"));
+                            match status.stats {
+                                // The histogram statistics only exist while that policy runs.
+                                Some(stats) if cfg.hud.depth_shift.use_depth_histogram => {
+                                    ui.label(format!(
+                                        "Live: {state} at {distance} (near {:.0}%, p{:.2} m)",
+                                        stats.near_occupancy * 100.0,
+                                        stats.percentile_depth,
+                                    ));
+                                }
+                                _ if cfg.hud.depth_shift.use_depth_histogram => {
+                                    ui.label(format!(
+                                        "Live: {state} at {distance} (no depth samples yet)"
+                                    ));
+                                }
+                                _ => {
+                                    ui.label(format!(
+                                        "Live: {state} at {distance} ({})",
+                                        if status.near_engaged {
+                                            "in a vehicle"
+                                        } else {
+                                            "not in a vehicle"
+                                        },
+                                    ));
+                                }
+                            }
                         }
                         None => {
-                            ui.label("Live: no depth samples yet");
+                            ui.label("Live: not sampled yet");
                         }
                     }
                     ui.checkbox(
-                        &mut cfg.hud.depth_shift.continuous,
-                        "EXPERIMENTAL: follow the depth percentile continuously",
+                        &mut cfg.hud.depth_shift.use_depth_histogram,
+                        "EXPERIMENTAL: drive from the depth histogram instead of the vehicle \
+                         state",
                     );
-                    if cfg.hud.depth_shift.continuous {
+                    if cfg.hud.depth_shift.use_depth_histogram {
+                        ui.checkbox(
+                            &mut cfg.hud.depth_shift.mask_by_hud,
+                            "Weight samples by the HUD's alpha on the panel",
+                        );
+                        ui.add(
+                            egui::Slider::new(&mut cfg.hud.depth_shift.min_depth, 0.0..=2.0)
+                                .text("Ignore depths below (m)"),
+                        );
+                    }
+                    if cfg.hud.depth_shift.use_depth_histogram && cfg.hud.depth_shift.continuous {
                         ui.add(
                             egui::Slider::new(&mut cfg.hud.depth_shift.percentile, 0.01..=0.5)
                                 .text("Percentile"),
@@ -125,7 +157,11 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                             egui::Slider::new(&mut cfg.hud.depth_shift.margin, 0.0..=2.0)
                                 .text("Margin inside (m)"),
                         );
-                    } else {
+                    } else if cfg.hud.depth_shift.use_depth_histogram {
+                        ui.checkbox(
+                            &mut cfg.hud.depth_shift.continuous,
+                            "EXPERIMENTAL: follow the depth percentile continuously",
+                        );
                         ui.add(
                             egui::Slider::new(&mut cfg.hud.depth_shift.near_threshold, 0.3..=10.0)
                                 .text("Near-field threshold (m)"),
