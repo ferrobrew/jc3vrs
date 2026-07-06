@@ -49,8 +49,10 @@ pub use projection::{Fov, OffAxisProjection};
 mod blit;
 mod config;
 mod frame;
+mod resolution;
 
 pub use blit::present_and_submit;
+pub use resolution::apply_native_resolution;
 
 /// The OpenXR view configuration: standard stereo, two views (one per eye).
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
@@ -66,6 +68,10 @@ static VR_STATE: Mutex<VrState> = Mutex::new(VrState::new());
 /// via the module declaration wiring). The cleanup fully tears the runtime down so the OpenXR
 /// instance never outlives the DLL on uninject → reinject.
 pub fn install() {
+    // Register the native-resolution shutdown restore: the deferred resize back to the pre-VR display
+    // size is requested while the hooks are still live, so the delayed hook uninstall (lib.rs
+    // `shutdown_startup`) leaves the `Draw` prologue time to service it before teardown.
+    resolution::install();
     crate::lifecycle::on_cleanup(|_renderer| {
         blit::teardown();
         uninstall();
@@ -100,6 +106,29 @@ pub fn update() -> bool {
 /// Whether an OpenXR session is currently running (READY..STOPPING). Cheap; locks the state briefly.
 pub fn is_running() -> bool {
     VR_STATE.lock().is_running()
+}
+
+/// The per-eye render resolution the engine should target while a session is running: the runtime's
+/// recommended view size × [`VrConfig::resolution_scale`], matching the stereo swapchain so the blit
+/// is a straight scale-1 pass. `None` when no session is up or the recommended size is unknown. Read
+/// by [`resolution`] once per frame.
+pub fn native_eye_resolution() -> Option<(u32, u32)> {
+    let cfg = Config::lock_query(|c| c.vr.clone());
+    let state = VR_STATE.lock();
+    if !state.is_running() {
+        return None;
+    }
+    state.eye_resolution(&cfg)
+}
+
+/// Scale a raw recommended per-eye view size by `resolution_scale`, clamped to a small positive
+/// minimum (and at least 1 px each axis). Shared by the swapchain and the native-resolution driver so
+/// the engine renders each eye at exactly the swapchain size.
+fn scaled_eye_size(width: u32, height: u32, resolution_scale: f32) -> (u32, u32) {
+    let scale = resolution_scale.max(0.1);
+    let w = ((width as f32) * scale).round() as u32;
+    let h = ((height as f32) * scale).round() as u32;
+    (w.max(1), h.max(1))
 }
 
 /// Recenter the cockpit: re-base the stored baseline from the latest located VIEW-space pose, taking
@@ -365,6 +394,10 @@ struct VrState {
     baseline: Option<Baseline>,
     /// The latest located head pose in LOCAL space, for [`recenter`]. `None` until a frame locates.
     latest_head_pose: Option<xr::Posef>,
+    /// The runtime's recommended per-eye render resolution (raw, before [`VrConfig::resolution_scale`]),
+    /// cached at bring-up. Feeds [`native_eye_resolution`] so the engine can render each eye at the
+    /// same size the swapchain uses. `None` while torn down.
+    recommended_view: Option<(u32, u32)>,
 }
 
 impl VrState {
@@ -377,11 +410,20 @@ impl VrState {
             last_attempt: None,
             baseline: None,
             latest_head_pose: None,
+            recommended_view: None,
         }
     }
 
     fn is_running(&self) -> bool {
         self.session.as_ref().is_some_and(|s| s.running)
+    }
+
+    /// The per-eye render resolution to drive the engine to: the runtime's recommended view size
+    /// scaled by [`VrConfig::resolution_scale`], the same computation the swapchain uses
+    /// ([`scaled_eye_size`]). `None` until bring-up cached the recommended size.
+    fn eye_resolution(&self, cfg: &VrConfig) -> Option<(u32, u32)> {
+        self.recommended_view
+            .map(|(w, h)| scaled_eye_size(w, h, cfg.resolution_scale))
     }
 
     /// Attempt the full bring-up (loader → instance → system → session → reference spaces) if the
@@ -443,6 +485,20 @@ impl VrState {
             .first()
             .context("vr: the runtime reported no environment blend modes")?;
 
+        // Cache the recommended per-eye view size for the native-resolution driver, so it can size
+        // the engine's scene render targets to match the swapchain without re-enumerating each frame.
+        let recommended_view = instance
+            .enumerate_view_configuration_views(system, VIEW_TYPE)
+            .ok()
+            .and_then(|views| {
+                views.first().map(|v| {
+                    (
+                        v.recommended_image_rect_width,
+                        v.recommended_image_rect_height,
+                    )
+                })
+            });
+
         let session = Session::create(&instance, system, cfg)?;
 
         if let Ok(props) = instance.properties() {
@@ -458,6 +514,7 @@ impl VrState {
         self.system = Some(system);
         self.blend_mode = blend_mode;
         self.session = Some(session);
+        self.recommended_view = recommended_view;
         Ok(())
     }
 
@@ -728,6 +785,7 @@ impl VrState {
         self.system = None;
         self.baseline = None;
         self.latest_head_pose = None;
+        self.recommended_view = None;
     }
 }
 
@@ -823,9 +881,11 @@ impl Swapchain {
             .first()
             .context("vr: the runtime reported no view configuration views")?;
 
-        let scale = cfg.resolution_scale.max(0.1);
-        let width = ((view.recommended_image_rect_width as f32) * scale).round() as u32;
-        let height = ((view.recommended_image_rect_height as f32) * scale).round() as u32;
+        let (width, height) = scaled_eye_size(
+            view.recommended_image_rect_width,
+            view.recommended_image_rect_height,
+            cfg.resolution_scale,
+        );
 
         let formats = session
             .enumerate_swapchain_formats()

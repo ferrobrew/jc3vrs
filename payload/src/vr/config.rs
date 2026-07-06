@@ -78,6 +78,20 @@ pub struct VrConfig {
     /// [`BlitGamma`]). Defaults to linearizing the display-referred capture.
     #[serde(default)]
     pub blit_srgb_gamma: BlitGamma,
+    /// Render each eye at the HMD-recommended per-eye resolution (× [`resolution_scale`]) rather than
+    /// the desktop display size, by driving the engine's own deferred resize (see
+    /// [`crate::vr::resolution`]). On by default; disabled automatically at runtime if the resize
+    /// path faults or returns the wrong size, falling back to the desktop resolution.
+    ///
+    /// [`resolution_scale`]: VrConfig::resolution_scale
+    #[serde(default = "default_true")]
+    pub native_resolution: bool,
+}
+
+/// The serde default for [`VrConfig::native_resolution`] (the manual [`Default`] via
+/// [`VrConfig::new`] is not consulted per-field when a field is absent from the serialized form).
+fn default_true() -> bool {
+    true
 }
 
 impl VrConfig {
@@ -92,6 +106,7 @@ impl VrConfig {
             far_clip: 4000.0,
             projection_convention: ProjectionConvention::EnginePreReverseZ,
             blit_srgb_gamma: BlitGamma::Linearize,
+            native_resolution: true,
         }
     }
 }

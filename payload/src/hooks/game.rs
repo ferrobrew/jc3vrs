@@ -86,6 +86,14 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         } else {
             crate::headpose::Source::Sim
         });
+
+        // Drive per-eye native render resolution before `frame_begin` (which holds the VR runtime
+        // lock for the frame) and before the eye loop: this only populates the engine's deferred
+        // display-mode state, which its own `HandleModeChange` services in the first eye's `Draw`
+        // prologue (previous dispatch drained, this frame not yet dispatched -- the idle-context
+        // boundary `ApplyResize` needs). Must sit before the first `game.Draw`.
+        crate::vr::apply_native_resolution();
+
         let mut vr_frame = vr_running.then(crate::vr::frame_begin).flatten();
 
         crate::crash::mark(Phase::OriginalUpdateRender);
