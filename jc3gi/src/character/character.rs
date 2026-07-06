@@ -184,6 +184,18 @@ impl Character {
             f()
         }
     }
+    pub const IsInVehicleAttachState_ADDRESS: usize = 0x14077F080;
+    /// Whether the character is attached to a vehicle (riding, or in the mount/dismount
+    /// transitions), read from the animation rule system's current state. The state machine
+    /// pointers it walks are game-thread data; call on the game update thread.
+    pub unsafe fn IsInVehicleAttachState(&self) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
+                Self::IsInVehicleAttachState_ADDRESS,
+            );
+            f(self as *const Self as _)
+        }
+    }
     pub const GetHeadPosition_ADDRESS: usize = 0x1407AF550;
     pub unsafe fn GetHeadPosition(
         &self,
