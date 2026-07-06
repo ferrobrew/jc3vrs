@@ -41,9 +41,17 @@ The binding translation is deliberately congruent with the extracted default map
 
 ### 3. Hands and guns
 
-Hand-attach bones (`ATTACH_HAND_RIGHT`/`LEFT`) driven to the controller poses via `SetJoint` in the existing character-hook seam — the gun renders in the hand. Arm IK from the shipped pattern (`NRightArmAimIK`-style effector writes on the pass the mod already feeds), both arms, with the head-effector write suppressed. Wrist position effectors place the hands; the open animation question is two-handed weapons (rifle fore-grip vs a one-hand hold) — start one-handed-everything and evaluate. Verify muzzle-origin coherence: shots must originate at the rendered (controller-held) muzzle.
+The weapon renders in the hand by driving its attach bone (`ATTACH_HAND_RIGHT`/`LEFT`, `docs/engine/hands-and-roomscale.md` §1) to the **dominant** controller's pose via `SetJoint` in the existing character-hook seam, with the right arm IK'd to it (the shipped `NRightArmAimIK` pattern, head-effector write suppressed so the HMD keeps the head).
+
+**The weapon is held one-handed by the dominant hand; the off-hand floats free.** The v1 hold is deliberately single-handed: the weapon rides the right hand only, and the left hand tracks its own controller as a free-floating tracked hand — *not* snapped to the weapon. This means suppressing the engine's own secondary-hand grip IK (`UpdateSecondaryHandIKPass`) for the off-hand, which would otherwise pull the left hand onto the weapon's foregrip; instead the left wrist is driven to the left controller (a wrist position effector, or left to the controller pose directly). The left hand has **no gameplay significance yet** — it is visible and player-controlled but mechanically dead. This is the common VR-shooter baseline: hold the gun one-handed until a stabilization gesture reaches up and grabs it.
+
+That **stabilization mechanism** — grabbing the weapon with the off-hand to steady and steer the muzzle (the H3VR / Boneworks two-grip hold, where the off-hand's grip point sets the weapon's pitch/yaw), and dual-wield split across two controllers (the per-gun attach bones make this mechanically possible, `docs/engine/hands-and-roomscale.md` §1) — is deferred to its own phase, with the reload/state-transition handoff as its known seam. (Left-*controller* grapple, phase 2, is a ray and is unaffected by the hand being free.)
+
+Verify muzzle-origin coherence: shots must originate at the rendered (controller-held) muzzle.
 
 ### 4. Dual-wield split
+
+Part of the deferred proper-two-hand solution (phase 3), not a near-term phase: independent per-gun *aiming* only reads correctly once the two guns are split onto two controller-held hands (otherwise both pistols sit in one animated pose while their bullets diverge). The mechanics are captured here so the seam is documented, but this ships with the two-hand hold, behind the same deferral.
 
 Two interventions on one weapon object. Direction: key the `m_AimTargetPosition` write to which barrel fires next, writing the left- or right-controller target accordingly. Fire: on foot the game exposes a single fire input and alternates barrels internally — inlined in `Fire_Projectile`'s tail (component index `+0x160`, per-component fire-position cursor `CWeaponData+0x120`; the named `MarkNextWeaponComponentForFire` turned out to be an unrelated misnamed predicate). Per-hand triggers route each trigger to its own component, pinning both the origin cursor and the dispatched `CWeaponData` together so origin and flash stay in sync. Verification answered the bookkeeping question: ammo, recoil, heat, and effects are all per-fire-call and never keyed off the barrel index, so nothing double-counts (`docs/engine/aim-pipeline.md`, verification notes).
 

@@ -72,6 +72,33 @@ Two clean override points, in increasing order of surface area:
    where the animation put it, so the hand and gun visibly separate. Only useful if the hand is
    hidden. Not recommended.
 
+### Dual-wield: one weapon object, per-gun attach bones
+
+A dual-wield slot (`E_SLOT_DUAL_WIELD`) is **one `CWeaponBase`** holding a *vector* of `CWeaponData`
+(`m_lWeaponData`, one entry per gun), not two weapon instances. Each gun carries its own
+`m_lBoneAttachementPerWeaponState[m_State]`, indexed by `weapon_index`:
+`GetCurrentBoneAttachement(weapon_index)` (**0x140CB58F0**) returns *that gun's* attach bone for the
+current weapon state, and `ChangeBoneAttachement(bone, weapon_index)` (**0x140CB58B0**) rebinds one
+gun's bones independently (it writes all 11 weapon-state slots). The second gun rides the `…2` attach
+bones — the equip code (`NGSONodes`) assigns `ATTACH_HAND_RIGHT` / `ATTACH_HAND_RIGHT2` to gun 0/1 on
+the right, `ATTACH_HAND_LEFT` / `ATTACH_HAND_LEFT2` on the left.
+
+Two consequences for controller-driven hands:
+
+- **Placement is fully splittable.** Each gun has an independent attach bone, so `SetJoint` on gun
+  0's bone → right controller and gun 1's bone → left controller places the two pistols in two hands
+  pointing two ways, with no shared transform to fight. Combined with the per-barrel aim-target write
+  (`docs/engine/aim-pipeline.md`, dual-wield) each gun fires at its own hand's target.
+- **State is shared, and that is the seam.** The whole pair has one `m_State`, one aim-flag, and one
+  reload/equip/holster animation; `GetCurrentBoneAttachement` is gated on that single `m_State`. So
+  the override is clean only in the free-aim states (`E_WS_WIELDING`, `E_WS_DUAL_WIELDING`) — when
+  `m_State` leaves them, a single canonical two-gun animation drives both hands, and holding the
+  attach-bone override through it looks broken if the hands are far apart. The fix is a state-gated
+  handoff: yield the hands to animation control outside the wielding states (let the reload play, the
+  hands reconcile to the scripted pose), and reclaim them to the controllers on return. Dual-wield is
+  the most visible instance of the general "yield during scripted animations" rule (§ feasibility
+  verdicts), because two independently-posed hands have the furthest to travel back.
+
 ### Muzzle-flash / shell effects and fire logic — the aim-pipeline interface point
 
 The wielded-weapon *effects* (muzzle flash, fire particle, casings, sounds) live in the
