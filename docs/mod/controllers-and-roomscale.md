@@ -12,7 +12,7 @@ The recon found that the game's own architecture separates almost everything we 
 - **Fire direction is one vector per weapon.** `CWeaponBase::GetShotMatrix` builds each shot as muzzle-bone origin toward `m_AimTargetPosition` (+0x3FC). Substituting that vector per weapon from a controller ray gives true per-gun aiming; the origin follows the rendered weapon automatically.
 - **The weapon follows a hand bone.** Wielded weapons ride dedicated attach bones (`ATTACH_HAND_RIGHT`/`ATTACH_HAND_LEFT`) resolved through the same `SetJoint` machinery the head override already uses — a controller-posed hand bone carries the gun, its muzzle, and its effects with it.
 - **The write path makes controllers native.** `ForceSetPressed`/`ForceSetClicked` on action IDs means the game reads VR input as native input. One correction from the semantic layer, though: while raw actions `FIRE_LEFT`/`FIRE_RIGHT` exist (bound to LT/RT), the game's mode-partitioned button layer (`CButtonMapping::EMapping`) exposes only `MAPPING_FIRE_RIGHT` on foot — dual-wield alternates barrels internally off a single fire input, and `FIRE_LEFT` is consulted only in vehicle/mounted contexts. Per-hand trigger firing is therefore a mod-side per-barrel intervention (phase 4), not an input mapping.
-- **Roomscale rides the engine's own character physics.** The locomotion task feeds a wanted velocity to the Havok character proxy (`SetWantedVelocity`), which solves collision, stairs, and slopes. Adding `roomscale_delta / dt` to that velocity moves the real capsule with the player's real body, with the engine doing the hard part.
+- **Roomscale rides the engine's own character physics.** The on-foot locomotion task solves a world velocity every tick (idle included) and writes it to the Havok character proxy, which handles collision, stairs, and slopes. Adding a chase velocity to that write moves the real capsule with the player's real body, with the engine doing the hard part (see "Roomscale design").
 
 The counterweights: auto-aim is computed upstream on the camera ray (controller rays get none natively — mod-side magnetism replaces it), dual-wield is one weapon object with two alternating barrels sharing one target (a per-shot target swap is needed), the aim *state* flags (`m_AimFlags`/`m_AimingWeapon`) are singular rather than per-hand (weapon-raise gating is a shared problem), and the right-arm aim IK also drives the head effector (must be suppressed so the HMD owns the head).
 
@@ -43,7 +43,7 @@ Two interventions on one weapon object. Direction: key the `m_AimTargetPosition`
 
 ### 5. Roomscale
 
-Per-frame HMD XZ delta (cockpit-frame) added to the on-foot locomotion task's wanted velocity — collision, stairs, and slopes solved by the proxy. Gated off when seat-locked (`m_attachType`/`m_Attachable`) and in proxy-suspended states. Vehicle seat transition: on seat-lock, re-base the cockpit frame to map the player's current physical pose onto the seat; roomscale disengages, the `vehicle` action set activates. Comfort safety: fade on deep head-through-geometry penetration (the pitfall list in `docs/mod/head-and-body.md`).
+The full design is in "Roomscale design" below; the engine answers live in `docs/engine/hands-and-roomscale.md` §4. In brief: a per-tick velocity nudge chases the body under the player's physical head through the engine's own character physics, facing stays head-owned, crouch ships in stages, and vehicle seating is a pause-and-confirm transition.
 
 ### 6. Radial menu and the gesture path
 
@@ -154,3 +154,39 @@ Derived from the game's own mode partition (`CButtonMapping::EMapping` sections)
 ### UI
 
 The floating panel plus the virtual cursor already exist; the VR-native upgrade is a hand-ray laser pointer with trigger as click, B as cancel, and the stick for lists — the `ui` action set replaces all gameplay bindings while a menu is up (`END_UI_MAPPINGS` marks the game's own boundary for this).
+
+## Roomscale design
+
+The handoff-complete design for physical locomotion, resolved against the engine answers in `docs/engine/hands-and-roomscale.md` §4. The governing principle (Boneworks topology, `docs/mod/head-and-body.md`): the head is ground truth and the body chases it — the camera is never derived from the body's motion, so the view stays 1:1 with the real head no matter what the body does.
+
+### The chase loop
+
+The camera is already placed from the measured HMD pose each frame (anchor + cockpit offset), so there is no explicit "consume the offset" bookkeeping — the offset is re-measured from live poses every frame, and anything the body fails to do simply leaves it nonzero. The loop, per sim tick:
+
+1. Measure the body-frame XZ offset from the character to the player's physical head (the cockpit position the pose path already computes).
+2. Outside a small deadzone (~10 cm), feed a chase velocity `clamp(offset / dt, max_chase_speed)` into the on-foot locomotion result — a post-call hook on the locomotion task, adding to the solved world velocity it writes to the character proxy (`docs/engine/hands-and-roomscale.md` §4: the task ticks every on-foot frame including idle, so walking from standstill works; the engine's own displacement evaluation is either/or between root motion and code-driven, so the add cannot double-count it).
+3. The proxy solves collision, stairs, and slopes. No read-back step: next tick's offset measurement reflects whatever actually happened. A wall between the player and the body leaves a persistent offset — the view stays with the real head, and a `CastRaySimple` probe drives a comfort fade on deep head-through-geometry penetration.
+4. Physical-walk and stick-walk compose in one channel: the chase velocity scales down with stick magnitude so deliberate stick locomotion wins, and both express as the same body-local move vector.
+
+Facing: **physical translation never rotates the body** (the settled VR convention — VRIK-family games derive facing from the head, never from travel). The chase velocity is body-local; JC3's aim-relative strafe blend space, already forced by the FPS-movement shim, animates sidesteps and backpedals while the body-follows-head deadzone scheme owns the torso yaw.
+
+Teleports: when `CCharacter::m_NumFramesSinceTeleport == 0` (one int read; every warp writer resets it), the tick re-bases the cockpit baseline instead of feeding a kilometre-long chase spike.
+
+Recenter on foot re-bases **yaw and height only**: the chase loop keeps position converged, so there is no position to recenter, and recentering must never teleport the body through a wall the chase could not cross. Position re-basing exists only in seat transitions.
+
+### Crouch, in stages
+
+1. **Visual crouch** (ship first, config-gated): a low head target with the hips-translation and floor-contact solve steps enabled folds the body through the same HumanIK pass the head target already uses — feet planted, hips drop.
+2. **Capsule honesty**: the engine swaps the proxy capsule per state itself (`SetProxyState` → `hknpWorld::setBodyShape`), so a shorter crouch capsule rides the engine's own mechanism rather than raw Havok surgery. Gate on the visual crouch proving out.
+3. **AI honesty**: whether enemy perception respects a lowered head is playtest-only; measured in the headset, not designed in advance.
+
+### Seat transitions (roomscale mode only)
+
+Entering a vehicle pauses the world but never the view — a static frame under head motion is instant sickness, and the game's own pause state freezes the camera seams the mod depends on (`UpdateRenderPaused` never runs `CameraTree::UpdateRenderContexts`). The freeze is therefore a mod-side game-clock freeze through the already-hooked `CClock::Update` (zero game dt, skip the sim tick, never enter the paused sub-state), keeping the render, headpose, and camera paths fully live.
+
+1. Enter-vehicle plays the game's own animation; the player watches.
+2. When the seat-lock engages (the attach machinery), the clock freezes and the floating panel prompts: take your seat, confirm when ready.
+3. On confirm: re-base the cockpit to the seated head reference — the character's own head/eye bones riding the vehicle through `m_AttachBone` · `m_AttachOffset` — unfreeze, and activate the `vehicle` action set. Roomscale chase disengages while seat-locked.
+4. Exit reverses: animation completes, freeze, stand-and-step-away prompt, re-base to standing, chase re-engages.
+
+Seated-mode players skip the ceremony entirely (instant auto re-base). Open aesthetic choice: whether the frozen world dims/vignettes to signal stopped time, or stays raw (bullets hanging mid-air) — a config default to be picked in the headset.

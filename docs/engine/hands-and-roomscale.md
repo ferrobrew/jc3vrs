@@ -301,3 +301,251 @@ handling the capsule-clamp residual (the through-geometry fade) rather than free
 - **Capsule size in roomscale.** Leaning/ducking physically moves the head but the proxy capsule is
   a fixed shape (`m_PendingProxyState`); whether crouch/lean should reshape the capsule or only
   offset the head is unresolved.
+
+## 4. Roomscale-locomotion handoff — closing the unknowns
+
+Follow-up RE that resolves the six blockers for the roomscale-locomotion handoff. Same conventions:
+release-build RVAs from the 2026 no-Denuvo IDB, 2016 symbol dump as locator only. Two of these
+findings correct earlier assumptions in §3 and the open questions above — flagged inline.
+
+### 4.1 Idle ticking — the locomotion task *does* run at idle (corrects an open question)
+
+`NStateTask_MovementLocomotionTask::Update` (**0x140829E80**) runs **every on-foot sim tick,
+including standing idle with no input** — it is not gated to an active move. The proof is by
+xref: the only callers of `NStateTask_LocoUtil::EvaluateCharacterOrientation` (**0x14081F8C0**) are
+this task, `NStateTask_MovementStuntingTask::Update` (**0x14082B440**), and
+`NPhysicalAnchorWarpTask::Update` (**0x14083E210**). The mod's mode detector already observes its
+`ORIENTATION_EVAL_CALLS` counter (the `EvaluateCharacterOrientation` detour) advancing on every
+on-foot tick including idle (`docs/mod/head-and-body.md`); on-foot idle is neither stunting nor
+warping, so the advancing counter *is* the locomotion task ticking. The "move/aim task counters stop
+while idle" the mod saw are a narrower, action-specific task, not this one.
+
+At idle the task still runs the full pipeline — `EvaluateCharacterSpeed` (**0x14081AB10**, ~0),
+`EvaluateCharacterOrientation`, `EvaluateCharacterDisplacement` — and still writes a wanted velocity
+(≈0) to the character proxy every tick. So the per-tick feed seam is live at idle; the mod does not
+need an always-on task or a state-machine change.
+
+**The on-foot feed does not go through `SetWantedVelocity` (corrects §3).** At its tail
+(`0x14082A658`) the locomotion task writes its solved world velocity **directly into the character
+proxy input at `CPfxCharacterInstance + 0x3C`** (a `CVector3f`: xy at `+0x3C`, z at `+0x44`; a byte
+"has surface dir" flag at `+0x39`), where `CPfxCharacterInstance` is `CCharacter[1034]`
+(`CCharacter + 0x2050`). It never calls `CPfxCharacterInstance::CCharacterInput::SetWantedVelocity`
+(**0x14075FD90**) — that entry point is used only by the *proxy-driven* states (ragdoll get-up,
+in-air grapple-fire, grappling-hang, stunting, jump, grapple-yank, upright), which write the
+`CCharacterInput` sub-object at `+0x2934` instead. So there are **two distinct proxy-input
+channels**: `+0x3C` (on-foot locomotion) and the `CCharacterInput` wanted-velocity at `+0x2934`
+(everything else).
+
+**Cleanest idle-and-walk feed:** hook `NStateTask_MovementLocomotionTask::Update` post-call for the
+local player and add `roomscaleDeltaXZ / dt` into the just-written `CPfxCharacterInstance + 0x3C`
+vector (re-normalizing the surface-dir flag handling is unnecessary — the physics step reads the raw
+vector). This is the on-foot analogue of the additive `SetWantedVelocity` seam §3 proposed for the
+proxy-driven states, and because the task ticks at idle the add works from a dead stop. Do **not**
+target `SetWantedVelocity` for on-foot roomscale — it is not on the on-foot path.
+
+### 4.2 Raycast / scene-query API — `CPhysicsSystem::CastRay` and friends
+
+`CPlayerAimControl::UpdateDirectAim` (**0x140CE5350**) calls the engine's general scene query
+directly (no wrapper): `CPhysicsSystem::CastRay` (**0x140286740**). The physics-system singleton is
+`qword_142EDC120`.
+
+```
+bool CPhysicsSystem::CastRay(CPhysicsSystem*,
+                             const CRay3&        ray,        // { CVector3f start; CVector3f direction; } WORLD space, direction normalized
+                             float               minFraction,// 0.0 in the aim call
+                             float               maxDistance,// world-space length along direction
+                             CCastRayInfoBase*   outHit,     // nullptr = boolean-only
+                             CRaycastFilter*     filter,     // nullptr = default filter
+                             unsigned int        flags,      // 0 in the aim call
+                             int                 layer);     // 21 in the aim call ("aim/query" layer)
+```
+
+Coordinate space is world. `layer=21` is the layer the aim query uses; `flags` is a
+collision-filter-info word (0 for a plain query). Backend is Havok `hknpWorld::castRay`
+(**0x141500BE0**).
+
+- **Filter semantics.** `CRaycastFilter` ctor (**0x1401FCBA0**):
+  `CRaycastFilter(int layerA, int layerB, IPfxInstance* ignoreInstance, const hknpWorld*)` — the
+  `ignoreInstance` lets you exclude the player's own proxy. The aim path uses the subclass
+  `CIgnoreMaterialFlagFilter` with `SetIgnoreBulletPass` / `SetIgnoreRayPass` / `SetIgnoreCameraPass`
+  (**0x140B86840/60/80**) — JC3 materials carry per-pass "holey" flags (foliage a bullet passes
+  through, glass, etc.); the filter chooses which passes count as a hit. `CPlayerAimControl` wraps
+  this in `CPlayerAimRaycastFilterCacheFirstHoleyHitAndMinDistanceHit` (a caching collector that
+  records both the first holey hit and the nearest solid hit).
+- **Result.** `CCastRayInfo : CCastRayInfoBase` (`Reset` **0x1402558C0**) carries hit
+  position/normal/fraction, hit body/instance, `GetHitMaterial` → `EGameMaterialId`
+  (**0x1402B3BA0**), `DidHitBulletPassMaterial` (**0x14023BDF0**), `GetHitNameHash`
+  (**0x1403E48E0**).
+- **Thread-safety / phase.** These are sim-phase queries against the live Havok world.
+  `UpdateDirectAim` runs inside the aim update on the sim thread (`CPlayerAimControl::UpdatePreSim`
+  **0x140C65920** / `UpdateAllTargets` **0x140CE7690**), *not* during the physics solve and *not*
+  from a render worker. Call the probe from a sim-phase hook (the same phase the mod already uses for
+  aim/HIK work), never from the camera/render hook.
+
+**Simpler variants** (all `CPhysicsSystem` members, all world space):
+
+- `CastRaySimple` (**0x140286BE0**): `bool CastRaySimple(const CVector3f& start, const CVector3f& end,
+  unsigned int flags)` — builds the ray, no hit-info, no filter, hardcodes `layer=21`, returns a
+  boolean. **This is the ideal head-through-geometry penetration probe** (start = last-safe head,
+  end = current head; a `true` return means the segment is blocked).
+- `CastRayTerrain` (**0x140286CE0**) — terrain-only.
+- `CastRayWaterSurface` (**0x14023C150**) — water plane.
+- **Shape casts** for magnetism volumes: `CastSphere` (**0x140202C90**)
+  `bool CastSphere(const CVector3f& start, const CVector3f& end, float radius, float, hknpCollisionQueryCollector&, unsigned int, float)`;
+  `CastShape` (**0x1401F0890**) for an arbitrary `hknpShape*` with a rotation; and the free function
+  `SweptSphereCast` (**0x140738670**) filling a `CCastResult`. `CMagnetWeaponComponent::CastSphereAgainstStatic`
+  (**0x14098A850**) is a worked consumer to copy for magnetism candidate scoring.
+
+### 4.3 Teleport / discontinuity detection — `m_NumFramesSinceTeleport == 0`
+
+The character teleport writers (all bypass the collision solve):
+
+- **Fast travel / mission warps:** `CGameWorld::TeleportPlayer` (**0x1409AF820**) and
+  `TeleportPlayerInstant` (**0x140A126C0**). Both call the object's virtual world-transform setter
+  (vtable slot `+0x90` / index 18 on the character's transform subobject `CCharacter + 8`), then
+  `CCharacter::ForceNeutralState` (**0x1407FD120**), set the teleport flag `CCharacter + 0x2B08 |= 4`,
+  and re-base the camera via `CGameCameraManager::ResetCamera` (**0x14077BCE0**). They also bracket
+  the move with `NEvent::CPostEvent::PostMsg("game_teleporting_initiated" / "…_completed")` — a clean
+  string-keyed choke point if event-level notification is wanted.
+- **Scripted teleport objects:** `CTeleport::Teleport` (**0x14050E360**), `CGameWorld::UpdateTeleport`
+  (**0x140A128A0**), `NStateTask_InputVehicleExitTask::TeleportUpwards` (**0x14081A3C0**).
+- **Vehicle:** `CVehicle::TeleportVehicle` (**0x140F4FC60**) (the seated character rides via the
+  attach, §4.4).
+- **Orientation-only / warp-task writers:** `CCharacter::WriteWorldMatrixOrientation`
+  (**0x1408D73A0**, sole caller `SetOrientation(CQuaternion)` **0x140803C10**) and the animation warp
+  tasks (`NPhysicalAnchorWarpTask`, `NStateTask_MovementHeightWarpTask`).
+
+**Cheapest reliable per-tick detector: `CCharacter::m_NumFramesSinceTeleport`.** The character's
+per-tick update does `++m_NumFramesSinceTeleport` at its very top, and every teleport writer resets
+it to `-1` (confirmed in the dump: `m_NumFramesSinceTeleport = -1` in the teleport paths, `++` at the
+tick head). So **`m_NumFramesSinceTeleport == 0` means "teleported on this exact tick"**, and small
+values (`< N`) mean "settling after a warp" — this is a single int read, covers *all* the writers
+above uniformly (they all funnel through the reset), and needs no hook on the writers themselves. Use
+it to suppress the roomscale add and hard-recenter the VR rig for one tick. A per-tick
+`length(T1.translation − prevT1.translation) > threshold` distance heuristic is the fallback if the
+field is ever missed, but the counter is strictly better (no threshold tuning, no false positives on
+fast legitimate motion like wingsuit).
+
+### 4.4 Seat pose reference — `m_AttachBone` + `m_AttachOffset` on the character
+
+When the character seat-locks into a vehicle the pose is **not** stored on the vehicle's `CSeat`
+(that struct is interaction-graph metadata only: `m_GraphNode`, `m_DoorSlot`, `m_WindowPartInstance`,
+`m_PlayerUsable` — no transform). It is defined on the **character**, by an attach *bone + offset*:
+
+- `CCharacter::m_AttachBone` (`NBone::ESafeBoneIndex`) — a safe bone / socket **on the parent
+  (vehicle) model**.
+- `CCharacter::m_AttachOffset` (`CMatrix4f`) — the character's transform *relative to that bone*.
+- `m_Attachable` (`CAttachable`), `m_attachType` (`AttachType`), `m_attachedObject` — the binding
+  (§3). The Y-aligned attach entry is `CCharacter::SetYAlignedAttachTo` (**0x14079D540**), which
+  computes a yaw-only alignment from the target frame and calls the `AttachTo` virtual (vtable slot
+  `+0x140` / index 40); `AttachToWithCurrentOffset` (**0x1403FEE10**) preserves the live offset.
+
+So while attached, **character world = vehicle.SafeBoneWorld(`m_AttachBone`) · `m_AttachOffset`**. The
+seat's head/eye reference the mod should re-base the VR cockpit to is therefore just **the
+character's own head/eye bones** — the exact `GetSafeBoneMatrix(HEAD)` / eye-bone reads the mod
+already does on foot — because the whole skeleton rides the vehicle through the attach. No new
+vehicle-side read is needed; the seat pose is expressed as the character's animated head bone, which
+is already vehicle-relative.
+
+**Do not use the vehicle camera as the seat reference.** The in-vehicle camera is a *third-person
+chase* rig (`SGenericVehicleCamera`: `m_CameraPosition`, `m_RotationPoint`, `m_LookAtPoint` relative
+to the vehicle body, plus spring/lag/FOV tuning) — it has no seat-eye anchor, so it is a poor
+fallback. If a vehicle-frame anchor is ever needed independent of the character skeleton, compose
+`m_AttachBone` world (from the vehicle's animated model) with `m_AttachOffset` directly.
+
+### 4.5 Root-motion summing — REPLACE, not add; the two dir sources are exclusive
+
+`NStateTask_LocoUtil::EvaluateCharacterDisplacement` (**0x14081AB90**) is a strict **either/or**, not
+a sum. Its first branch (taken when the animation is *not* mid-blend, no code-driven marker
+`0xE844061C` is set, and it is outside the special segments) reads
+`CAnimationControl::GetRawRootVelocity` (**0x140434F20**), rotates it into world space, writes the
+wanted velocity, and **returns immediately** (`0x14081AC63…ACA2`). Only if that branch is skipped
+does it fall through to the code-driven path, which reads the target direction from blackboard
+`0x7DF24A88` (with previous-dir `0x370A3A61` and the marker), builds a direction, and rotates it out.
+**Animation root motion and the blackboard-`0x7DF24A88` direction never both contribute in one call**
+— it is one source per tick.
+
+Consequently, adding a roomscale velocity on top of stick locomotion **does not double-count against
+`EvaluateCharacterDisplacement`**, because the mod's additive term is applied *after* the task, at the
+proxy-input write (`CPfxCharacterInstance + 0x3C`, §4.1), not inside the displacement evaluator.
+
+**Safe composition rule:** `proxy_wanted_velocity_ws = engine_result + roomscaleDeltaXZ / dt`, where
+`engine_result` is whatever the locomotion task already wrote to `+0x3C` (animation root motion *or*
+code-driven displacement, whichever the tick chose — the mod need not care which). The one real
+double-count risk is **stick-driven walking**: while the stick is deflected the animation walk cycle
+already produces root velocity, so a *physical* walk added on top stacks with it. Gate the roomscale
+add to the idle/near-idle case (stick near center) or scale it against stick magnitude — the same
+gating §3's open question anticipated, now with the mechanism confirmed: the add is at `+0x3C`, the
+engine value is self-consistent, and the only overlap is real-walk-plus-stick-walk, not
+root-motion-versus-blackboard.
+
+### 4.6 Capsule shape and pause
+
+**(a) Capsule dimensions and runtime resize.** The character proxy's capsule is a Havok `hknpShape`
+selected per **proxy state**. `CPfxCharacterInstance::SetProxyState` (**0x140239580**) is the swap:
+it stores the new state at `CPfxCharacterInstance + 0xC8`, fetches the per-state shape from the
+avatar template's shape table (`*(this+240)->vtbl[2]()` indexed by state), and calls
+`hknpWorld::setBodyShape(world, bodyId, shape)` (**0x1414CF370**) to hot-swap the shape on the live
+body, plus a byte at `+0x31` on a linked object. `BuildDefaultCharacterContext` (**0x14024D370**)
+builds the Havok *character-state* machine (on-ground / in-air / jumping / flying) but not the
+capsule dims themselves — those live in the pre-registered `hknpShape` objects in the avatar template
+table, keyed by `EProxyState`. **So the engine itself already resizes/swaps the capsule** (the
+`m_PendingProxyState` / `m_DefaultProxyState` mechanism) for its own state changes.
+
+A safe runtime height-reduction path for physical crouch: register a shorter capsule `hknpShape` once
+and call `hknpWorld::setBodyShape` on the character body id
+(`CPfxCharacterInstance::GetCharacterRigidBodyId` **0x14024DA40**) to swap to it, restoring the
+default on stand — exactly what `SetProxyState` does, so it is a proven, thread-consistent path (do
+it on the sim thread, as the engine does). Reuse the existing proxy-state swap machinery rather than
+mutating shape geometry in place. Note the engine also swaps proxy state for swimming/vehicles/ragdoll
+transitions, so a crouch swap must cooperate with (defer to) those state changes, not fight them.
+
+**(b) What the game's pause freezes, and a camera-live alternative.** A real pause (pause menu up)
+switches `CGameStateRun` into its paused update, which runs `UpdateRenderPaused`
+(**0x1409AE200** in release; the larger symbol'd variant in the dump). That path drives the *render*
+systems — landscape LOD, UI prerender, video, `WaitForCPUDrawToFinish`, resource streaming — and it
+**reads** the active camera's already-computed `m_TransformF`, but it does **not** call
+`GameCameraManager::UpdateRender` or `CameraTree::UpdateRenderContexts`. Those are the very seams the
+mod's camera hook rides (`docs/mod/head-and-body.md`), so **under a real pause the camera transform
+is frozen and the HMD view stops tracking the head** — unacceptable for VR. Entering pause also sets
+`CPhysicsSystem::m_Pause = 1` and `CClock::Pause(true)`; leaving it clears both
+(`CGameStateRun.cpp`: `m_Pause = 0; CClock::Pause(instance, 0)`).
+
+The clock split makes a camera-live freeze possible. `CClock::Update` (**0x140093230**) keeps two
+independent accumulators: the **real** clock (spf/fps at `+0x10/+0x14`, always advances) and the
+**game** clock (`+0x44` is the game-pause bool; when set, the game-time counters at `+0x44/+0x48` and
+tick counters at `+0x48/+0x50` stop, gated by `v13 = *(a1+44)`), with a timescale multiplier at
+`+0x20`. `CClock::Pause` (**0x140091BB0**) toggles that game-pause bool. The mod already hooks
+`CClock::Update` (`payload/src/hooks/clock.rs`).
+
+**Recommended VR pause:** freeze *gameplay time* (game-clock pause / zero the game dt, and skip the
+character + vehicle sim tick) **without switching `CGameStateRun` into its paused sub-state**, so the
+normal Run render path keeps calling `GameCameraManager::UpdateRender` / `CameraTree::UpdateRenderContexts`
+every frame and the mod's camera hook stays live — the HMD view keeps tracking at full rate while the
+world holds still. This is the "pause, physically take your seat, confirm, unpause" transition: the
+mod owns `CClock::Update`, so it can zero the game dt there (leaving the real/render dt intact) and
+gate the sim update, rather than invoking the game's own pause, which darkens the camera seam.
+
+## Feasibility verdicts (roomscale-locomotion handoff)
+
+- **Idle-feed — EASY.** The locomotion task ticks at idle and writes the proxy input at
+  `CPfxCharacterInstance + 0x3C` every tick; a post-call add from a standstill needs no state-machine
+  change (§4.1).
+- **Penetration / magnetism probe — EASY.** `CPhysicsSystem::CastRaySimple` (boolean LOS) and
+  `CastRay`/`CastSphere` (full hit info) are directly callable from a sim-phase hook with world-space
+  args and material-pass filtering (§4.2).
+- **Teleport detect — EASY.** `m_NumFramesSinceTeleport == 0` is a one-int per-tick test covering all
+  warp writers uniformly, no writer hooks or thresholds (§4.3).
+- **Seat re-base — EASY.** The seat eye reference is the character's own head/eye bones (already read
+  on foot), riding the vehicle via `m_AttachBone` + `m_AttachOffset`; no vehicle-side read needed, and
+  the chase camera is explicitly not the reference (§4.4).
+- **Velocity compose — EASY/MODERATE.** Root motion vs. blackboard direction is exclusive (no
+  double-count there); the add is safe as `engine_result + roomscaleDeltaXZ/dt` at `+0x3C`, with the
+  one caveat of gating against stick-walk overlap (§4.5).
+- **Crouch capsule — MODERATE.** A shorter `hknpShape` swapped via `hknpWorld::setBodyShape` reuses
+  the engine's own proxy-state mechanism (safe on the sim thread), but must cooperate with
+  engine-driven swaps (swim/vehicle/ragdoll) (§4.6a).
+- **Pause-with-live-camera — MODERATE.** Achievable by freezing game-time via the already-hooked
+  `CClock::Update` and skipping the sim tick while staying out of `CGameStateRun`'s paused sub-state
+  (which otherwise freezes the camera seam); not a one-liner, but the clock split and the hook both
+  already exist (§4.6b).
