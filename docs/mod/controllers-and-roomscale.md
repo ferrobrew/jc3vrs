@@ -30,7 +30,7 @@ The second prerequisite: the mode detector. Today's headpose mode detection is b
 
 OpenXR action sets — `onfoot`, `vehicle`, `airborne`, `ui` — with one active per frame from the mode detection the headpose latch already does. Grip/aim pose actions for both hands. Suggested bindings for the Touch and Index interaction profiles; per-user remaps are the OpenXR runtime's own binding interface (SteamVR/xrizer-side, not a mod UI — the mod ships suggested bindings only). Output flows through `LocalPlayerActionMap::ForceSetPressed`/`ForceSetClicked` after `InputDeviceManager::Update`, per the timing rules in `docs/engine/input.md`. Deliverable: the whole game playable with controllers acting as a wearable gamepad — no pointing yet, but no gamepad in hand either.
 
-The binding translation is deliberately congruent with the extracted default map (right trigger = fire, exactly as the pad's RT; the left trigger keeps the pad's LT grapple-retract role on foot; face buttons keep the game's clusters). A phase-1 RE task recovers the `CButtonMapping` mapping→action table (data-built; `CPlayerActionObserver` keys the button-hint prompts off it, which VR prompts will eventually want too). VR deletions fund the gaps: `PRECISION_AIM`, `LOOK_*`, `VEHICLE_CAM`, and `LOOK_BACK` dissolve into the headset, freeing the right-stick click for `THROW_GRENADE` (the pad's RB). The left grip takes `FIRE_GRAPPLE` (the pad's LB); the left trigger keeps the pad's own `FIRE_LEFT` + `RETRACT_GRAPPLE` overload. The right grip and left-stick click stay reserved for the gesture layer.
+The binding translation is deliberately congruent with the extracted default map (right trigger = fire, exactly as the pad's RT; the left trigger keeps the pad's LT grapple-retract role on foot; face buttons keep the game's clusters). The `CButtonMapping` mapping→action table is recovered in full (`docs/engine/input.md` — code-built in `PopulateMappings`, verified against the release decompile), so the per-mode tables below are grounded, and the button-hint machinery (`CPlayerActionObserver`) is mapped for eventual VR prompts. VR deletions fund the gaps: `PRECISION_AIM` (except its ungated sniper-zoom twin, whose VR treatment is an open design question), `LOOK_*`, `VEHICLE_CAM`, and `LOOK_BACK` dissolve into the headset, freeing the right-stick click for `THROW_GRENADE` (the pad's RB). The left grip takes `FIRE_GRAPPLE` (the pad's LB); the left trigger keeps the pad's own `FIRE_LEFT` + `RETRACT_GRAPPLE` overload. The right grip and left-stick click stay reserved for the gesture layer.
 
 ### 2. The aim split
 
@@ -77,7 +77,7 @@ Phases 1–2 are the highest value-to-risk; everything downstream of them reuses
 
 ## Per-mode input tables
 
-Derived from the game's own mode partition (`CButtonMapping::EMapping` sections) crossed with the extracted default gamepad keymap. Semantic actions, not raw action IDs — the raw table recovery is a phase-1 task. VR bindings are the draft defaults for a Touch-style layout; Index shares the topology (its extra inputs — touchpad, finger curl — stay unbound until the gesture layer). "Gesture" marks the designed successor to a button. Entries marked *(verify)* need the recovered mapping table or a playtest to confirm the game-side binding.
+Derived from the game's own mode partition (`CButtonMapping::EMapping` sections) crossed with the extracted default gamepad keymap, and grounded in the fully recovered mapping→action table (`docs/engine/input.md`). VR bindings are the draft defaults for a Touch-style layout; Index shares the topology (its extra inputs — touchpad, finger curl — stay unbound until the gesture layer). "Gesture" marks the designed successor to a button.
 
 ### On foot
 
@@ -94,12 +94,12 @@ Derived from the game's own mode partition (`CButtonMapping::EMapping` sections)
 | Reload | X | X → gesture (chest tap) |
 | Jump / stunt / parachute | A | A |
 | Use item / enter vehicle / open wingsuit | Y | Y |
-| Melee (`MAPPING_HAMMER`) | *(verify)* | gesture candidate (swing); interim shares R stick click *(verify)* |
+| Melee (`MAPPING_HAMMER` → `PUSH_GRAPPLE`, ability-gated) | B (shares the push/release cluster) | B contextual → gesture (physical swing) |
 | Weapon slot select ×4 | d-pad | radial menu on L stick click (four sectors + explosives) |
-| Holster (contextual) | *(verify)* | radial center → gesture (over-shoulder) |
-| Precision aim | R3 | **deleted** — physically aim |
-| Sniper zoom | *(verify)* | gun raised to eye *(design)*; interim A *(verify)* |
-| Reel-in context (cancel, boost, slingshot, hang jump) | A/B contextual *(verify)* | A/B contextual, same as game |
+| Holster | hold-`RELOAD` (hold X) | hold X, same as game → gesture (over-shoulder) |
+| Precision aim | R3 (upgrade-gated) | **deleted** — physically aim |
+| Sniper zoom (`PRECISION_AIM`, ungated twin) | R3 | open design: scope magnification in VR is its own problem; the action stays injectable, binding TBD |
+| Reel-in context | cancel = B (`CANCEL`), boost = hold LT (`RETRACT_GRAPPLE`), hang jump = A (`JUMP`), slingshot = A (`OPEN_PARACHUTE`) | same buttons, same as game |
 
 ### Land vehicles (car; motorcycle variants in italics)
 
@@ -108,10 +108,10 @@ Derived from the game's own mode partition (`CButtonMapping::EMapping` sections)
 | Steer / *lean-tilt* | L stick | L stick |
 | Accelerate / reverse | RT / LT | R trigger / L trigger |
 | Handbrake | X | X |
-| Nitrous / turbo jump | *(verify)* | B *(verify)* |
+| Nitrous / turbo jump | hold-B / tap-B (`USE_VEHICLE_MOD`, upgrade-gated) | hold-B / tap-B |
 | Fire vehicle weapon primary / secondary | RB / LB | R grip / L grip |
-| *Fire personal weapon (motorcycle)* | RB | R grip, aimed by right hand |
-| Enter gunner seat / stunt (roof) | *(verify)* | A |
+| *Fire personal weapon (motorcycle)* | RB (`MC_FIRE`) | R grip, aimed by right hand |
+| Enter gunner seat / stunt (roof) | hold-Y (`ENTER_VEHICLE`) / A (`STUNT_JUMP`) | hold-Y / A |
 | Exit vehicle | Y | Y |
 | Horn | L3 | L stick click |
 | Look back / vehicle cam / recenter cam | R3 | **deleted** — the neck and F7 |
@@ -123,8 +123,8 @@ Derived from the game's own mode partition (`CButtonMapping::EMapping` sections)
 | Collective up / down | RT / LT | R trigger / L trigger |
 | Cyclic (forward/back, roll) | L stick | L stick |
 | Yaw | R stick X | R stick X |
-| Fire primary / secondary | RB / LB *(verify)* | R grip / L grip |
-| Exit / stunt / nitrous | Y / A / *(verify)* | Y / A / B |
+| Fire primary / secondary | RB / LB (`FIRE_VEHICLE_WEAPON_PRIMARY`/`SECONDARY`) | R grip / L grip |
+| Exit / stunt / nitrous | Y / A / hold-B (`USE_VEHICLE_MOD`, upgrade-gated) | Y / A / hold-B |
 
 ### Plane
 
@@ -133,7 +133,7 @@ Derived from the game's own mode partition (`CButtonMapping::EMapping` sections)
 | Pitch / roll | L stick | L stick |
 | Rudder | X / B | R stick X |
 | Thrust up / down | RT / LT | R trigger / L trigger |
-| Fire primary / secondary | RB / LB *(verify)* | R grip / L grip |
+| Fire primary / secondary | RB / LB (`FIRE_VEHICLE_WEAPON_PRIMARY`/`SECONDARY`) | R grip / L grip |
 | Exit / stunt | Y / A | Y / A |
 
 ### Boats and jetskis
@@ -143,7 +143,7 @@ Derived from the game's own mode partition (`CButtonMapping::EMapping` sections)
 | Steer | L stick | L stick |
 | Accelerate / reverse | RT / LT | R trigger / L trigger |
 | Fire / *personal weapon (jetski)* | RB | R grip |
-| Nitrous / turbo jump | *(verify)* | B |
+| Nitrous / turbo jump | hold-B / tap-B (`USE_VEHICLE_MOD`, upgrade-gated) | hold-B / tap-B |
 | Exit | Y | Y |
 
 ### Wingsuit and parachute
@@ -151,9 +151,9 @@ Derived from the game's own mode partition (`CButtonMapping::EMapping` sections)
 | Semantic action | Pad default | VR draft |
 |---|---|---|
 | Steer | L stick | L stick |
-| Air brake | *(verify)* | both grips *(design)* or L trigger |
-| Boost (weaponized) / evade | *(verify)* | B / A |
-| Fire weapon (weaponized wingsuit / parachute) | RT *(verify)* | R trigger, aimed by right hand |
+| Air brake | hold-B (`CANCEL`, upgrade-gated; weaponized: `WINGSUIT_AIRBRAKE`) | both grips *(design)* or L trigger |
+| Boost (weaponized) / evade | `WINGSUIT_BOOST` / chord `WINGSUIT_EVADE`+`MOVE_ALL` | B / A + stick flick |
+| Fire weapon (weaponized wingsuit / parachute) | `FIRE_WINGSUIT_WEAPON_MAIN`/`SECONDARY` | R trigger / R grip, aimed by right hand |
 | Open parachute / close | A | A |
 | Grapple (slingshot boost) | LB | L grip |
 
