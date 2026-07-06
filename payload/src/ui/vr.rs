@@ -41,7 +41,34 @@ pub fn egui_debug_vr(ui: &mut egui::Ui) {
         .on_hover_text("Show one eye in the game window while a session runs.");
     ui.checkbox(&mut cfg.body_ik.enabled, "Body IK")
         .on_hover_text("Drive the upper body toward the headpose via the engine's HumanIK solver.");
+    drop(cfg);
+
+    ui.separator();
+    ui.heading("Logging");
+    ui.label(match crate::logging::active_spec() {
+        Some(spec) => format!("Active filter: {spec}"),
+        None => "Active filter: (launch RUST_LOG, INFO floor)".to_string(),
+    });
+    {
+        let mut edit = FILTER_EDIT.lock();
+        let mut error = FILTER_ERROR.lock();
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(&mut *edit)
+                .on_hover_text("RUST_LOG directive syntax, e.g. warn,vr=debug,coord_frame=debug.");
+            if ui.button("Apply").clicked() {
+                *error = crate::logging::set_filter(&edit).err();
+            }
+        });
+        if let Some(e) = error.as_ref() {
+            ui.colored_label(egui::Color32::LIGHT_RED, e);
+        }
+    }
 }
+
+/// The in-progress filter text, kept across frames until applied.
+static FILTER_EDIT: parking_lot::Mutex<String> = parking_lot::Mutex::new(String::new());
+/// The last apply error, shown until the next successful apply.
+static FILTER_ERROR: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);
 
 /// A human-readable label for the runtime's current session state.
 fn session_label(status: &vr::VrStatus) -> &'static str {
