@@ -145,7 +145,12 @@ impl std::convert::AsMut<AnimationController> for AnimationController {
 }
 #[repr(C, align(8))]
 pub struct Character {
-    _field_0: [u8; 6016],
+    _field_0: [u8; 4320],
+    /// The character's embedded HumanIK solver. Driven each frame in
+    /// [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel), after the
+    /// animation graph finalizes the local pose and before the model-space pose is computed. See
+    /// [`HumanIK`] for the per-pass lifecycle.
+    pub m_HIK: crate::animation::ik::HumanIK,
     pub m_AnimatedModel: crate::character::character::AnimatedModel,
     _field_19c0: [u8; 1696],
     /// The character's embedded [`ObjectBlackboard`] (`lea rcx, [character+2060h]` at every
@@ -239,8 +244,29 @@ impl Character {
             f(self as *const Self as _, safe_index, matrix)
         }
     }
+    pub const UpdatePassFinalizePose_Parallel_ADDRESS: usize = 0x1407F9B10;
+    /// The character's SIM-phase pose-finalization pass. After the animation graph has finalized the
+    /// local pose, this drives the [`HumanIK`](Character::m_HIK) solve (the `MAIN` body pass, gated
+    /// on [`HumanIK::HasTargets`], followed by the `SECONDARY` hand pass), then computes the
+    /// model-space pose (`CalculateModelSpacePose`), and finally calls
+    /// [`UpdatePropEffects`](Character::UpdatePropEffects). Effector targets queued before this runs
+    /// are solved into the pose the same frame.
+    pub unsafe fn UpdatePassFinalizePose_Parallel(
+        &mut self,
+        context: *mut ::std::ffi::c_void,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                context: *mut ::std::ffi::c_void,
+            ) = ::std::mem::transmute(Self::UpdatePassFinalizePose_Parallel_ADDRESS);
+            f(self as *mut Self as _, context)
+        }
+    }
     pub const UpdatePropEffects_ADDRESS: usize = 0x1407C2380;
-    /// The per-frame update of the character's attached prop visual effects.
+    /// The per-frame update of the character's attached prop visual effects. Runs last in
+    /// [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel), after the IK
+    /// solve and the model-space pose computation.
     pub unsafe fn UpdatePropEffects(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
