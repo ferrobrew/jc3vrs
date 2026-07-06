@@ -1,12 +1,12 @@
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+    Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     UI::{
         Input::KeyboardAndMouse::{VK_F7, VK_F10, VK_F11},
         WindowsAndMessaging::{
-            WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
-            WM_SYSKEYDOWN,
+            GetClientRect, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+            WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
         },
     },
 };
@@ -81,6 +81,19 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         // The wheel delta is the signed high word of `wParam`, in `WHEEL_DELTA` units.
         WM_MOUSEWHEEL => cursor::on_wheel(((wparam.0 >> 16) & 0xffff) as u16 as i16 as i32),
         _ => {}
+    }
+    // The mouse position (game-tracked from these same messages) is in window-client pixels, so
+    // publish the live client rect as the cursor mapping's normalization space -- the back buffer
+    // can be a different size (and aspect) than the window under Wine/Proton scaling.
+    if msg == WM_MOUSEMOVE {
+        let mut rect = RECT::default();
+        // SAFETY: `hwnd` is the live game window handle this message arrived on.
+        if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() {
+            let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+            if w > 0 && h > 0 {
+                cursor::set_client_size((w as u32, h as u32));
+            }
+        }
     }
 
     if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {

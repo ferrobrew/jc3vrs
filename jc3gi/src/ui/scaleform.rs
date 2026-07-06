@@ -254,6 +254,83 @@ impl std::convert::AsMut<MouseEvent> for MouseEvent {
     }
 }
 #[repr(C, align(8))]
+/// A Scaleform `GFx::MouseState`: one tracked mouse's per-movie state
+/// ([`MovieImpl::MouseStates`]). `MouseState::UpdateState` (`0x141_9DD_E60`) fills it while
+/// [`MovieImpl::ProcessInput`] drains the input-events queue during `Advance`: it copies
+/// [`CurButtonsState`](MouseState::CurButtonsState) into
+/// [`PrevButtonsState`](MouseState::PrevButtonsState), applies the entry's button/wheel payload,
+/// sets or clears [`FLAG_MOUSE_MOVED`](MouseState::FLAG_MOUSE_MOVED) by integer-comparing the
+/// entry's position against [`LastPosition`](MouseState::LastPosition), and stores the entry's
+/// position. `MovieImpl::ProcessMouse` then hit-tests the display tree at that stored position
+/// directly (`GetTopMostEntity` recurses with each display object's own local transforms) -- no
+/// further viewport, view-scale, or flag-dependent transform runs between the queue and the hit
+/// test.
+pub struct MouseState {
+    /// `WeakPtr<InteractiveObject>`: the entity under the cursor (the hover target), written
+    /// during `ProcessInput` via `MouseState::SetTopmostEntity`.
+    pub TopmostEntity: *mut ::std::ffi::c_void,
+    /// `WeakPtr<InteractiveObject>`: the previous hover target.
+    pub PrevTopmostEntity: *mut ::std::ffi::c_void,
+    /// `WeakPtr<InteractiveObject>`: the entity that received the last button press.
+    pub ActiveEntity: *mut ::std::ffi::c_void,
+    /// `ArrayLH<WeakPtr<InteractiveObject>>` (`{data, size, capacity}`): the per-button press
+    /// targets.
+    pub MouseButtonDownEntities: [u64; 3],
+    /// The current button bitmask (bit 0 left, bit 1 right, bit 2 middle), as last applied from
+    /// the queue. [`MovieImpl::NotifyMouseState`] diffs its `buttons` argument against this when
+    /// queueing.
+    pub CurButtonsState: u32,
+    /// The button bitmask before the last processed queue entry.
+    pub PrevButtonsState: u32,
+    /// The mouse position in stage twips (`Render::Point<float>`): the authoritative position
+    /// hit-testing uses, i.e. the queued output of the
+    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix)-inverse transform once `Advance` has
+    /// drained the queue. Divide by 20 for stage pixels. Between a
+    /// [`NotifyMouseState`](MovieImpl::NotifyMouseState) call and the next `Advance`, the new
+    /// position exists only in the input-events queue; this field still holds the previous one.
+    pub LastPosition: [f32; 2],
+    /// The cursor type forced via `MovieImpl::ChangeMouseCursorType`, if any.
+    pub PresetCursorType: u32,
+    /// The current cursor type.
+    pub CursorType: u32,
+    /// The wheel delta of the last processed queue entry (zero when it carried no wheel bit).
+    pub WheelDelta: i32,
+    /// The `FLAG_*` state bits.
+    pub Flags: u8,
+    _field_4d: [u8; 3],
+}
+fn _MouseState_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x50], MouseState>([0u8; 0x50]);
+    }
+    unreachable!()
+}
+impl MouseState {}
+impl MouseState {
+    /// [`Flags`](MouseState::Flags) bit: this mouse has received input since the movie started.
+    pub const FLAG_ACTIVATED: u8 = 16;
+    /// [`Flags`](MouseState::Flags) bit: the mouse was inside the active entity on the last
+    /// test.
+    pub const FLAG_MOUSE_INSIDE_ENTITY_LAST: u8 = 4;
+    /// [`Flags`](MouseState::Flags) bit: the position changed on the last processed queue entry
+    /// (compared as truncated integers).
+    pub const FLAG_MOUSE_MOVED: u8 = 8;
+    /// [`Flags`](MouseState::Flags) bit: the previous topmost entity was null.
+    pub const FLAG_PREV_TOPMOST_ENTITY_WAS_NULL: u8 = 2;
+    /// [`Flags`](MouseState::Flags) bit: the topmost entity resolved to null on the last update.
+    pub const FLAG_TOPMOST_ENTITY_IS_NULL: u8 = 1;
+}
+impl std::convert::AsRef<MouseState> for MouseState {
+    fn as_ref(&self) -> &MouseState {
+        self
+    }
+}
+impl std::convert::AsMut<MouseState> for MouseState {
+    fn as_mut(&mut self) -> &mut MouseState {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The Scaleform AS3 `MovieRoot` (the `ASMovieRootBase` interface), which `CUIManager::m_Movie`
 /// points at. The engine drives the movie through this interface's virtuals; the bound
 /// [`SetVariable`](Movie::SetVariable) / [`GetVariable`](Movie::GetVariable) /
@@ -387,7 +464,10 @@ pub struct MovieImpl {
     pub pObjectInterface: *mut ::std::ffi::c_void,
     /// The Scaleform `MemoryHeap` the movie allocates from.
     pub pHeap: *mut crate::ui::scaleform::MemoryHeap,
-    _field_48: [u8; 8],
+    /// The main `MovieDefImpl`. [`UpdateViewport`](MovieImpl::UpdateViewport) reads the stage
+    /// frame rectangle (twips) through it; while null, the view scale and offset reset to
+    /// identity.
+    pub pMainMovieDef: *mut ::std::ffi::c_void,
     /// The root `DisplayObjContainer` (the main movie clip).
     pub pMainMovie: *mut ::std::ffi::c_void,
     _field_58: [u8; 48],
@@ -395,16 +475,60 @@ pub struct MovieImpl {
     /// display handle. The whole display tree's render nodes hang off it.
     pub pRenderRoot: *mut crate::ui::scaleform::TreeRoot,
     _field_90: [u8; 16],
-    /// The movie's `GFx::Viewport` (0x34 bytes: buffer size, view rectangle, scissor, flags,
-    /// scale, and aspect). [`TreeRoot::SetViewport`] takes it directly (copying the 0x2C
-    /// `Render::Viewport` prefix).
-    pub Viewport: [u8; 52],
-    _field_d4: [u8; 60],
-    /// The stage-to-viewport matrix (`Matrix2x4<float>`: two rows of `[sx, shx, shy, sy? tx, ty]`
-    /// layout) the movie sets on [`pRenderRoot`](MovieImpl::pRenderRoot) via `TreeNode::SetMatrix`
-    /// whenever the viewport changes.
+    /// The movie's current [`Viewport`], as last copied in by
+    /// [`SetViewportImpl`](MovieImpl::SetViewportImpl). [`TreeRoot::SetViewport`] takes it
+    /// directly (copying the 0x2C `Render::Viewport` prefix).
+    pub Viewport: crate::ui::scaleform::Viewport,
+    /// The larger of `1 / ViewScaleX` and `1 / ViewScaleY`, recomputed by
+    /// [`UpdateViewport`](MovieImpl::UpdateViewport) (0.005 when a scale is zero).
+    pub PixelScale: f32,
+    /// The stage-pixel to view-rectangle-pixel scale on X, derived from
+    /// [`ViewScaleMode`](MovieImpl::ViewScaleMode) by [`UpdateViewport`](MovieImpl::UpdateViewport)
+    /// (for `SM_SHOW_ALL`/`SM_NO_BORDER`, the visible-frame to view-rectangle ratio).
+    pub ViewScaleX: f32,
+    /// See [`ViewScaleX`](MovieImpl::ViewScaleX).
+    pub ViewScaleY: f32,
+    /// [`VisibleFrameRect`](MovieImpl::VisibleFrameRect) `x1` in stage pixels (`x1 / 20`).
+    pub ViewOffsetX: f32,
+    /// [`VisibleFrameRect`](MovieImpl::VisibleFrameRect) `y1` in stage pixels (`y1 / 20`).
+    pub ViewOffsetY: f32,
+    /// The `SM_*` stage scale mode. Constructed as [`SM_SHOW_ALL`](MovieImpl::SM_SHOW_ALL); the
+    /// engine never changes it on the main UI movie (`CRenderToTextureUI`/`CDynUI` set it on
+    /// their own movies).
+    pub ViewScaleMode: u32,
+    /// The `Align_*` stage alignment (0 = center) used by the `SM_NO_SCALE` mode. Constructed
+    /// as 0.
+    pub ViewAlignment: u32,
+    /// The stage region mapped onto the view rectangle, in twips (`x1, y1, x2, y2`), computed by
+    /// [`UpdateViewport`](MovieImpl::UpdateViewport) from the [`Viewport`](MovieImpl::Viewport),
+    /// the stage frame rectangle, and the [`ViewScaleMode`](MovieImpl::ViewScaleMode). Under
+    /// `SM_SHOW_ALL` with a view rectangle matching the stage aspect, this is the whole stage.
+    pub VisibleFrameRect: [f32; 4],
+    _field_100: [u8; 16],
+    /// The stage-to-viewport matrix (`Matrix2x4<float>`, rows `[sx, shx, shy, tx]` and
+    /// `[shx, sy, shy, ty]`; in practice `sx` at `[0]`, `tx` at `[3]`, `sy` at `[5]`, and `ty` at
+    /// `[7]`) the movie sets on [`pRenderRoot`](MovieImpl::pRenderRoot) via `TreeNode::SetMatrix`
+    /// whenever the viewport changes. Built by
+    /// [`ResetViewportMatrix`](MovieImpl::ResetViewportMatrix) as `sx = Viewport.Width /
+    /// (VisibleFrameRect.x2 - VisibleFrameRect.x1)`, `tx = -VisibleFrameRect.x1 * sx` (and
+    /// likewise for Y), mapping stage twips to pixels relative to the view rectangle's top-left
+    /// corner -- `Viewport.Left`/`Top` are *not* part of the matrix.
+    ///
+    /// This same matrix, inverted, is the entire mouse-to-stage transform:
+    /// [`HandleEvent`](MovieImpl::HandleEvent) and
+    /// [`NotifyMouseState`](MovieImpl::NotifyMouseState) run incoming positions through
+    /// `TransformByInverse` before queueing, so mouse coordinates are expected in view-rectangle
+    /// pixels (`stage_twips = (pos - t) / s` per axis).
     pub ViewportMatrix: [f32; 8],
-    _field_130: [u8; 21024],
+    _field_130: [u8; 8416],
+    /// The tracked mice ([`MouseState`] per index; the engine's main UI movie uses only index
+    /// 0). The array ends exactly at [`MouseCursorCount`](MovieImpl::MouseCursorCount).
+    pub MouseStates: [crate::ui::scaleform::MouseState; 6],
+    /// The number of mouse cursors the movie tracks (see
+    /// [`SetMouseCursorCount`](MovieImpl::SetMouseCursorCount)); mouse input with an index at or
+    /// beyond it is dropped.
+    pub MouseCursorCount: u32,
+    _field_23f4: [u8; 12124],
     /// The movie's embedded `Render::Context` (the snapshot pipeline: active/pending/displaying
     /// snapshots, the capture locks, and the once-a-frame consumption latch).
     pub RenderContext: crate::ui::scaleform::RenderContext,
@@ -433,6 +557,149 @@ impl MovieImpl {
                 Self::CaptureImpl_ADDRESS,
             );
             f(self as *mut Self as _, if_changed)
+        }
+    }
+    pub const HandleEventImpl_ADDRESS: usize = 0x1419830D0;
+    /// The concrete implementation behind [`HandleEvent`](MovieImpl::HandleEvent) (vtable slot
+    /// 35). For mouse move/down/up/wheel events it transforms the event's position by the
+    /// inverse of [`ViewportMatrix`](MovieImpl::ViewportMatrix) (view-rectangle pixels to stage
+    /// twips) and queues the result on the input-events queue; nothing is stored raw. The next
+    /// `Advance` drains the queue into AS3 mouse processing.
+    pub unsafe fn HandleEventImpl(
+        &mut self,
+        event: *const crate::ui::scaleform::MouseEvent,
+    ) -> u32 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                event: *const crate::ui::scaleform::MouseEvent,
+            ) -> u32 = ::std::mem::transmute(Self::HandleEventImpl_ADDRESS);
+            f(self as *mut Self as _, event)
+        }
+    }
+    pub const NotifyMouseStateImpl_ADDRESS: usize = 0x141983830;
+    /// The concrete implementation behind [`NotifyMouseState`](MovieImpl::NotifyMouseState)
+    /// (vtable slot 37). Transforms `(x, y)` by the inverse of
+    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix), queues a mouse move at the resulting stage
+    /// position (twips), then diffs `buttons` against the tracked per-mouse button state and
+    /// queues a button event per changed bit.
+    pub unsafe fn NotifyMouseStateImpl(
+        &mut self,
+        x: f32,
+        y: f32,
+        buttons: u32,
+        mouse_index: u32,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                x: f32,
+                y: f32,
+                buttons: u32,
+                mouse_index: u32,
+            ) = ::std::mem::transmute(Self::NotifyMouseStateImpl_ADDRESS);
+            f(self as *mut Self as _, x, y, buttons, mouse_index)
+        }
+    }
+    pub const SetViewportImpl_ADDRESS: usize = 0x14198E4F0;
+    /// The concrete implementation behind the `SetViewport` virtual (vtable slot 12). When
+    /// `desc` differs from [`Viewport`](MovieImpl::Viewport) (memcmp over all 0x34 bytes), copies
+    /// it in, runs [`UpdateViewport`](MovieImpl::UpdateViewport), and pushes the new state to the
+    /// render tree ([`TreeRoot::SetViewport`], background color, and `TreeNode::SetMatrix` with
+    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix) on [`pRenderRoot`](MovieImpl::pRenderRoot)).
+    pub unsafe fn SetViewportImpl(
+        &mut self,
+        desc: *const crate::ui::scaleform::Viewport,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                desc: *const crate::ui::scaleform::Viewport,
+            ) = ::std::mem::transmute(Self::SetViewportImpl_ADDRESS);
+            f(self as *mut Self as _, desc)
+        }
+    }
+    pub const UpdateViewport_ADDRESS: usize = 0x14198ACC0;
+    /// Recomputes [`VisibleFrameRect`](MovieImpl::VisibleFrameRect), the view scales and offsets,
+    /// and [`PixelScale`](MovieImpl::PixelScale) from [`Viewport`](MovieImpl::Viewport), the
+    /// stage frame rectangle, and [`ViewScaleMode`](MovieImpl::ViewScaleMode), then calls
+    /// [`ResetViewportMatrix`](MovieImpl::ResetViewportMatrix). Called only from
+    /// [`SetViewportImpl`](MovieImpl::SetViewportImpl); nothing engine-side recomputes the
+    /// viewport per frame.
+    pub unsafe fn UpdateViewport(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::UpdateViewport_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub const ResetViewportMatrix_ADDRESS: usize = 0x141987380;
+    /// Rebuilds [`ViewportMatrix`](MovieImpl::ViewportMatrix) from
+    /// [`Viewport`](MovieImpl::Viewport) `Width`/`Height` and
+    /// [`VisibleFrameRect`](MovieImpl::VisibleFrameRect) (see the matrix field for the formula).
+    /// Does not push the matrix to the render tree.
+    pub unsafe fn ResetViewportMatrix(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::ResetViewportMatrix_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub const ProcessInput_ADDRESS: usize = 0x141994890;
+    /// Drains the input-events queue during `Advance`: keyboard entries go to focus handling,
+    /// mouse entries to `ProcessMouse` (which runs `MouseState::UpdateState` and hit-tests the
+    /// display tree at the entry's stage-twips position). Afterwards, for any tracked mouse that
+    /// saw no entry this drain but has pending state (movie-flag 0x80), re-resolves the hover
+    /// target from [`MouseState::LastPosition`].
+    pub unsafe fn ProcessInput(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::ProcessInput_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub const GetMouseStateImpl_ADDRESS: usize = 0x141983920;
+    /// The concrete implementation behind [`GetMouseState`](MovieImpl::GetMouseState) (vtable
+    /// slot 36).
+    pub unsafe fn GetMouseStateImpl(
+        &mut self,
+        mouse_index: u32,
+        x: *mut f32,
+        y: *mut f32,
+        buttons: *mut u32,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                mouse_index: u32,
+                x: *mut f32,
+                y: *mut f32,
+                buttons: *mut u32,
+            ) = ::std::mem::transmute(Self::GetMouseStateImpl_ADDRESS);
+            f(self as *mut Self as _, mouse_index, x, y, buttons)
+        }
+    }
+    pub const HitTestImpl_ADDRESS: usize = 0x1419839A0;
+    /// The concrete implementation behind [`HitTest`](MovieImpl::HitTest) (vtable slot 38).
+    pub unsafe fn HitTestImpl(
+        &mut self,
+        x: f32,
+        y: f32,
+        test_cond: u32,
+        controller_idx: u32,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                x: f32,
+                y: f32,
+                test_cond: u32,
+                controller_idx: u32,
+            ) -> bool = ::std::mem::transmute(Self::HitTestImpl_ADDRESS);
+            f(self as *mut Self as _, x, y, test_cond, controller_idx)
         }
     }
     /// Snapshots the display tree for the render thread (`GFx::Movie` vtable slot 25). Must be
@@ -480,6 +747,25 @@ impl MovieImpl {
             f(self as *mut Self as _, event)
         }
     }
+    /// Reads one mouse's current state (`GFx::Movie` vtable slot 36): the position comes
+    /// from [`MouseStates`](MovieImpl::MouseStates)`[mouse_index].LastPosition` converted to
+    /// **view-rectangle pixels** (`(twips * 0.05 - ViewOffset) / ViewScale` per axis, the
+    /// same space [`NotifyMouseState`](MovieImpl::NotifyMouseState) takes), and `buttons`
+    /// from [`CurButtonsState`](MouseState::CurButtonsState). Out pointers may be null; a
+    /// `mouse_index` at or beyond [`MouseCursorCount`](MovieImpl::MouseCursorCount) leaves
+    /// them untouched.
+    pub unsafe fn GetMouseState(
+        &mut self,
+        mouse_index: u32,
+        x: *mut f32,
+        y: *mut f32,
+        buttons: *mut u32,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetMouseState).read();
+            f(self as *mut Self as _, mouse_index, x, y, buttons)
+        }
+    }
     /// Directly overwrites one mouse's state (`GFx::Movie` vtable slot 37): position in
     /// movie-viewport pixels (the same space as [`MouseEvent`]) plus a button bitmask (bit 0
     /// left, bit 1 right), bypassing the event objects. Processed on the next `Advance`, like
@@ -496,6 +782,23 @@ impl MovieImpl {
             f(self as *mut Self as _, x, y, buttons, mouse_index)
         }
     }
+    /// Hit-tests the display tree at a point in view-rectangle pixels (`GFx::Movie` vtable
+    /// slot 38): transforms by the inverse of
+    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix), then tests each root level's shapes.
+    /// `test_cond` is the `HitTestType` (0 = bounds, 1 = shapes, 2 = button events with
+    /// `controller_idx`, 3 = shapes counting invisible).
+    pub unsafe fn HitTest(
+        &mut self,
+        x: f32,
+        y: f32,
+        test_cond: u32,
+        controller_idx: u32,
+    ) -> bool {
+        unsafe {
+            let f = (&raw const (*self.vftable()).HitTest).read();
+            f(self as *mut Self as _, x, y, test_cond, controller_idx)
+        }
+    }
     /// Sets how many mice the movie tracks (`GFx::Movie` vtable slot 43); `0` disables mouse
     /// processing entirely. `CUIManager::RestoreAfterReset` sets `1` when a DirectInput mouse
     /// device exists and `0` otherwise.
@@ -505,6 +808,20 @@ impl MovieImpl {
             f(self as *mut Self as _, count)
         }
     }
+}
+impl MovieImpl {
+    /// The [`ViewScaleMode`](MovieImpl::ViewScaleMode) that stretches the stage to the view
+    /// rectangle exactly, ignoring aspect.
+    pub const SM_EXACT_FIT: u32 = 2;
+    /// The [`ViewScaleMode`](MovieImpl::ViewScaleMode) that fills the view rectangle, preserving
+    /// aspect (cropping as needed).
+    pub const SM_NO_BORDER: u32 = 3;
+    /// The [`ViewScaleMode`](MovieImpl::ViewScaleMode) that maps the movie 1:1 at
+    /// [`Viewport::Scale`] with no stretching (the view rectangle crops or pads the stage).
+    pub const SM_NO_SCALE: u32 = 0;
+    /// The [`ViewScaleMode`](MovieImpl::ViewScaleMode) that fits the whole stage inside the view
+    /// rectangle, preserving aspect (letterboxing as needed). The constructor default.
+    pub const SM_SHOW_ALL: u32 = 1;
 }
 impl std::convert::AsRef<MovieImpl> for MovieImpl {
     fn as_ref(&self) -> &MovieImpl {
@@ -581,7 +898,20 @@ pub struct MovieImplVftable {
         this: *mut crate::ui::scaleform::MovieImpl,
         event: *const crate::ui::scaleform::MouseEvent,
     ) -> u32,
-    _vfunc_36: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    /// Reads one mouse's current state (`GFx::Movie` vtable slot 36): the position comes
+    /// from [`MouseStates`](MovieImpl::MouseStates)`[mouse_index].LastPosition` converted to
+    /// **view-rectangle pixels** (`(twips * 0.05 - ViewOffset) / ViewScale` per axis, the
+    /// same space [`NotifyMouseState`](MovieImpl::NotifyMouseState) takes), and `buttons`
+    /// from [`CurButtonsState`](MouseState::CurButtonsState). Out pointers may be null; a
+    /// `mouse_index` at or beyond [`MouseCursorCount`](MovieImpl::MouseCursorCount) leaves
+    /// them untouched.
+    pub GetMouseState: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+        mouse_index: u32,
+        x: *mut f32,
+        y: *mut f32,
+        buttons: *mut u32,
+    ),
     /// Directly overwrites one mouse's state (`GFx::Movie` vtable slot 37): position in
     /// movie-viewport pixels (the same space as [`MouseEvent`]) plus a button bitmask (bit 0
     /// left, bit 1 right), bypassing the event objects. Processed on the next `Advance`, like
@@ -593,7 +923,18 @@ pub struct MovieImplVftable {
         buttons: u32,
         mouse_index: u32,
     ),
-    _vfunc_38: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
+    /// Hit-tests the display tree at a point in view-rectangle pixels (`GFx::Movie` vtable
+    /// slot 38): transforms by the inverse of
+    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix), then tests each root level's shapes.
+    /// `test_cond` is the `HitTestType` (0 = bounds, 1 = shapes, 2 = button events with
+    /// `controller_idx`, 3 = shapes counting invisible).
+    pub HitTest: unsafe extern "system" fn(
+        this: *mut crate::ui::scaleform::MovieImpl,
+        x: f32,
+        y: f32,
+        test_cond: u32,
+        controller_idx: u32,
+    ) -> bool,
     _vfunc_39: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
     _vfunc_40: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
     _vfunc_41: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
@@ -1376,13 +1717,17 @@ fn _TreeRoot_size_check() {
 impl TreeRoot {
     pub const SetViewport_ADDRESS: usize = 0x1419E6860;
     /// Writes the root's viewport (entry-change bit 0x1000, self-comparing). `viewport` is a
-    /// `GFx::Viewport` (e.g. [`MovieImpl::Viewport`]); the 0x2C `Render::Viewport` prefix is
+    /// [`Viewport`] (e.g. [`MovieImpl::Viewport`]); the 0x2C `Render::Viewport` prefix is
     /// copied. Capture (game update) thread only.
-    pub unsafe fn SetViewport(&mut self, viewport: *const u8) {
+    pub unsafe fn SetViewport(
+        &mut self,
+        viewport: *const crate::ui::scaleform::Viewport,
+    ) {
         unsafe {
-            let f: unsafe extern "system" fn(this: *mut Self, viewport: *const u8) = ::std::mem::transmute(
-                Self::SetViewport_ADDRESS,
-            );
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                viewport: *const crate::ui::scaleform::Viewport,
+            ) = ::std::mem::transmute(Self::SetViewport_ADDRESS);
             f(self as *mut Self as _, viewport)
         }
     }
@@ -1528,6 +1873,52 @@ impl std::convert::AsRef<ValueObjectInterface> for ValueObjectInterface {
 }
 impl std::convert::AsMut<ValueObjectInterface> for ValueObjectInterface {
     fn as_mut(&mut self) -> &mut ValueObjectInterface {
+        self
+    }
+}
+#[derive(Copy, Clone, Default)]
+#[repr(C, align(4))]
+/// A Scaleform `GFx::Viewport` (a `Render::Viewport` plus `Scale` and `AspectRatio`): the
+/// description [`MovieImpl::SetViewportImpl`] copies into [`MovieImpl::Viewport`]. `BufferWidth`
+/// and `BufferHeight` describe the whole output surface; `Left`/`Top`/`Width`/`Height` are the
+/// view rectangle the movie occupies within it. `CUIManager::SetMovieViewport` builds one as
+/// `{BufferWidth: vw, BufferHeight: vh, Left: (vw - movie_w) / 2, Top: (vh - movie_h) / 2,
+/// Width: movie_w, Height: movie_h, Scissor*: 0, Flags: 0, Scale: 1.0, AspectRatio: 1.0}`, where
+/// `movie_w`/`movie_h` are `UIManager::m_MovieScaleWidth`/`Height` at call time (not the
+/// arguments).
+pub struct Viewport {
+    pub BufferWidth: i32,
+    pub BufferHeight: i32,
+    pub Left: i32,
+    pub Top: i32,
+    pub Width: i32,
+    pub Height: i32,
+    pub ScissorLeft: i32,
+    pub ScissorTop: i32,
+    pub ScissorWidth: i32,
+    pub ScissorHeight: i32,
+    /// `View_*` flags (bit 0 render texture, bit 2 use scissor, bits 4-5 orientation, ...).
+    pub Flags: u32,
+    /// The view scale used by the `SM_NO_SCALE` mode; every engine caller passes 1.0.
+    pub Scale: f32,
+    /// The pixel aspect used as an extra horizontal factor by [`MovieImpl::UpdateViewport`];
+    /// every engine caller passes 1.0.
+    pub AspectRatio: f32,
+}
+fn _Viewport_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x34], Viewport>([0u8; 0x34]);
+    }
+    unreachable!()
+}
+impl Viewport {}
+impl std::convert::AsRef<Viewport> for Viewport {
+    fn as_ref(&self) -> &Viewport {
+        self
+    }
+}
+impl std::convert::AsMut<Viewport> for Viewport {
+    fn as_mut(&mut self) -> &mut Viewport {
         self
     }
 }

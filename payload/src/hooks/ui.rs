@@ -26,6 +26,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&CONVERT_3D_COORDS_DEFAULT_BINDER)
         .with_static_binder(&MOVIE_CAPTURE_BINDER)
         .with_static_binder(&SEND_MOUSE_EVENTS_BINDER)
+        .with_static_binder(&GET_MOVIE_SPACE_MOUSE_CURSOR_BINDER)
 }
 
 /// Marks the start of a game frame for the aim-depth recording: `UpdateGrappleReticle`'s *first*
@@ -330,8 +331,27 @@ fn send_mouse_events(this: *mut UIManager, steering: *mut std::ffi::c_void) -> b
 
     let u = (manager.m_MouseX as f32 / window_w as f32).clamp(0.0, 1.0);
     let v = (manager.m_MouseY as f32 / window_h as f32).clamp(0.0, 1.0);
-    let x = u * movie_w as f32;
-    let y = v * movie_h as f32;
+
+    // Map through the movie's LIVE stage-to-viewport matrix rather than assuming any pixel
+    // scale: HandleEvent/NotifyMouseState invert `MovieImpl.ViewportMatrix` to produce the stage
+    // point they hit-test, and that copy of the matrix can be stale relative to the render
+    // root's (observed in practice: the render root carries the texture-shaped matrix while the
+    // movie still holds the load-time stage-identity one, so injected texture pixels were
+    // consumed as stage pixels -- a uniform ~0.73 compression toward the top-left). Computing
+    // the desired stage point (the UI fills the texture with the stage) and running it FORWARD
+    // through the live matrix is exact no matter which matrix the movie currently holds.
+    // The matrix maps stage twips (20/px) to view-rectangle pixels: `px = s * twips + t`.
+    let stage_w = manager.m_CachedStageWidth;
+    let stage_h = manager.m_CachedStageHeight;
+    let m = movie.ViewportMatrix;
+    let (x, y) = if stage_w > 0.0 && stage_h > 0.0 && m[0] != 0.0 && m[5] != 0.0 {
+        let stage_x_twips = u * stage_w * 20.0;
+        let stage_y_twips = v * stage_h * 20.0;
+        (m[0] * stage_x_twips + m[3], m[5] * stage_y_twips + m[7])
+    } else {
+        // Degenerate stage or matrix (movie still initializing): fall back to texture pixels.
+        (u * movie_w as f32, v * movie_h as f32)
+    };
 
     // SAFETY: as above; the wheel event matches the layout the engine itself builds for
     // HandleEvent, and the overlay call no-ops unless the overlay is active.
@@ -363,4 +383,43 @@ fn send_mouse_events(this: *mut UIManager, steering: *mut std::ffi::c_void) -> b
         unsafe { OverlayUI::get() }.is_some_and(|overlay| overlay.m_MouseCursorShowRefCount > 0);
     cursor::set_frame(visible.then_some(cursor::CursorFrame { u, v }));
     true
+}
+
+/// The map's mouse-to-stage conversion: `CCommMapUI::OnManageInput` -- the function's only
+/// caller -- feeds `GetMousePos` window-client pixels through it to get the stage-space cursor
+/// position it uses for icon picking, click selection, drag panning, and zoom-to-cursor. The
+/// original maps `(pos - m_MouseDelta) * m_MouseScaleFac`, and those fields are written only by
+/// `ComputeMovieSizeOnViewSize` -- which the redirect bypasses, leaving them describing the
+/// window-shaped movie rectangle (X happens to stay correct because its delta is zero and the
+/// scale factor cancels; Y is offset by the stale half-letterbox). Generic Scaleform widgets are
+/// unaffected -- they hit-test through the injected `NotifyMouseState` path -- so the map was the
+/// one UI screen left broken. Replace the mapping with the same client-rect normalization the
+/// injection uses, so the map's cursor and the panel dot agree by construction.
+#[detour(address = UIManager::GetMovieSpaceMouseCursor_ADDRESS)]
+fn get_movie_space_mouse_cursor(
+    this: *const UIManager,
+    viewport_x: f32,
+    viewport_y: f32,
+    out: *mut jc3gi::types::math::Vector2,
+) {
+    let original = GET_MOVIE_SPACE_MOUSE_CURSOR.get().unwrap();
+    let geometry = Config::lock_query(|c| c.hud.redirect)
+        .then(cursor::geometry)
+        .flatten();
+    // SAFETY: `this` is the live UI singleton (the map passes it); `out` is the caller's
+    // out-pointer, written exactly once.
+    unsafe {
+        let (Some((window, _)), Some(manager)) = (geometry, this.as_ref()) else {
+            return original.call(this, viewport_x, viewport_y, out);
+        };
+        let (stage_w, stage_h) = (manager.m_CachedStageWidth, manager.m_CachedStageHeight);
+        if stage_w <= 0.0 || stage_h <= 0.0 {
+            return original.call(this, viewport_x, viewport_y, out);
+        }
+        let u = (viewport_x / window.0 as f32).clamp(0.0, 1.0);
+        let v = (viewport_y / window.1 as f32).clamp(0.0, 1.0);
+        if let Some(out) = out.as_mut() {
+            out.data = [u * stage_w, v * stage_h];
+        }
+    }
 }

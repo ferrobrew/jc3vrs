@@ -78,6 +78,42 @@ pub(super) fn redirect_to(target: &HudTarget, width: u32, height: u32) -> bool {
     true
 }
 
+/// Whether the movie's live viewport still matches the redirect: `SetMovieViewport` fills the
+/// movie's `GFx::Viewport` with buffer = viewport = movie rectangle = our texture (zero centering
+/// offset), and the movie's `ViewportMatrix` -- the render transform AND the entire mouse-to-stage
+/// transform -- is derived from it. The engine's device-reset path (`RestoreAfterReset`) is the
+/// one writer that can silently replace it (resizing the movie from the device resolution), which
+/// skews the mouse hit test off the texture-shaped render. Returns `true` while the movie is not
+/// live yet (nothing to drift).
+pub(super) fn movie_viewport_matches(width: u32, height: u32) -> bool {
+    // SAFETY: reads plain fields of the live UI singleton and its movie on the render thread,
+    // where the engine itself reads them.
+    unsafe {
+        let Some(manager) = GetIUIManager().as_mut() else {
+            return true;
+        };
+        let Some(movie) = manager.m_Movie.as_ref() else {
+            return true;
+        };
+        let viewport = &movie.Viewport;
+        (
+            viewport.BufferWidth,
+            viewport.BufferHeight,
+            viewport.Left,
+            viewport.Top,
+            viewport.Width,
+            viewport.Height,
+        ) == (
+            width as i32,
+            height as i32,
+            0,
+            0,
+            width as i32,
+            height as i32,
+        )
+    }
+}
+
 /// Restore the engine's own UI binding by resizing everything back to the back buffer:
 /// `ComputeMovieSizeOnViewSize` resets the movie rectangle to the device resolution, then the
 /// viewport, safe area, and `InitPlatformRT` (which rebinds to the engine surface) follow.

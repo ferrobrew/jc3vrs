@@ -117,7 +117,7 @@ pub unsafe fn on_capture(movie: &mut MovieImpl, active: bool) {
         // Mirror the movie's viewport and stage matrix onto our roots (both writes self-compare
         // upstream or are cheap), so resizes track.
         for root in p.roots {
-            (*root).SetViewport(movie.Viewport.as_ptr());
+            (*root).SetViewport(&movie.Viewport);
             root.cast::<TreeNode>()
                 .as_mut()
                 .unwrap_unchecked()

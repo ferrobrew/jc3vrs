@@ -186,6 +186,18 @@ impl HudState {
             self.redirected = false;
         }
 
+        // The engine's device-reset path (`RestoreAfterReset`) can replace the movie's viewport
+        // with device-sized state without the back buffer changing size (e.g. an alt-tab
+        // fullscreen reacquire), which skews the Scaleform mouse transform off the
+        // texture-shaped render. Detect the drift and re-apply.
+        if self.redirected && !binding::movie_viewport_matches(texture_width, texture_height) {
+            tracing::warn!(
+                target: "hud",
+                "the movie viewport drifted from the redirect (engine reset path?); re-applying"
+            );
+            self.redirected = false;
+        }
+
         let Some(target) = self.target.as_ref() else {
             return;
         };

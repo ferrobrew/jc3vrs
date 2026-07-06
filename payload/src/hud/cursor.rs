@@ -73,24 +73,35 @@ pub fn take_wheel_lines() -> f32 {
     raw as f32 / 120.0 * 3.0
 }
 
-/// Publish the frame's coordinate-mapping geometry from the render-thread HUD tick: the window's
-/// back-buffer size, and the redirected texture's size (`None` while the redirect is not applied,
-/// which disables the injection).
+/// Publish the frame's coordinate-mapping geometry from the render-thread HUD tick: the game's
+/// back-buffer size (the fallback normalization space), and the redirected texture's size (`None`
+/// while the redirect is not applied, which disables the injection).
 pub fn set_geometry(window: (u32, u32), movie: Option<(u32, u32)>) {
     let mut state = STATE.lock();
     state.window = window;
     state.movie = movie;
 }
 
+/// Publish the game window's live client-rect size from the `WndProc` detour. The mouse position
+/// is in window-client pixels, so this -- not the back-buffer size -- is the correct
+/// normalization space: under Wine/Proton fullscreen scaling (or any window/back-buffer size
+/// divergence, e.g. an HMD-shaped swap chain behind a desktop-shaped window) the two differ, and
+/// normalizing against the back buffer skews the axis whose sizes disagree.
+pub fn set_client_size(size: (u32, u32)) {
+    STATE.lock().client = Some(size);
+}
+
 /// The frame's mapping geometry `(window size, movie size)`, or `None` while the redirect is not
-/// applied or a dimension is degenerate.
+/// applied or a dimension is degenerate. The window size is the live client rect when one has
+/// been seen, else the back-buffer size.
 pub fn geometry() -> Option<((u32, u32), (u32, u32))> {
     let state = STATE.lock();
     let movie = state.movie?;
-    if state.window.0 == 0 || state.window.1 == 0 || movie.0 == 0 || movie.1 == 0 {
+    let window = state.client.unwrap_or(state.window);
+    if window.0 == 0 || window.1 == 0 || movie.0 == 0 || movie.1 == 0 {
         return None;
     }
-    Some((state.window, movie))
+    Some((window, movie))
 }
 
 /// Publish the cursor's panel position for the renderer, or `None` to hide it (gamepad in use,
@@ -108,15 +119,17 @@ static BUTTONS: AtomicU32 = AtomicU32::new(0);
 static WHEEL: AtomicI32 = AtomicI32::new(0);
 static STATE: Mutex<State> = Mutex::new(State {
     window: (0, 0),
+    client: None,
     movie: None,
     frame: None,
 });
 
-/// The cross-thread cursor state: geometry written on the render thread, the frame written from
-/// the `SendMouseEvents` detour (window or game thread), both read wherever needed. Locked only
-/// for these short copies.
+/// The cross-thread cursor state: geometry written on the render thread, the client rect from the
+/// `WndProc` detour, the frame written from the `SendMouseEvents` detour (window or game thread),
+/// all read wherever needed. Locked only for these short copies.
 struct State {
     window: (u32, u32),
+    client: Option<(u32, u32)>,
     movie: Option<(u32, u32)>,
     frame: Option<CursorFrame>,
 }
