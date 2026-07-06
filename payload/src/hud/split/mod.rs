@@ -15,8 +15,8 @@ use windows::Win32::Graphics::Direct3D11::{ID3D11DepthStencilView, ID3D11RenderT
 
 pub use super::scaleform::LAYER_COUNT;
 
-/// The HUD layers, in composite order (bottom to top). Each is one texture, refreshed round-robin
-/// one layer per frame (historical; the render-root partition redraws all per frame).
+/// The HUD layers, in composite order (bottom to top). Each is one texture; the render-root
+/// partition redraws every layer every frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HudLayer {
     /// The static HUD: the corner/edge safe-area containers and the weapon-selection wheel. No
