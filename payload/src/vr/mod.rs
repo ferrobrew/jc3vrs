@@ -1003,28 +1003,33 @@ impl Swapchain {
 
 /// Load the OpenXR loader (dynamic route). Uses [`VrConfig::loader_path`] if set, else
 /// `openxr_loader.dll` next to the payload DLL, falling back to the platform default search
-/// (`xr::Entry::load`) if the payload path cannot be resolved.
+/// (`xr::Entry::load`) when no explicit path is configured and the payload-adjacent DLL is
+/// missing or fails to load — a system-wide loader then still works. An explicit
+/// `loader_path` does not fall back: the user asked for that loader specifically.
 fn load_entry(cfg: &VrConfig) -> anyhow::Result<xr::Entry> {
-    let path = cfg
-        .loader_path
-        .clone()
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            crate::module::get_path().and_then(|p| p.parent().map(|d| d.join("openxr_loader.dll")))
-        });
+    if let Some(path) = cfg.loader_path.clone().map(std::path::PathBuf::from) {
+        tracing::info!(target: "vr", loader = %path.display(), "loading the configured OpenXR loader");
+        return unsafe { xr::Entry::load_from(&path) }
+            .with_context(|| format!("loader at {}", path.display()));
+    }
 
-    let entry = match path {
-        Some(path) => {
-            tracing::info!(target: "vr", loader = %path.display(), "loading the OpenXR loader");
-            unsafe { xr::Entry::load_from(&path) }
-                .with_context(|| format!("vr: loading the OpenXR loader at {}", path.display()))?
+    if let Some(path) =
+        crate::module::get_path().and_then(|p| p.parent().map(|d| d.join("openxr_loader.dll")))
+    {
+        tracing::info!(target: "vr", loader = %path.display(), "loading the payload-adjacent OpenXR loader");
+        match unsafe { xr::Entry::load_from(&path) } {
+            Ok(entry) => return Ok(entry),
+            Err(e) => {
+                tracing::info!(
+                    target: "vr",
+                    "payload-adjacent loader unavailable ({e}); trying the default search path",
+                );
+            }
         }
-        None => {
-            tracing::info!(target: "vr", "loading the OpenXR loader from the default search path");
-            unsafe { xr::Entry::load() }.context("vr: loading the OpenXR loader (default path)")?
-        }
-    };
-    Ok(entry)
+    }
+
+    tracing::info!(target: "vr", "loading the OpenXR loader from the default search path");
+    unsafe { xr::Entry::load() }.context("loader on the default search path")
 }
 
 /// Negotiate a swapchain color format from the runtime's supported list, preferring an 8-bit sRGB
