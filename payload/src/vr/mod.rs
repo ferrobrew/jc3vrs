@@ -1,9 +1,9 @@
-//! The OpenXR runtime: session lifecycle, event pump, and the per-frame API surface the wave-2 Draw
-//! wiring will drive. This module owns the OpenXR instance, session, reference spaces, and stereo
-//! swapchain; it does **not** yet render -- the per-frame blit of the game's eye captures into the
-//! swapchain, and feeding HMD poses into the camera, land in a later wave (`docs/vr-runtime.md`).
-//! The public surface here ([`frame_begin`] → [`FrameContext`] → [`frame_end`]) is designed for that
-//! caller but has none today.
+//! The OpenXR runtime: session lifecycle, event pump, and the per-frame API surface the Draw wiring
+//! drives. This module owns the OpenXR instance, session, reference spaces, and stereo swapchain. The
+//! per-frame loop ([`update`] → [`frame_begin`] → [`FrameContext`] → per-eye blit → [`present_and_submit`])
+//! is driven from `hooks::game::game_update_render`; the per-eye render parameters flow to the camera
+//! hook through [`frame`]'s separate slot ([`render_params`]), not the frame-held runtime lock. See
+//! `docs/vr-runtime.md` for the loop end to end.
 //!
 //! ## Loader route
 //!
@@ -81,8 +81,8 @@ pub fn install() {
     });
 }
 
-/// The once-per-frame entry point, intended to be called from the game thread by the wave-2 Draw
-/// wiring (no caller today). Pumps OpenXR events, drives bring-up/retry/teardown per config, and
+/// The once-per-frame entry point, called from the game thread by `hooks::game::game_update_render`.
+/// Pumps OpenXR events, drives bring-up/retry/teardown per config, and
 /// returns whether a session is currently running (so the caller can decide whether to submit VR
 /// frames). Never panics on OpenXR failure -- failures degrade to flatscreen stereo and are retried.
 pub fn update() -> bool {
@@ -111,6 +111,37 @@ pub fn is_running() -> bool {
     VR_STATE.lock().is_running()
 }
 
+/// A snapshot of the VR runtime state for the debug UI ([`crate::ui::vr`]).
+pub struct VrStatus {
+    /// Whether `vr.enabled` is set (the master switch). Off leaves the mod in flatscreen stereo.
+    pub enabled: bool,
+    /// Whether an OpenXR instance is currently up (bring-up succeeded).
+    pub instance_up: bool,
+    /// Whether a session is currently running (READY..STOPPING).
+    pub running: bool,
+    /// The runtime name reported at bring-up, or `None` while torn down.
+    pub runtime_name: Option<String>,
+    /// The effective per-eye render resolution (recommended × `resolution_scale`) while a session is
+    /// running, or `None` otherwise.
+    pub eye_resolution: Option<(u32, u32)>,
+}
+
+/// Snapshot the VR runtime state for the debug UI. Locks the config and the runtime state briefly.
+pub fn status() -> VrStatus {
+    let cfg = Config::lock_query(|c| c.vr.clone());
+    let state = VR_STATE.lock();
+    VrStatus {
+        enabled: cfg.enabled,
+        instance_up: state.instance.is_some(),
+        running: state.is_running(),
+        runtime_name: state.runtime_name.clone(),
+        eye_resolution: state
+            .is_running()
+            .then(|| state.eye_resolution(&cfg))
+            .flatten(),
+    }
+}
+
 /// The per-eye render resolution the engine should target while a session is running: the runtime's
 /// recommended view size × [`VrConfig::resolution_scale`], matching the stereo swapchain so the blit
 /// is a straight scale-1 pass. `None` when no session is up or the recommended size is unknown. Read
@@ -135,8 +166,8 @@ fn scaled_eye_size(width: u32, height: u32, resolution_scale: f32) -> (u32, u32)
 }
 
 /// Recenter the cockpit: re-base the stored baseline from the latest located VIEW-space pose, taking
-/// its position and yaw only (the cockpit model). The wave-2 frame loop consumes the baseline when
-/// mapping per-eye poses. No-op until a frame has located a head pose.
+/// its position and yaw only (the cockpit model). The frame loop consumes the baseline when
+/// mapping per-eye poses (see [`frame`]). No-op until a frame has located a head pose.
 pub fn recenter() {
     let mut state = VR_STATE.lock();
     match state.latest_head_pose {
@@ -166,7 +197,7 @@ pub fn uninstall() {
 /// running or the frame could not begin (the caller then renders flatscreen). The returned context
 /// carries the per-eye poses (relative to the recenter baseline), FOVs, off-axis projections, and the
 /// predicted display time; call [`FrameContext::should_render`] to decide whether to render or submit
-/// an empty frame. The wave-2 Draw wiring is the intended caller; there is none today.
+/// an empty frame. Called from `hooks::game::game_update_render`.
 pub fn frame_begin() -> Option<FrameContext> {
     let mut guard = VR_STATE.lock();
 
@@ -203,7 +234,7 @@ pub struct EyeView {
     pub projection: OffAxisProjection,
 }
 
-/// A swapchain image reference for one eye, handed to the wave-2 blit. The swapchain is a single
+/// A swapchain image reference for one eye, handed to the per-eye blit. The swapchain is a single
 /// 2-slice texture array; both eyes share the same acquired texture and are distinguished by
 /// [`array_index`](Self::array_index). The texture is runtime-owned -- wrap it borrowed (no `AddRef`)
 /// and do not release it.
@@ -214,13 +245,13 @@ pub struct EyeImage {
     pub texture: *mut std::ffi::c_void,
     /// The array slice for this eye (`0` = left, `1` = right).
     pub array_index: u32,
-    /// The swapchain's DXGI format, so the wave-2 blit can build a matching view / conversion.
+    /// The swapchain's DXGI format, so the per-eye blit can build a matching view / conversion.
     pub format: u32,
 }
 
 /// The frame in flight. Holds the runtime lock, so it must be dropped (or consumed via [`frame_end`])
 /// before [`update`] or another [`frame_begin`] is called on the same thread. Carries the per-eye
-/// views and the predicted display time; exposes the swapchain acquire/release the wave-2 blit needs.
+/// views and the predicted display time; exposes the swapchain acquire/release the per-eye blit needs.
 pub struct FrameContext {
     guard: MutexGuard<'static, VrState>,
     frame: FrameData,
@@ -260,7 +291,7 @@ impl FrameContext {
     }
 
     /// The swapchain image for `eye` (`0` = left, `1` = right), valid only between [`acquire`] and
-    /// [`release`]. `None` until [`acquire`] has run. The wave-2 blit copies the game's captured eye
+    /// [`release`]. `None` until [`acquire`] has run. The per-eye blit copies the game's captured eye
     /// texture into this image's `array_index` slice.
     ///
     /// [`acquire`]: Self::acquire
@@ -401,6 +432,8 @@ struct VrState {
     /// cached at bring-up. Feeds [`native_eye_resolution`] so the engine can render each eye at the
     /// same size the swapchain uses. `None` while torn down.
     recommended_view: Option<(u32, u32)>,
+    /// The runtime name reported at bring-up, cached for the debug UI. `None` while torn down.
+    runtime_name: Option<String>,
 }
 
 impl VrState {
@@ -414,6 +447,7 @@ impl VrState {
             baseline: None,
             latest_head_pose: None,
             recommended_view: None,
+            runtime_name: None,
         }
     }
 
@@ -504,20 +538,22 @@ impl VrState {
 
         let session = Session::create(&instance, system, cfg)?;
 
-        if let Ok(props) = instance.properties() {
+        let runtime_name = instance.properties().ok().map(|props| {
             tracing::info!(
                 target: "vr",
                 runtime = %props.runtime_name,
                 version = %props.runtime_version,
                 "OpenXR runtime brought up",
             );
-        }
+            props.runtime_name.to_string()
+        });
 
         self.instance = Some(instance);
         self.system = Some(system);
         self.blend_mode = blend_mode;
         self.session = Some(session);
         self.recommended_view = recommended_view;
+        self.runtime_name = runtime_name;
         Ok(())
     }
 
@@ -789,6 +825,7 @@ impl VrState {
         self.baseline = None;
         self.latest_head_pose = None;
         self.recommended_view = None;
+        self.runtime_name = None;
     }
 }
 
@@ -859,7 +896,7 @@ struct Swapchain {
     handle: xr::Swapchain<xr::D3D11>,
     width: u32,
     height: u32,
-    /// The DXGI format actually chosen (recorded for the wave-2 blit, which must match/convert).
+    /// The DXGI format actually chosen (recorded for the per-eye blit, which must match/convert).
     format: u32,
     /// The enumerated swapchain images (raw `ID3D11Texture2D` pointers as `usize`, so the state stays
     /// `Send`; runtime-owned). Cast back to a pointer at [`Swapchain::acquired_texture`].
@@ -993,7 +1030,7 @@ fn load_entry(cfg: &VrConfig) -> anyhow::Result<xr::Entry> {
 /// Negotiate a swapchain color format from the runtime's supported list, preferring an 8-bit sRGB
 /// format (the eye captures resolve through the engine's LDR path). Falls back to the runtime's
 /// first offered format, logging the choice. The game's captures may be a different format; the
-/// wave-2 blit bridges them.
+/// per-eye blit bridges them.
 fn negotiate_format(formats: &[u32]) -> anyhow::Result<u32> {
     use windows::Win32::Graphics::Dxgi::Common::{
         DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,

@@ -1,44 +1,107 @@
 # VR runtime: OpenXR, per-eye projection, per-eye resolution
 
-What exists today is a desktop stereo prototype, not a VR build — none of the OpenXR runtime described below is implemented yet. The mod renders the scene twice per frame (rendering §11) and presents the two eyes side-by-side, and it already drives the camera's full pose from a headpose source and captures each eye after the resolve — but there is no OpenXR session, no real headset pose feeding that source, and no off-axis projection. The per-eye stereo divergence is a lateral position offset on a shared symmetric projection with a hardcoded ~90° FOV, and the head is driven by a mouse-as-HMD stand-in rather than a headset. This doc is the runtime half that turns that prototype into something a headset can display, so every section below is planned work. It is the spine the feature work (head/body, HUD, controllers) hangs off.
+The OpenXR runtime is built. The mod brings up a real OpenXR session against the game's own D3D11 device, drives the render camera from the located HMD pose, builds a per-eye off-axis projection from the headset's field of view, renders each eye at the HMD-recommended resolution, blits the two eye captures into a stereo swapchain, and submits a projection layer to the compositor — while the game's own desktop present stays suppressed and one eye is mirrored back into the game window. This doc describes what runs, in the order it runs, and gathers the headset-only checks the desktop build could not settle into a single playtest checklist at the end.
+
+The implementation lives in `payload/src/vr/` (`mod.rs` owns the session and the frame API; `frame.rs` bridges a frame to the render hooks; `projection.rs` builds the off-axis matrices; `blit.rs` copies the eyes into the swapchain; `resolution.rs` drives the per-eye resize; `mirror.rs` presents the desktop mirror; `config.rs` is the config surface) plus the frame-loop wiring in `payload/src/hooks/game.rs` and the VR headpose source in `payload/src/headpose/xr.rs`. It is the runtime half that turns the desktop stereo prototype (rendering §11) into something a headset displays; the head/body scheme, the HUD, and controllers hang off it.
 
 ## The runtime loop
 
-Bring up an OpenXR session against the D3D11 device and immediate context the game already owns (rendering §8 — take `m_Context->m_Mutex` at `+0x8028` around shared-context work), with a swapchain per eye sized to the runtime's recommended resolution (blocker 2). Each frame:
+The whole loop runs on the game's main thread, inside the `game_update_render` hook (`payload/src/hooks/game.rs`), in this order:
 
-- `xrWaitFrame` / `xrBeginFrame` to pace against the compositor.
-- `xrLocateViews` for the predicted display time → per-eye pose and `XrFovf`. The pose drives the camera (orientation: blocker 3 and `docs/head-and-body.md`; position: the existing camera-relative offset, rendering §6). The FOV builds the projection (blocker 1).
-- Render both eyes — the existing double-`Draw` path, with the clean-stereo gating (rendering §13).
-- Copy each eye into its XR swapchain image. The mod already captures the eye textures after the resolve (rendering §12), so this is a copy into the acquired swapchain image rather than new capture work.
-- `xrEndFrame` submits an `XrCompositionLayerProjection` for the world plus, later, the HUD quad layer (`docs/hud.md`).
+- `vr::update()` pumps the OpenXR event queue once, drives bring-up/retry/teardown per config, and returns whether a session is running. The headpose source is set to `Vr` while a session is running and `Sim` otherwise, so the flatscreen mouse-look sim yields to the HMD pose for the frame.
+- `vr::apply_native_resolution()` populates the engine's deferred display-mode state so the first eye's `Draw` prologue resizes the scene targets to the per-eye resolution. This must sit before the eye loop and before `frame_begin` (which holds the runtime lock for the frame).
+- `vr::frame_begin()` runs `xrWaitFrame` → `xrBeginFrame` → `xrLocateViews`, returning a `FrameContext` that holds the runtime lock for the frame. `xrWaitFrame` is what paces the app against the compositor, replacing vsync (which stays suppressed via `BLOCK_FLIP`, rendering §7).
+- The original `UpdateRender` runs (this frame's animation, so the head-bone anchor is current), then `vr::begin_render_frame` publishes the HMD headpose and the per-eye render parameters from the located views — but only when the runtime asked to render; otherwise the parameters are cleared and the camera hook falls back to flatscreen stereo for the non-submitted keep-alive draws.
+- The existing double-`Draw` stereo path renders both eyes. A running session forces the stereo double-`Draw` on regardless of the flatscreen stereo toggle (the swapchain has a slice per eye), and blocks the flip for both eyes. The `SetupRenderCamera` hook (hooks::camera, rendering §2) applies each eye's off-axis projection and world offset from the render parameters.
+- `vr::present_and_submit()` blits each captured eye into its swapchain slice and ends the XR frame (a world projection layer when rendered, an empty frame otherwise), consuming the frame context and releasing the runtime lock.
+- `vr::present_mirror()` draws one eye into the game window, letterboxed, and presents the game swapchain — the only present this frame.
 
-Present is already handled: the mod suppresses `Graphics::Flip` via `BLOCK_FLIP` (rendering §7), and the XR compositor presents instead. So the loop is mostly new OpenXR plumbing plus three reverse-engineering blockers, each scoped below.
+The per-eye render parameters do not flow through the frame's runtime lock: `frame_begin` holds that lock for the whole frame, and the camera hook runs during the eye draws, so the parameters are handed to it through a separate, independently locked slot (`vr::render_params`, in `frame.rs`). Nothing on the game thread may re-enter the runtime between `frame_begin` and the submit.
 
-## Reference scaffold
+## Session lifecycle, degradation, and retry
 
-`d3d11-openxr-example` is a minimal, working D3D11 + OpenXR loop (the `openxr` 0.21 crate over `windows` 0.62) with exactly this shape — share a D3D11 device with the runtime, one stereo swapchain, `locate_views` → per-eye pose and FOV → off-axis projection → submit a projection layer. Use it as the skeleton; the differences for JC3 are:
+Bring-up is the full chain: load the OpenXR loader (dynamically, `openxr_loader.dll` beside the payload DLL or `vr.loader_path`; the static loader route does not cross-build under xwin), create the instance with `XR_KHR_D3D11_enable`, acquire the HMD system, create the session against the graphics engine's existing `ID3D11Device`, and create the LOCAL reference space. The stereo swapchain (a single 2-slice texture array) is created lazily on the first rendered frame.
 
-- **Share the game's device, don't create one.** The example calls `D3D11CreateDevice` itself; we instead pass the engine's existing `ID3D11Device` to `create_session::<xr::D3D11>` (rendering §8 — the device behind the master context at `engine+2616`). The session must run on the same device the game renders on.
-- **The game renders the scene; we copy into the swapchain.** The example renders its triangle straight into the swapchain RTV. We can't — JC3 renders through its own pipeline into `m_BackBufferLinear` and we capture each eye after the resolve (rendering §12). So per frame: `acquire_image` / `wait_image`, `CopyResource` our captured eye texture into the swapchain image (on the immediate context, under `m_Context->m_Mutex`, rendering §8), `release_image`. The example's single swapchain with `array_size = 2` — one array slice per eye, RTV as `TEXTURE2DARRAY` — is a clean target: eye 0 → slice 0, eye 1 → slice 1.
-- **Drive the camera from `locate_views`, don't render from it.** The example feeds each view's pose and FOV into a per-view VP in a constant buffer. We instead feed the pose into the game camera (blocker 3) and the FOV into the game projection (blocker 1), once per eye, and let the engine render the scene.
-- **Frame pacing replaces the game's own.** `frame_wait.wait()` → `frame_stream.begin()` → render → `frame_stream.end(predicted_display_time, blend_mode, &[projection_layer])`. The HUD quad layer (`docs/hud.md`) becomes a second layer in that `end` call once we move past the in-scene quad. Present stays suppressed (`BLOCK_FLIP`, rendering §7).
+Any failure at any stage logs on the `vr` target and leaves the mod in flatscreen stereo; `vr::update` retries the whole bring-up every `vr.retry_interval_secs` while `vr.enabled`. This is the graceful-degradation contract: with no runtime installed the mod plays normally in flatscreen and simply keeps retrying. Turning `vr.enabled` off, a session transition to `EXITING`/`LOSS_PENDING`, instance loss, or a lifecycle shutdown all tear the runtime down in order (swapchain → session → instance) so the OpenXR instance never outlives the DLL across an uninject → reinject cycle.
 
-The example also has the input scaffold — action sets, `/interaction_profiles/khr/simple_controller`, grip-pose spaces, `sync_actions` + `locate` — that the OpenXR half of controller input (`docs/input.md`) builds on.
+## The cockpit pose model
 
-## Blocker 1: per-eye off-axis projection
+The runtime tracks a **recenter baseline** (`vr::Baseline`): a position and a yaw-only orientation, captured from the latest located head pose. `recenter()` snapshots the current head pose into the baseline; F7 and the VR tab's Recenter button both route here (via `headpose::recenter`, which re-bases both the VR baseline and the mouse sim so one action recenters whichever source is live). The baseline is yaw-only on purpose — pitch and roll are the player's real head tilt and must not be zeroed, only the heading is re-based, matching the vehicle-recenter design in `docs/head-and-body.md`.
 
-Real HMDs have asymmetric, per-eye frusta — the pupil isn't centred on its display half — described by the four `XrFovf` angles (`angleLeft`, `angleRight`, `angleUp`, `angleDown`). Today both eyes render with the engine's single symmetric projection, so even with the position offset the stereo isn't geometrically correct for a headset.
+Each frame, `frame_begin` locates the two eye views in LOCAL space and re-bases each into the baseline frame (`baseline⁻¹ · pose`, yaw-only inverse). `begin_render_frame` (`frame.rs`) then reduces the two eyes to a center pose (position averaged, the left eye's orientation), composes it into world space through `headpose::xr::compose` — the cockpit-frame pose is rotated by the body frame and placed on the animated head-bone anchor, scaled by `vr.world_scale` — and publishes it as the headpose. The per-eye world offset handed to the camera is the true per-eye delta from `locate_views`, rotated into world space by the body frame, replacing the flatscreen build's synthetic ±IPD/2 lateral offset.
 
-The preferred injection point is rendering §2.7's reverse-Z window: write a standard (non-reverse-Z) `m_Projection` on the render camera *before* `SetupRenderCamera`, so the engine applies its reverse-Z and TAA jitter to it exactly once. Build the off-axis matrix directly from the four FOV angles (an off-centre perspective). The engine's own builder is worth confirming as a reference — `RecalcProjection` / a `PerspectiveOffCenter`-style function (not yet a def; find and verify before use). Watch the §2.7 wedge bug: a projection written in the wrong depth convention produces a thin valid band and black elsewhere. The example builds the off-axis matrix straight from the four `XrFovf` angles — `Mat4::frustum_rh(near·tan(angleLeft), near·tan(angleRight), near·tan(angleDown), near·tan(angleUp), near, far)` — which is the matrix we need; the only adaptation is depth convention, since the example uses standard depth (`LESS`, near 0.1 / far 100) and JC3 is reverse-Z (§2.7), so build that off-axis frustum in the engine's convention via the pre-`SetupRenderCamera` write.
+The VR source publishes through `headpose::set_pose_no_interp`, writing the same pose to both sides of the engine's `T0 → T1` interpolation pair (**prev = cur**). The engine interpolates its camera by the sub-frame fraction `dtf` to smooth its fixed-rate sim tick; the VR source samples a fresh pose at the predicted display time every rendered frame, so there is no tick cadence to smooth and any residual interpolation would only lag the head behind the HMD (the "no smoothing on the HMD→camera path" pitfall in `docs/head-and-body.md`).
 
-## Blocker 2: per-eye resolution
+## Per-eye camera and projection, and the two convention tweakables
 
-The runtime's recommended swapchain resolution rarely equals the desktop resolution, and a mismatched copy into the XR swapchain either crops or scales wrong. (That per-eye resolution is what the example reads from `enumerate_view_configuration_views(system, VIEW_TYPE)[0].recommended_image_rect_width` / `_height`.) There is no dynamic-resolution path in the engine (rendering §9): every render target is sized from `device->m_DeviceInfo.m_DisplayWidth`/`m_DisplayHeight` through `CreateRenderSetups`, and per-pass viewports follow the bound RT size.
+`projection.rs` turns the four `XrFovf` half-angles into an off-axis (asymmetric-frustum) projection in the engine's row-major, row-vector layout (rendering §2.6), in two depth conventions, both host-unit-tested. The camera hook writes the projection into `m_Projection` on the render camera; the frame loop supplies the world-space eye offset alongside it.
 
-So the clean approach (rendering §9) is to set the device display size to the per-eye render resolution and re-run `CreateRenderSetups`; viewports then follow automatically, with no per-pass viewport patching. The open RE question is whether that re-init can be driven at runtime without tearing down live resources mid-session: xref `CreateRenderSetups`, find its caller inside `Graphics::Reset` / `SetDisplayMode`, and check what state it assumes (device idle, swapchain recreated). This wants confirming before we commit to runtime resolution changes.
+Two conventions are switchable at runtime because they are the least-verifiable part of the pipeline without a headset — a wrong guess produces a mirrored view or a thin depth wedge that cannot be eyeballed from the desktop:
 
-## Blocker 3: HMD orientation, and the coordinate-frame gate
+- **`vr.projection_convention`** (`EnginePreReverseZ`, default, vs `ManualReverseZ`). The preferred path writes a standard (non-reverse-Z) off-axis projection *before* `SetupRenderCamera`, so the engine applies its own reverse-Z remap and TAA jitter to it exactly once, matching every other camera (rendering §2.7). The fallback writes an already-reverse-Z'd projection *after* `SetupRenderCamera` and rebuilds the view-projections manually — for the case where the engine turns out to rebuild `m_Projection` from its own FOV on this path and drops the pre-call write. The §2.7 wedge bug (a thin valid depth band, black elsewhere) is the tell that the convention is wrong.
+- **`vr.blit_srgb_gamma`** (`Linearize`, default, vs `Passthrough`). The captured eye texture is a `CopyResource` of `m_BackBufferLinear` as `R8G8B8A8_UNORM` (non-sRGB) holding display-referred bytes; the negotiated OpenXR swapchain is `_SRGB`, whose render-target view applies a hardware linear→sRGB encode on write. To reproduce the original bytes the blit shader linearizes the sampled color first, so the hardware re-encode cancels it out. `Passthrough` is for a genuinely-linear source or a non-sRGB swapchain. (The desktop mirror is a separate path with no gamma conversion — it writes into the game's own non-sRGB back buffer, which applies no encode, so passthrough there is a correctness conclusion, not a knob; see `mirror.rs`.)
 
-The mod already drives the render camera's *full* pose — position and orientation — from the headpose source: `camera_update_render` writes both a rotation and a translation into the active camera's `m_TransformT0`/`m_TransformT1` from `headpose::query()`/`query_prev()`, and `CameraTree::UpdateRenderContexts` patches the same pose into the control contexts, after which the engine derives a consistent `m_View = Inverse(m_TransformF)` and rebuilds the VP (rendering §2.5/§2.6). On flatscreen the headpose source is a mouse-as-HMD stand-in (`headpose::sim`). What remains for VR is feeding a *real* HMD pose (position + orientation from `xrLocateViews`) into that same headpose source — the plumbing already routes an arbitrary pose through the camera — and confirming the coordinate frame before trusting the HMD rotation.
+Before trusting a real HMD *rotation*, clear the coordinate-frame gate: the `coord_frame` diagnostic (`RUST_LOG=coord_frame=debug`, added for this work) logs the render camera's `m_TransformF` basis rows and the travel-direction dot products, so one walk-forward session confirms JC3's world frame (almost certainly right-handed Y-up, but unverified). See `docs/head-and-body.md`'s RE notes.
 
-Verify the coordinate frame before trusting a real HMD pose. JC3 is almost certainly right-handed Y-up, but that is unverified. Run the experiment: log the render camera's `m_TransformF` column 2 at `SetupRenderCamera`, press W, and confirm `-column2` aligns with travel direction. Guessing wrong mirrors or rotates the whole view. The body-vs-head split, vehicle handling, and the baked-animation conflict are in `docs/head-and-body.md`; this blocker is now just feeding the HMD pose into the headpose source plus that coordinate-frame check.
+## Per-eye native resolution
+
+While a session runs and `vr.native_resolution` is on (default), each eye renders at the runtime's recommended per-eye resolution × `vr.resolution_scale`, the same size the swapchain uses (one shared `scaled_eye_size`, so the blit is a straight scale-1 pass). The engine has no dynamic-resolution path (rendering §9): every render target is sized from `device->m_DeviceInfo.m_DisplayWidth`/`m_DisplayHeight` through `CreateRenderSetups`.
+
+Rather than call `ApplyResize` directly, `resolution.rs` drives the engine's **own deferred display-mode state** — it writes the pending dimensions into `m_WindowWidth`/`m_WindowHeight` and sets `m_HasNewWindowSettings`, exactly as a windowed/settings resize does. The engine's `HandleModeChange`, serviced once per frame in the `Draw` prologue, then calls `ApplyResize` at the frame boundary the engine chose (previous dispatch drained, this frame not yet dispatched), so the idle-context assumption `ApplyResize` needs holds by construction (`docs/render-setups-reinit.md` §2/§6). `ApplyResize` also resizes the DXGI swapchain buffers and sets the camera aspect ratio, and never touches the Win32 window (§4/§7); presenting is suppressed in VR, so the desktop effect is nil.
+
+The pre-VR display size is captured before the first resize and restored both when the session ends and on uninject: a lifecycle cleanup requests the deferred restore while the hooks are still live, so the delayed hook uninstall (`lib.rs` `shutdown_startup`, its 100 ms grace windows) leaves the `Draw` prologue time to service it and the game is left exactly as found. Every serviced resize is verified (the device reports the requested size, and the Win32 window rect is unchanged); a timeout (`SERVICE_TIMEOUT_FRAMES`), a wrong size, or a changed window rect disables native resolution at runtime and restores the original size, and the mod continues at desktop resolution.
+
+## The desktop mirror
+
+While a session runs the compositor owns the HMD present and the engine's own present is blocked for both eyes, so the game window would freeze on a stale frame. `mirror.rs` presents the game's own swapchain itself, once per frame, unsynced (`SyncInterval = 0`): a vsynced mirror on a 60 Hz monitor would throttle the whole loop, including the 90 Hz HMD submit, down to the monitor's refresh. It draws the configured eye (`vr.mirror_eye`) into the game back buffer, letterboxed to the window aspect — the buffer is near-square at the per-eye resolution while the window keeps its 16:9 client rect, so a viewport inside the buffer pre-compensates DXGI's buffer→window stretch (unit-tested in `mirror.rs`). The egui debug overlay composites onto the mirror before the present so it stays visible on the desktop. Any draw/present fault disables `vr.mirror` at runtime and never wedges the loop; the window then holds its last frame.
+
+## Recenter and the VR debug tab
+
+Recenter is bound to **F7** (`payload/src/hooks/wndproc.rs`), edge-detected like the other function-key toggles (F5 uninject, F6 egui capture, F10 stereo capture, F11 shadow-PCF A/B) — F7 was the free key in that block. The same action is a Recenter button in two places in the debug overlay: the Camera tab's Headpose section and the dedicated **VR tab** (`payload/src/ui/vr.rs`). The VR tab shows the session state, the runtime name, the effective per-eye resolution, and the live headpose source, and exposes the `vr.enabled`, `vr.native_resolution`, `vr.mirror`, and `body_ik.enabled` toggles live.
+
+## Config reference
+
+All under `vr.*` (`payload/src/vr/config.rs`):
+
+- `enabled` — master switch; off tears any live runtime down and stays in flatscreen stereo.
+- `resolution_scale` — per-eye swapchain resolution scale on the runtime's recommendation (`1.0` = recommended).
+- `retry_interval_secs` — bring-up retry cadence after a failure.
+- `world_scale` — metres of head/IPD motion per engine unit (`1.0` = 1:1).
+- `loader_path` — override for the OpenXR loader DLL.
+- `near_clip` / `far_clip` — the per-eye projection clip planes, in metres.
+- `projection_convention` — `EnginePreReverseZ` (default) or `ManualReverseZ` (see above).
+- `blit_srgb_gamma` — `Linearize` (default) or `Passthrough` (see above).
+- `native_resolution` — render each eye at the HMD-recommended resolution (default on; auto-disables on a resize fault).
+- `mirror` / `mirror_eye` — desktop mirror on/off and which eye (default on, left).
+
+## Playtest checklist
+
+Everything below needs a headset in the loop; the desktop build could not settle these, and each maps to a runtime knob or a diagnostic so a wrong guess is recoverable without a rebuild. Consolidated from the module doc comments and the branch's commit notes.
+
+**Bring-up and lifecycle.**
+
+- With a runtime present and a headset connected, confirm the `vr` log shows the loader loading, the runtime name and version, the D3D11 graphics requirements, the negotiated swapchain format, the swapchain creation line, and the `session state -> READY` transition, then a steady `VR frame-loop health` line every ~5 s.
+- Confirm graceful degradation with no runtime available: the mod plays in flatscreen, logs the bring-up failure, and retries on the `retry_interval_secs` cadence (no panics, no crash).
+- Toggle `vr.enabled` off and on in the VR tab mid-session: the runtime tears down cleanly (flatscreen resumes, resolution restores) and brings back up on re-enable.
+- Uninject (F5) and reinject: the game stays running and stable, the display resolution is restored to the pre-VR size, and a fresh inject brings the runtime back up cleanly.
+
+**Coordinate frame and pose.**
+
+- Run the `coord_frame` diagnostic (`RUST_LOG=coord_frame=debug`) and walk forward to confirm the world frame before trusting HMD rotation (blocker 3, `docs/head-and-body.md`).
+- Confirm head rotation and roomscale translation track 1:1 with no perceptible lag or smoothing.
+- Confirm Recenter (F7 or the VR tab button) re-bases heading only, leaving pitch and roll (real head tilt) intact.
+- Confirm the stereo separation reads as depth (not a flat or hyperstereo image) and that near/far objects fuse — the true per-eye `locate_views` delta, not the synthetic IPD.
+
+**Projection and color.**
+
+- Confirm the world fills the frustum with no §2.7 depth wedge (a thin valid band with black elsewhere). If it wedges, flip `vr.projection_convention` to `ManualReverseZ`.
+- Confirm colors and gamma look correct in the headset. If washed out or crushed, flip `vr.blit_srgb_gamma` to `Passthrough`.
+
+**Resolution and mirror.**
+
+- Confirm each eye renders sharp at the recommended resolution and that the `native resolution: engine resize serviced` line reports the expected per-eye size and a sane aspect ratio, with no runtime auto-disable.
+- Confirm the desktop mirror shows the configured eye letterboxed at the correct aspect, that the egui overlay is visible on it, and that the mirror present never throttles the HMD frame rate.
+
+**Body IK.**
+
+- With `body_ik.enabled`, confirm the spine and neck bend toward where the player looks without fighting the head-bone override or the game's aim IK (`docs/humanik.md` open risks); tune the reach weights in the VR/Camera tab.

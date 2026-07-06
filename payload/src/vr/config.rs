@@ -59,8 +59,7 @@ pub struct VrConfig {
     /// How often, in seconds, to retry OpenXR bring-up after a failure while
     /// [`enabled`](VrConfig::enabled). The mod runs in flatscreen stereo between attempts.
     pub retry_interval_secs: u64,
-    /// World scale: metres of head/IPD motion per engine unit (reserved for the wave-2 pose
-    /// mapping; `1.0` = 1:1). Kept here so the render wiring and the camera path share one knob.
+    /// World scale: metres of head/IPD motion per engine unit (`1.0` = 1:1). Kept here so the render wiring and the camera path share one knob.
     pub world_scale: f32,
     /// Override path to the OpenXR loader DLL. `None` loads `openxr_loader.dll` next to the payload
     /// DLL, falling back to the platform default search path.
