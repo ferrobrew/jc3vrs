@@ -2,7 +2,7 @@
 //! then submit the frame.
 //!
 //! The game renders each eye into `m_BackBufferLinear` and the mod captures it after the resolve
-//! (`docs/rendering.md` §12); those captures live in [`EGUI_DEBUG_RENDER_STATE`] as
+//! (`docs/engine/rendering.md` §12); those captures live in [`EGUI_DEBUG_RENDER_STATE`] as
 //! `R8G8B8A8_UNORM` textures sized to the game's back buffer. The OpenXR swapchain is a 2-slice
 //! texture array sized to the runtime's recommended per-eye resolution in a negotiated (usually
 //! `_SRGB`) format. Sizes and formats generally differ, so this is a **shader blit** (fullscreen

@@ -1,6 +1,6 @@
 # fsr-sys
 
-FFI bindings to AMD FidelityFX Super Resolution 2 (FSR2) with the native DirectX 11 backend, used by the payload for VR anti-aliasing (and, later, upscaling). See `docs/fsr.md` for the integration design.
+FFI bindings to AMD FidelityFX Super Resolution 2 (FSR2) with the native DirectX 11 backend, used by the payload for VR anti-aliasing (and, later, upscaling). See `docs/mod/fsr.md` for the integration design.
 
 The C++ backend is the vendored `optiscaler/FidelityFX-FSR2-DX11` submodule (MIT) at `vendor/FidelityFX-FSR2-DX11`. `build.rs` compiles it for the MSVC target alongside the shader headers under `generated/`.
 

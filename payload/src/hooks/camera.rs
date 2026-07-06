@@ -33,7 +33,7 @@ pub(super) fn hook_library() -> HookLibrary {
 }
 
 /// The last `dtf` the active camera's `UpdateRender` received, for the debug UI: the engine's
-/// sub-frame interpolation fraction (see `docs/issue-20-animation-judder.md`). If it sits at 0.0
+/// sub-frame interpolation fraction (see `docs/issues/20-animation-judder.md`). If it sits at 0.0
 /// or 1.0 every frame, the engine's T0 → T1 lerp is inert and nothing smooths the sim-tick
 /// cadence.
 pub fn last_dtf() -> f32 {
@@ -43,7 +43,7 @@ pub fn last_dtf() -> f32 {
 /// The scene render camera is the engine-owned copy (`GraphicsEngine::m_RenderCamera`), rebuilt
 /// each Draw by `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF`
 /// from `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye,
-/// *before* the rebuild, so the two dispatches diverge. See `docs/rendering.md` section 2.
+/// *before* the rebuild, so the two dispatches diverge. See `docs/engine/rendering.md` section 2.
 #[detour(address = jc3gi::camera::camera::Camera::SetupRenderCamera_ADDRESS)]
 fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     let is_render_camera = unsafe {
@@ -80,7 +80,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // needs jitter, but its own Halton sequence, applied below.
     let jitter = jitter && !fsr_enabled && !(stereo_active && force_smaa_1x);
 
-    // The VR per-eye off-axis projection and world offset (docs/vr-runtime.md blockers 1 & 3).
+    // The VR per-eye off-axis projection and world offset (docs/mod/vr-runtime.md blockers 1 & 3).
     // Fetch this eye's parameters once; `None` on flatscreen frames. Under the preferred convention,
     // write the standard-depth off-axis projection into `m_Projection` *before* SetupRenderCamera so
     // the engine applies its reverse-Z remap and TAA jitter to it exactly once (§2.7).
@@ -104,7 +104,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // after the eye loop -- the sim-side sun-shadow fit reads this camera and must see the center,
     // unjittered state or its cascade texel snap flip-flops (issue #10's blob flicker).
     if is_render_camera && let Some(camera) = unsafe { camera.as_ref() } {
-        // Coordinate-frame verification (docs/vr-runtime.md "Blocker 3"): log the pristine center
+        // Coordinate-frame verification (docs/mod/vr-runtime.md "Blocker 3"): log the pristine center
         // camera's basis + travel direction before the per-eye offset below mutates m_TransformF.
         crate::debug::coord_frame::log_render_camera_frame(camera);
 
@@ -238,7 +238,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     result
 }
 
-/// The camera pipeline within a frame (see `docs/rendering.md` §2.2): `CameraTree::
+/// The camera pipeline within a frame (see `docs/engine/rendering.md` §2.2): `CameraTree::
 /// UpdateRenderContexts` fills the control contexts, `PushRenderContext` copies the next render
 /// context's transform into the active camera's `m_TransformT0` and `m_TransformT1` (running it
 /// through a rotation jitter filter that snaps sub-epsilon deltas), and `Camera::UpdateRender`

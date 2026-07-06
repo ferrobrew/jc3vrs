@@ -2,7 +2,7 @@
 
 Helpers for pulling apart Just Cause 3's shaders. The full walkthrough — bundle format, how to read
 the disassembly, how to find a specific effect, and how the mod patches shaders — is in
-[`docs/shaders.md`](../../docs/shaders.md). Quick reference:
+[`docs/engine/shaders.md`](../../docs/engine/shaders.md). Quick reference:
 
 ```sh
 # 1. Carve the DXBC blobs out of a bundle (one of the four *.shader_bundle in the game dir).

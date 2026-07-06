@@ -4,9 +4,9 @@
 //! each eye needs an off-centre perspective built from the four `XrFovf` half-angles (`angleLeft`,
 //! `angleRight`, `angleUp`, `angleDown`). This module turns those angles into a matrix laid out the
 //! way the engine's `Camera::m_Projection` is: **row-major, row-vector** (`clip = p · M`), the D3D
-//! convention documented in `docs/rendering.md` §2.6.
+//! convention documented in `docs/engine/rendering.md` §2.6.
 //!
-//! Two depth conventions are produced (see `docs/rendering.md` §2.7):
+//! Two depth conventions are produced (see `docs/engine/rendering.md` §2.7):
 //!
 //! - [`OffAxisProjection::standard_depth`]: a standard (non-reversed) projection, NDC z in `[0, 1]`
 //!   with near → 0 and far → 1. **This is the one to write into `m_Projection` before
@@ -39,7 +39,7 @@ pub struct Fov {
 pub struct OffAxisProjection {
     /// Standard depth (NDC z in `[0, 1]`, near → 0, far → 1). Write this into `m_Projection`
     /// *before* `SetupRenderCamera` so the engine reverse-Z's and jitters it once (the preferred
-    /// path, `docs/rendering.md` §2.7).
+    /// path, `docs/engine/rendering.md` §2.7).
     pub standard_depth: [f32; 16],
     /// Reverse-Z depth (near → 1, far → 0), the engine's `z' = w - z` remap already applied. Write
     /// this *after* `SetupRenderCamera` (the §2.7 alternative path); you then own jitter and the
@@ -100,7 +100,7 @@ fn perspective_off_center_rh(fov: Fov, near: f32, far: f32) -> [f32; 16] {
 
 /// Apply the engine's reverse-Z remap (`z' = w - z`) to a standard-depth projection: for each row,
 /// column 2 becomes column 3 minus column 2. This is exactly what `SetupRenderCamera` /
-/// `RecalcProjection` do to `m_Projection` on a render camera (`docs/rendering.md` §2.3, §2.7).
+/// `RecalcProjection` do to `m_Projection` on a render camera (`docs/engine/rendering.md` §2.3, §2.7).
 fn apply_reverse_z(mut m: [f32; 16]) -> [f32; 16] {
     for row in 0..4 {
         m[row * 4 + 2] = m[row * 4 + 3] - m[row * 4 + 2];

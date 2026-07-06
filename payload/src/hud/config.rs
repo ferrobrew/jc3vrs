@@ -1,8 +1,8 @@
-//! Floating-HUD configuration types. See `docs/hud.md`.
+//! Floating-HUD configuration types. See `docs/mod/hud.md`.
 
 use serde::{Deserialize, Serialize};
 
-/// Floating-HUD settings. See `docs/hud.md`.
+/// Floating-HUD settings. See `docs/mod/hud.md`.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct HudConfig {
     /// Redirect the HUD into our own offscreen texture (the first step toward the floating panel).
@@ -63,7 +63,7 @@ pub struct HudConfig {
     /// markers, reticles -- each in its own texture composited at its own depth, at full rate
     /// (the movie's render tree partitioned across extra render roots). Gameplay works, but the
     /// first pause permanently stops the UI update pump; see the post-mortem in
-    /// `docs/issue-08-14-hud-overlays-and-depth.md` and `payload/src/hud/split/`.
+    /// `docs/issues/08-14-hud-overlays-and-depth.md` and `payload/src/hud/split/`.
     pub split: bool,
     /// Keep the full-screen Scaleform overlays -- drowning tint, damage flashes, directional
     /// damage indicators -- hidden (issue #8): they were authored to cover a flat screen and
@@ -287,7 +287,7 @@ impl std::fmt::Display for PrefixTooLongError {
 
 impl std::error::Error for PrefixTooLongError {}
 
-/// Lazy-follow damping parameters for the floating HUD panel. See `docs/hud.md`.
+/// Lazy-follow damping parameters for the floating HUD panel. See `docs/mod/hud.md`.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct FollowConfig {
     /// Rotation follow halflife in seconds. Lower = snappier follow.

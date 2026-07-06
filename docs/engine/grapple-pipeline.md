@@ -1,12 +1,12 @@
 # The grapple pipeline
 
-Just Cause 3's signature mechanic: fire a hook at a surface or object to zip toward it (traversal), or tether two things together (attach), with reel-in. The VR goal being scoped is a two-handed split — the **left** motion controller aims and fires the grapple at whatever it points at, while the **right** hand independently aims and fires a weapon (`docs/aim-pipeline.md`). This doc maps the grapple targeting and tether machinery well enough to identify the seam for re-sourcing the grapple's aim ray from an arbitrary transform.
+Just Cause 3's signature mechanic: fire a hook at a surface or object to zip toward it (traversal), or tether two things together (attach), with reel-in. The VR goal being scoped is a two-handed split — the **left** motion controller aims and fires the grapple at whatever it points at, while the **right** hand independently aims and fires a weapon (`docs/engine/aim-pipeline.md`). This doc maps the grapple targeting and tether machinery well enough to identify the seam for re-sourcing the grapple's aim ray from an arbitrary transform.
 
 All addresses are release-IDB (`JustCause3.exe`, imagebase `0x140000000`) unless marked *(dump)*, meaning a dump-build address still to be confirmed against the release binary. The release IDB carries MSVC symbols, so most functions resolved directly by name.
 
 ## The one-line summary
 
-The grapple does **not** cast its own ray. It reads the same shared aim state the guns read — the single per-tick raycast in `CPlayerAimControl::UpdateDirectAim` — bucketed by a target-type index. Weapons are index 0, melee index 1, **grapple is index 2**. Both the ray origin and direction come from `CGameCameraManager::GetCameraMatrix` (`0x140_75C_7C0`), the same getter the mod already post-overrides with the headpose (see `docs/head-and-body.md`, "The aim seam"). So overriding `GetCameraMatrix` moves the gun aim *and* the grapple aim together. Splitting them is not a caller-keyed problem — it is an **index** problem, and the clean intervention is to overwrite the grapple slot (index 2) after the shared raycast has run.
+The grapple does **not** cast its own ray. It reads the same shared aim state the guns read — the single per-tick raycast in `CPlayerAimControl::UpdateDirectAim` — bucketed by a target-type index. Weapons are index 0, melee index 1, **grapple is index 2**. Both the ray origin and direction come from `CGameCameraManager::GetCameraMatrix` (`0x140_75C_7C0`), the same getter the mod already post-overrides with the headpose (see "The camera getters" above and `docs/mod/head-and-body.md` for the mod-side override). So overriding `GetCameraMatrix` moves the gun aim *and* the grapple aim together. Splitting them is not a caller-keyed problem — it is an **index** problem, and the clean intervention is to overwrite the grapple slot (index 2) after the shared raycast has run.
 
 ## 1. Targeting: how the target point and entity are chosen
 
@@ -46,7 +46,7 @@ Between "target chosen" and "hook attached" there is an animation-gated wire *ex
 
 ## 3. Traversal versus tether versus retract
 
-The three modes are distinguished by input and by `CGrapplingHook::EGrapplingHookState` (`GHS_INACTIVE`, `GHS_REELING_IN`, `GHS_REELED_ATTACHED`, `GHS_REELED_HANG`, `GHS_REELED_UPSIDEDOWN`, `GHS_REELED_STUNT`, `GHS_CUSTOM_ACTIVE_WIRE`; `SetState` is the mutator). Input is dispatched from `CGrapplingHook::OnPreSimUpdate` (`0x140_949_F70`) and `OnPostCamUpdate`, reading a `CActionMap`. The relevant `Action` IDs (from `input/input_action_map.pyxis`, and see `docs/input.md`):
+The three modes are distinguished by input and by `CGrapplingHook::EGrapplingHookState` (`GHS_INACTIVE`, `GHS_REELING_IN`, `GHS_REELED_ATTACHED`, `GHS_REELED_HANG`, `GHS_REELED_UPSIDEDOWN`, `GHS_REELED_STUNT`, `GHS_CUSTOM_ACTIVE_WIRE`; `SetState` is the mutator). Input is dispatched from `CGrapplingHook::OnPreSimUpdate` (`0x140_949_F70`) and `OnPostCamUpdate`, reading a `CActionMap`. The relevant `Action` IDs (from `input/input_action_map.pyxis`, and see `docs/engine/input.md`):
 
 - **`FIRE_GRAPPLE` (`0xAD`)** — the mode selector, tap versus hold against the tuning hold-time:
   - **tap** with a wire already attached → **reel-to-target / zip**: `SetState(GHS_REELING_IN)`, `QueueAct(ACT_PRE_REEL)`, reel completes into a `GHS_REELED_*` state via the reel tasks (`NStateTask_ReelIn`, `StartReelAttach` / `StartReelHangAtPosition` / `StartReelUpsideDown`).
@@ -76,7 +76,7 @@ Recommendation: option 1. It is the minimal per-consumer intervention, mirrors t
 
 ## 5. Related seams
 
-### Arm IK during grapple (interface point for `docs/hands-and-roomscale.md`)
+### Arm IK during grapple (interface point for `docs/engine/hands-and-roomscale.md`)
 
 Two distinct IK tasks with two distinct target sources — the hands agent should note which is which:
 

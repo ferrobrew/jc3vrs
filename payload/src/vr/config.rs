@@ -1,9 +1,9 @@
-//! VR runtime configuration. See [`crate::vr`] and `docs/vr-runtime.md`.
+//! VR runtime configuration. See [`crate::vr`] and `docs/mod/vr-runtime.md`.
 
 use serde::{Deserialize, Serialize};
 
 /// Which depth convention the per-eye off-axis projection is written in, and where in the
-/// `SetupRenderCamera` sequence it lands (`docs/rendering.md` §2.7, `docs/vr-runtime.md` blocker 1).
+/// `SetupRenderCamera` sequence it lands (`docs/engine/rendering.md` §2.7, `docs/mod/vr-runtime.md` blocker 1).
 /// The coordinate/depth conventions are the least-verifiable part of the pipeline without a headset,
 /// so this is a runtime tweakable rather than a compile-time choice.
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

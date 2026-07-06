@@ -1,6 +1,6 @@
 # The weapon aim and fire pipeline
 
-Mapping the weapon-side aim/fire path well enough to give each wielded weapon its own aim ray — the right hand firing a gun one way while the left grapples another, or two dual-wielded guns firing at two targets. The head/camera side (how the mod already overrides the camera the aim system reads) lives in `docs/head-and-body.md`'s "The aim seam"; this doc picks up where that leaves off: from the camera matrix, through the single stored aim target, into the per-weapon fire construction.
+Mapping the weapon-side aim/fire path well enough to give each wielded weapon its own aim ray — the right hand firing a gun one way while the left grapples another, or two dual-wielded guns firing at two targets. The camera-getter split and the body's native turn reactions to the aim direction are covered below in "The camera getters" and "Body-turn reactions to the aim direction"; `docs/mod/head-and-body.md`'s "The aim seam" covers the mod's design for how it overrides those getters and suppresses the turn reactions. This doc picks up from the camera matrix, through the single stored aim target, into the per-weapon fire construction.
 
 All addresses are release-IDB (`JustCause3.exe.i64`, No-Denuvo) RVAs; the IDB carries full mangled symbols, so these were read directly, not mapped from the dump.
 
@@ -29,9 +29,21 @@ The per-frame update is `CPlayerAimControl::UpdatePostSim` (`0x140_CF5_C50`), wh
 
 ### The raycast (`UpdateDirectAim`, `0x140_CE5_350`)
 
-A single ray. The origin comes from `GetRaycastStartPosition` (`0x140_C2B_610`): it calls `CGameCameraManager::GetCameraMatrix` (`0x140_75C_7C0` — the matrix the mod already overwrites post-call with the headpose transform, per `docs/head-and-body.md`) and steps back 0.1 along camera-forward. The direction is camera-forward, adjusted by `GetAdjustedCameraMatrix` (`0x140_C3E_510`), which for the *current weapon* (`GetCurrentWeapon(TARGET_WEAPONS)`, `0x140_C65_E10`) adds a small ballistic pitch (`FOV × weapon tuning`) — a per-weapon-*type* offset, not a per-hand one. `CPhysicsSystem::CastRay` (`0x140_286_740`) runs it; `CheckDirectTargets` (`0x140_CE4_BB0`) writes the hit into `m_DirectPositions[0]` / `m_AimPos[0]`.
+A single ray. The origin comes from `GetRaycastStartPosition` (`0x140_C2B_610`): it calls `CGameCameraManager::GetCameraMatrix` (`0x140_75C_7C0` — see "The camera getters" below) and steps back 0.1 along camera-forward. The direction is camera-forward, adjusted by `GetAdjustedCameraMatrix` (`0x140_C3E_510`), which for the *current weapon* (`GetCurrentWeapon(TARGET_WEAPONS)`, `0x140_C65_E10`) adds a small ballistic pitch (`FOV × weapon tuning`) — a per-weapon-*type* offset, not a per-hand one. `CPhysicsSystem::CastRay` (`0x140_286_740`) runs it; `CheckDirectTargets` (`0x140_CE4_BB0`) writes the hit into `m_DirectPositions[0]` / `m_AimPos[0]`.
 
 Because the origin is `GetCameraMatrix` and the mod overrides that getter, **the current aim ray already follows the HMD gaze** — this is exactly why the VR mod aims everything by looking. The whole raycast is single-threaded through the one camera transform.
+
+### The camera getters
+
+`GameCameraManager` splits its camera getters by phase:
+
+- `GetInputMatrix` (`0x140_75C_7A0`) reads `m_NextRenderContext` — the render-phase context the mod patches, so movement-direction mapping follows the headpose.
+- `GetCameraMatrix` (`0x140_75C_7C0`) reads `m_NextCameraContext`, which the *sim-phase* camera update rewrites from the internal camera **after** the mod's render-phase patch — so with the look input already consumed by that patch, the internal camera's yaw is frozen at its injection-time direction. Every sim-side aim consumer goes through this getter: `CPlayerAimControl` (the raycast above, plus `GetAdjustedCameraMatrix` and the target visibility casts), the weapon aim-target queries, and the melee and grapple tasks (see `docs/engine/grapple-pipeline.md`). The mod hooks `GetCameraMatrix` post-call and overwrites the output with the render camera's headpose transform, which is why the aim ray above already follows the HMD gaze.
+- `GetAlternateAimMatrix` (`0x140_75C_830`) reads `m_NextRenderContext.m_AlternateAimTransform`, which the render-phase context patch already covers.
+
+### Body-turn reactions to the aim direction
+
+The `GetCameraMatrix` override has a side effect on the body: `NStateTask_LocoUtil::GetAimMoveAngle` (`0x140_831_880`) measures the XZ angle from the move direction to the player's aim target — which now follows the head when the mod's override is active — and the aim-relative act dispatchers (`QueueAimRelativeOnSpotActions`, `QueueRotateOnSpots`, `QueueStopTurns`, and friends) queue turn acts from it, so the game itself turns the body toward the aim direction whenever those acts run. The turn acts are only half of it: in the aim-relative family the game also passes `track_face_dir` to the orientation executor with its own blackboard face dir (again derived from the aim reference), so the executor's continuous yaw turns the body toward the aim direction independently of the turn acts. `docs/mod/head-and-body.md`'s "The aim seam" covers how the mod suppresses both reactions for the decoupled-idle head case (the `GetAimMoveAngle` zero-return shim, and `force_face_camera` forcing `track_face_dir` off).
 
 ### Aim assist (`UpdateAllTargets`, `0x140_CE7_690`)
 
@@ -86,7 +98,7 @@ When a weapon fires, the launch transform is `CWeaponBase::GetShotMatrix` (`0x14
 
 `GetShotMatrix` builds the shot as:
 
-- **Origin** = `GetFireFromPosition` (virtual, `CWeaponBase::GetFireFromPosition` `0x140_966_940`): the weapon's world matrix `× m_InternalFirePositions[current]` — i.e. the **muzzle bone** of *this* weapon's current fire-point. Per-weapon, per-barrel. (Grip transforms for hand attachment are the separate `GetGripPosition`, `0x140_966_840` — see `docs/hands-and-roomscale.md`.)
+- **Origin** = `GetFireFromPosition` (virtual, `CWeaponBase::GetFireFromPosition` `0x140_966_940`): the weapon's world matrix `× m_InternalFirePositions[current]` — i.e. the **muzzle bone** of *this* weapon's current fire-point. Per-weapon, per-barrel. (Grip transforms for hand attachment are the separate `GetGripPosition`, `0x140_966_840` — see `docs/engine/hands-and-roomscale.md`.)
 - **Aim point** = `m_AimTargetPosition` (`+0x3FC`), i.e. the stored shared target. For a remote player it is instead read off the network component.
 - **Direction** = `CMatrix4f::CreateOrientation(from = muzzle, at = aim point, up)` — the shot points from *this weapon's muzzle* toward the *shared* target.
 - **Fallbacks/modifiers**: if the aim point is within ~0.3 m of the muzzle, or the weapon is in `E_PROJECTILE_FIRE_DIRECTION_BARREL` mode (`m_ProjectileFireDirection` / `m_ProjectileTempFireDirection`, `+0x168`/`+0x16C` region), or `force_barrel_direction`, it uses the barrel-forward direction instead of the aim point (10 m along the weapon's own forward). `m_ProjectileOffsetFromAimPos` (`+0x1A4`) applies a spread ring, and scatter (`RotationYawPitchRoll` from tuning) is layered on unless suppressed.
@@ -116,8 +128,8 @@ Recommended path: **seam 1 for independence** (each weapon gets its controller r
 
 ## Risks and coupling
 
-- **The aim-flags coupling (the fps-movement lesson).** `Character::m_AimFlags` (`m_AimingWeapon` / `m_AimingGrapple`, `character/character.pyxis`, `+0x2_0F1`) and the aim timer gate whether the weapon is *raised* at all, whether the reticle shows, whether the body faces the aim direction, and whether assist runs. Substituting a fire *direction* does not by itself raise the weapon or enable firing — `CInventory::UpdateWeapons_Parallel` only drives a weapon when the animation allows shooting and the aim state is live. Per-hand aiming that wants the off-hand raised independently will collide with this single-aim-state model (there is one `m_AimingWeapon`, not one per hand), exactly the coupling `docs/head-and-body.md` and the `fps-movement-aim-coupling` memory warn about. Treat weapon-raise/enable as a separate problem from aim-direction.
-- **The body turns toward the aim point.** `NStateTask_LocoUtil::GetAimMoveAngle` (`0x140_831_880`) measures the body's move angle against the *aim target*; the mod already neutralises this for the decoupled-idle head case. A per-weapon target that diverges hard from the head will re-excite the body-turn machinery through the primary weapon's point — validate that the character does not spin toward an off-axis controller ray.
+- **The aim-flags coupling (the fps-movement lesson).** `Character::m_AimFlags` (`m_AimingWeapon` / `m_AimingGrapple`, `character/character.pyxis`, `+0x2_0F1`) and the aim timer gate whether the weapon is *raised* at all, whether the reticle shows, whether the body faces the aim direction, and whether assist runs. Substituting a fire *direction* does not by itself raise the weapon or enable firing — `CInventory::UpdateWeapons_Parallel` only drives a weapon when the animation allows shooting and the aim state is live. Per-hand aiming that wants the off-hand raised independently will collide with this single-aim-state model (there is one `m_AimingWeapon`, not one per hand), exactly the coupling `docs/mod/head-and-body.md` and the `fps-movement-aim-coupling` memory warn about. Treat weapon-raise/enable as a separate problem from aim-direction.
+- **The body turns toward the aim point** (see "Body-turn reactions to the aim direction" above): `NStateTask_LocoUtil::GetAimMoveAngle` (`0x140_831_880`) measures the body's move angle against the *aim target*; the mod already neutralises this for the decoupled-idle head case. A per-weapon target that diverges hard from the head will re-excite the body-turn machinery through the primary weapon's point — validate that the character does not spin toward an off-axis controller ray.
 - **The `WasSetThisFrame` fallback.** If a detour ever skips the write (`+0x2714` stays 0), the serial path aims 25 m down body-forward — a substitution seam must set the flag or route through `UpdateWeaponAiming` so the fallback never fires.
 - **Barrel-direction fallback and near-muzzle points.** `GetShotMatrix` silently swaps to barrel-forward when the target is ~0.3 m from the muzzle; keep controller rays projected to a real distance so a near-hand target doesn't collapse to "fire down the barrel."
 - **Network aim override.** For non-local controllers `GetShotMatrix` reads the aim point off the network component, not `m_AimTargetPosition`; the substitution seams are local-player only, which is the intended scope.
@@ -140,7 +152,7 @@ Aim control (`CPlayerAimControl`):
     GetTargetBodyPosition              0x140_CDA_570
     NAutoAimToTarget_Update            0x140_809_C60   (already in aim/aim.pyxis)
 
-Camera getters (from docs/head-and-body.md):
+Camera getters (see "The camera getters" above):
 
     GetCameraMatrix                    0x140_75C_7C0   (mod-overridden; aim origin)
     GetInputMatrix                     0x140_75C_7A0
@@ -150,6 +162,7 @@ Player / character:
 
     CPlayer::UpdatePostCamera          0x140_CF7_BB0   (aim-control → character hand-off)
     CCharacter::UpdateWeaponAiming     0x140_760_2C0   (writes m_AimTargetPositionWeapons)
+    NStateTask_LocoUtil::GetAimMoveAngle 0x140_831_880 (body-turn reaction to the aim direction)
     CCharacter::UpdateWeapons_Parallel 0x140_760_660
       m_AimTargetPositionWeapons               @ +0x26BC
       m_AimTargetPositionGrenade               @ +0x26C8
@@ -173,4 +186,4 @@ Weapon:
 
 `CTarget::ETargetType` slots: `TARGET_WEAPONS=0`, `TARGET_STICKY_AIM=1`, `TARGET_GRAPPLE=2`, `TARGET_MELEE=3`, `TARGET_GRENADE=4`, `TARGET_SNAP=5`. `CInventory::EWeaponSlot`: `E_SLOT_DUAL_WIELD=0`, `E_SLOT_TWO_HANDED=1`, `E_SLOT_HEAVY=2`, `E_SLOT_HAND_GRENADE=3`, … `E_NUM_WEAPON_SLOTS=8`.
 
-Interface points with adjacent docs: the grapple aim target is slot `TARGET_GRAPPLE=2` (`GetActiveGrappleTargetPosition` → `m_AimPos[2]`), fed by the same `CPlayerAimControl` raycast and grapple-fitness scoring — grapple targeting internals belong to `docs/grapple-pipeline.md`. Weapon *grip*/hand attachment (`GetGripPosition`, muzzle bones) belongs to `docs/hands-and-roomscale.md`; this doc treats the muzzle only as the fire origin.
+Interface points with adjacent docs: the grapple aim target is slot `TARGET_GRAPPLE=2` (`GetActiveGrappleTargetPosition` → `m_AimPos[2]`), fed by the same `CPlayerAimControl` raycast and grapple-fitness scoring — grapple targeting internals belong to `docs/engine/grapple-pipeline.md`. Weapon *grip*/hand attachment (`GetGripPosition`, muzzle bones) belongs to `docs/engine/hands-and-roomscale.md`; this doc treats the muzzle only as the fire origin.

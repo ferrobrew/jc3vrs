@@ -152,7 +152,7 @@ fn apply_global_filters(this: *mut c_void, dt: f32, ctx: *mut c_void) {
 
 // AntiAliasingEffect::Apply -- the AA stage of the post chain. Two roles:
 //   * FSR on: resolve the slot color ourselves (post-tonemap) via fsr_dispatch, then neutralize the
-//     engine AA to AA_NONE so it passthrough-blits our FSR result onward (docs/fsr.md).
+//     engine AA to AA_NONE so it passthrough-blits our FSR result onward (docs/mod/fsr.md).
 //   * else, force-SMAA-1x in stereo: drop T2X (mode 3) to SMAA 1x (mode 2) -- T2X's temporal resolve
 //     blends a single history shared across the two eye dispatches, so each eye ghosts the other.
 // Either way, restore the real mode afterwards so the engine's own state stays intact.

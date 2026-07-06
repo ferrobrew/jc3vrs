@@ -53,7 +53,7 @@ struct PreIkPose {
 static PRE_IK_POSE: Mutex<Option<PreIkPose>> = Mutex::new(None);
 
 /// Pre-call seam for headset-driven upper-body IK. Runs at the entry of the pose-finalization pass,
-/// *before* the HumanIK `MAIN` solve and its `HasTargets` gate (docs/humanik.md): it captures the
+/// *before* the HumanIK `MAIN` solve and its `HasTargets` gate (docs/engine/humanik.md): it captures the
 /// headpose anchors from the freshly animated (pre-IK) pose and queues the head effector target so
 /// the engine's own solver bends the spine and head toward the headpose the same frame. The
 /// `SetJoint` head override still runs at the very end of this pass, in
@@ -157,7 +157,7 @@ unsafe fn capture_anchors_and_queue_body_ik(character: *mut Character) {
             return;
         }
 
-        // Respect the same gates the engine checks before the HasTargets gate (docs/humanik.md):
+        // Respect the same gates the engine checks before the HasTargets gate (docs/engine/humanik.md):
         // the global HIK enable and the per-character reduced-LOD bit. Queuing while gated off would
         // leave targets unconsumed (neither the solve nor ClearTargets runs), so skip cleanly and
         // log the transition once rather than per frame.
@@ -181,7 +181,7 @@ unsafe fn capture_anchors_and_queue_body_ik(character: *mut Character) {
 
         // The head world target is the headpose position (already anchored to this frame's animated
         // head plus the roomscale offset), transformed into character-model space — the space
-        // AddEffectorTargetPosition expects (docs/humanik.md) — plus the optional tuning offset.
+        // AddEffectorTargetPosition expects (docs/engine/humanik.md) — plus the optional tuning offset.
         let target_world = headpose::query().position;
         let target_model =
             character_world.inverse().transform_point3(target_world) + cfg.target_offset;

@@ -1,6 +1,6 @@
 # Motion controllers and roomscale: scope
 
-The plan for turning the VR runtime (issue #12) into a hands-first VR game: motion-controller input, per-hand aiming (left-hand grapple and right-hand gunfire at independent targets, dual-wielded guns at two targets), controller-held weapons, and roomscale locomotion. Grounded in three pipeline recon docs — `docs/aim-pipeline.md`, `docs/grapple-pipeline.md`, and `docs/hands-and-roomscale.md` — and the extracted default gamepad keymap (`settings/keymap_gamepad.bin`, an RTPC container).
+The plan for turning the VR runtime (issue #12) into a hands-first VR game: motion-controller input, per-hand aiming (left-hand grapple and right-hand gunfire at independent targets, dual-wielded guns at two targets), controller-held weapons, and roomscale locomotion. Grounded in three pipeline recon docs — `docs/engine/aim-pipeline.md`, `docs/engine/grapple-pipeline.md`, and `docs/engine/hands-and-roomscale.md` — and the extracted default gamepad keymap (`settings/keymap_gamepad.bin`, an RTPC container).
 
 Decisions taken up front: weapons are virtual guns in the hand (not laser-pointer arm IK); aim assist is kept but re-derived mod-side per ray, softened; roomscale root motion is in scope; the grapple keeps the game's semantics with the target ray re-sourced to the left hand, with a designed path to gestures later. Both Touch-style and Index controllers are supported via OpenXR suggested bindings.
 
@@ -22,7 +22,7 @@ Each phase is independently shippable behind config and playtestable in the head
 
 ### 1. Controller input foundation
 
-OpenXR action sets — `onfoot`, `vehicle`, `airborne`, `ui` — with one active per frame from the mode detection the headpose latch already does. Grip/aim pose actions for both hands. Suggested bindings for the Touch and Index interaction profiles; the runtime's rebinding UI covers per-user remaps. Output flows through `LocalPlayerActionMap::ForceSetPressed`/`ForceSetClicked` after `InputDeviceManager::Update`, per the timing rules in `docs/input.md`. Deliverable: the whole game playable with controllers acting as a wearable gamepad — no pointing yet, but no gamepad in hand either.
+OpenXR action sets — `onfoot`, `vehicle`, `airborne`, `ui` — with one active per frame from the mode detection the headpose latch already does. Grip/aim pose actions for both hands. Suggested bindings for the Touch and Index interaction profiles; the runtime's rebinding UI covers per-user remaps. Output flows through `LocalPlayerActionMap::ForceSetPressed`/`ForceSetClicked` after `InputDeviceManager::Update`, per the timing rules in `docs/engine/input.md`. Deliverable: the whole game playable with controllers acting as a wearable gamepad — no pointing yet, but no gamepad in hand either.
 
 The binding translation is deliberately congruent with the extracted default map (right trigger = fire, exactly as the pad's RT; the left trigger keeps the pad's LT grapple-retract role on foot; face buttons keep the game's clusters). A phase-1 RE task recovers the `CButtonMapping` mapping→action table (data-built; `CPlayerActionObserver` keys the button-hint prompts off it, which VR prompts will eventually want too). VR deletions fund the gaps: `PRECISION_AIM`, `LOOK_*`, `VEHICLE_CAM`, and `LOOK_BACK` dissolve into the headset, freeing the right-stick click for `THROW_GRENADE` (the pad's RB). The left grip takes `FIRE_GRAPPLE` (the pad's LB); the left trigger keeps the pad's own `FIRE_LEFT` + `RETRACT_GRAPPLE` overload. The right grip and left-stick click stay reserved for the gesture layer.
 
@@ -39,11 +39,11 @@ Hand-attach bones (`ATTACH_HAND_RIGHT`/`LEFT`) driven to the controller poses vi
 
 ### 4. Dual-wield split
 
-Two interventions on one weapon object. Direction: key the `m_AimTargetPosition` write to which barrel fires next, writing the left- or right-controller target accordingly. Fire: on foot the game exposes a single fire input and alternates barrels internally (`MarkNextWeaponComponentForFire`), so per-hand triggers need the mod to drive barrel selection — left trigger forces the left fire-point and fires with the left target, right trigger the right. Moderate: the alternation function and fire dispatch are identified in `docs/aim-pipeline.md`; the open question is whether forcing the same barrel on consecutive shots upsets ammo/recoil/effects bookkeeping.
+Two interventions on one weapon object. Direction: key the `m_AimTargetPosition` write to which barrel fires next, writing the left- or right-controller target accordingly. Fire: on foot the game exposes a single fire input and alternates barrels internally (`MarkNextWeaponComponentForFire`), so per-hand triggers need the mod to drive barrel selection — left trigger forces the left fire-point and fires with the left target, right trigger the right. Moderate: the alternation function and fire dispatch are identified in `docs/engine/aim-pipeline.md`; the open question is whether forcing the same barrel on consecutive shots upsets ammo/recoil/effects bookkeeping.
 
 ### 5. Roomscale
 
-Per-frame HMD XZ delta (cockpit-frame) added to the on-foot locomotion task's wanted velocity — collision, stairs, and slopes solved by the proxy. Gated off when seat-locked (`m_attachType`/`m_Attachable`) and in proxy-suspended states. Vehicle seat transition: on seat-lock, re-base the cockpit frame to map the player's current physical pose onto the seat; roomscale disengages, the `vehicle` action set activates. Comfort safety: fade on deep head-through-geometry penetration (the pitfall list in `docs/head-and-body.md`).
+Per-frame HMD XZ delta (cockpit-frame) added to the on-foot locomotion task's wanted velocity — collision, stairs, and slopes solved by the proxy. Gated off when seat-locked (`m_attachType`/`m_Attachable`) and in proxy-suspended states. Vehicle seat transition: on seat-lock, re-base the cockpit frame to map the player's current physical pose onto the seat; roomscale disengages, the `vehicle` action set activates. Comfort safety: fade on deep head-through-geometry penetration (the pitfall list in `docs/mod/head-and-body.md`).
 
 ### 6. Radial menu and the gesture path
 

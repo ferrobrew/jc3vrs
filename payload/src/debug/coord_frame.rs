@@ -1,4 +1,4 @@
-//! Coordinate-frame verification diagnostic (see `docs/vr-runtime.md` "Blocker 3"): logs the render
+//! Coordinate-frame verification diagnostic (see `docs/mod/vr-runtime.md` "Blocker 3"): logs the render
 //! camera's `m_TransformF` basis and the frame-over-frame position delta so a log reader can confirm
 //! JC3's world frame before a real HMD pose is trusted. A sustained dot product of ≈ +1 between the
 //! normalized travel direction and `-z_basis` while walking forward confirms right-handed, Y-up with

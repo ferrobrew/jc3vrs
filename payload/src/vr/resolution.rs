@@ -4,7 +4,7 @@
 //!
 //! The engine sizes every scene render target from `device->m_DeviceInfo.m_DisplayWidth`/
 //! `m_DisplayHeight` through `CreateRenderSetups`, re-run at runtime only by `ApplyResize`
-//! (`docs/render-setups-reinit.md`). Rather than call `ApplyResize` directly, this drives the
+//! (`docs/engine/render-setups-reinit.md`). Rather than call `ApplyResize` directly, this drives the
 //! engine's **own deferred display-mode state**: it writes the pending dimensions into
 //! [`m_WindowWidth`](GraphicsEngine::m_WindowWidth)/[`m_WindowHeight`](GraphicsEngine::m_WindowHeight)
 //! and sets [`m_HasNewWindowSettings`](GraphicsEngine::m_HasNewWindowSettings), exactly as
@@ -13,13 +13,13 @@
 //! prologue (which runs inside the first eye's `game.Draw`, see `payload/src/hooks/game.rs`), then
 //! calls `ApplyResize(m_WindowWidth, m_WindowHeight)` at the exact frame boundary the engine chose --
 //! previous dispatch drained, this frame not yet dispatched -- so the idle-context assumption
-//! `ApplyResize` needs holds by construction (`docs/render-setups-reinit.md` §2/§6). We populate the
+//! `ApplyResize` needs holds by construction (`docs/engine/render-setups-reinit.md` §2/§6). We populate the
 //! request from the frame top ([`apply_native_resolution`], before the eye loop) so it is visible to
 //! that prologue.
 //!
 //! Driving the full `ApplyResize` (as opposed to a scene-only `CreateRenderSetups`) also resizes the
 //! DXGI swapchain buffers to the same size (`Graphics::ResizeBuffers`), which **never touches the
-//! Win32 window** (`docs/render-setups-reinit.md` §4/§7: it never calls `SetWindowPos`). Presenting is
+//! Win32 window** (`docs/engine/render-setups-reinit.md` §4/§7: it never calls `SetWindowPos`). Presenting is
 //! suppressed in VR (`BLOCK_FLIP`), so the desktop-visible effect is nil, and this keeps
 //! `m_BackBufferLinear` and the back-buffer render setups coherent with the per-eye scene targets for
 //! free -- the low-risk path. `ApplyResize` also sets `CameraManager.m_AspectRatio` from the per-eye

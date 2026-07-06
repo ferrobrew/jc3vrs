@@ -1,6 +1,6 @@
 # Runtime re-initialisation of the render setups (per-eye resolution)
 
-Reverse-engineered from the 2026 Denuvo-less Steam build. This is the RE half of `docs/vr-runtime.md`
+Reverse-engineered from the 2026 Denuvo-less Steam build. This is the RE half of `docs/mod/vr-runtime.md`
 "Blocker 2": every render target is sized from the device's display size through
 `CGraphicsEngine::CreateRenderSetups`, and this documents who re-runs that function at runtime, what
 state it assumes, what it tears down and rebuilds, whether the window swapchain is separable from the
@@ -159,7 +159,7 @@ to share dimensions — the final composite/UI pass would bind a mismatched RTV+
   those three setups with a **mod-owned, per-eye-sized "back buffer"** (a texture of your own, its
   render setup rebuilt to pair with the per-eye `m_MainDepthSurface`), rather than the back-buffer
   alias. The mod already suppresses `Graphics::Flip` (`BLOCK_FLIP`) and captures each eye from
-  `m_BackBufferLinear` after the resolve (`docs/rendering.md` §7/§12), so the real DXGI back buffer is
+  `m_BackBufferLinear` after the resolve (`docs/engine/rendering.md` §7/§12), so the real DXGI back buffer is
   only used as the resolve destination; substituting a per-eye `m_BackBufferLinear` and capturing from
   it keeps the whole scene→composite→capture chain at per-eye resolution with the swapchain never
   resized. The engine's final `CopySurfaceToTexture` resolve into the (still swapchain-sized) back
@@ -168,7 +168,7 @@ to share dimensions — the final composite/UI pass would bind a mismatched RTV+
 
 ## 5. Viewports and other size-derived state
 
-**Viewports follow automatically**, confirming `docs/rendering.md` §9. `Graphics::SetRenderSetup`, on
+**Viewports follow automatically**, confirming `docs/engine/rendering.md` §9. `Graphics::SetRenderSetup`, on
 binding a setup, sets the viewport to the bound colour/depth target's own `m_Width`/`m_Height`
 (`vp = {0, 0, target->m_Width, target->m_Height, 0, 1}`), so every pass's viewport is its bound RT's
 size. Re-running `CreateRenderSetups` at a new size re-creates the RTs at that size and the per-pass
@@ -181,7 +181,7 @@ viewports track them with no per-pass viewport patching.
 - **Camera aspect ratio** — `CameraManager.m_AspectRatio` (`CameraManager + 0x5D0`) is set from
   `width/height` in `ApplyResize` step 10, and it feeds the projection built by
   `Camera::RecalcProjection`. For VR the projection is overridden per eye from the HMD FOV
-  (`docs/vr-runtime.md` Blocker 1), so the engine aspect matters less, but it is display-size-derived
+  (`docs/mod/vr-runtime.md` Blocker 1), so the engine aspect matters less, but it is display-size-derived
   and does not follow from `CreateRenderSetups`.
 - **TAA jitter scale** — the jitter offset is divided by RT width/height at use, so it tracks the new
   size automatically once the RTs are re-sized.

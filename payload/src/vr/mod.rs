@@ -3,7 +3,7 @@
 //! per-frame loop ([`update`] → [`frame_begin`] → [`FrameContext`] → per-eye blit → [`present_and_submit`])
 //! is driven from `hooks::game::game_update_render`; the per-eye render parameters flow to the camera
 //! hook through [`frame`]'s separate slot ([`render_params`]), not the frame-held runtime lock. See
-//! `docs/vr-runtime.md` for the loop end to end.
+//! `docs/mod/vr-runtime.md` for the loop end to end.
 //!
 //! ## Loader route
 //!
@@ -230,7 +230,7 @@ pub struct EyeView {
     pub fov: xr::Fovf,
     /// The off-axis projection for [`fov`](Self::fov). Write [`standard_depth`]
     /// (`OffAxisProjection::standard_depth`) into `m_Projection` before `SetupRenderCamera`
-    /// (`docs/rendering.md` §2.7 / blocker 1).
+    /// (`docs/engine/rendering.md` §2.7 / blocker 1).
     pub projection: OffAxisProjection,
 }
 
@@ -321,7 +321,7 @@ impl FrameContext {
     /// End the frame: submit the world projection layer (or an empty frame when
     /// [`should_render`](Self::should_render) is false or the swapchain was never acquired) and
     /// consume the context, releasing the runtime lock. HUD quad layers become additional layers here
-    /// in a later wave (`docs/hud.md`); the surface takes only the world layer today.
+    /// in a later wave (`docs/mod/hud.md`); the surface takes only the world layer today.
     pub fn frame_end(mut self) -> anyhow::Result<()> {
         // Release any still-held image before submitting, so a caller that forgot to release does
         // not deadlock the swapchain.

@@ -323,7 +323,7 @@ impl CameraConfig {
 /// Headset-driven upper-body IK: drive the player's spine and head toward the headpose target by
 /// feeding the engine's own HumanIK `MAIN` pass an effector target for the head bone, so the body
 /// leans, ducks, and turns to follow where the player looks. Queued pre-solve in
-/// [`crate::hooks::character`] (see `docs/humanik.md`); the `UpdatePropEffects` head-bone override
+/// [`crate::hooks::character`] (see `docs/engine/humanik.md`); the `UpdatePropEffects` head-bone override
 /// still sets the exact head orientation on top of the HIK-bent spine.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct BodyIkConfig {
@@ -461,7 +461,7 @@ impl MovementConfig {
 }
 
 /// FSR anti-aliasing / upscaling settings. When `enabled`, FSR runs in place of the engine's SMAA
-/// (which is suppressed); off restores the engine AA. See `docs/fsr.md`.
+/// (which is suppressed); off restores the engine AA. See `docs/mod/fsr.md`.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct FsrConfig {
     /// Master switch: run FSR and suppress the engine AA. Off = engine SMAA as normal, FSR idle.
@@ -490,7 +490,7 @@ pub struct FsrConfig {
     /// a debug A/B to confirm the decode is helping.
     pub motion_vectors: bool,
     /// The sign/axis convention applied to the decoded UV motion before FSR. The decode math is now
-    /// RE-exact (see `docs/fsr.md`); only FSR's expected sign/Y direction is empirical -- a wrong sign
+    /// RE-exact (see `docs/mod/fsr.md`); only FSR's expected sign/Y direction is empirical -- a wrong sign
     /// is visually obvious (trails point backwards). Defaults to `(1, -1)` (UV is Y-down; FSR's
     /// convention TBD against on-screen motion).
     pub mv_sign: (f32, f32),

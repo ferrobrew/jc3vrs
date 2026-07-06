@@ -2,7 +2,7 @@
 //!
 //! Disabled by default. Gameplay works (full-rate per-layer textures via the render-root
 //! partition, composited at per-layer depths), but the first pause permanently stops the UI
-//! update pump -- see the post-mortem in `docs/issue-08-14-hud-overlays-and-depth.md` for the
+//! update pump -- see the post-mortem in `docs/issues/08-14-hud-overlays-and-depth.md` for the
 //! complete history of the three mechanisms tried, the constraints they established, and the
 //! diagnostic next step if this is revived. Nothing outside this module (and its gated call
 //! sites) depends on the split; the clip-handle registry it uses lives with the Scaleform

@@ -3,7 +3,7 @@
 //! [`get_2d_info`](UIManager::Get2DInfo) is the gameplay marker placement function. When the HUD
 //! is redirected and drawn as a floating quad, the VP and camera matrix are replaced with the
 //! panel's orientation so that markers project onto the panel's surface rather than the screen
-//! plane. See `docs/hud.md`.
+//! plane. See `docs/mod/hud.md`.
 
 use detours_macro::detour;
 use jc3gi::{
