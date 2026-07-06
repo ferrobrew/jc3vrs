@@ -72,6 +72,10 @@ pub struct HudConfig {
     pub suppress_overlays: bool,
     /// Dynamic panel distance from the scene depth distribution.
     pub depth_shift: DepthShiftConfig,
+    /// The virtual mouse cursor for panel UI interaction (issue #9). See
+    /// [`crate::hud::cursor`].
+    #[serde(default)]
+    pub cursor: CursorConfig,
     /// The clip-path prefix from the root movie's timeline to the HUD movie's clips, ending in a
     /// dot when non-empty (e.g. `"hud."`). The HUD movie is attached by `root.gfx`'s ActionScript
     /// under a runtime name the display-tree dump reveals; until confirmed in-game, the authored
@@ -98,6 +102,7 @@ impl HudConfig {
             marker_max_depth: 150.0,
             split: false,
             depth_shift: DepthShiftConfig::new(),
+            cursor: CursorConfig::new(),
             suppress_overlays: true,
             split_path_prefix: SplitPathPrefix::new(),
         }
@@ -172,6 +177,39 @@ impl DepthShiftConfig {
 }
 
 impl Default for DepthShiftConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The virtual mouse cursor rendered on the floating panel (issue #9): a circle dot with a stroke,
+/// lifted slightly off the panel toward the camera. Position injection and visibility follow the
+/// game's own cursor policy; see [`crate::hud::cursor`].
+#[derive(Copy, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CursorConfig {
+    /// Master toggle: replace the game's mouse-to-UI coordinate mapping (broken by the redirect)
+    /// and render the panel cursor.
+    pub enabled: bool,
+    /// The cursor's diameter as a fraction of the panel distance, so it keeps a constant apparent
+    /// (angular) size like the panel itself.
+    pub size: f32,
+    /// How far the cursor floats off the panel surface toward the camera, in meters. The offset
+    /// gives it depth separation from the UI beneath it.
+    pub lift: f32,
+}
+
+impl CursorConfig {
+    pub const fn new() -> Self {
+        Self {
+            enabled: true,
+            size: 0.014,
+            lift: 0.03,
+        }
+    }
+}
+
+impl Default for CursorConfig {
     fn default() -> Self {
         Self::new()
     }

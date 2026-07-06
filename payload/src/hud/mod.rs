@@ -33,6 +33,7 @@
 pub mod aim;
 mod binding;
 mod config;
+pub mod cursor;
 pub mod depth;
 pub mod markers;
 mod quad;
@@ -154,6 +155,13 @@ pub fn tick(device: &Device, back_buffer_width: u32, back_buffer_height: u32) {
         hud.restore(back_buffer_width, back_buffer_height);
         hud.ensure_layers(device, false);
     }
+    // Publish the frame's mouse-mapping geometry for the cursor injection (the `SendMouseEvents`
+    // detour): window-client pixels normalize against the window, and rescale to the movie
+    // rectangle -- our texture -- once the redirect is applied.
+    cursor::set_geometry(
+        (back_buffer_width, back_buffer_height),
+        hud.redirected_size(),
+    );
 }
 
 /// The layer views the `CUIManager::Render` detour needs for a partitioned frame, or `None` when
@@ -238,6 +246,18 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
             panel_height: panel_height(cfg.panel_scale, distance, aspect),
         };
         hud.compute_world_corners(&params_at(panel_distance));
+        // The virtual cursor rides the panel at its UV position, lifted toward the camera; its
+        // world-space corners are computed here (eye 0) like the panel's so both eyes project the
+        // same dot with correct stereo disparity (see `cursor`).
+        let cursor_corners = cfg
+            .cursor
+            .enabled
+            .then(cursor::frame)
+            .flatten()
+            .and_then(|frame| {
+                quad::compute_cursor_corners(&params_at(panel_distance), frame, &cfg.cursor)
+            });
+        hud.set_cursor_corners(cursor_corners);
         // The split composites in gameplay while the render-root partition is live (the layer
         // textures then contain per-layer content, redrawn every frame).
         let split_active = cfg.split && mode == HudMode::Hud && split::roots::live();

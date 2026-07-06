@@ -91,6 +91,7 @@ const PAYLOAD_SHADERS: &[(&str, &str)] = &[
     ("hud_quad_vs", "vs_5_0"),
     ("hud_layer_vs", "vs_5_0"),
     ("hud_quad_ps", "ps_5_0"),
+    ("cursor_ps", "ps_5_0"),
     ("capture_vs", "vs_5_0"),
     ("capture_ps", "ps_5_0"),
 ];

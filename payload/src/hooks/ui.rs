@@ -10,13 +10,14 @@ use jc3gi::{
     graphics_engine::graphics_engine::HContext_t,
     types::math::{Matrix4, Vector2, Vector3},
     ui::{
-        scaleform::MovieImpl,
+        overlay_ui::OverlayUI,
+        scaleform::{MouseEvent, MovieImpl},
         ui_manager::{ScreenPos, UIManager},
     },
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::{config::Config, hud::cursor};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -24,6 +25,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&UI_RENDER_BINDER)
         .with_static_binder(&CONVERT_3D_COORDS_DEFAULT_BINDER)
         .with_static_binder(&MOVIE_CAPTURE_BINDER)
+        .with_static_binder(&SEND_MOUSE_EVENTS_BINDER)
 }
 
 /// Marks the start of a game frame for the aim-depth recording: `UpdateGrappleReticle`'s *first*
@@ -266,4 +268,99 @@ fn get_2d_info(
             }
         }
     }
+}
+
+/// Replace the game's mouse-to-UI coordinate mapping while the HUD redirect is active.
+///
+/// The original converts window-client pixels to movie-viewport pixels by subtracting the
+/// centering offset `(m_CachedViewport - m_MovieScale) / 2` -- but the redirect points both of
+/// those at our offscreen texture, so window coordinates no longer relate to either and the
+/// original's mapping lands nowhere near the pointer. It also only emits a move event on frames
+/// where the DirectInput mouse reported a delta, and reads clicks out of the steering action map.
+///
+/// Instead: normalize the window-client position ([`UIManager::m_MouseX`], written by `WndProc` on
+/// every `WM_MOUSEMOVE`) against the window size, rescale to the movie rectangle (= our texture),
+/// and hand Scaleform the whole mouse state -- position plus the `WndProc`-tracked button bitmask
+/// -- via `NotifyMouseState`, which diffs against the previous state on the next `Advance` to
+/// synthesize hover/press/release. The wheel still needs an explicit event. The game's own
+/// `MCI_cursor` sprite is parked offscreen (it would otherwise be drawn into the panel texture
+/// alongside our own cursor), and the panel cursor's position and visibility are published for the
+/// render side (see [`crate::hud::cursor`]).
+///
+/// Like the original, it runs both from `WndProc` (via `SetMousePos`) and once per frame from
+/// `CUIManager::PreUpdate`, so the state stays fresh even while the physical mouse is still.
+#[detour(address = UIManager::SendMouseEvents_ADDRESS)]
+fn send_mouse_events(this: *mut UIManager, steering: *mut std::ffi::c_void) -> bool {
+    let original = SEND_MOUSE_EVENTS.get().unwrap();
+
+    let active = Config::lock_query(|c| c.hud.redirect && c.hud.cursor.enabled);
+    // While egui captures input the debug panel owns the mouse; leave the game's own path in
+    // place (its input manager is disabled anyway) and hide the panel cursor.
+    let egui_captured = crate::egui_impl::EguiState::get()
+        .as_ref()
+        .is_some_and(|s| s.is_input_captured());
+    // The mapping geometry is published by the render-thread HUD tick only once the redirect is
+    // applied; until then the original's coordinate spaces are still intact.
+    let geometry = cursor::geometry();
+    if !active || egui_captured || geometry.is_none() {
+        cursor::set_frame(None);
+        return original.call(this, steering);
+    }
+    let ((window_w, window_h), (movie_w, movie_h)) = geometry.unwrap();
+
+    // SAFETY: `this` is the live UI singleton (the engine's own callers pass it); the movie
+    // pointer is checked before use.
+    let Some(manager) = (unsafe { this.as_mut() }) else {
+        return original.call(this, steering);
+    };
+    let Some(movie) = (unsafe { manager.m_Movie.as_mut() }) else {
+        cursor::set_frame(None);
+        return false;
+    };
+
+    // Mirror the original's gamepad handling: park the Scaleform mouse out of the movie so
+    // gamepad-driven menu focus is not fought by a stale hover.
+    if manager.m_IsUsingGamepad {
+        // SAFETY: NotifyMouseState is the movie's own embedding API, called from the same
+        // contexts the engine calls HandleEvent from.
+        unsafe { movie.NotifyMouseState(-1000.0, -1000.0, 0, 0) };
+        cursor::set_frame(None);
+        return true;
+    }
+
+    let u = (manager.m_MouseX as f32 / window_w as f32).clamp(0.0, 1.0);
+    let v = (manager.m_MouseY as f32 / window_h as f32).clamp(0.0, 1.0);
+    let x = u * movie_w as f32;
+    let y = v * movie_h as f32;
+
+    // SAFETY: as above; the wheel event matches the layout the engine itself builds for
+    // HandleEvent, and the overlay call no-ops unless the overlay is active.
+    unsafe {
+        movie.NotifyMouseState(x, y, cursor::buttons(), 0);
+
+        let wheel_lines = cursor::take_wheel_lines();
+        if wheel_lines != 0.0 {
+            let mut event: MouseEvent = std::mem::zeroed();
+            event.Type = MouseEvent::TYPE_MOUSE_WHEEL;
+            event.x = x;
+            event.y = y;
+            event.ScrollDelta = wheel_lines;
+            movie.HandleEvent(&event);
+        }
+
+        // Park the game's in-movie cursor sprite: with the original bypassed nothing repositions
+        // it, and its last position would ghost inside the panel texture under our own cursor.
+        if let Some(overlay) = OverlayUI::get() {
+            overlay.SetMouseCursorPosition(-10_000.0, -10_000.0);
+        }
+    }
+
+    // The panel cursor shows exactly when the game's own policy would show a cursor: the overlay
+    // visibility refcount is driven per frame by `CUIManager::MousePointerVisibility` (overlay
+    // active, no gamepad, no cursor-hiding HUD state).
+    // SAFETY: reads a field of the live overlay singleton.
+    let visible =
+        unsafe { OverlayUI::get() }.is_some_and(|overlay| overlay.m_MouseCursorShowRefCount > 0);
+    cursor::set_frame(visible.then_some(cursor::CursorFrame { u, v }));
+    true
 }

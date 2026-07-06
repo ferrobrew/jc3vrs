@@ -4,9 +4,14 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     UI::{
         Input::KeyboardAndMouse::{VK_F7, VK_F10, VK_F11},
-        WindowsAndMessaging::{WM_KEYDOWN, WM_SYSKEYDOWN},
+        WindowsAndMessaging::{
+            WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
+            WM_SYSKEYDOWN,
+        },
     },
 };
+
+use crate::hud::cursor;
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new().with_static_binder(&WNDPROC_BINDER)
@@ -62,6 +67,20 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
             );
         }
         return LRESULT(0);
+    }
+
+    // Track the mouse buttons and wheel for the panel cursor (see `crate::hud::cursor`): the
+    // `SendMouseEvents` detour hands Scaleform the live button bitmask each frame instead of the
+    // steering action map's effector edges. Observed, not consumed -- egui and the game still see
+    // the messages.
+    match msg {
+        WM_LBUTTONDOWN => cursor::on_button(cursor::Button::Left, true),
+        WM_LBUTTONUP => cursor::on_button(cursor::Button::Left, false),
+        WM_RBUTTONDOWN => cursor::on_button(cursor::Button::Right, true),
+        WM_RBUTTONUP => cursor::on_button(cursor::Button::Right, false),
+        // The wheel delta is the signed high word of `wParam`, in `WHEEL_DELTA` units.
+        WM_MOUSEWHEEL => cursor::on_wheel(((wparam.0 >> 16) & 0xffff) as u16 as i16 as i32),
+        _ => {}
     }
 
     if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {

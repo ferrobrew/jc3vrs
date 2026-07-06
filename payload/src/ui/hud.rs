@@ -39,6 +39,22 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 "Suppress full-screen overlays (damage flash, drowning)",
             );
             ui.checkbox(
+                &mut cfg.hud.cursor.enabled,
+                "Virtual mouse cursor on the panel (remaps mouse-to-UI coordinates)",
+            );
+            if cfg.hud.cursor.enabled {
+                ui.indent("hud_cursor", |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut cfg.hud.cursor.size, 0.004..=0.05)
+                            .text("Cursor size (fraction of distance)"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut cfg.hud.cursor.lift, 0.0..=0.2)
+                            .text("Cursor lift off the panel (m)"),
+                    );
+                });
+            }
+            ui.checkbox(
                 &mut cfg.hud.marker_warp,
                 "Warp the panel to per-element world depths (markers + center bubble)",
             );

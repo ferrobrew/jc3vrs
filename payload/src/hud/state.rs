@@ -74,6 +74,9 @@ pub struct HudState {
     /// World-space panel corners, computed once per frame on eye 0 and reused for eye 1 so both
     /// eyes project the same world position through their own per-eye VP (correct stereo depth).
     cached_corners: Option<[[f32; 4]; 4]>,
+    /// The virtual mouse cursor's world-space corners, computed once per frame on eye 0 alongside
+    /// the panel corners; `None` while the cursor is hidden (see [`super::cursor`]).
+    cursor_corners: Option<[[f32; 4]; 4]>,
     /// While split: per-layer world-space corners and their distances, chosen on eye 0. Index
     /// matches [`split::LAYERS`]. The static and center entries are recomputed every frame
     /// (head-locked); the marker entry is frozen at each marker-texture refresh so the stale
@@ -134,6 +137,7 @@ impl HudState {
             latched_pose: None,
             current_pose: None,
             cached_corners: None,
+            cursor_corners: None,
             cached_layer_corners: [None, None, None],
             split_composite: false,
             layer_targets: [None, None],
@@ -364,6 +368,21 @@ impl HudState {
         self.warp_frame = frame;
     }
 
+    /// Set (or clear) the frame's cursor corners. Chosen on eye 0 alongside the panel corners.
+    pub fn set_cursor_corners(&mut self, corners: Option<[[f32; 4]; 4]>) {
+        self.cursor_corners = corners;
+    }
+
+    /// The redirected texture's size, or `None` while the redirect is not applied. The mouse
+    /// cursor's coordinate mapping rescales to this (movie rectangle = texture; see
+    /// [`super::cursor`]).
+    pub(super) fn redirected_size(&self) -> Option<(u32, u32)> {
+        if !self.redirected {
+            return None;
+        }
+        self.target.as_ref().map(HudTarget::size)
+    }
+
     /// Set the frame's split state (eye 0): whether the composite is live, and every layer's
     /// world-space corner set (all recomputed per frame -- the partition redraws every texture
     /// every frame, so nothing freezes).
@@ -393,6 +412,13 @@ impl HudState {
         target: &Texture,
         _eye: usize,
     ) {
+        self.draw_panels(context, device, target);
+        self.draw_cursor(context, device, target);
+    }
+
+    /// Draw the panel surface(s): the single (possibly warped) panel, or every split layer at its
+    /// own distance.
+    fn draw_panels(&mut self, context: &ID3D11DeviceContext, device: &Device, target: &Texture) {
         if !self.redirected {
             return;
         }
@@ -497,6 +523,21 @@ impl HudState {
             if let Some(quad) = self.quad.as_ref() {
                 quad.draw(context, device, target, srv, &layer_corners);
             }
+        }
+    }
+
+    /// Draw the virtual mouse cursor over the panel. Drawn last: the cursor floats nearest the
+    /// eye, and the quads are alpha-blended overlays ordered painter-style. A no-op while hidden
+    /// or before the quad pipeline exists (it is built by the panel draw).
+    fn draw_cursor(&mut self, context: &ID3D11DeviceContext, device: &Device, target: &Texture) {
+        if !self.redirected {
+            return;
+        }
+        let Some(corners) = self.cursor_corners else {
+            return;
+        };
+        if let Some(quad) = self.quad.as_ref() {
+            quad.draw_cursor(context, device, target, &corners);
         }
     }
 

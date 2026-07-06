@@ -35,6 +35,8 @@ use windows::Win32::Graphics::{
 /// The committed, precompiled quad shaders (entry point `main`).
 const VERTEX_DXBC: &[u8] = include_bytes!("../shaders/hud_quad_vs.dxbc");
 const PIXEL_DXBC: &[u8] = include_bytes!("../shaders/hud_quad_ps.dxbc");
+/// The cursor-dot pixel shader (an analytic circle with a stroke; shares the quad vertex shader).
+const CURSOR_PIXEL_DXBC: &[u8] = include_bytes!("../shaders/cursor_ps.dxbc");
 
 /// Constant buffer uploaded per draw: view-projection matrix followed by four world-space corners.
 /// Matches the HLSL `cbuffer Quad` layout: `row_major float4x4 ViewProjection` (64 bytes) +
@@ -49,6 +51,8 @@ struct QuadConstants {
 pub struct HudQuad {
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
+    /// The cursor-dot pixel shader; the cursor draw shares every other pipeline object.
+    cursor_pixel_shader: ID3D11PixelShader,
     sampler: ID3D11SamplerState,
     blend: ID3D11BlendState,
     rasterizer: ID3D11RasterizerState,
@@ -72,6 +76,12 @@ impl HudQuad {
             d3d.CreatePixelShader(PIXEL_DXBC, None, Some(&mut pixel_shader))
                 .context("creating the HUD quad pixel shader")?;
             let pixel_shader = pixel_shader.context("the HUD quad pixel shader was not created")?;
+
+            let mut cursor_pixel_shader: Option<ID3D11PixelShader> = None;
+            d3d.CreatePixelShader(CURSOR_PIXEL_DXBC, None, Some(&mut cursor_pixel_shader))
+                .context("creating the cursor pixel shader")?;
+            let cursor_pixel_shader =
+                cursor_pixel_shader.context("the cursor pixel shader was not created")?;
 
             let mut sampler: Option<ID3D11SamplerState> = None;
             d3d.CreateSamplerState(
@@ -146,6 +156,7 @@ impl HudQuad {
             Ok(Self {
                 vertex_shader,
                 pixel_shader,
+                cursor_pixel_shader,
                 sampler,
                 blend,
                 rasterizer,
@@ -166,6 +177,47 @@ impl HudQuad {
         device: &Device,
         target: &Texture,
         hud_srv: &ID3D11ShaderResourceView,
+        corners: &[[f32; 4]; 4],
+    ) -> bool {
+        self.draw_internal(
+            context,
+            device,
+            target,
+            Some(hud_srv),
+            &self.pixel_shader,
+            corners,
+        )
+    }
+
+    /// Draw the virtual mouse cursor as a small quad over `target`, with the analytic circle-dot
+    /// pixel shader (no texture). `corners` are the cursor's world-space corners (computed once
+    /// per frame by [`compute_cursor_corners`]). The caller must hold the engine context mutex.
+    pub fn draw_cursor(
+        &self,
+        context: &ID3D11DeviceContext,
+        device: &Device,
+        target: &Texture,
+        corners: &[[f32; 4]; 4],
+    ) -> bool {
+        self.draw_internal(
+            context,
+            device,
+            target,
+            None,
+            &self.cursor_pixel_shader,
+            corners,
+        )
+    }
+
+    /// The shared quad draw: project four world-space corners through the eye's view-projection
+    /// and shade with `pixel_shader`, sampling `srv` when one is given.
+    fn draw_internal(
+        &self,
+        context: &ID3D11DeviceContext,
+        device: &Device,
+        target: &Texture,
+        srv: Option<&ID3D11ShaderResourceView>,
+        pixel_shader: &ID3D11PixelShader,
         corners: &[[f32; 4]; 4],
     ) -> bool {
         let width = u32::from(target.m_Width);
@@ -235,9 +287,11 @@ impl HudQuad {
             context.VSSetShader(&self.vertex_shader, None);
             context
                 .VSSetConstantBuffers(0, Some(std::slice::from_ref(&Some(self.constants.clone()))));
-            context.PSSetShader(&self.pixel_shader, None);
-            context.PSSetShaderResources(0, Some(std::slice::from_ref(&Some(hud_srv.clone()))));
-            context.PSSetSamplers(0, Some(std::slice::from_ref(&Some(self.sampler.clone()))));
+            context.PSSetShader(pixel_shader, None);
+            if let Some(srv) = srv {
+                context.PSSetShaderResources(0, Some(std::slice::from_ref(&Some(srv.clone()))));
+                context.PSSetSamplers(0, Some(std::slice::from_ref(&Some(self.sampler.clone()))));
+            }
             context.Draw(4, 0);
 
             // Unbind our SRV and RTV so the engine's own passes don't see them still bound.
@@ -297,6 +351,43 @@ pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4
 
     Some(layout.map(|(dx, dy)| {
         let corner = center + right * dx + up * dy;
+        [corner.x, corner.y, corner.z, 1.0]
+    }))
+}
+
+/// Compute the virtual mouse cursor's world-space corners: a small square quad centered on the
+/// cursor's UV position on the panel, lifted off the panel surface toward the camera
+/// ([`CursorConfig::lift`](super::config::CursorConfig)), sized as a fraction of the panel
+/// distance so it keeps a constant apparent (angular) size like the panel. Call once per frame
+/// (eye 0) with the same [`PanelParams`] the panel's own corners were built from, so the cursor
+/// rides exactly the surface the UI is drawn on. Returns `None` for a degenerate aspect or size.
+pub(crate) fn compute_cursor_corners(
+    params: &PanelParams,
+    frame: super::cursor::CursorFrame,
+    cfg: &super::config::CursorConfig,
+) -> Option<[[f32; 4]; 4]> {
+    if params.aspect <= 0.0 || cfg.size <= 0.0 {
+        return None;
+    }
+
+    let forward = params.rot * Vec3::NEG_Z;
+    let right = params.rot * Vec3::X;
+    let up = params.rot * Vec3::Y;
+
+    // The panel point under the cursor: UV (0, 0) is the texture's top-left, which the corner
+    // layout places at (-half_w, +half_h).
+    let panel_center = params.pos + forward * params.distance;
+    let half_w = params.panel_height * params.aspect * 0.5;
+    let half_h = params.panel_height * 0.5;
+    let point = panel_center
+        + right * ((frame.u - 0.5) * 2.0 * half_w)
+        + up * ((0.5 - frame.v) * 2.0 * half_h)
+        - forward * cfg.lift;
+
+    let half = cfg.size * params.distance * 0.5;
+    let layout = [(-half, half), (half, half), (-half, -half), (half, -half)];
+    Some(layout.map(|(dx, dy)| {
+        let corner = point + right * dx + up * dy;
         [corner.x, corner.y, corner.z, 1.0]
     }))
 }
