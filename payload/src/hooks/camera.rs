@@ -89,6 +89,10 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // after the eye loop -- the sim-side sun-shadow fit reads this camera and must see the center,
     // unjittered state or its cascade texel snap flip-flops (issue #10's blob flicker).
     if is_render_camera && let Some(camera) = unsafe { camera.as_ref() } {
+        // Coordinate-frame verification (docs/vr-runtime.md "Blocker 3"): log the pristine center
+        // camera's basis + travel direction before the per-eye offset below mutates m_TransformF.
+        crate::debug::coord_frame::log_render_camera_frame(camera);
+
         let mut stereo = crate::stereo::STEREO_STATE.lock();
         stereo.vp_history.cur_center = Some(glam::Mat4::from(camera.m_ViewProjectionF));
         stereo.pristine_render_camera = Some(crate::stereo::PristineRenderCamera {

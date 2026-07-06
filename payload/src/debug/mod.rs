@@ -2,5 +2,6 @@
 //! per-eye render-camera snapshots ([`camera`]); their egui surfaces live under `crate::ui`.
 
 pub mod camera;
+pub mod coord_frame;
 pub mod rt_hash;
 pub mod trace;
