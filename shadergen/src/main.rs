@@ -94,6 +94,7 @@ const PAYLOAD_SHADERS: &[(&str, &str)] = &[
     ("cursor_ps", "ps_5_0"),
     ("capture_vs", "vs_5_0"),
     ("capture_ps", "ps_5_0"),
+    ("vr_blit_ps", "ps_5_0"),
 ];
 
 fn main() {

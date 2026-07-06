@@ -42,10 +42,15 @@ use windows::core::Interface as _;
 
 use crate::config::Config;
 
-pub use config::VrConfig;
+pub use config::{BlitGamma, ProjectionConvention, VrConfig};
+pub use frame::{EyeRenderParams, begin_render_frame, clear_render_params, render_params};
 pub use projection::{Fov, OffAxisProjection};
 
+mod blit;
 mod config;
+mod frame;
+
+pub use blit::present_and_submit;
 
 /// The OpenXR view configuration: standard stereo, two views (one per eye).
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
@@ -62,6 +67,7 @@ static VR_STATE: Mutex<VrState> = Mutex::new(VrState::new());
 /// instance never outlives the DLL on uninject → reinject.
 pub fn install() {
     crate::lifecycle::on_cleanup(|_renderer| {
+        blit::teardown();
         uninstall();
     });
 }

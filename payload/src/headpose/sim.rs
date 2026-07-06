@@ -64,6 +64,13 @@ pub fn on_input_tick(look_x: f32, look_y: f32, dt: f32) {
         return;
     }
 
+    // The VR source owns the pose while an OpenXR session is running (it publishes a fresh HMD pose
+    // every rendered frame). The sim must not also publish, or the two would fight over the same
+    // slot; skip the whole tick so the VR pose stands.
+    if super::source() == super::Source::Vr {
+        return;
+    }
+
     let mut s = SIM.lock();
 
     // Mode detection, once per input tick: the locomotion orientation evaluator runs once per sim

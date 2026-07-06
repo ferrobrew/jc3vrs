@@ -22,15 +22,49 @@
 //! its accumulated angles ([`recenter`] delegates to [`sim::reset`]). The VR source will own its
 //! own re-basing against the HMD's absolute pose when it lands (issue #12).
 
-use std::sync::OnceLock;
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicU8, Ordering},
+};
 
 use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
 pub mod config;
 pub mod sim;
+pub mod xr;
 
 pub use config::HeadPoseConfig;
+
+/// Which source currently owns the published headpose. The flatscreen [`sim`] and the VR [`xr`]
+/// source are mutually exclusive publishers; the arbiter is a plain atomic so the sim's per-tick
+/// gate and [`set_anchors`] can read it without taking the runtime lock (the VR frame loop holds the
+/// OpenXR runtime lock across the frame, so reading it there would deadlock).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Source {
+    /// The flatscreen mouse-look simulation ([`sim`]) publishes the pose.
+    Sim,
+    /// The OpenXR HMD source ([`xr`]) publishes the pose.
+    Vr,
+}
+
+/// The active headpose source. Set once per frame by the VR frame loop (`Vr` while an OpenXR session
+/// is running, else `Sim`).
+static SOURCE: AtomicU8 = AtomicU8::new(Source::Sim as u8);
+
+/// Set the active headpose source (see [`Source`]). Called once per frame by the VR frame loop.
+pub fn set_source(source: Source) {
+    SOURCE.store(source as u8, Ordering::Relaxed);
+}
+
+/// The active headpose source.
+pub fn source() -> Source {
+    if SOURCE.load(Ordering::Relaxed) == Source::Vr as u8 {
+        Source::Vr
+    } else {
+        Source::Sim
+    }
+}
 
 /// A head pose: world-space position and orientation (quaternion).
 #[derive(Copy, Clone, Default)]
@@ -59,6 +93,16 @@ pub fn snapshot_prev() {
 /// Called by the sim (or VR) to publish the headpose.
 pub fn set_pose(pose: HeadPose) {
     state().lock().pose = pose;
+}
+
+/// Publish a pose to *both* sides of the interpolation pair (`pose` and `prev_pose`), so the
+/// engine's `dtf` lerp degenerates to zero delta. The VR source uses this: it samples a fresh pose
+/// at the predicted display time every rendered frame, so there is no tick-cadence to smooth and any
+/// residual interpolation would only lag the head behind the HMD.
+pub fn set_pose_no_interp(pose: HeadPose) {
+    let mut s = state().lock();
+    s.pose = pose;
+    s.prev_pose = pose;
 }
 
 /// The animated bone positions the character hook captures each frame *before* it overrides the
@@ -96,7 +140,13 @@ pub fn set_anchors(anchors: Anchors) {
     if anchors.eye_arm.is_finite() && anchors.eye_arm.length_squared() < 1.0 {
         s.eye_arm = anchors.eye_arm;
     }
-    s.pose.position = anchors.head + s.pose.orientation * offset;
+    // The sim's pose position is anchor-derived, so refresh it here to this frame's animated head
+    // bone. The VR source owns the full pose position (the anchor plus the room-scale HMD
+    // translation), so refreshing it from the anchor alone would drop that translation -- leave it
+    // untouched while VR publishes.
+    if source() == Source::Sim {
+        s.pose.position = anchors.head + s.pose.orientation * offset;
+    }
 }
 
 /// The animated head bone world position, or `None` until the character hook has published a valid
@@ -120,10 +170,13 @@ pub fn eye_arm() -> Vec3 {
     state().lock().eye_arm
 }
 
-/// Recenter the headpose. The sim is body-relative and recenters by zeroing its accumulated
-/// angles; the VR source will re-base against the HMD pose here when it lands (issue #12).
+/// Recenter the headpose. The sim is body-relative and recenters by zeroing its accumulated angles;
+/// the VR source re-bases the cockpit baseline against the HMD's latest located pose. Both are
+/// re-based so one action recenters whichever source is live (and the other stays consistent for a
+/// later switch).
 pub fn recenter() {
     sim::reset();
+    crate::vr::recenter();
 }
 
 /// Whether headpose-driven head control is enabled.

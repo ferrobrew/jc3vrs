@@ -2,6 +2,48 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Which depth convention the per-eye off-axis projection is written in, and where in the
+/// `SetupRenderCamera` sequence it lands (`docs/rendering.md` §2.7, `docs/vr-runtime.md` blocker 1).
+/// The coordinate/depth conventions are the least-verifiable part of the pipeline without a headset,
+/// so this is a runtime tweakable rather than a compile-time choice.
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ProjectionConvention {
+    /// **Preferred.** Write a standard (non-reverse-Z) off-axis projection into `m_Projection`
+    /// *before* the engine's `SetupRenderCamera`, so the engine applies its reverse-Z remap and TAA
+    /// jitter to it exactly once, matching every other camera.
+    #[default]
+    EnginePreReverseZ,
+    /// **Fallback.** Write an already-reverse-Z'd off-axis projection *after* `SetupRenderCamera`
+    /// (so the engine does not re-reverse it), then rebuild the view-projections manually. Use this
+    /// if the engine turns out to rebuild `m_Projection` from its own FOV on this path (dropping the
+    /// pre-call write) or otherwise not to reverse-Z it: the depth then comes out as a thin valid
+    /// wedge (§2.7's wedge bug). TAA jitter is not applied on this path.
+    ManualReverseZ,
+}
+
+/// How the per-eye blit bridges the game's captured back-buffer colour into the OpenXR swapchain.
+///
+/// The captured eye texture is a `CopyResource` of `m_BackBufferLinear` as `R8G8B8A8_UNORM`
+/// (non-sRGB); the game presents those same bytes to a non-sRGB desktop swapchain and they look
+/// correct, so the stored bytes are **display-referred** (already sRGB-encoded). The negotiated
+/// OpenXR swapchain is `_SRGB`, so writing through its render-target view applies a hardware
+/// linear→sRGB encode. To reproduce the original bytes the shader must therefore **linearize** the
+/// sampled colour first, so the hardware re-encode cancels it out ([`Linearize`](Self::Linearize),
+/// the default). If the swapchain ends up non-sRGB, or the captured content turns out to be genuine
+/// linear despite the copy, [`Passthrough`](Self::Passthrough) samples and writes the colour
+/// unchanged. Colours cannot be eyeballed without a headset, so this stays switchable at runtime.
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum BlitGamma {
+    /// Decode the sampled display-referred colour to linear before writing, so the `_SRGB`
+    /// render-target's hardware encode reproduces the original bytes. The correct default for a
+    /// display-referred source into an `_SRGB` target.
+    #[default]
+    Linearize,
+    /// Sample and write the colour unchanged. Correct for a genuine-linear source, or a non-sRGB
+    /// target that applies no encode.
+    Passthrough,
+}
+
 /// OpenXR runtime settings. `Clone` (not `Copy`) because [`loader_path`](VrConfig::loader_path) owns
 /// a `String`.
 #[derive(Clone, Serialize, Deserialize)]
@@ -28,6 +70,14 @@ pub struct VrConfig {
     /// The far clip plane, in metres, for the per-eye off-axis projection. The engine's reverse-Z
     /// tolerates a distant far plane; the wide default suits the open world.
     pub far_clip: f32,
+    /// Which depth convention the per-eye off-axis projection is written in (see
+    /// [`ProjectionConvention`]). Defaults to the preferred pre-`SetupRenderCamera` write.
+    #[serde(default)]
+    pub projection_convention: ProjectionConvention,
+    /// How the per-eye blit bridges the captured colour into the `_SRGB` swapchain (see
+    /// [`BlitGamma`]). Defaults to linearizing the display-referred capture.
+    #[serde(default)]
+    pub blit_srgb_gamma: BlitGamma,
 }
 
 impl VrConfig {
@@ -40,6 +90,8 @@ impl VrConfig {
             loader_path: None,
             near_clip: 0.1,
             far_clip: 4000.0,
+            projection_convention: ProjectionConvention::EnginePreReverseZ,
+            blit_srgb_gamma: BlitGamma::Linearize,
         }
     }
 }

@@ -1,4 +1,7 @@
-use std::sync::atomic::Ordering;
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 use detours_macro::detour;
 use jc3gi::{
@@ -12,6 +15,7 @@ use jc3gi::{
         render_pass::get_current_add_buffer,
     },
 };
+use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 
 use crate::{
@@ -69,12 +73,37 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // state, so it is polled here and read by the render side.
         crate::hud::depth::poll_vehicle_state();
 
+        // Pump the OpenXR runtime once per frame and, if a session is running, begin the XR frame
+        // before the eye Draws: `xrWaitFrame` inside `frame_begin` paces the app against the
+        // compositor, replacing vsync (which stays suppressed via BLOCK_FLIP). Set the headpose
+        // source before the original UpdateRender runs the input tick, so the sim yields to the VR
+        // pose while a session is live. `frame_begin` holds the OpenXR runtime lock for the frame,
+        // so nothing on the game thread may re-enter the runtime until the frame is submitted --
+        // the per-eye render parameters flow through a separate slot (`vr::render_params`).
+        let vr_running = crate::vr::update();
+        crate::headpose::set_source(if vr_running {
+            crate::headpose::Source::Vr
+        } else {
+            crate::headpose::Source::Sim
+        });
+        let mut vr_frame = vr_running.then(crate::vr::frame_begin).flatten();
+
         crate::crash::mark(Phase::OriginalUpdateRender);
         GAME_UPDATE_RENDER
             .get()
             .unwrap()
             .call(game, update_contexts);
         GameState::PostUpdateRender(update_contexts);
+
+        // Now that this frame's animation (and the head-bone anchor) is up to date, publish the VR
+        // head pose and the per-eye camera parameters from the located views. When the runtime asks
+        // to skip rendering, clear the parameters so the camera hook falls back to flatscreen stereo
+        // for the (non-submitted) keep-alive Draws.
+        let vr_cfg = crate::config::Config::lock_query(|c| c.vr.clone());
+        match vr_frame.as_ref() {
+            Some(frame) if frame.should_render() => crate::vr::begin_render_frame(frame, &vr_cfg),
+            _ => crate::vr::clear_render_params(),
+        }
 
         let game = game.as_mut().unwrap();
 
@@ -92,6 +121,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                     c.stereo.restore_gi_cascade,
                 )
             });
+        // A running VR session always renders both eyes (the XR swapchain has a slice per eye), so
+        // force the stereo double-Draw on regardless of the flatscreen stereo toggle.
+        let stereo = stereo || vr_running;
         STEREO_STATE.lock().active = stereo;
 
         if stereo {
@@ -146,7 +178,10 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             super::graphics_engine::post_effects::reset_post_block_gate();
             TraceState::record(TraceEvent::DrawBegin { eye: 0 });
             STEREO_STATE.lock().draw_index = 0;
-            BLOCK_FLIP.store(present_eye != 0, Ordering::Relaxed);
+            // While a VR session runs there is no desktop present at all (the compositor presents),
+            // so block the flip for both eyes; otherwise `present_eye_0` picks which eye reaches the
+            // game window.
+            BLOCK_FLIP.store(vr_running || present_eye != 0, Ordering::Relaxed);
             tracing::trace!(target: "frameloop", "game_update_render: eye 0 Draw");
             crate::crash::mark(Phase::Eye0Draw);
             game.Draw(spf);
@@ -190,7 +225,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             super::graphics_engine::post_effects::reset_post_block_gate();
             TraceState::record(TraceEvent::DrawBegin { eye: 1 });
             STEREO_STATE.lock().draw_index = 1;
-            BLOCK_FLIP.store(present_eye != 1, Ordering::Relaxed);
+            BLOCK_FLIP.store(vr_running || present_eye != 1, Ordering::Relaxed);
             tracing::trace!(target: "frameloop", "game_update_render: eye 1 Draw");
             crate::crash::mark(Phase::Eye1Draw);
             game.Draw(spf);
@@ -231,6 +266,15 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // jittered, offset projection (the Halton wobble otherwise flips the cascade texel snap and
         // the shadows blob-flicker; issue #10).
         restore_pristine_render_camera();
+
+        // Submit the VR frame: blit each captured eye into its swapchain slice and end the XR frame
+        // (world layer when rendered, empty otherwise). Consumes the frame context, releasing the
+        // OpenXR runtime lock so the next `vr::update` can proceed.
+        if let Some(frame) = vr_frame.take() {
+            let should_render = frame.should_render();
+            crate::vr::present_and_submit(frame, &vr_cfg);
+            log_vr_frame_health(should_render);
+        }
 
         // Drive the F10 stereo capture composite after the frame's draws are done (both eyes
         // captured in stereo, eye 0 in non-stereo). No-op when capture is inactive.
@@ -403,6 +447,53 @@ fn apply_sun_shadow_override(disable: bool) {
         }
     }
 }
+
+/// Emit a VR frame-loop health line about once every [`VR_HEALTH_INTERVAL`]: the mean submitted
+/// frame time over the window and the fraction of frames the runtime asked to render. Logs are the
+/// only diagnostics a headset playtest has, so this stays cheap and steady rather than per-frame.
+fn log_vr_frame_health(should_render: bool) {
+    let mut health = VR_FRAME_HEALTH.lock();
+    let now = Instant::now();
+    health.frames += 1;
+    if should_render {
+        health.rendered += 1;
+    }
+    let last = *health.last_log.get_or_insert(now);
+    let elapsed = now.duration_since(last);
+    if elapsed < VR_HEALTH_INTERVAL {
+        return;
+    }
+    let frames = health.frames.max(1);
+    let mean_frame_ms = elapsed.as_secs_f32() * 1000.0 / frames as f32;
+    tracing::info!(
+        target: "vr",
+        frames,
+        rendered = health.rendered,
+        mean_frame_ms,
+        "VR frame-loop health",
+    );
+    *health = VrFrameHealth {
+        last_log: Some(now),
+        frames: 0,
+        rendered: 0,
+    };
+}
+
+/// Rolling counters for [`log_vr_frame_health`].
+struct VrFrameHealth {
+    last_log: Option<Instant>,
+    frames: u32,
+    rendered: u32,
+}
+
+static VR_FRAME_HEALTH: Mutex<VrFrameHealth> = Mutex::new(VrFrameHealth {
+    last_log: None,
+    frames: 0,
+    rendered: 0,
+});
+
+/// How often [`log_vr_frame_health`] emits a health line.
+const VR_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
 
 fn snapshot_frame_counters() -> RenderFrameCounters {
     unsafe { *get_render_frame_counters() }
