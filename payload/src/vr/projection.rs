@@ -6,13 +6,23 @@
 //! way the engine's `Camera::m_Projection` is: **row-major, row-vector** (`clip = p · M`), the D3D
 //! convention documented in `docs/engine/rendering.md` §2.6.
 //!
-//! Two depth conventions are produced (see `docs/engine/rendering.md` §2.7):
+//! The `standard_depth` matrix is built element-for-element the way the engine's
+//! `CMatrix4f::PerspectiveOffCenter` builds `Camera::m_Projection` (verified against the release
+//! build, `docs/engine/rendering.md` §2.9): the engine passes near-plane extents (`near·tan θ`),
+//! this module passes the tangents directly, and `near` cancels out of every term except the depth
+//! column, so the two matrices are identical. The engine's finite far plane defaults to `38400` and
+//! near to `0.1` (the `Camera` constructor values, §2.9); the mod feeds the same near/far so the
+//! frustum matches and the horizon does not clip.
+//!
+//! Two depth conventions are produced (see `docs/engine/rendering.md` §2.7, §2.9):
 //!
 //! - [`OffAxisProjection::standard_depth`]: a standard (non-reversed) projection, NDC z in `[0, 1]`
 //!   with near → 0 and far → 1. **This is the one to write into `m_Projection` before
 //!   `SetupRenderCamera`** (blocker 1): the engine then applies its own reverse-Z remap (`z' = w - z`)
-//!   and TAA jitter to it exactly once, matching every other camera. Feeding an already-reversed
-//!   matrix into that window double-applies the remap -- the §2.7 wedge bug.
+//!   and TAA jitter to it exactly once, matching every other camera. `SetupRenderCamera` consumes the
+//!   pre-written `m_Projection` in place (it does not rebuild it from FOV/near/far, §2.9), so this
+//!   write reaches the GPU. Feeding an already-reversed matrix into that window double-applies the
+//!   remap -- the §2.7 wedge bug.
 //! - [`OffAxisProjection::reverse_z`]: the same projection with the engine's reverse-Z remap already
 //!   applied (near → 1, far → 0). This is for the §2.7 *alternative* path -- writing the projection
 //!   *after* `SetupRenderCamera` has run (when bit `0x20` is set, so the engine will not re-reverse
@@ -187,6 +197,75 @@ mod tests {
         let ndc = project(&proj, [cx, cy, -1.0, 1.0]);
         assert!(ndc[0].abs() < 1e-5, "centre x = {}", ndc[0]);
         assert!(ndc[1].abs() < 1e-5, "centre y = {}", ndc[1]);
+    }
+
+    /// The `standard_depth` matrix must match the engine's `CMatrix4f::PerspectiveOffCenter`
+    /// element-for-element (`docs/engine/rendering.md` §2.9). The engine builds it from the
+    /// near-plane extents `x = near·tan θ`, `y = near·tan φ`; this reproduces those exact formulas
+    /// with the game's real default near/far and asserts equality against the mod's builder.
+    #[test]
+    fn standard_depth_matches_engine_perspective_off_center() {
+        let fov = Fov {
+            left: -35.0_f32.to_radians(),
+            right: 42.0_f32.to_radians(),
+            up: 40.0_f32.to_radians(),
+            down: -38.0_f32.to_radians(),
+        };
+        // The engine's Camera constructor defaults: m_Near = 0.1, m_Far = 38400 (0x47160000).
+        let near = 0.1_f32;
+        let far = 38400.0_f32;
+
+        // Near-plane extents, exactly what RecalcProjection passes to PerspectiveOffCenter.
+        let x_min = near * fov.left.tan();
+        let x_max = near * fov.right.tan();
+        let y_min = near * fov.down.tan();
+        let y_max = near * fov.up.tan();
+
+        // CMatrix4f::PerspectiveOffCenter, flat row-major `e[]` (the engine's field layout).
+        let mut engine = [0.0f32; 16];
+        engine[0] = (2.0 * near) / (x_max - x_min);
+        engine[5] = (2.0 * near) / (y_max - y_min);
+        engine[8] = (x_min + x_max) / (x_max - x_min);
+        engine[9] = (y_min + y_max) / (y_max - y_min);
+        engine[10] = far / (near - far);
+        engine[11] = -1.0;
+        engine[14] = (near * far) / (near - far);
+
+        let proj = OffAxisProjection::new(fov, near, far).standard_depth;
+        for (i, (a, b)) in proj.iter().zip(engine.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-6, "element {i}: mod {a}, engine {b}");
+        }
+    }
+
+    /// The engine's reverse-Z remap (`SetupRenderCamera` / `RecalcProjection`, §2.9) is
+    /// `col2 = col3 - col2` on the row-major matrix. Applying it to the engine's own standard
+    /// projection must produce the mod's `reverse_z` matrix element-for-element, and map far → 0 at
+    /// the game's real 38400 far plane.
+    #[test]
+    fn reverse_z_matches_engine_remap_at_real_far() {
+        let fov = Fov {
+            left: -40.0_f32.to_radians(),
+            right: 40.0_f32.to_radians(),
+            up: 40.0_f32.to_radians(),
+            down: -40.0_f32.to_radians(),
+        };
+        let (near, far) = (0.1_f32, 38400.0_f32);
+        let p = OffAxisProjection::new(fov, near, far);
+
+        // Engine remap applied by hand to the standard matrix: e[row*4+2] = e[row*4+3] - e[row*4+2].
+        let mut expected = p.standard_depth;
+        for row in 0..4 {
+            expected[row * 4 + 2] = expected[row * 4 + 3] - expected[row * 4 + 2];
+        }
+        for (i, (a, b)) in p.reverse_z.iter().zip(expected.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-6, "element {i}: {a} vs {b}");
+        }
+
+        // Reverse-Z at the real far plane: far → 0, near → 1.
+        let far_rev = project(&p.reverse_z, [0.0, 0.0, -far, 1.0])[2];
+        let near_rev = project(&p.reverse_z, [0.0, 0.0, -near, 1.0])[2];
+        assert!(far_rev.abs() < 1e-3, "rev far z = {far_rev}");
+        assert!((near_rev - 1.0).abs() < 1e-3, "rev near z = {near_rev}");
     }
 
     /// Depth mapping: standard depth maps near → 0 and far → 1; the reverse-Z variant maps

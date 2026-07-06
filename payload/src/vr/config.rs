@@ -8,16 +8,24 @@ use serde::{Deserialize, Serialize};
 /// so this is a runtime tweakable rather than a compile-time choice.
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ProjectionConvention {
-    /// **Preferred.** Write a standard (non-reverse-Z) off-axis projection into `m_Projection`
-    /// *before* the engine's `SetupRenderCamera`, so the engine applies its reverse-Z remap and TAA
-    /// jitter to it exactly once, matching every other camera.
+    /// **Preferred and verified-correct.** Write a standard (non-reverse-Z) off-axis projection into
+    /// `m_Projection` *before* the engine's `SetupRenderCamera`, so the engine applies its reverse-Z
+    /// remap and TAA jitter to it exactly once, matching every other camera. `SetupRenderCamera`
+    /// consumes the pre-written `m_Projection` in place rather than rebuilding it from FOV/near/far
+    /// (settled against the engine, `docs/engine/rendering.md` §2.9), so this write reaches the GPU.
     #[default]
     EnginePreReverseZ,
-    /// **Fallback.** Write an already-reverse-Z'd off-axis projection *after* `SetupRenderCamera`
-    /// (so the engine does not re-reverse it), then rebuild the view-projections manually. Use this
-    /// if the engine turns out to rebuild `m_Projection` from its own FOV on this path (dropping the
-    /// pre-call write) or otherwise not to reverse-Z it: the depth then comes out as a thin valid
-    /// wedge (§2.7's wedge bug). TAA jitter is not applied on this path.
+    /// **Fallback / escape hatch.** Write an already-reverse-Z'd off-axis projection *after*
+    /// `SetupRenderCamera` (so the engine does not re-reverse it), then rebuild the view-projections
+    /// manually. TAA jitter is not applied on this path.
+    ///
+    /// The consume-vs-rebuild question this guarded against is now settled against the engine
+    /// (`docs/engine/rendering.md` §2.9): `Camera::SetupRenderCamera` *consumes* whatever is in
+    /// `m_Projection`, applying `z' = w - z` to it in place — it never rebuilds from FOV/near/far —
+    /// so the pre-call [`EnginePreReverseZ`](Self::EnginePreReverseZ) write flows through correctly
+    /// and is the verified-correct default. This variant is retained only as a runtime escape hatch
+    /// for a headset playtest, in case the depth still reads wrong for a reason not visible from the
+    /// desktop.
     ManualReverseZ,
 }
 
@@ -64,10 +72,14 @@ pub struct VrConfig {
     /// Override path to the OpenXR loader DLL. `None` loads `openxr_loader.dll` next to the payload
     /// DLL, falling back to the platform default search path.
     pub loader_path: Option<String>,
-    /// The near clip plane, in metres, for the per-eye off-axis projection.
+    /// The near clip plane, in metres, for the per-eye off-axis projection. Defaults to `0.1`, the
+    /// value the engine's `Camera` constructor writes to `m_Near` (`docs/engine/rendering.md` §2.9).
     pub near_clip: f32,
-    /// The far clip plane, in metres, for the per-eye off-axis projection. The engine's reverse-Z
-    /// tolerates a distant far plane; the wide default suits the open world.
+    /// The far clip plane, in metres, for the per-eye off-axis projection. Defaults to `38400`, the
+    /// value the engine's `Camera` constructor writes to `m_Far` (`0x47160000`,
+    /// `docs/engine/rendering.md` §2.9) — the game renders a finite-far reverse-Z frustum out to
+    /// ~38 km, so the mod must match it or the horizon clips. The engine's reverse-Z depth keeps
+    /// precision at this distance.
     pub far_clip: f32,
     /// Which depth convention the per-eye off-axis projection is written in (see
     /// [`ProjectionConvention`]). Defaults to the preferred pre-`SetupRenderCamera` write.
@@ -113,7 +125,7 @@ impl VrConfig {
             world_scale: 1.0,
             loader_path: None,
             near_clip: 0.1,
-            far_clip: 4000.0,
+            far_clip: 38400.0,
             projection_convention: ProjectionConvention::EnginePreReverseZ,
             blit_srgb_gamma: BlitGamma::Linearize,
             native_resolution: true,

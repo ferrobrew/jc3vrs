@@ -271,6 +271,32 @@ Result: reverse-Z is applied once, by whichever of {`RecalcProjection`-on-render
 
 Vehicles take a different path through `GameCameraManager::PushRenderContext`: an `IsInDrivingVehicleState` branch routes the transform differently — a raw matrix, bypassing the jitter freeze — so vehicle head-look behaves differently from on-foot. See `docs/mod/head-and-body.md`'s RE notes for the mod-side validation this motivates (logging the cockpit head-bone position against character world position, confirming it isn't clipped to seat or world origin).
 
+### 2.9 Projection construction — exact formulas, real near/far, and consume-vs-rebuild (decompiled)
+
+Decompiled from the release build to settle the depth convention for the VR off-axis projection (the claims in §2.7 named the flow; this is the line-level confirmation, plus the numbers).
+
+**Where `m_Projection` is built.** `Camera::RecalcProjection` builds it once, dispatching on `m_StateBitfield` (`+1374`): `& 0x04` → `CMatrix4f::Ortho`, `& 0x01` (off-center tiling) → `CMatrix4f::PerspectiveOffCenter`, else → `CMatrix4f::PerspectiveFov`. All three read the camera's `m_Near` / `m_Far` scalars; the FOV comes from `m_FOV`, the aspect from `m_AspectRatio`. There is no infinite-far formulation — the far plane is a finite field value.
+
+**`CMatrix4f::PerspectiveOffCenter(this, x_min, x_max, y_min, y_max, z_min=near, z_max=far)`** writes the row-major `e[]` (D3D row-vector, `clip = p·M`) as:
+
+```
+e[0]  = 2·near / (x_max − x_min)          e[5]  = 2·near / (y_max − y_min)
+e[8]  = (x_min + x_max) / (x_max − x_min)  e[9]  = (y_min + y_max) / (y_max − y_min)
+e[10] = far / (near − far)                 e[11] = −1
+e[14] = near·far / (near − far)            e[15] = 0   (all others 0)
+```
+
+`RecalcProjection` passes **near-plane extents** (`x = near·tan θ`, computed via the engine's polynomial sin/cos approximations of `m_FOV`), so `near` cancels from `e[0]`/`e[5]`/`e[8]`/`e[9]` and the matrix depends only on the FOV tangents and the depth column. This is exactly `DirectXMath`'s `PerspectiveOffCenterRH` (standard depth, NDC z in `[0, 1]`, near → 0, far → 1). `PerspectiveFov` is the symmetric special case.
+
+**Reverse-Z is `z' = w − z`, applied in place.** In the row-major layout that is `e[row·4+2] = e[row·4+3] − e[row·4+2]` for all four rows (`e[2]=e[3]−e[2]; e[6]=e[7]−e[6]; e[10]=e[11]−e[10]; e[14]=e[15]−e[14]`). It maps near → 1, far → 0 (MainDepth is `D32FS8`). Two sites apply it, each gated so it happens **exactly once**:
+
+- `RecalcProjection` applies it at its tail **only if** `m_IsRenderCamera` (`0x20`) is already set.
+- `Camera::SetupRenderCamera` (release `0x1400B3B80`) applies it under its check-and-set `0x20` guard.
+
+**Consume vs rebuild — settled: `SetupRenderCamera` CONSUMES.** Decompiled (release `0x1400B3B80`, byte-identical to the symbol dump), its `0x20`-guard body does, in order: (1) the four-element reverse-Z remap **on whatever is already in `m_Projection`**, then the same on `m_PreviousProj`; (2) `ApplyJitterTransform` on both (when `a2`); (3) `Multiply4x4` to rebuild `m_ViewProjection` / `m_PreviousViewProjection`; (4) `memcpy` the `*F` float-shadow copies. It **never calls `PerspectiveFov`/`PerspectiveOffCenter` and never reads `m_FOV`/`m_Near`/`m_Far`** — it transforms the existing matrix in place. So a `m_Projection` written *before* `SetupRenderCamera` flows through and receives reverse-Z (and jitter) exactly once; the engine does **not** build the reversed form from scratch, it remaps whatever standard matrix it finds. This is the verified basis for the mod's preferred `EnginePreReverseZ` path.
+
+**Real near/far.** The `Camera` constructor writes `m_Near = 0.1` and `m_Far = 38400.0` (the store `*(u64*)&m_Far = 0x0000000047160000`; `0x47160000` = `38400.0`). No gameplay-wide override was found — only auxiliary cameras diverge (`CWaterPatchManager` reflection/top-down cameras, shadow/RSM light cameras at near `0.1`; `CCollisionModule` nudges *near* when the camera clips geometry). So the on-foot/vehicle scene camera renders a **finite-far reverse-Z frustum, near `0.1`, far `38400`** (~38 km — matching the open world's draw distance; reverse-Z is what keeps `D32` precision usable at that range). The VR off-axis builder adopts these as its default near/far so its frustum matches the engine and the horizon does not clip.
+
 ---
 
 ## 3. Render passes / stages (ordered)
