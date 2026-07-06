@@ -179,11 +179,6 @@ impl std::convert::AsMut<DisplayObjectBase> for DisplayObjectBase {
         self
     }
 }
-/// The `AS3::MovieRoot` vtable address (the `ASMovieRootBase` layout: slot 35 is
-/// [`GetDisplayObjectsTree`](Movie::GetDisplayObjectsTree), slots 49/50/57 are the bound
-/// SetVariable/GetVariable/Invoke). The payload checks a live object against it before
-/// trusting the vtable-indexed calls, since the object's dynamic type is load-bearing here.
-pub const MOVIE_VFTABLE: u64 = 5408691888;
 #[repr(C, align(1))]
 /// A Scaleform `MemoryHeap`. Opaque; allocation goes through its vtable (`Alloc` at slot offset
 /// `0x50`).
@@ -359,6 +354,13 @@ impl Movie {
             f(self as *const Self as _, heap)
         }
     }
+}
+impl Movie {
+    /// The `AS3::MovieRoot` vtable address (the `ASMovieRootBase` layout: slot 35 is
+    /// [`GetDisplayObjectsTree`](Movie::GetDisplayObjectsTree), slots 49/50/57 are the bound
+    /// SetVariable/GetVariable/Invoke). The payload checks a live object against it before
+    /// trusting the vtable-indexed calls, since the object's dynamic type is load-bearing here.
+    pub const VFTABLE: u64 = 5408691888;
 }
 impl std::convert::AsRef<Movie> for Movie {
     fn as_ref(&self) -> &Movie {
