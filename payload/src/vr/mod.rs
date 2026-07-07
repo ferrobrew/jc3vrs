@@ -236,8 +236,15 @@ pub fn frame_begin() -> Option<FrameContext> {
 #[derive(Copy, Clone)]
 pub struct EyeView {
     /// The eye pose (position + orientation) relative to the recenter baseline, in the cockpit
-    /// frame. When no baseline is set this is the raw LOCAL-space pose.
+    /// frame. When no baseline is set this is the raw LOCAL-space pose. This drives the *game camera*
+    /// (so recentering re-orients the game world); it is NOT the compositor submission pose.
     pub pose: xr::Posef,
+    /// The raw located eye pose in LOCAL space (before rebasing), i.e. where the eye actually is. This
+    /// is the pose submitted to the compositor's projection layer: the layer is composited in LOCAL
+    /// space, so its pose must describe the eye's true position, or the compositor reprojects the image
+    /// to a plane offset by the recenter baseline. Equal to [`pose`](Self::pose) until the first
+    /// recenter.
+    pub raw_pose: xr::Posef,
     /// The eye's field of view, as reported by `locate_views`.
     pub fov: xr::Fovf,
     /// The off-axis projection for [`fov`](Self::fov). Write [`standard_depth`]
@@ -659,6 +666,7 @@ impl VrState {
 
         let mut eyes = [EyeView {
             pose: xr::Posef::IDENTITY,
+            raw_pose: xr::Posef::IDENTITY,
             fov: xr::Fovf {
                 angle_left: 0.0,
                 angle_right: 0.0,
@@ -696,6 +704,7 @@ impl VrState {
                     };
                     *eye = EyeView {
                         pose,
+                        raw_pose: view.pose,
                         fov: view.fov,
                         projection: OffAxisProjection::new(
                             fov_from_xr(view.fov),
@@ -783,9 +792,15 @@ impl VrState {
             offset: xr::Offset2Di { x: 0, y: 0 },
             extent,
         };
+        // Submit the RAW located eye poses (where the eyes actually are in LOCAL space), not the
+        // rebased poses that drive the game camera. The projection layer is composited in LOCAL space,
+        // so the compositor treats the submitted pose as the image's viewpoint and reprojects to the
+        // real eye; feeding it the rebased pose displaces the image by the recenter baseline (the
+        // floating, angled plane after F7). The recenter is already baked into the rendered content
+        // via the game camera, so the compositor must see the true eye pose here.
         let views = [
             xr::CompositionLayerProjectionView::new()
-                .pose(frame.eyes[0].pose)
+                .pose(frame.eyes[0].raw_pose)
                 .fov(frame.eyes[0].fov)
                 .sub_image(
                     xr::SwapchainSubImage::new()
@@ -794,7 +809,7 @@ impl VrState {
                         .image_rect(rect),
                 ),
             xr::CompositionLayerProjectionView::new()
-                .pose(frame.eyes[1].pose)
+                .pose(frame.eyes[1].raw_pose)
                 .fov(frame.eyes[1].fov)
                 .sub_image(
                     xr::SwapchainSubImage::new()
