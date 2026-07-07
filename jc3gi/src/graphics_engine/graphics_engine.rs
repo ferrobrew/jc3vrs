@@ -479,6 +479,49 @@ impl std::convert::AsMut<HTexture_t> for HTexture_t {
 }
 pub use windows::Win32::Foundation::HWND as HWND;
 #[repr(C, align(8))]
+/// The scene occluder / beam-frustum-based-culling manager. Its cull frustum is built (and cached
+/// per camera and time) from a camera's `m_View` and `m_ProjectionF`, and every scene-geometry,
+/// terrain, streaming, and occlusion consumer reads it through
+/// [`GetBFBCFrustumParamsForCameraAndTime`](OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime).
+pub struct OccluderCollectionManager {}
+impl OccluderCollectionManager {
+    pub const GetBFBCFrustumParamsForCameraAndTime_ADDRESS: usize = 0x1400D68B0;
+    /// Build or fetch the cached BFBC cull-frustum parameters for `camera` at `time`. The frustum is
+    /// derived from `camera.m_View` combined with `camera.m_ProjectionF`, so overwriting the camera's
+    /// `m_ProjectionF` before this runs widens the resulting cull frustum without touching the view.
+    /// `out_params` and `out_state` receive pointers into the manager's per-camera cache slot.
+    pub unsafe fn GetBFBCFrustumParamsForCameraAndTime(
+        &mut self,
+        camera: *const crate::camera::camera::Camera,
+        time: i32,
+        out_params: *mut u64,
+        out_state: *mut u64,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                camera: *const crate::camera::camera::Camera,
+                time: i32,
+                out_params: *mut u64,
+                out_state: *mut u64,
+            ) = ::std::mem::transmute(
+                Self::GetBFBCFrustumParamsForCameraAndTime_ADDRESS,
+            );
+            f(self as *mut Self as _, camera, time, out_params, out_state)
+        }
+    }
+}
+impl std::convert::AsRef<OccluderCollectionManager> for OccluderCollectionManager {
+    fn as_ref(&self) -> &OccluderCollectionManager {
+        self
+    }
+}
+impl std::convert::AsMut<OccluderCollectionManager> for OccluderCollectionManager {
+    fn as_mut(&mut self) -> &mut OccluderCollectionManager {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The per-view render context the render passes read: the camera matrices (view, projection, the
 /// translation-free offset view-projection, and the separate camera world position), shadow data, and
 /// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].

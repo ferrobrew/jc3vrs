@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 
 use crate::headpose;
 
-use super::{FrameContext, VrConfig, config::ProjectionConvention};
+use super::{Fov, FrameContext, OffAxisProjection, VrConfig, config::ProjectionConvention};
 
 /// The per-eye render parameters the `SetupRenderCamera` hook applies while a VR frame is in flight.
 #[derive(Copy, Clone)]
@@ -38,16 +38,32 @@ pub struct EyeRenderParams {
 /// frame-held runtime lock.
 static RENDER_PARAMS: Mutex<Option<[EyeRenderParams; 2]>> = Mutex::new(None);
 
+/// The standard-depth, symmetric, union-FOV projection that bounds *both* eyes' off-axis frusta, for
+/// widening the scene cull frustum (see [`cull_projection_standard`]). `None` when no VR frame is
+/// rendering.
+static CULL_PROJECTION: Mutex<Option<[f32; 16]>> = Mutex::new(None);
+
 /// The render parameters for `eye` (`0` = left, `1` = right) this frame, or `None` when no VR frame
 /// is rendering. Read by the `SetupRenderCamera` hook.
 pub fn render_params(eye: usize) -> Option<EyeRenderParams> {
     RENDER_PARAMS.lock().as_ref().map(|p| p[eye.min(1)])
 }
 
-/// Clear the per-eye render parameters, so the camera hook falls back to flatscreen stereo. Called
-/// when no VR frame renders this frame (session down, or `should_render` false).
+/// The symmetric union-FOV projection covering both eyes' off-axis frusta, in the engine's
+/// standard-depth `m_ProjectionF` layout, or `None` when no VR frame is rendering. The occluder-cull
+/// hook writes this into the shared cull camera's `m_ProjectionF` so the visibility cull -- which the
+/// engine runs once per frame against the narrower center camera -- covers everything either eye can
+/// see, removing the black voids and pop-in at the outer edges.
+pub fn cull_projection_standard() -> Option<[f32; 16]> {
+    *CULL_PROJECTION.lock()
+}
+
+/// Clear the per-eye render parameters (and the cull projection), so the camera hook falls back to
+/// flatscreen stereo. Called when no VR frame renders this frame (session down, or `should_render`
+/// false).
 pub fn clear_render_params() {
     *RENDER_PARAMS.lock() = None;
+    *CULL_PROJECTION.lock() = None;
 }
 
 /// Drive one rendered VR frame's pose and per-eye camera parameters from the located views: reduce
@@ -95,6 +111,23 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
         cfg.world_scale,
     );
     headpose::xr::publish_pair(prev, cur);
+
+    // The symmetric union-FOV cull projection: a single centred frustum that contains both eyes'
+    // off-axis frusta. Each eye is laterally offset by ~IPD/2 and has its own asymmetric FOV, so the
+    // superset bounds the wider of the two on each side (in tangent space) plus a near-plane margin
+    // `s = (IPD/2) / near` for the lateral eye shift. `s·z` covers the shift exactly at the near plane
+    // and over-covers (harmlessly) with distance, so nothing either eye can see is culled. Vertical
+    // has no IPD term. Written standard-depth to match the cull camera's `m_ProjectionF`.
+    let ipd = (pos1 - pos0).length();
+    let margin = 0.5 * ipd / cfg.near_clip.max(1e-3);
+    let union_fov = Fov {
+        left: (eye0.fov.angle_left.tan().min(eye1.fov.angle_left.tan()) - margin).atan(),
+        right: (eye0.fov.angle_right.tan().max(eye1.fov.angle_right.tan()) + margin).atan(),
+        up: eye0.fov.angle_up.max(eye1.fov.angle_up),
+        down: eye0.fov.angle_down.min(eye1.fov.angle_down),
+    };
+    *CULL_PROJECTION.lock() =
+        Some(OffAxisProjection::new(union_fov, cfg.near_clip, cfg.far_clip).standard_depth);
 
     let eye_params = |eye: super::EyeView, eye_position: Vec3| EyeRenderParams {
         projection_standard: eye.projection.standard_depth,

@@ -44,7 +44,10 @@ use windows::core::Interface as _;
 use crate::config::Config;
 
 pub use config::{BlitGamma, ProjectionConvention, VrConfig};
-pub use frame::{EyeRenderParams, begin_render_frame, clear_render_params, render_params};
+pub use frame::{
+    EyeRenderParams, begin_render_frame, clear_render_params, cull_projection_standard,
+    render_params,
+};
 pub use projection::{Fov, OffAxisProjection};
 
 mod blit;

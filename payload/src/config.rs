@@ -222,6 +222,14 @@ pub struct StereoConfig {
     /// distant per-eye shadow flip. With this on, the atmospheric pass falls back to the engine's
     /// symmetric rebuild while the finite-geometry passes (specular, SSR) keep the off-axis override.
     pub offaxis_inverse_skip_atmospheric: bool,
+    /// Widen the scene visibility-cull frustum to cover both eyes' off-axis frusta. The engine culls
+    /// the scene (terrain, models, streaming) once per frame against the center camera's narrower,
+    /// symmetric frustum, so geometry an eye can see past that frustum's edge is never drawn -- the
+    /// black voids and pop-in at the outer edges of each eye in VR. This writes a symmetric union-FOV
+    /// projection over the shared cull camera's `m_ProjectionF` (leaving the per-eye render projections
+    /// untouched), so the cull covers everything either eye can see. VR only. See
+    /// [`crate::hooks::graphics_engine`].
+    pub widen_cull_frustum: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -259,6 +267,7 @@ impl StereoConfig {
             invalidate_terrain_cb: true,
             reconstruct_offaxis_inverse: true,
             offaxis_inverse_skip_atmospheric: true,
+            widen_cull_frustum: true,
         }
     }
 }

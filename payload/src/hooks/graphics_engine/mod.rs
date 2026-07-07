@@ -13,6 +13,9 @@ pub mod graphics_engine;
 pub(crate) mod post_effects;
 // `render_block` is crate-visible so hooks::character can publish the facial classification bones.
 pub(crate) mod render_block;
+// The VR two-eye cull-frustum widening (`GetBFBCFrustumParamsForCameraAndTime`); private, reached
+// only through `hook_library` below.
+mod culling;
 // The per-eye off-axis clip-to-view reconstruction fix (`PerspectiveFovInverse`); private, reached
 // only through `hook_library` below.
 mod reconstruction;
@@ -30,6 +33,7 @@ pub(crate) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_hook_library(graphics_engine::hook_library())
         .with_hook_library(render_block::hook_library())
+        .with_hook_library(culling::hook_library())
         .with_hook_library(reconstruction::hook_library())
         .with_hook_library(render_pass::hook_library())
         .with_hook_library(tone_mapping::hook_library())
