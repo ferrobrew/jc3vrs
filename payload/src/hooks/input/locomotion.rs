@@ -262,7 +262,7 @@ fn force_face_camera(
     // still yaws the body with the head continuously. The act-level suppression in
     // [`get_aim_move_angle`] stops the turn *acts*; this stops the executor's continuous yaw.
     // Applies regardless of the face_camera toggle, like the latch.
-    if head_decoupled_idle(character) {
+    if head_decoupled(character) {
         return (false, max_step_deg);
     }
 
@@ -301,20 +301,26 @@ fn force_face_camera(
     (true, step.max(0.1))
 }
 
-/// Whether the headpose currently holds the local player's head decoupled from the body on foot:
-/// headpose active, on-foot mode, latch disengaged, no movement input, and not really aiming. In
-/// this state the body must not chase the head — the latch owns body turning — so both the
-/// orientation executor's face-dir tracking and the aim-relative turn acts are suppressed.
-fn head_decoupled_idle(character: &Character) -> bool {
-    // Under the VR source the head is *always* decoupled (the HMD owns it, the stick owns the body),
-    // so the flatscreen latch does not apply — and the sim's latch state is not even updated while
-    // VR publishes. Without this, the game's aim-relative body turn chases the head, and the
-    // body-relative pose composition (`body × cockpit`) makes that a runaway spin.
-    let decoupled = crate::headpose::source() == crate::headpose::Source::Vr
-        || crate::headpose::sim::latch_state() == LatchState::Decoupled;
-    crate::headpose::is_active()
-        && crate::headpose::sim::mode() == HeadMode::OnFoot
-        && decoupled
+/// Whether the body must not chase the head this frame — so both the orientation executor's face-dir
+/// tracking and the aim-relative turn acts are suppressed. On foot with the headpose active.
+///
+/// Under the **VR source** this is *always* true on foot: the HMD owns the head and the stick owns
+/// the body, so the body must never turn toward the head — moving, aiming, or idle. The
+/// body-relative pose composition (`body × cockpit`) makes any body-follow of the head a runaway
+/// feedback loop; idle it spins in place, and walking it spins in circles. (The sim's latch state is
+/// not even updated while VR publishes, so the flatscreen conditions below cannot be consulted.)
+///
+/// Under the **flatscreen sim** it is the decoupled-idle-not-aiming state: the latch owns body
+/// turning past its threshold, and while idle within the cone the head moves freely, so the body is
+/// held only in that specific window.
+fn head_decoupled(character: &Character) -> bool {
+    if !crate::headpose::is_active() || crate::headpose::sim::mode() != HeadMode::OnFoot {
+        return false;
+    }
+    if crate::headpose::source() == crate::headpose::Source::Vr {
+        return true;
+    }
+    crate::headpose::sim::latch_state() == LatchState::Decoupled
         && !character
             .m_AimFlags
             .intersects(AimState::m_AimingWeapon | AimState::m_AimingGrapple)
@@ -476,9 +482,7 @@ fn queue_starts(
 /// head, and the game's own turn machinery performs the latch catch-up natively.
 #[detour(address = jc3gi::input::locomotion::NStateTask_LocoUtil::GetAimMoveAngle_ADDRESS)]
 fn get_aim_move_angle(character: *mut Character, move_dir: *const Vector3) -> f32 {
-    if (unsafe { character.as_ref() })
-        .is_some_and(|c| c.m_IsLocalCharacter && head_decoupled_idle(c))
-    {
+    if (unsafe { character.as_ref() }).is_some_and(|c| c.m_IsLocalCharacter && head_decoupled(c)) {
         return 0.0;
     }
     GET_AIM_MOVE_ANGLE.get().unwrap().call(character, move_dir)
