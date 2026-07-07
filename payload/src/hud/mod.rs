@@ -348,15 +348,17 @@ fn render_camera_pose() -> Option<(Vec3, Quat)> {
 /// W2S (`Get2DInfo`) projects world points onto the panel's surface rather than the screen plane.
 /// Returns `(vp, camera_transform)` in engine format, or `None` if the camera is unavailable.
 ///
-/// The panel VP uses the damped follow rotation for orientation and the active camera's position
-/// and projection. This ensures markers are positioned correctly on the floating quad: a POI
-/// directly ahead of the camera but off-center from the panel's facing direction appears at the
-/// correct position on the panel surface, compensating for the follow-damping lag.
+/// The panel VP uses the damped follow rotation for orientation, the head position as the view
+/// origin, and a symmetric projection built from the panel's own angular subtense (not the gameplay
+/// camera's FOV). This ensures markers are positioned correctly on the floating quad: a POI directly
+/// ahead of the camera but off-center from the panel's facing direction appears at the correct
+/// position on the panel surface, compensating for the follow-damping lag.
 pub fn compute_panel_vp() -> Option<(Matrix4, Matrix4)> {
     // Reuse the pose chosen for the quad this frame (head-following or latched world-static), so
     // markers project onto exactly the panel the quad drew.
     let (pos, rot) = HUD_STATE.lock().panel_pose()?;
     let aspect = current_aspect();
+    let panel_scale = crate::config::Config::lock_query(|c| c.hud.panel_scale);
 
     let projection = unsafe {
         let cm = CameraManager::get()?;
@@ -382,18 +384,24 @@ pub fn compute_panel_vp() -> Option<(Matrix4, Matrix4)> {
     let panel_view = panel_transform.inverse();
     let mut glam_proj = Mat4::from(projection);
 
-    // Re-aspect the projection to the panel. The game's projection bakes in the render aspect
-    // (`x_axis.x = cot(fovY/2) / render_aspect`, `y_axis.y = cot(fovY/2)`); rewrite the horizontal
-    // mapping so it matches the panel's aspect (`x_axis.x = cot(fovY/2) / aspect`) instead, otherwise
-    // markers are stretched by the render aspect when drawn onto the panel. `z_axis.x` carries any
-    // off-center frustum shear (asymmetric per-eye VR projections), so it scales by the same factor.
-    // The marker pass also sets `m_CachedViewportRatio = 1 / aspect` so `Convert3DCoords` does not
-    // re-apply the device aspect on top of this (see `hooks::ui`).
-    if glam_proj.x_axis.x != 0.0 && aspect > 0.0 {
-        let horizontal_scale = (glam_proj.y_axis.y / aspect) / glam_proj.x_axis.x;
-        glam_proj.x_axis.x *= horizontal_scale;
-        glam_proj.z_axis.x *= horizontal_scale;
-    }
+    // The projection's field of view must match the panel's own angular subtense as seen from the
+    // head -- a horizontal half-angle of `atan(scale * PANEL_WIDTH_PER_DISTANCE / 2)`, independent of
+    // distance -- so that a world direction lands where the ray from the head crosses the panel
+    // surface. Reusing the gameplay camera's FOV instead misplaces markers by the ratio of the game
+    // FOV to the panel subtense: that ratio is ~1 on the flat desktop (the panel effectively fills
+    // the screen, so its subtense ≈ the game FOV) but far from 1 in VR, where the panel is a fixed
+    // floating surface viewed through a much wider per-eye FOV -- and it swings with every game FOV
+    // change (aiming, sniper zoom, vehicles), sliding markers off their world features. Overwrite the
+    // FOV terms with the panel's; the panel is centered on the panel-view forward, so the projection
+    // is symmetric and any off-center shear is dropped. The depth (`z`) and `w` columns are kept from
+    // the game projection, preserving its reverse-Z convention and the behind-camera `w`-sign cull in
+    // `Convert3DCoords`. The marker pass also sets `m_CachedViewportRatio = 1 / aspect` so
+    // `Convert3DCoords` does not re-apply the device aspect on top of this (see `hooks::ui`).
+    let cot_x = 2.0 / (panel_scale.max(f32::EPSILON) * PANEL_WIDTH_PER_DISTANCE);
+    glam_proj.x_axis.x = cot_x;
+    glam_proj.y_axis.y = cot_x * aspect.max(0.0);
+    glam_proj.z_axis.x = 0.0;
+    glam_proj.z_axis.y = 0.0;
 
     let glam_vp = glam_proj * panel_view;
 
