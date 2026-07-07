@@ -203,6 +203,16 @@ pub struct StereoConfig {
     /// wedge in VR (the per-eye off-axis projections differ). Only meaningful while
     /// `restore_frame_counters` is on. See [`crate::hooks::game`].
     pub invalidate_terrain_cb: bool,
+    /// Reconstruct the screen-space passes' clip-to-view inverse from the true off-axis projection
+    /// while rendering a VR eye. The reconstruction passes (SSR, deferred clustered lighting, SSAO,
+    /// screen-space subsurface, atmospheric scattering, depth of field) rebuild it with
+    /// [`Matrix4::PerspectiveFovInverse`](jc3gi::types::math::Matrix4), which can only encode a
+    /// *symmetric* frustum -- exact for the flatscreen stereo center projection but wrong, and
+    /// mirror-opposite between eyes, under VR's off-axis projection, so specular and reflections on
+    /// shiny surfaces (car paint, chrome) diverge grossly per eye. The override replaces the symmetric
+    /// inverse with the exact inverse of the per-eye off-axis projection. VR only; a no-op on
+    /// flatscreen frames. See [`crate::hooks::graphics_engine`].
+    pub reconstruct_offaxis_inverse: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -238,6 +248,7 @@ impl StereoConfig {
             freeze_shadow_maps: false,
             dedupe_post_block: true,
             invalidate_terrain_cb: true,
+            reconstruct_offaxis_inverse: true,
         }
     }
 }
