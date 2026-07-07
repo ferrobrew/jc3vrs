@@ -213,6 +213,15 @@ pub struct StereoConfig {
     /// inverse with the exact inverse of the per-eye off-axis projection. VR only; a no-op on
     /// flatscreen frames. See [`crate::hooks::graphics_engine`].
     pub reconstruct_offaxis_inverse: bool,
+    /// Exclude the atmospheric-scattering pass from the
+    /// [`reconstruct_offaxis_inverse`](Self::reconstruct_offaxis_inverse) override. That pass
+    /// reconstructs the whole screen (sky included) and samples the sun shadow cascade over it; the
+    /// off-axis inverse is correct for finite geometry but at the far plane its off-centre shear
+    /// dominates and is mirror-opposite between the eyes, so the sky reconstruction swims with head
+    /// roll and crosses the cascade boundary -- the floating black crescent, and a contributor to the
+    /// distant per-eye shadow flip. With this on, the atmospheric pass falls back to the engine's
+    /// symmetric rebuild while the finite-geometry passes (specular, SSR) keep the off-axis override.
+    pub offaxis_inverse_skip_atmospheric: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -249,6 +258,7 @@ impl StereoConfig {
             dedupe_post_block: true,
             invalidate_terrain_cb: true,
             reconstruct_offaxis_inverse: true,
+            offaxis_inverse_skip_atmospheric: true,
         }
     }
 }

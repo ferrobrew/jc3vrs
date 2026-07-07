@@ -64,6 +64,44 @@ impl std::convert::AsMut<RBIInfo> for RBIInfo {
     }
 }
 #[repr(C, align(8))]
+/// The atmospheric-scattering / aerial-perspective render block. Its `Draw` reconstructs world
+/// position from depth via [`Matrix4::PerspectiveFovInverse`](types::math::Matrix4) -- for the whole
+/// screen, sky included -- and then ray-marches the sun shadow cascade and aerial perspective over
+/// the reconstructed positions.
+pub struct RenderBlockAtmosphericScattering {}
+impl RenderBlockAtmosphericScattering {
+    pub const Draw_ADDRESS: usize = 0x14036A820;
+    /// Draws the atmospheric-scattering pass. `rc` is the per-view render context; `info` the
+    /// instance info. Reconstructs view rays from depth via
+    /// [`Matrix4::PerspectiveFovInverse`](types::math::Matrix4) and samples the sun cascade.
+    pub unsafe fn Draw(
+        &mut self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *mut Self as _, rc, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockAtmosphericScattering>
+for RenderBlockAtmosphericScattering {
+    fn as_ref(&self) -> &RenderBlockAtmosphericScattering {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockAtmosphericScattering>
+for RenderBlockAtmosphericScattering {
+    fn as_mut(&mut self) -> &mut RenderBlockAtmosphericScattering {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The skinned character render block (the `Character` RBMDL block type). A character model is
 /// composed of one block per material; the same block objects are drawn for every pass, branching
 /// internally on [`RenderContext::m_RenderStatus`](graphics_engine::graphics_engine::RenderContext::m_RenderStatus)
