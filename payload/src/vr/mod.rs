@@ -37,6 +37,7 @@ use std::time::Instant;
 
 use anyhow::Context as _;
 use openxr as xr;
+use openxr::sys::Handle as _;
 use parking_lot::{Mutex, MutexGuard};
 use windows::core::Interface as _;
 
@@ -96,7 +97,8 @@ pub fn update() -> bool {
     if !cfg.enabled {
         if state.instance.is_some() {
             tracing::info!(target: "vr", "vr.enabled turned off; tearing down the OpenXR runtime");
-            state.teardown();
+            // VR is being genuinely stopped, so destroy everything rather than persisting for reuse.
+            state.teardown(false);
         }
         return false;
     }
@@ -185,15 +187,18 @@ pub fn recenter() {
     }
 }
 
-/// Fully tear the runtime down (swapchain → session → instance) and clear all state. Idempotent.
-/// Called from the `vr.enabled` toggle-off path and registered with [`crate::lifecycle`] so
-/// uninject → reinject starts clean and the OpenXR instance never outlives the DLL.
+/// Tear the runtime down and clear all state. Idempotent. Registered with [`crate::lifecycle`], so it
+/// runs on uninject — where, if [`VrConfig::persist_instance`] is set, the instance and session are
+/// kept alive (their handles stashed in the game process environment, the wrappers leaked) for a
+/// reinject to reuse, sidestepping the runtime's per-process instance/session budget. Otherwise
+/// everything is destroyed.
 pub fn uninstall() {
+    let persist = Config::lock_query(|c| c.vr.persist_instance);
     let mut state = VR_STATE.lock();
     if state.instance.is_some() {
-        tracing::info!(target: "vr", "uninstalling the OpenXR runtime");
+        tracing::info!(target: "vr", persist, "uninstalling the OpenXR runtime");
     }
-    state.teardown();
+    state.teardown(persist);
 }
 
 /// Begin an OpenXR frame: `wait_frame` + `begin_frame` + `locate_views`, returning a [`FrameContext`]
@@ -484,7 +489,9 @@ impl VrState {
                 "OpenXR bring-up failed (staying in flatscreen stereo, retrying in {}s): {e:#}",
                 cfg.retry_interval_secs,
             );
-            self.teardown();
+            // Keep any successfully-reused/created handles for the next retry when persistence is on;
+            // a stale stashed handle was already cleared by the acquire path.
+            self.teardown(cfg.persist_instance);
         }
     }
 
@@ -502,19 +509,7 @@ impl VrState {
 
         let mut extensions = xr::ExtensionSet::default();
         extensions.khr_d3d11_enable = true;
-        let instance = entry
-            .create_instance(
-                &xr::ApplicationInfo {
-                    application_name: "jc3vrs",
-                    application_version: 0,
-                    engine_name: "jc3vrs",
-                    engine_version: 0,
-                    api_version: xr::Version::new(1, 0, 0),
-                },
-                &extensions,
-                &[],
-            )
-            .context("vr: creating the OpenXR instance")?;
+        let instance = acquire_instance(&entry, &extensions, cfg.persist_instance)?;
 
         let system = instance
             .system(xr::FormFactor::HEAD_MOUNTED_DISPLAY)
@@ -540,7 +535,7 @@ impl VrState {
                 })
             });
 
-        let session = Session::create(&instance, system, cfg)?;
+        let session = acquire_session(&instance, system, cfg)?;
 
         let runtime_name = instance.properties().ok().map(|props| {
             tracing::info!(
@@ -606,9 +601,11 @@ impl VrState {
             }
         }
         if lost {
-            // Restore the instance so `teardown` destroys handles in order.
+            // Restore the instance so `teardown` can destroy handles in order. A lost or exiting
+            // session cannot be reused, so destroy everything and clear the stashes (persist=false)
+            // rather than stashing a dead session for a reinject.
             self.instance = Some(instance);
-            self.teardown();
+            self.teardown(false);
         } else {
             self.instance = Some(instance);
         }
@@ -861,25 +858,41 @@ impl VrState {
         self.instance = Some(instance);
     }
 
-    fn teardown(&mut self) {
-        // Drain the GPU before destroying the XR swapchain/session, and release the flip block, so
-        // the game's own present path resumes against an idle pipeline rather than deadlocking in a
-        // timestamp-query readback (see `blit::drain_gpu`). Order matters: drain while the swapchain
-        // still exists, then walk the session through the OpenXR exit handshake, then destroy it.
+    /// Tear the runtime down. When `persist` is set, keep the instance and session alive for a
+    /// reinject to reuse (stash their handles, leak the wrappers, and *do not* end the session — an
+    /// ended session cannot be resumed), sidestepping the runtime's per-process instance/session
+    /// budget. When not set, end and destroy everything and clear the stashes so a later bring-up
+    /// starts fresh (used when VR is genuinely stopped: `vr.enabled` off, or a lost session).
+    fn teardown(&mut self, persist: bool) {
+        // Drain the GPU first, and release the flip block, so the game's own present path resumes
+        // against an idle pipeline rather than deadlocking in a timestamp-query readback (see
+        // `blit::drain_gpu`); the swapchain is destroyed either way (persisting keeps only the
+        // session handle). When destroying, walk the session through the OpenXR exit handshake first.
         if self.session.is_some() {
             blit::drain_gpu();
-            self.end_session_cleanly();
+            if !persist {
+                self.end_session_cleanly();
+            }
         }
         crate::hooks::graphics_engine::graphics_engine::BLOCK_FLIP
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
-        if let Some(mut session) = self.session.take() {
-            // `end_session_cleanly` above already ran the exit handshake. Destroy the swapchain
-            // first (before the session handle), then dropping `session` drops the frame
-            // stream/waiter and the session handle.
-            session.swapchain = None;
+        if persist {
+            if let Some(session) = self.session.take() {
+                persist_session(session);
+            }
+            if let Some(instance) = self.instance.take() {
+                stash_instance(instance);
+            }
+        } else {
+            if let Some(mut session) = self.session.take() {
+                // The exit handshake ran above; destroy the swapchain (before the session handle),
+                // then dropping `session` drops the frame stream/waiter and the session handle.
+                session.swapchain = None;
+            }
+            self.instance = None;
+            clear_persisted();
         }
-        self.instance = None;
         self.system = None;
         self.baseline = None;
         self.latest_head_pose = None;
@@ -1058,6 +1071,201 @@ impl Swapchain {
         let index = self.acquired_index? as usize;
         self.images.get(index).map(|&p| p as *mut std::ffi::c_void)
     }
+}
+
+/// The Windows process environment variables that persist the OpenXR instance and session handles
+/// across inject/uninject cycles (see [`VrConfig::persist_instance`]). The payload DLL unmaps on
+/// uninject, so a payload static cannot survive; the game process's environment block does. The
+/// runtime allows only a small number of instances *and* sessions per process, so a reinject must
+/// reuse both rather than create new ones.
+const INSTANCE_STASH_VAR: windows::core::PCWSTR = windows::core::w!("JC3VRS_XR_INSTANCE");
+const SESSION_STASH_VAR: windows::core::PCWSTR = windows::core::w!("JC3VRS_XR_SESSION");
+
+/// Store a handle value in the game process's environment under `var`, as hex.
+fn stash_handle(var: windows::core::PCWSTR, raw: u64) {
+    let value: Vec<u16> = format!("{raw:#x}")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        let _ = windows::Win32::System::Environment::SetEnvironmentVariableW(
+            var,
+            windows::core::PCWSTR(value.as_ptr()),
+        );
+    }
+}
+
+/// Read a persisted handle value from the game process's environment, if set and non-zero.
+fn stashed_handle(var: windows::core::PCWSTR) -> Option<u64> {
+    let mut buf = [0u16; 32];
+    let len = unsafe {
+        windows::Win32::System::Environment::GetEnvironmentVariableW(var, Some(&mut buf))
+    };
+    if len == 0 || len as usize >= buf.len() {
+        return None;
+    }
+    let text = String::from_utf16_lossy(&buf[..len as usize]);
+    u64::from_str_radix(text.trim().trim_start_matches("0x"), 16)
+        .ok()
+        .filter(|&v| v != 0)
+}
+
+/// Clear a persisted handle (a stale one that failed to reuse).
+fn clear_handle(var: windows::core::PCWSTR) {
+    unsafe {
+        let _ = windows::Win32::System::Environment::SetEnvironmentVariableW(
+            var,
+            windows::core::PCWSTR::null(),
+        );
+    }
+}
+
+/// Clear both persisted handles. Called when the runtime is genuinely stopped (not persisted for a
+/// reinject) — a session loss, or `vr.enabled` turned off — so a later bring-up starts fresh.
+fn clear_persisted() {
+    clear_handle(INSTANCE_STASH_VAR);
+    clear_handle(SESSION_STASH_VAR);
+}
+
+/// Acquire an OpenXR instance: reuse a persisted handle if `persist` is set and one is stashed and
+/// still live, otherwise create a fresh one. A stashed handle that fails to re-wrap or validate (the
+/// runtime dropped it) is cleared and falls back to a fresh create.
+fn acquire_instance(
+    entry: &xr::Entry,
+    extensions: &xr::ExtensionSet,
+    persist: bool,
+) -> anyhow::Result<xr::Instance> {
+    if persist && let Some(raw) = stashed_handle(INSTANCE_STASH_VAR) {
+        match unsafe { reuse_instance(entry, raw, extensions) } {
+            Ok(instance) => {
+                tracing::info!(target: "vr", handle = format_args!("{raw:#x}"), "reused the persisted OpenXR instance");
+                return Ok(instance);
+            }
+            Err(e) => {
+                tracing::warn!(target: "vr", "the persisted OpenXR instance is unusable ({e:#}); creating a fresh one");
+                clear_handle(INSTANCE_STASH_VAR);
+            }
+        }
+    }
+    entry
+        .create_instance(
+            &xr::ApplicationInfo {
+                application_name: "jc3vrs",
+                application_version: 0,
+                engine_name: "jc3vrs",
+                engine_version: 0,
+                api_version: xr::Version::new(1, 0, 0),
+            },
+            extensions,
+            &[],
+        )
+        .context("vr: creating the OpenXR instance")
+}
+
+/// Re-wrap a persisted OpenXR instance handle: load the extension function table for it and confirm
+/// it is live. See [`VrConfig::persist_instance`].
+///
+/// # Safety
+/// `raw` must be an instance handle that was created with `extensions` and has not been destroyed.
+unsafe fn reuse_instance(
+    entry: &xr::Entry,
+    raw: u64,
+    extensions: &xr::ExtensionSet,
+) -> anyhow::Result<xr::Instance> {
+    let handle = xr::sys::Instance::from_raw(raw);
+    let exts = unsafe { xr::InstanceExtensions::load(entry, handle, extensions) }
+        .context("loading extensions for the persisted instance")?;
+    let instance = unsafe { xr::Instance::from_raw(entry.clone(), handle, exts) }
+        .context("wrapping the persisted instance handle")?;
+    // Confirm the handle is actually live before committing to it.
+    instance
+        .properties()
+        .context("querying the persisted instance")?;
+    Ok(instance)
+}
+
+/// Persist an OpenXR instance across inject cycles: stash its handle in the game process's
+/// environment and leak the wrapper so its `Drop` never calls `xrDestroyInstance`, keeping the handle
+/// live for the process lifetime for a later reinject to reuse. Consumes the instance so the two
+/// halves (stash the handle, suppress the destroy) cannot be split. See [`VrConfig::persist_instance`].
+fn stash_instance(instance: xr::Instance) {
+    stash_handle(INSTANCE_STASH_VAR, instance.as_raw().into_raw());
+    std::mem::forget(instance);
+}
+
+/// Acquire an OpenXR session: reuse a persisted session if `cfg.persist_instance` is set and one is
+/// stashed and still valid, otherwise create a fresh one. A stale stashed session is cleared and
+/// falls back to a fresh create.
+fn acquire_session(
+    instance: &xr::Instance,
+    system: xr::SystemId,
+    cfg: &VrConfig,
+) -> anyhow::Result<Session> {
+    if cfg.persist_instance
+        && let Some(raw) = stashed_handle(SESSION_STASH_VAR)
+    {
+        match unsafe { reuse_session(instance, raw) } {
+            Ok(session) => {
+                tracing::info!(target: "vr", handle = format_args!("{raw:#x}"), "reused the persisted OpenXR session");
+                return Ok(session);
+            }
+            Err(e) => {
+                tracing::warn!(target: "vr", "the persisted OpenXR session is unusable ({e:#}); creating a fresh one");
+                clear_handle(SESSION_STASH_VAR);
+            }
+        }
+    }
+    Session::create(instance, system, cfg)
+}
+
+/// Re-wrap a persisted session handle: regenerate the frame waiter/stream (`Session::from_raw`) and
+/// recreate the LOCAL reference space (which also validates the session still exists). The session
+/// was persisted while `FOCUSED` (never ended), so `running` starts true; the swapchain is recreated
+/// lazily on the first frame as usual.
+///
+/// # Safety
+/// `raw` must be a D3D11 session handle created on `instance`, not currently inside a frame, and not
+/// destroyed.
+unsafe fn reuse_session(instance: &xr::Instance, raw: u64) -> anyhow::Result<Session> {
+    let handle = xr::sys::Session::from_raw(raw);
+    // An empty drop guard: the real one keeps the graphics device alive, but we share the game's
+    // device, which outlives every VR session.
+    let (session, frame_wait, frame_stream) =
+        unsafe { xr::Session::<xr::D3D11>::from_raw(instance.clone(), handle, Box::new(())) };
+    let local = session
+        .create_reference_space(xr::ReferenceSpaceType::LOCAL, xr::Posef::IDENTITY)
+        .context("recreating the LOCAL reference space for the persisted session")?;
+    Ok(Session {
+        handle: session,
+        frame_wait,
+        frame_stream,
+        local,
+        swapchain: None,
+        running: true,
+    })
+}
+
+/// Persist a session across inject cycles: destroy its recreatable children (swapchain, reference
+/// space) but keep the session handle alive — stash it and leak the wrapper — *without* ending it, so
+/// a reinject can re-wrap and resume it (an ended session cannot be resumed). Consumes the session.
+fn persist_session(session: Session) {
+    let Session {
+        handle,
+        frame_wait,
+        frame_stream,
+        local,
+        swapchain,
+        running: _,
+    } = session;
+    // Destroy the cheap-to-recreate children; the reinject rebuilds them on the reused session.
+    drop(swapchain);
+    drop(local);
+    // The frame waiter/stream hold session references but issue no XR destroy; dropping them just
+    // releases those references (the leaked handle below keeps the session alive).
+    drop(frame_wait);
+    drop(frame_stream);
+    stash_handle(SESSION_STASH_VAR, handle.as_raw().into_raw());
+    std::mem::forget(handle);
 }
 
 /// Load the OpenXR loader (dynamic route). Uses [`VrConfig::loader_path`] if set, else

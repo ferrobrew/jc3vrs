@@ -108,6 +108,18 @@ pub struct VrConfig {
     /// a valid eye at use.
     #[serde(default)]
     pub mirror_eye: u8,
+    /// Persist the OpenXR **instance and session** across inject/uninject cycles instead of destroying
+    /// them on teardown. The runtime allows only a small number of instances *and* sessions per
+    /// process (often one each), and Proton's own startup VR probe contends for that budget, so a
+    /// reinject that creates fresh ones fails with `XR_ERROR_LIMIT_REACHED`. With this on, teardown
+    /// stashes both handles in the game process's environment and leaks the wrappers (the handles stay
+    /// valid for the process lifetime), *without* ending the session — an ended session cannot be
+    /// resumed — and a reinject re-wraps both rather than creating new ones, so VR comes back on
+    /// reinject without a game relaunch. The swapchain and reference space are recreated on the reused
+    /// session. On by default; a stale handle falls back to a fresh create, and a genuine stop
+    /// (`enabled` off, or a lost session) destroys everything and clears the stashes.
+    #[serde(default = "default_true")]
+    pub persist_instance: bool,
 }
 
 /// The serde default for [`VrConfig::native_resolution`] (the manual [`Default`] via
@@ -131,6 +143,7 @@ impl VrConfig {
             native_resolution: true,
             mirror: true,
             mirror_eye: 0,
+            persist_instance: true,
         }
     }
 }
