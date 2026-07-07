@@ -64,13 +64,6 @@ pub fn on_input_tick(look_x: f32, look_y: f32, dt: f32) {
         return;
     }
 
-    // The VR source owns the pose while an OpenXR session is running (it publishes a fresh HMD pose
-    // every rendered frame). The sim must not also publish, or the two would fight over the same
-    // slot; skip the whole tick so the VR pose stands.
-    if super::source() == super::Source::Vr {
-        return;
-    }
-
     let mut s = SIM.lock();
 
     // Mode detection, once per input tick: the locomotion orientation evaluator runs once per sim
@@ -79,9 +72,21 @@ pub fn on_input_tick(look_x: f32, look_y: f32, dt: f32) {
     // advances exactly when the player is on foot. Comparing per rendered frame instead flickered
     // to `Other` on every frame without a sim tick, resetting the latch and letting the idle
     // camera pin leak through (the body tracked the head immediately).
+    //
+    // This runs regardless of the active source, *before* the VR early-return below: `sim::mode()`
+    // is read by `head_decoupled_idle` (the body-turn suppression gate), so freezing it under VR
+    // left the game's aim-relative body turn permanently unsuppressed, which the body-relative pose
+    // composition (`body × cockpit`) turns into a runaway head spin.
     let evals = crate::hooks::input::locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
     s.mode = detect_mode(s.last_orientation_evals, evals);
     s.last_orientation_evals = evals;
+
+    // The VR source owns the pose while an OpenXR session is running (it publishes a fresh HMD pose
+    // every rendered frame). The sim must not also publish, or the two would fight over the same
+    // slot; skip the rest of the tick so the VR pose stands (mode detection above still ran).
+    if super::source() == super::Source::Vr {
+        return;
+    }
 
     let body_rotation = read_body_rotation();
     let body_yaw = body_rotation.map(body_yaw_of);

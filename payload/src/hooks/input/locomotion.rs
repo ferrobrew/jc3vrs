@@ -306,9 +306,15 @@ fn force_face_camera(
 /// this state the body must not chase the head — the latch owns body turning — so both the
 /// orientation executor's face-dir tracking and the aim-relative turn acts are suppressed.
 fn head_decoupled_idle(character: &Character) -> bool {
+    // Under the VR source the head is *always* decoupled (the HMD owns it, the stick owns the body),
+    // so the flatscreen latch does not apply — and the sim's latch state is not even updated while
+    // VR publishes. Without this, the game's aim-relative body turn chases the head, and the
+    // body-relative pose composition (`body × cockpit`) makes that a runaway spin.
+    let decoupled = crate::headpose::source() == crate::headpose::Source::Vr
+        || crate::headpose::sim::latch_state() == LatchState::Decoupled;
     crate::headpose::is_active()
         && crate::headpose::sim::mode() == HeadMode::OnFoot
-        && crate::headpose::sim::latch_state() == LatchState::Decoupled
+        && decoupled
         && !character
             .m_AimFlags
             .intersects(AimState::m_AimingWeapon | AimState::m_AimingGrapple)
