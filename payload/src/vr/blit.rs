@@ -22,13 +22,14 @@ use windows::{
             Direct3D11::{
                 D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_COMPARISON_NEVER,
                 D3D11_CULL_NONE, D3D11_FILL_SOLID, D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-                D3D11_RASTERIZER_DESC, D3D11_RENDER_TARGET_VIEW_DESC,
-                D3D11_RENDER_TARGET_VIEW_DESC_0, D3D11_RTV_DIMENSION_TEXTURE2DARRAY,
-                D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_ARRAY_RTV,
-                D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-                D3D11_VIEWPORT, ID3D11Buffer, ID3D11DeviceContext, ID3D11PixelShader,
-                ID3D11RasterizerState, ID3D11RenderTargetView, ID3D11SamplerState,
-                ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
+                D3D11_QUERY_DESC, D3D11_QUERY_EVENT, D3D11_RASTERIZER_DESC,
+                D3D11_RENDER_TARGET_VIEW_DESC, D3D11_RENDER_TARGET_VIEW_DESC_0,
+                D3D11_RTV_DIMENSION_TEXTURE2DARRAY, D3D11_SAMPLER_DESC, D3D11_SUBRESOURCE_DATA,
+                D3D11_TEX2D_ARRAY_RTV, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE2D_DESC,
+                D3D11_USAGE_DEFAULT, D3D11_VIEWPORT, ID3D11Buffer, ID3D11Device,
+                ID3D11DeviceContext, ID3D11PixelShader, ID3D11Query, ID3D11RasterizerState,
+                ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView,
+                ID3D11Texture2D, ID3D11VertexShader,
             },
             Dxgi::Common::DXGI_FORMAT,
         },
@@ -72,6 +73,78 @@ pub fn present_and_submit(mut frame: FrameContext, cfg: &VrConfig) {
 /// Tear down the blit pipeline (COM release). Called from the runtime cleanup.
 pub fn teardown() {
     *VR_BLIT.lock() = None;
+}
+
+/// The maximum time to wait for the GPU to report idle during teardown, in ~1 ms polling steps. A
+/// hard cap so a teardown can never itself hang if the pipeline is already wedged; the drain is
+/// best-effort.
+const DRAIN_MAX_POLLS: u32 = 2000;
+
+/// Flush the engine's immediate context and wait (bounded) for the GPU to go idle. Called at the top
+/// of the VR runtime teardown, *before* the XR swapchain and session are destroyed: the per-eye blit
+/// writes into the swapchain images and the last submitted frame may still be in flight, so tearing
+/// the swapchain down underneath that work strands the DXVK/present pipeline. The game's own `Flip`
+/// then deadlocks in a timestamp-query `GetData` that never completes — while it holds the engine
+/// context mutex, which freezes every other thread behind it. Draining here lets that work retire so
+/// the game resumes cleanly. Best-effort: any failure (or the poll budget expiring) logs and returns;
+/// teardown must never hang or panic.
+pub fn drain_gpu() {
+    let Some(ge) = (unsafe { jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() })
+    else {
+        return;
+    };
+    // Drain the CPU-side draw dispatch first, so its command list is submitted before we wait on the
+    // GPU (`WaitForCPUDrawToFinish` is CPU-side only).
+    unsafe { ge.WaitForCPUDrawToFinish() };
+    let Some(device) = (unsafe { ge.m_Device.as_ref() }) else {
+        return;
+    };
+    let Some(context) = (unsafe { device.m_Context.as_ref() }) else {
+        return;
+    };
+    unsafe {
+        EnterCriticalSection(context.m_Mutex);
+        let result = drain_immediate(&device.m_Device, &context.m_Context);
+        LeaveCriticalSection(context.m_Mutex);
+        if let Err(e) = result {
+            tracing::warn!(target: "vr", "GPU drain during teardown was incomplete: {e:#}");
+        }
+    }
+}
+
+/// Submit everything pending and poll an event query until the GPU signals it, up to
+/// [`DRAIN_MAX_POLLS`]. Held under the context mutex by the caller.
+unsafe fn drain_immediate(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+) -> anyhow::Result<()> {
+    let desc = D3D11_QUERY_DESC {
+        Query: D3D11_QUERY_EVENT,
+        MiscFlags: 0,
+    };
+    let mut query: Option<ID3D11Query> = None;
+    unsafe { device.CreateQuery(&desc, Some(&mut query)) }
+        .context("creating the drain event query")?;
+    let query = query.context("the drain event query was not created")?;
+    unsafe {
+        context.End(&query);
+        context.Flush();
+    }
+    // `GetData` returns S_OK once the GPU has passed the `End`, S_FALSE while still pending. The
+    // safe `GetData` wrapper folds S_FALSE into `Ok`, so it cannot distinguish the two; call the raw
+    // vtable entry for the real HRESULT. The cap guarantees the loop terminates even if the pipeline
+    // never drains.
+    let vtable = context.vtable();
+    for _ in 0..DRAIN_MAX_POLLS {
+        let hr = unsafe {
+            (vtable.GetData)(context.as_raw(), query.as_raw(), std::ptr::null_mut(), 0, 0)
+        };
+        if hr == windows::Win32::Foundation::S_OK {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    anyhow::bail!("the GPU did not report idle within the teardown budget")
 }
 
 /// End the frame, logging a submit failure (the frame is consumed regardless).

@@ -811,6 +811,16 @@ impl VrState {
     /// Tear the runtime down in order: swapchain → session → instance. Ending a running session
     /// first is best-effort (the runtime may already be stopping). Clears all derived state.
     fn teardown(&mut self) {
+        // Drain the GPU before destroying the XR swapchain/session, and release the flip block, so
+        // the game's own present path resumes against an idle pipeline rather than deadlocking in a
+        // timestamp-query readback (see `blit::drain_gpu`). Order matters: drain while the swapchain
+        // still exists, then destroy it.
+        if self.session.is_some() {
+            blit::drain_gpu();
+        }
+        crate::hooks::graphics_engine::graphics_engine::BLOCK_FLIP
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
         if let Some(mut session) = self.session.take() {
             session.swapchain = None;
             if session.running
