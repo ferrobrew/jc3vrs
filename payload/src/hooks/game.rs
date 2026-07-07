@@ -97,22 +97,31 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
         let mut vr_frame = vr_running.then(crate::vr::frame_begin).flatten();
 
+        // Publish the VR head pose and per-eye camera parameters *before* the original UpdateRender.
+        // `CGame::Update` runs the sim tick (`UpdateGame`) -- which finalizes this frame's animation,
+        // the head-bone anchor, and the character's `m_WorldMatrixT0/T1` -- and computes the sub-frame
+        // fraction `dtf` *before* it calls `UpdateRender`, so everything the pose pair needs is already
+        // current here (and the views are located by `frame_begin` above). The camera's T0->T1
+        // interpolation is consumed *inside* `UpdateRender` (`Camera::UpdateRender`'s `dtf` lerp), so
+        // publishing after that call fed it the previous frame's pair -- one rendered frame stale,
+        // which snapped the camera a full tick backward at every `dtf` reset (the residual sawtooth
+        // after 1879c65 landed the interpolation content). Publishing here puts the current pair in
+        // phase with `dtf`, exactly as the flatscreen sim path publishes on the sim tick, and drops a
+        // frame of HMD-tracking latency as a bonus. When the runtime asks to skip rendering, clear the
+        // parameters so the camera hook falls back to flatscreen stereo for the (non-submitted)
+        // keep-alive Draws.
+        let vr_cfg = crate::config::Config::lock_query(|c| c.vr.clone());
+        match vr_frame.as_ref() {
+            Some(frame) if frame.should_render() => crate::vr::begin_render_frame(frame, &vr_cfg),
+            _ => crate::vr::clear_render_params(),
+        }
+
         crate::crash::mark(Phase::OriginalUpdateRender);
         GAME_UPDATE_RENDER
             .get()
             .unwrap()
             .call(game, update_contexts);
         GameState::PostUpdateRender(update_contexts);
-
-        // Now that this frame's animation (and the head-bone anchor) is up to date, publish the VR
-        // head pose and the per-eye camera parameters from the located views. When the runtime asks
-        // to skip rendering, clear the parameters so the camera hook falls back to flatscreen stereo
-        // for the (non-submitted) keep-alive Draws.
-        let vr_cfg = crate::config::Config::lock_query(|c| c.vr.clone());
-        match vr_frame.as_ref() {
-            Some(frame) if frame.should_render() => crate::vr::begin_render_frame(frame, &vr_cfg),
-            _ => crate::vr::clear_render_params(),
-        }
 
         let game = game.as_mut().unwrap();
 
