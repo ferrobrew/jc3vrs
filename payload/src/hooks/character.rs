@@ -1,20 +1,307 @@
-use std::sync::LazyLock;
+use std::{
+    sync::{
+        LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use detours_macro::detour;
 use jc3gi::{
-    animation::symbol_table::EventIdSymbolTable,
+    animation::{
+        ik::{HumanIK, Pass, SolveStep},
+        symbol_table::EventIdSymbolTable,
+    },
     character::character::{AnimatedModel, Character, Joint, SafeBoneIndex},
     hash::hashlittle,
+    types::math::Vector3,
 };
+use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 
 use crate::{config::Config, headpose};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
+        .with_static_binder(&CHARACTER_UPDATE_PASS_FINALIZE_POSE_PARALLEL_BINDER)
         .with_static_binder(&CHARACTER_UPDATE_PROP_EFFECTS_BINDER)
         .with_static_binder(&CHARACTER_QUEUE_ACT_BINDER)
 }
+
+/// The tracing target for the body-IK path.
+const BODY_IK_TARGET: &str = "body_ik";
+
+/// The global HumanIK enable flag (`CCharacter::m_EnableHIK`, `byte_142D621C8`): the engine gates
+/// the whole IK pass on it in `UpdatePassFinalizePose_Parallel`. No pyxis binding exists for this
+/// standalone global, so it is read at its release RVA, matching the engine's own gate.
+const HIK_ENABLE_FLAG_ADDRESS: usize = 0x142D621C8;
+
+/// The offset of the per-character reduced-LOD flag byte within `CCharacter`: the engine skips the
+/// IK pass when `(*(this + 10124) & 2) != 0` (verified in the release decompile of
+/// `UpdatePassFinalizePose_Parallel`). Not modelled as a pyxis field, so it is read by raw offset.
+const REDUCED_LOD_FLAG_OFFSET: usize = 10124;
+
+/// The head-bone model-space orientations captured *before* the HumanIK solve, wired from the
+/// pre-call [`character_update_pass_finalize_pose_parallel`] hook to the post-solve
+/// [`character_update_prop_effects`] head override so the override composes its body-relative offset
+/// onto the pure animated orientation rather than the IK-bent one (which would double-count the yaw
+/// HumanIK already applied toward the target).
+struct PreIkPose {
+    head_orientation: glam::Quat,
+    neck_orientation: glam::Quat,
+}
+static PRE_IK_POSE: Mutex<Option<PreIkPose>> = Mutex::new(None);
+
+/// Pre-call seam for headset-driven upper-body IK. Runs at the entry of the pose-finalization pass,
+/// *before* the HumanIK `MAIN` solve and its `HasTargets` gate (docs/engine/humanik.md): it captures the
+/// headpose anchors from the freshly animated (pre-IK) pose and queues the head effector target so
+/// the engine's own solver bends the spine and head toward the headpose the same frame. The
+/// `SetJoint` head override still runs at the very end of this pass, in
+/// [`character_update_prop_effects`], on top of the HIK-bent spine.
+#[detour(
+    address = jc3gi::character::character::Character::UpdatePassFinalizePose_Parallel_ADDRESS
+)]
+fn character_update_pass_finalize_pose_parallel(
+    character: *mut Character,
+    context: *mut std::ffi::c_void,
+) {
+    // Queue targets and capture anchors BEFORE the trampoline: the solve and the anchor-consuming
+    // gate both run inside the real function, so entry-queued targets are solved this frame and the
+    // pre-solve pose is the pure animation result.
+    unsafe {
+        capture_anchors_and_queue_body_ik(character);
+    }
+
+    CHARACTER_UPDATE_PASS_FINALIZE_POSE_PARALLEL
+        .get()
+        .unwrap()
+        .call(character, context);
+}
+
+/// Capture the headpose anchors (pre-IK) and queue the HumanIK head effector target for the local
+/// player. Every engine-pointer hop is null-guarded; any failure leaves the previous anchors and
+/// queues nothing.
+unsafe fn capture_anchors_and_queue_body_ik(character: *mut Character) {
+    unsafe {
+        let Some(character) = character.as_mut().filter(|c| c.m_IsLocalCharacter) else {
+            return;
+        };
+        let Some(animation_controller) = character.m_AnimatedModel.m_AnimationController.as_mut()
+        else {
+            return;
+        };
+
+        let head_index = character.GetSafeIndex(SafeBoneIndex::HEAD);
+        let neck_index = character.GetSafeIndex(SafeBoneIndex::NECK);
+
+        // Anchor capture, MOVED here from UpdatePropEffects. It must run pre-IK: the HumanIK MAIN
+        // solve happens later in this same function, and reading the head bone *after* the solve
+        // would let the anchor chase the very target HIK pulls it toward — a feedback loop that pins
+        // the camera to a fixed world point while the body walks out from under it. Reading here,
+        // before the solve, samples the freshly animated pose: the release decompile shows
+        // AnimationController::GetJoint recomputes the model-space transform on demand when the bone
+        // is dirty (CBlender::UpdateTime), and the animation graph finalized this frame's local pose
+        // earlier in SIM, so this read reflects this frame's animation. At worst it is the previous
+        // frame's model-space pose (one frame of latency) — still IK-free, and it can never contain
+        // this frame's solve, so no tight feedback loop can form. The counterpart capture in
+        // UpdatePropEffects is removed; that hook now only consumes the published anchors.
+        let character_world = glam::Mat4::from(character.m_WorldMatrixT1);
+        let (_, character_rotation, _) = character_world.to_scale_rotation_translation();
+        let joint_translation = |joint: &Joint| {
+            let [x, y, z] = joint.m_Translation.data;
+            glam::Vec3::new(x, y, z)
+        };
+        let quat_of = |joint: &Joint| {
+            let [qx, qy, qz, qw] = joint.m_Orientation.data;
+            glam::Quat::from_xyzw(qx, qy, qz, qw)
+        };
+
+        let mut head_joint = Joint::default();
+        animation_controller.GetJoint(head_index, &mut head_joint);
+        let animated_head_world = character_world.transform_point3(joint_translation(&head_joint));
+        // The previous-tick head anchor: the same animated joint through the character's T0 world
+        // matrix. Feeds the VR pose pair so the engine's sub-frame lerp smooths per-tick anchor
+        // motion (vehicles, parachuting) instead of stepping the camera at the tick rate.
+        let character_world_prev = glam::Mat4::from(character.m_WorldMatrixT0);
+        let animated_head_world_prev =
+            character_world_prev.transform_point3(joint_translation(&head_joint));
+
+        let mut neck_joint = Joint::default();
+        animation_controller.GetJoint(neck_index, &mut neck_joint);
+        let animated_neck_world = character_world.transform_point3(joint_translation(&neck_joint));
+
+        let eye_joint = |name: &[u8]| {
+            let mut joint = Joint::default();
+            animation_controller.GetJoint(
+                animation_controller.GetBoneIndex(hashlittle(name) as u32),
+                &mut joint,
+            );
+            joint_translation(&joint)
+        };
+        let eye_mid_model = (eye_joint(b"fLeftEye") + eye_joint(b"fRightEye")) / 2.0;
+        let eye_mid_world = character_world.transform_point3(eye_mid_model);
+        let eye_arm = character_rotation.inverse() * (eye_mid_world - animated_neck_world);
+
+        headpose::set_anchors(headpose::Anchors {
+            head: animated_head_world,
+            head_prev: animated_head_world_prev,
+            neck: animated_neck_world,
+            eye_arm,
+        });
+
+        // Snapshot the pre-IK head and neck model-space orientations for the post-solve override's
+        // compose base (see PreIkPose). Refreshed every frame the local player is active, so it can
+        // never go stale.
+        let animated_head_orientation = quat_of(&head_joint);
+        *PRE_IK_POSE.lock() = Some(PreIkPose {
+            head_orientation: animated_head_orientation,
+            neck_orientation: quat_of(&neck_joint),
+        });
+
+        // From here on: the HumanIK body-follow targets, behind the body_ik config.
+        let cfg = Config::lock_query(|c| c.body_ik);
+        if !cfg.enabled || !headpose::is_active() || headpose::anchor().is_none() {
+            return;
+        }
+
+        // Respect the same gates the engine checks before the HasTargets gate (docs/engine/humanik.md):
+        // the global HIK enable and the per-character reduced-LOD bit. Queuing while gated off would
+        // leave targets unconsumed (neither the solve nor ClearTargets runs), so skip cleanly and
+        // log the transition once rather than per frame.
+        let hik_globally_enabled = *(HIK_ENABLE_FLAG_ADDRESS as *const bool);
+        let reduced_lod =
+            *(character as *const Character as *const u8).add(REDUCED_LOD_FLAG_OFFSET) & 2 != 0;
+        if !hik_globally_enabled || reduced_lod {
+            log_gate_skip(hik_globally_enabled, reduced_lod);
+            return;
+        }
+        GATE_SKIP_LOGGED.store(false, Ordering::Relaxed);
+
+        // The head bone index maps to a HumanIK effector (expected 15); -1 means unmapped — skip.
+        let effector = character.m_HIK.GetEffectorIdFromBoneIndex(head_index);
+        if !(0..HumanIK::EFFECTOR_SLOTS as i32).contains(&effector) {
+            log_unmapped_effector(effector);
+            return;
+        }
+        UNMAPPED_LOGGED.store(false, Ordering::Relaxed);
+        let eff = effector as usize;
+
+        // The head world target is the headpose position (already anchored to this frame's animated
+        // head plus the roomscale offset), transformed into character-model space — the space
+        // AddEffectorTargetPosition expects (docs/engine/humanik.md) — plus the optional tuning offset.
+        let target_world = headpose::query().position;
+        let target_model =
+            character_world.inverse().transform_point3(target_world) + cfg.target_offset;
+        let pos = Vector3 {
+            data: [target_model.x, target_model.y, target_model.z],
+        };
+
+        let weight = cfg.weight.clamp(0.0, 1.0);
+        let reach_t = (cfg.head_reach_t * weight).clamp(0.0, 1.0);
+
+        // Only the head effector's target and reach slots are written; other effectors (aim IK,
+        // hands) are left untouched, so this coexists with the game's own MAIN-pass targets — the
+        // pass's solve step is the max of all queued targets' steps.
+        character.m_HIK.AddEffectorTargetPosition(
+            effector,
+            &pos,
+            SolveStep::UPPER_BODY,
+            Pass::MAIN,
+            cfg.interpolation,
+            cfg.interpolation_rate,
+            cfg.blend_out,
+            cfg.blend_out_rate,
+        );
+        character.m_HIK.m_TargetReachT[eff] = reach_t;
+
+        let mut reach_r = 0.0;
+        if cfg.rotation_target {
+            // Aim the head's model-space frame at the headpose orientation, mirroring the aim IK's
+            // AddEffectorTargetRotationVector(axis, angle) call. The delta is the model-space
+            // rotation that turns the animated head orientation to the desired one; both are model
+            // space, so no bone rest-frame knowledge is needed. Sourced from headpose::query()
+            // (source-agnostic — identical under the VR pose source).
+            let desired_head_model = character_rotation.inverse() * headpose::query().orientation;
+            let delta = desired_head_model * animated_head_orientation.inverse();
+            let (axis, angle) = delta.to_axis_angle();
+            if angle.abs() > 1.0e-4 && axis.is_finite() {
+                let axis_v = Vector3 {
+                    data: [axis.x, axis.y, axis.z],
+                };
+                character.m_HIK.AddEffectorTargetRotationVector(
+                    effector,
+                    angle,
+                    &axis_v,
+                    SolveStep::UPPER_BODY,
+                    Pass::MAIN,
+                    cfg.interpolation,
+                    cfg.interpolation_rate,
+                    cfg.blend_out,
+                    cfg.blend_out_rate,
+                );
+                reach_r = (cfg.head_reach_r * weight).clamp(0.0, 1.0);
+                character.m_HIK.m_TargetReachR[eff] = reach_r;
+            }
+        }
+
+        log_body_ik(target_model, effector, reach_t, reach_r);
+    }
+}
+
+/// Once-per-second DEBUG line for a log-based playtest: the model-space target actually queued, the
+/// resolved head effector id, and the reach weights actually written.
+fn log_body_ik(target_model: glam::Vec3, effector: i32, reach_t: f32, reach_r: f32) {
+    if throttle(&BODY_IK_LOG_AT, Duration::from_secs(1)) {
+        tracing::debug!(
+            target: BODY_IK_TARGET,
+            effector,
+            target_model = ?target_model,
+            reach_t,
+            reach_r,
+            "queued head effector target",
+        );
+    }
+}
+
+/// Log once (not per frame) when the engine's IK gates skip the pass, so a gated-off session is
+/// visible without spamming. Re-arms when the gate next passes.
+fn log_gate_skip(hik_globally_enabled: bool, reduced_lod: bool) {
+    if !GATE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
+        tracing::debug!(
+            target: BODY_IK_TARGET,
+            hik_globally_enabled,
+            reduced_lod,
+            "HumanIK gated off; skipping body-IK target queue",
+        );
+    }
+}
+
+/// Log once when the head bone has no effector mapping (-1). Re-arms when a valid effector resolves.
+fn log_unmapped_effector(effector: i32) {
+    if !UNMAPPED_LOGGED.swap(true, Ordering::Relaxed) {
+        tracing::debug!(
+            target: BODY_IK_TARGET,
+            effector,
+            "head bone has no HumanIK effector mapping; skipping body-IK target queue",
+        );
+    }
+}
+
+/// Return `true` at most once per `interval`, updating the last-fire time stored in `at`.
+fn throttle(at: &Mutex<Option<Instant>>, interval: Duration) -> bool {
+    let mut guard = at.lock();
+    let now = Instant::now();
+    if guard.is_none_or(|last| now.duration_since(last) >= interval) {
+        *guard = Some(now);
+        true
+    } else {
+        false
+    }
+}
+
+static BODY_IK_LOG_AT: Mutex<Option<Instant>> = Mutex::new(None);
+static GATE_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
+static UNMAPPED_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[detour(address = jc3gi::character::character::Character::UpdatePropEffects_ADDRESS)]
 fn character_update_prop_effects(character: *mut Character, dt: f32) {
@@ -80,26 +367,22 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         ]);
 
         // HEAD: optionally the legacy scale-hide, plus the full headpose pose, in a single
-        // SetJoint.
+        // SetJoint. The head/neck/eye anchors are captured PRE-IK in
+        // `character_update_pass_finalize_pose_parallel`: this hook runs last, after the HumanIK
+        // solve *and* after CalculateModelSpacePose, so a capture here would read the IK-solved head
+        // and chase the very target HIK pulls it toward (the feedback loop). This hook only consumes
+        // the published anchors and applies the head override on top of the solved pose.
         let hide_scale = crate::config::Config::lock_query(|c| c.camera.hide_head_scale);
         let scale = 0.001;
         let mut joint = Joint::default();
         animation_controller.GetJoint(head_index, &mut joint);
 
-        // Publish this frame's *animated* head and neck positions as the headpose anchors before
-        // overriding the head bone. UpdatePropEffects runs after CalculateModelSpacePose, so the
-        // joint reads are the freshly animated model-space pose, not last frame's override —
-        // reading the bone matrices instead would return the override and freeze the anchor in
-        // place (the feedback loop that pinned the camera to a fixed world point and stretched
-        // the head toward it). The neck anchor gives the camera its pivot: pitching the head
-        // swings the eyes about the neck instead of rotating in place at the skull base.
         let character_world = glam::Mat4::from(character.m_WorldMatrixT1);
         let (_, character_rotation, _) = character_world.to_scale_rotation_translation();
         let joint_translation = |joint: &Joint| {
             let [x, y, z] = joint.m_Translation.data;
             glam::Vec3::new(x, y, z)
         };
-        let animated_head_world = character_world.transform_point3(joint_translation(&joint));
 
         let neck_index = character.GetSafeIndex(SafeBoneIndex::NECK);
         let mut neck_joint = Joint::default();
@@ -110,27 +393,23 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         crate::hooks::graphics_engine::render_block::publish_collapse_target(joint_translation(
             &neck_joint,
         ));
-        let animated_neck_world = character_world.transform_point3(joint_translation(&neck_joint));
 
-        // The animated eye midpoint, expressed as a body-frame arm from the neck pivot: rotating
-        // it by the published head orientation places the eyes anatomically as the head pitches.
-        let eye_joint = |name: &[u8]| {
-            let mut joint = Joint::default();
-            animation_controller.GetJoint(
-                animation_controller.GetBoneIndex(hashlittle(name) as u32),
-                &mut joint,
-            );
-            joint_translation(&joint)
-        };
-        let eye_mid_model = (eye_joint(b"fLeftEye") + eye_joint(b"fRightEye")) / 2.0;
-        let eye_mid_world = character_world.transform_point3(eye_mid_model);
-        let eye_arm = character_rotation.inverse() * (eye_mid_world - animated_neck_world);
-
-        headpose::set_anchors(headpose::Anchors {
-            head: animated_head_world,
-            neck: animated_neck_world,
-            eye_arm,
-        });
+        // The pre-IK head/neck orientations captured this frame before the solve. When body_ik is
+        // driving the head, the joints read above are the *post-IK* pose, so composing the
+        // override's body-relative offset onto their orientation would double-count the yaw HumanIK
+        // already bent toward the target. Composing onto the pre-IK base instead makes the override
+        // "set the exact head orientation" — identical to the no-IK case — with HIK's spine/neck
+        // bend sitting underneath it. When body_ik is off the pre-IK and post-IK orientations match,
+        // so the fallback to the freshly read orientation preserves the flatscreen path exactly.
+        let body_ik_enabled = crate::config::Config::lock_query(|c| c.body_ik.enabled);
+        let pre_ik = body_ik_enabled
+            .then(|| {
+                PRE_IK_POSE
+                    .lock()
+                    .as_ref()
+                    .map(|p| (p.head_orientation, p.neck_orientation))
+            })
+            .flatten();
 
         if hide_scale {
             joint.m_Scale.data = [scale, scale, scale];
@@ -148,15 +427,21 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
             // head stays anatomically placed while turning where the player looks.
             let (yaw, pitch, roll) = headpose::sim::euler_angles();
             let offset_model = glam::Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, roll);
-            let [qx, qy, qz, qw] = joint.m_Orientation.data;
-            let animated = glam::Quat::from_xyzw(qx, qy, qz, qw);
+            let animated = pre_ik.map(|(head, _)| head).unwrap_or_else(|| {
+                let [qx, qy, qz, qw] = joint.m_Orientation.data;
+                glam::Quat::from_xyzw(qx, qy, qz, qw)
+            });
             let composed = offset_model * animated;
             // glam Quat (x,y,z,w) -> Havok AlignedQuat [x,y,z,w] is a direct copy.
             joint.m_Orientation.data = [composed.x, composed.y, composed.z, composed.w];
 
-            // The roomscale positional offset, brought into the body frame. Zero whenever the
-            // offset config is zero: the pose position is the anchor captured above plus the
-            // offset.
+            // The roomscale positional offset, brought into the body frame. `animated_head_world`
+            // is the pre-IK anchor published by the finalize hook, so the offset stays the pure
+            // roomscale displacement even when HumanIK has moved the head. Zero whenever the offset
+            // config is zero. (When body_ik drives the head toward `query().position` and a nonzero
+            // offset is set, HIK's positional reach and this add both move the head toward the
+            // offset — a known interaction, inert with the default zero offset.)
+            let animated_head_world = headpose::anchor().unwrap_or(glam::Vec3::ZERO);
             let world_offset = headpose::query().position - animated_head_world;
             if world_offset != glam::Vec3::ZERO {
                 let model_offset = character_rotation.inverse() * world_offset;
@@ -189,8 +474,13 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
             let excess_deg = (yaw.abs().to_degrees() - start_deg).clamp(0.0, max_deg.max(0.0));
             if excess_deg > 0.0 {
                 let twist = excess_deg.to_radians().copysign(yaw);
-                let [qx, qy, qz, qw] = neck_joint.m_Orientation.data;
-                let animated = glam::Quat::from_xyzw(qx, qy, qz, qw);
+                // Pre-multiply onto the pre-IK neck orientation for the same reason as the head
+                // above: when body_ik has bent the neck toward the target, twisting the post-IK
+                // orientation would compound HIK's neck rotation with this manual twist.
+                let animated = pre_ik.map(|(_, neck)| neck).unwrap_or_else(|| {
+                    let [qx, qy, qz, qw] = neck_joint.m_Orientation.data;
+                    glam::Quat::from_xyzw(qx, qy, qz, qw)
+                });
                 let twisted = glam::Quat::from_rotation_y(twist) * animated;
                 neck_joint.m_Orientation.data = [twisted.x, twisted.y, twisted.z, twisted.w];
                 animation_controller.SetJoint(neck_index, &mut neck_joint);

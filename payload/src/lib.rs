@@ -12,6 +12,7 @@ pub mod egui_impl;
 pub mod module;
 pub mod ui;
 pub mod util;
+pub mod vr;
 
 mod allocator;
 mod capture;
@@ -119,6 +120,7 @@ fn initialize_from_game() -> anyhow::Result<()> {
     ui::render::install();
     hud::install();
     capture::install();
+    vr::install();
     tracing::info!("Initialized in game thread");
 
     Ok(())

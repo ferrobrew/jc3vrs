@@ -38,6 +38,30 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
 
     ui.separator();
     egui_debug_headpose(ui, &mut cfg.headpose);
+
+    ui.separator();
+    egui::CollapsingHeader::new("Body IK")
+        .default_open(false)
+        .show(ui, |ui| egui_debug_body_ik(ui, &mut cfg.body_ik));
+}
+
+fn egui_debug_body_ik(ui: &mut egui::Ui, ik: &mut config::BodyIkConfig) {
+    ui.checkbox(&mut ik.enabled, "Enabled")
+        .on_hover_text("Drive the upper body toward the headpose via the engine's HumanIK solver.");
+    ui.checkbox(
+        &mut ik.rotation_target,
+        "Rotation target (aim head at headpose)",
+    );
+    ui.add(Slider::new(&mut ik.weight, 0.0..=1.0).text("Master weight"));
+    ui.add(Slider::new(&mut ik.head_reach_t, 0.0..=1.0).text("Head reach (translation)"));
+    ui.add(Slider::new(&mut ik.head_reach_r, 0.0..=1.0).text("Head reach (rotation)"));
+    ui.checkbox(&mut ik.interpolation, "Interpolation (ease reach in)");
+    ui.add(Slider::new(&mut ik.interpolation_rate, 0.0..=10.0).text("Interpolation rate"));
+    ui.checkbox(&mut ik.blend_out, "Blend out");
+    ui.add(Slider::new(&mut ik.blend_out_rate, 0.0..=10.0).text("Blend-out rate"));
+    ui.add(Slider::new(&mut ik.target_offset.x, -1.0..=1.0).text("Target offset X (m)"));
+    ui.add(Slider::new(&mut ik.target_offset.y, -1.0..=1.0).text("Target offset Y (m)"));
+    ui.add(Slider::new(&mut ik.target_offset.z, -1.0..=1.0).text("Target offset Z (m)"));
 }
 
 fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {

@@ -2,7 +2,7 @@
 //! own render context, so each depth layer renders into its own texture at full rate (issue #14).
 //!
 //! Rendering the movie several times with visibility masks cannot work (captures are only safe on
-//! the game thread; see `docs/issue-08-14-hud-overlays-and-depth.md`), and refreshing one layer
+//! the game thread; see `docs/issues/08-14-hud-overlays-and-depth.md`), and refreshing one layer
 //! per frame undersamples world-to-screen'd content visibly. This mechanism reshapes the *render*
 //! tree instead: the layer containers' render nodes move from the movie's main root into roots we
 //! create in the same context, and the render detour draws each root into its own texture from

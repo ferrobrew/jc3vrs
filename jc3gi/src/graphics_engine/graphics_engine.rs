@@ -60,7 +60,11 @@ impl std::convert::AsMut<EffectInfo> for EffectInfo {
 }
 #[repr(C, align(8))]
 pub struct GraphicsEngine {
-    _field_0: [u8; 24],
+    _field_0: [u8; 8],
+    /// Whether the engine has finished its system initialisation. [`ResizeBuffers`](GraphicsEngine::ResizeBuffers)
+    /// only applies a resize inline once this is set.
+    pub m_HasBeenInitialized: bool,
+    _field_9: [u8; 15],
     pub m_CPUFinishedDrawingEvent: u32,
     _field_1c: [u8; 20],
     /// Completion signal for the async draw-dispatch CPU fragment that
@@ -70,7 +74,29 @@ pub struct GraphicsEngine {
     /// *next* [`Draw`](GraphicsEngine::Draw)'s entry.
     /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) does *not* wait on it.
     pub m_DrawThreadWorkSignal: u32,
-    _field_34: [u8; 244],
+    _field_34: [u8; 212],
+    /// The display-mode state machine serviced once per frame by
+    /// [`HandleModeChange`](GraphicsEngine::HandleModeChange): while idle it applies a deferred
+    /// window resize, and while a mode change is pending it applies the fullscreen/adapter change.
+    pub m_DisplayModeChangeState: u32,
+    _field_10c: [u8; 12],
+    /// Set at the tail of [`ApplyResize`](GraphicsEngine::ApplyResize) once a resize has been applied
+    /// and a valid display mode is in effect.
+    pub m_HasNewValidDisplayMode: bool,
+    _field_119: [u8; 3],
+    /// The pending deferred-resize width, stashed by [`ResizeBuffers`](GraphicsEngine::ResizeBuffers)
+    /// and consumed by [`HandleModeChange`](GraphicsEngine::HandleModeChange).
+    pub m_WindowWidth: u32,
+    /// The pending deferred-resize height.
+    pub m_WindowHeight: u32,
+    /// When set, [`ResizeBuffers`](GraphicsEngine::ResizeBuffers) applies a resize inline rather than
+    /// deferring it; the fullscreen/adapter path sets it around its device reset.
+    pub m_SynchronousResize: bool,
+    /// Set when a deferred resize is pending in [`m_WindowWidth`](GraphicsEngine::m_WindowWidth)/
+    /// [`m_WindowHeight`](GraphicsEngine::m_WindowHeight), consumed by
+    /// [`HandleModeChange`](GraphicsEngine::HandleModeChange).
+    pub m_HasNewWindowSettings: bool,
+    _field_126: [u8; 2],
     pub m_ActiveCursor: crate::graphics_engine::graphics_engine::ActiveCursor,
     _field_12c: [u8; 44],
     /// The cascaded sun-shadow system.
@@ -90,7 +116,12 @@ pub struct GraphicsEngine {
     _field_ee8: [u8; 184],
     /// Motion-blur velocity buffer.
     pub m_VelocityBufferTexture: *mut crate::graphics_engine::texture::Texture,
-    _field_fa8: [u8; 176],
+    _field_fa8: [u8; 168],
+    /// The final composite render setup: colour → [`m_BackBufferLinear`](GraphicsEngine::m_BackBufferLinear),
+    /// depth → the main depth surface. Built by
+    /// [`CreateRenderSetups`](GraphicsEngine::CreateRenderSetups) against the live swapchain back
+    /// buffer and stored as the render context's setup; the HUD and the scene resolve target it.
+    pub m_BackBufferRenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
     /// Main scene depth ("MainDepthBuffer").
     pub m_MainDepthTexture: *mut crate::graphics_engine::texture::Texture,
     _field_1060: [u8; 8],
@@ -207,6 +238,91 @@ impl GraphicsEngine {
                 dt: f32,
             ) = ::std::mem::transmute(Self::TextureCachePlatformUpdate_ADDRESS);
             f(self as *mut Self as _, ctx, dt)
+        }
+    }
+    pub const CreateRenderSetups_ADDRESS: usize = 0x1400CE930;
+    /// Creates every scene render target and render setup. Each scene target
+    /// (main depth/colour, the four GBuffers, velocity, downsampled depth, the reflection-proxy
+    /// targets, the AO volume, and the `VfxDepthCopy_%d` slots) is sized from
+    /// `device_info`'s [`m_DisplayWidth`](graphics_engine::device::DeviceInfo::m_DisplayWidth)/
+    /// [`m_DisplayHeight`](graphics_engine::device::DeviceInfo::m_DisplayHeight) (some at half
+    /// resolution), so it can be re-run at any size by passing a modified copy. The final
+    /// `BackBufferLinear` alias plus [`m_BackBufferRenderSetup`](GraphicsEngine::m_BackBufferRenderSetup)
+    /// and the post-effect setup are instead built against the live swapchain surface via
+    /// `GetDeviceSurface(BackBuffer)`, independent of
+    /// `device_info`. Per-pass viewports follow the bound target's size, so no per-pass viewport
+    /// changes are needed. Assumes the previously created setups have been torn down
+    /// ([`DestroyRenderSetups`](GraphicsEngine::DestroyRenderSetups)) and that no draw is in flight.
+    pub unsafe fn CreateRenderSetups(
+        &mut self,
+        device_info: *const crate::graphics_engine::device::DeviceInfo,
+    ) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                device_info: *const crate::graphics_engine::device::DeviceInfo,
+            ) -> bool = ::std::mem::transmute(Self::CreateRenderSetups_ADDRESS);
+            f(self as *mut Self as _, device_info)
+        }
+    }
+    pub const DestroyRenderSetups_ADDRESS: usize = 0x1400C4090;
+    /// Destroys every scene render target, surface, and render setup created by
+    /// [`CreateRenderSetups`](GraphicsEngine::CreateRenderSetups), including the `BackBufferLinear`
+    /// alias, after first unbinding the active setup. The swapchain back buffer itself is not touched.
+    /// Pass-owned render targets (post-effect, SSAO, SSR, anti-aliasing pools) are not freed here — the
+    /// registered resize callbacks re-allocate those.
+    pub unsafe fn DestroyRenderSetups(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::DestroyRenderSetups_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+    pub const ApplyResize_ADDRESS: usize = 0x1400CFA90;
+    /// Applies a resize: tears down the render setups, has the UI drop its references, resizes the
+    /// swapchain (the device-level `ResizeBuffers`), re-creates the render
+    /// setups at the new size ([`CreateRenderSetups`](GraphicsEngine::CreateRenderSetups)), runs every
+    /// registered resize callback (which re-sizes the pass-owned pools), restores the UI, and updates
+    /// the camera aspect and window params. Called from
+    /// [`HandleModeChange`](GraphicsEngine::HandleModeChange) in the [`Draw`](GraphicsEngine::Draw)
+    /// prologue, so it runs on the main thread with no draw in flight.
+    pub unsafe fn ApplyResize(&mut self, width: u32, height: u32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, width: u32, height: u32) = ::std::mem::transmute(
+                Self::ApplyResize_ADDRESS,
+            );
+            f(self as *mut Self as _, width, height)
+        }
+    }
+    pub const ResizeBuffers_ADDRESS: usize = 0x1400D43C0;
+    /// The resize request entry. Applies the resize inline via
+    /// [`ApplyResize`](GraphicsEngine::ApplyResize) when
+    /// [`m_SynchronousResize`](GraphicsEngine::m_SynchronousResize) and
+    /// [`m_HasBeenInitialized`](GraphicsEngine::m_HasBeenInitialized) are set; otherwise it stashes the
+    /// dimensions in [`m_WindowWidth`](GraphicsEngine::m_WindowWidth)/
+    /// [`m_WindowHeight`](GraphicsEngine::m_WindowHeight) and defers to the next
+    /// [`HandleModeChange`](GraphicsEngine::HandleModeChange).
+    pub unsafe fn ResizeBuffers(&mut self, width: u32, height: u32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, width: u32, height: u32) = ::std::mem::transmute(
+                Self::ResizeBuffers_ADDRESS,
+            );
+            f(self as *mut Self as _, width, height)
+        }
+    }
+    pub const HandleModeChange_ADDRESS: usize = 0x1400F40C0;
+    /// Services the display-mode state machine once per frame from the [`Draw`](GraphicsEngine::Draw)
+    /// prologue: applies a deferred resize ([`ApplyResize`](GraphicsEngine::ApplyResize)) when one is
+    /// pending, or the fullscreen/adapter change when a mode change is pending, then reconciles the
+    /// flip interval. It runs after the previous frame's draw dispatch has drained and before the
+    /// current frame is dispatched.
+    pub unsafe fn HandleModeChange(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::HandleModeChange_ADDRESS,
+            );
+            f(self as *mut Self as _)
         }
     }
     pub const LoadShaderBundle_ADDRESS: usize = 0x1400DE9A0;
@@ -367,7 +483,19 @@ pub use windows::Win32::Foundation::HWND as HWND;
 /// translation-free offset view-projection, and the separate camera world position), shadow data, and
 /// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].
 pub struct RenderContext {
-    _field_0: [u8; 1100],
+    _field_0: [u8; 216],
+    /// The translation-free view-projection for this dispatch (the rotation and projection without the
+    /// camera world translation). The tessellation constant buffers bake it directly (e.g.
+    /// [`RenderBlockTypeTerrain::SetupConstantBuffers`](crate::graphics_engine::render_block::RenderBlockTypeTerrain)),
+    /// so it carries the per-view (and, off-axis, per-eye) projection.
+    pub m_OffsetViewProjection: crate::types::math::Matrix4,
+    _field_118: [u8; 816],
+    /// The per-real-frame stamp for this dispatch, set from [`get_render_frame_counters`]'s `m_FrameIndex`
+    /// during render-context setup. Passes that cache per-frame state key on it — the terrain
+    /// tessellation blocks compare it against their per-slot
+    /// [`m_WasCBApplied`](graphics_engine::render_block::RenderBlockTypeTerrain::m_WasCBApplied) stamp
+    /// to decide whether to re-upload the constant buffer.
+    pub m_RenderFrameNo: u32,
     /// The 8 per-atlas-slice projective shadow transforms, copied per dispatch from the shadow
     /// manager's parity storage. The deferred lighting shaders index them dynamically by a light's
     /// packed slice index (`cb0[63 + 4*slice .. 66 + 4*slice]` in the GlobalConstants) to project a

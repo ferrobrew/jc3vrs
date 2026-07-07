@@ -86,8 +86,10 @@ pub enum TraceEvent {
     Manifest {
         /// Local capture time (YYYYMMDD-HHMMSS), matching the trace filename.
         timestamp: String,
-        /// The full runtime configuration snapshot (nests cleanly via its own `Serialize`).
-        config: crate::config::Config,
+        /// The full runtime configuration snapshot (nests cleanly via its own `Serialize`). Boxed
+        /// so the one-off manifest doesn't inflate every event in the enum
+        /// (`clippy::large_enum_variant`).
+        config: Box<crate::config::Config>,
     },
     #[serde(rename = "frame_begin")]
     FrameBegin {
@@ -366,6 +368,6 @@ impl TraceState {
 fn build_manifest(timestamp: String) -> TraceEvent {
     TraceEvent::Manifest {
         timestamp,
-        config: crate::config::get(),
+        config: Box::new(crate::config::get()),
     }
 }

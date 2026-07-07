@@ -62,6 +62,34 @@ impl Matrix4 {
             f(a, b, result)
         }
     }
+    pub const PerspectiveFovInverse_ADDRESS: usize = 0x1400390E0;
+    /// Builds the inverse of a symmetric perspective projection into `self` (also returned), from a
+    /// vertical field of view, an aspect ratio, and the far and near planes. The screen-space
+    /// reconstruction passes (SSR, deferred clustered lighting, SSAO, screen-space subsurface,
+    /// atmospheric scattering, depth of field) call it to recover a clip-to-view basis, then multiply
+    /// by the render context's camera transform to reach clip-to-world. The result is purely diagonal
+    /// (`[0][0] = aspect·tan(fov/2)`, `[1][1] = tan(fov/2)`, plus standard-depth `z` terms) and so
+    /// cannot represent an off-center (asymmetric) frustum.
+    pub unsafe fn PerspectiveFovInverse(
+        &mut self,
+        fov: f32,
+        aspect: f32,
+        far: f32,
+        near: f32,
+    ) -> *mut crate::types::math::Matrix4 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                fov: f32,
+                aspect: f32,
+                far: f32,
+                near: f32,
+            ) -> *mut crate::types::math::Matrix4 = ::std::mem::transmute(
+                Self::PerspectiveFovInverse_ADDRESS,
+            );
+            f(self as *mut Self as _, fov, aspect, far, near)
+        }
+    }
 }
 impl std::convert::AsRef<Matrix4> for Matrix4 {
     fn as_ref(&self) -> &Matrix4 {

@@ -7,7 +7,7 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-use crate::{headpose::HeadPoseConfig, hud::HudConfig};
+use crate::{headpose::HeadPoseConfig, hud::HudConfig, vr::VrConfig};
 
 /// The global runtime configuration. Cheap to lock (uncontended `parking_lot::Mutex`); read it at the
 /// top of a hook and release before doing engine work.
@@ -28,6 +28,8 @@ pub struct Config {
     pub fsr: FsrConfig,
     pub hud: HudConfig,
     pub headpose: HeadPoseConfig,
+    pub body_ik: BodyIkConfig,
+    pub vr: VrConfig,
 }
 impl Config {
     pub const fn new() -> Self {
@@ -40,6 +42,8 @@ impl Config {
             fsr: FsrConfig::new(),
             hud: HudConfig::new(),
             headpose: HeadPoseConfig::new(),
+            body_ik: BodyIkConfig::new(),
+            vr: VrConfig::new(),
         }
     }
 
@@ -191,6 +195,24 @@ pub struct StereoConfig {
     /// cannot zero -- so eye 1 draws eye 0's stale entry plus its own, running the whole post chain
     /// (and FSR) twice. The double-stepped FSR history is the residual per-eye flicker of issue #10.
     pub dedupe_post_block: bool,
+    /// Invalidate the terrain tessellation constant-buffer cache between the two eyes, so eye 1
+    /// re-uploads it with its own projection. The terrain blocks cache the baked view-projection keyed
+    /// on the render frame number, which [`restore_frame_counters`](Self::restore_frame_counters) pins
+    /// across both eyes, so eye 1 otherwise reuses eye 0's projection for the distant tessellated
+    /// terrain -- harmless in flatscreen stereo (both eyes share the projection) but a sheared horizon
+    /// wedge in VR (the per-eye off-axis projections differ). Only meaningful while
+    /// `restore_frame_counters` is on. See [`crate::hooks::game`].
+    pub invalidate_terrain_cb: bool,
+    /// Reconstruct the screen-space passes' clip-to-view inverse from the true off-axis projection
+    /// while rendering a VR eye. The reconstruction passes (SSR, deferred clustered lighting, SSAO,
+    /// screen-space subsurface, atmospheric scattering, depth of field) rebuild it with
+    /// [`Matrix4::PerspectiveFovInverse`](jc3gi::types::math::Matrix4), which can only encode a
+    /// *symmetric* frustum -- exact for the flatscreen stereo center projection but wrong, and
+    /// mirror-opposite between eyes, under VR's off-axis projection, so specular and reflections on
+    /// shiny surfaces (car paint, chrome) diverge grossly per eye. The override replaces the symmetric
+    /// inverse with the exact inverse of the per-eye off-axis projection. VR only; a no-op on
+    /// flatscreen frames. See [`crate::hooks::graphics_engine`].
+    pub reconstruct_offaxis_inverse: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -225,6 +247,8 @@ impl StereoConfig {
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,
+            invalidate_terrain_cb: true,
+            reconstruct_offaxis_inverse: true,
         }
     }
 }
@@ -316,6 +340,62 @@ impl CameraConfig {
     }
 }
 
+/// Headset-driven upper-body IK: drive the player's spine and head toward the headpose target by
+/// feeding the engine's own HumanIK `MAIN` pass an effector target for the head bone, so the body
+/// leans, ducks, and turns to follow where the player looks. Queued pre-solve in
+/// [`crate::hooks::character`] (see `docs/engine/humanik.md`); the `UpdatePropEffects` head-bone override
+/// still sets the exact head orientation on top of the HIK-bent spine.
+#[derive(Copy, Clone, Serialize, Deserialize)]
+pub struct BodyIkConfig {
+    /// Master switch: queue the head effector target each frame for the local player.
+    pub enabled: bool,
+    /// The translation-reach weight written to `m_TargetReachT[head]` (scaled by
+    /// [`weight`](Self::weight)): how strongly the positional target pulls the upper body toward the
+    /// head world target. `0.6` is strong but not rigid, leaving some of the animated pose.
+    pub head_reach_t: f32,
+    /// The rotation-reach weight written to `m_TargetReachR[head]` (scaled by
+    /// [`weight`](Self::weight)) when [`rotation_target`](Self::rotation_target) is set: how strongly
+    /// the head is oriented toward the headpose forward.
+    pub head_reach_r: f32,
+    /// Also queue a rotation target that aims the head's model-space frame at the headpose
+    /// orientation (in addition to the positional target). The `UpdatePropEffects` override sets the
+    /// final head orientation regardless, so this mainly biases the spine/neck bend.
+    pub rotation_target: bool,
+    /// A master multiplier on both reach weights (`0..=1`), for tuning the overall IK strength with a
+    /// single dial.
+    pub weight: f32,
+    /// Ease the reach weight in rather than snapping it (the `effector_interpolation` argument). The
+    /// game's own hand pass uses `false`; on eases the body into the pose over several frames.
+    pub interpolation: bool,
+    /// The reach-weight ease-in rate when [`interpolation`](Self::interpolation) is set (the game
+    /// default is `3.0`).
+    pub interpolation_rate: f32,
+    /// Ease the reach weight back out when the target stops being supplied (the game default is
+    /// `true`).
+    pub blend_out: bool,
+    /// The reach-weight ease-out rate (the game default is `1.5`).
+    pub blend_out_rate: f32,
+    /// An optional character-model-space offset added to the head target position, for tuning where
+    /// the body reaches relative to the headpose point. Zero by default.
+    pub target_offset: glam::Vec3,
+}
+impl BodyIkConfig {
+    pub const fn new() -> Self {
+        Self {
+            enabled: true,
+            head_reach_t: 0.6,
+            head_reach_r: 0.4,
+            rotation_target: true,
+            weight: 1.0,
+            interpolation: false,
+            interpolation_rate: 3.0,
+            blend_out: true,
+            blend_out_rate: 1.5,
+            target_offset: glam::Vec3::ZERO,
+        }
+    }
+}
+
 /// On-foot movement settings.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct MovementConfig {
@@ -401,7 +481,7 @@ impl MovementConfig {
 }
 
 /// FSR anti-aliasing / upscaling settings. When `enabled`, FSR runs in place of the engine's SMAA
-/// (which is suppressed); off restores the engine AA. See `docs/fsr.md`.
+/// (which is suppressed); off restores the engine AA. See `docs/mod/fsr.md`.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct FsrConfig {
     /// Master switch: run FSR and suppress the engine AA. Off = engine SMAA as normal, FSR idle.
@@ -430,7 +510,7 @@ pub struct FsrConfig {
     /// a debug A/B to confirm the decode is helping.
     pub motion_vectors: bool,
     /// The sign/axis convention applied to the decoded UV motion before FSR. The decode math is now
-    /// RE-exact (see `docs/fsr.md`); only FSR's expected sign/Y direction is empirical -- a wrong sign
+    /// RE-exact (see `docs/mod/fsr.md`); only FSR's expected sign/Y direction is empirical -- a wrong sign
     /// is visually obvious (trails point backwards). Defaults to `(1, -1)` (UV is Y-down; FSR's
     /// convention TBD against on-screen motion).
     pub mv_sign: (f32, f32),

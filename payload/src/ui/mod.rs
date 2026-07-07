@@ -8,6 +8,7 @@ pub mod environment;
 pub mod game;
 pub mod hud;
 pub mod render;
+pub mod vr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EguiTab {
@@ -17,6 +18,7 @@ pub enum EguiTab {
     Camera,
     Game,
     Environment,
+    Vr,
 }
 impl std::fmt::Display for EguiTab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -35,6 +37,7 @@ impl EguiTab {
                 EguiTab::Camera,
                 EguiTab::Game,
                 EguiTab::Environment,
+                EguiTab::Vr,
             ] {
                 if ui
                     .add(
@@ -75,6 +78,9 @@ pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
         }
         EguiTab::Environment => {
             environment::render(ui);
+        }
+        EguiTab::Vr => {
+            vr::egui_debug_vr(ui);
         }
     }
 }

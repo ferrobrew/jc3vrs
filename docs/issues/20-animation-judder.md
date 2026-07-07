@@ -148,7 +148,7 @@ T0.
 ### The camera transform interpolation
 
 The camera also uses T0/T1 interpolation. `Camera::UpdateRender` (documented
-in `docs/rendering.md` §2.2) does:
+in `docs/engine/rendering.md` §2.2) does:
 
 ```c
 Lerp(&m_TransformF, &m_TransformT0, &m_TransformT1, dtf);
@@ -322,7 +322,7 @@ collapses this back to the constant-transform behaviour when set.
 With HMD-driven head control, the previous/current pose pair spans one input
 tick, so this is the engine smoothing the tick-rate headpose exactly as it
 smooths its own camera — not smoothing the HMD → camera path itself (per
-`docs/head-and-body.md`). What remains open is the *body pose*: the per-bone
+`docs/mod/head-and-body.md`). What remains open is the *body pose*: the per-bone
 skinning-palette judder, independent of the now-smoothed camera and body root.
 
 ## Summary of findings

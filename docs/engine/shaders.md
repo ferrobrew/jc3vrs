@@ -2,7 +2,7 @@
 
 How to get at Just Cause 3's compiled shaders, turn them back into readable assembly, find the one you
 care about, and patch it from the mod. The tooling referenced here lives in
-[`tools/shaders/`](../tools/shaders/). Reverse-engineered against the 2026 Denuvo-less Steam build;
+[`tools/shaders/`](../../tools/shaders/). Reverse-engineered against the 2026 Denuvo-less Steam build;
 struct offsets and bundle layout are byte-stable across builds, only function addresses move.
 
 ## Where the shaders live
@@ -45,7 +45,7 @@ and runs it under wine against the `d3dcompiler_47.dll` that `shadergen` provisi
 ./tools/shaders/disasm.sh Shaders_F.shaders/sh_0467_0016b270.dxbc | less
 ```
 
-See [`tools/shaders/README.md`](../tools/shaders/README.md) for the one-time prerequisites. The output
+See [`tools/shaders/README.md`](../../tools/shaders/README.md) for the one-time prerequisites. The output
 is standard FXC-style SM5 assembly: a commented reflection header (cbuffers, resource bindings, the
 input/output signatures) followed by the instruction stream.
 

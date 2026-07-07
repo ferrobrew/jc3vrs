@@ -401,7 +401,7 @@ a **parameter**. This is now implemented for the floating panel: `Get2DInfo` is
 hooked (`payload/src/hooks/ui.rs`) and its VP and camera matrix are swapped for
 the panel's orientation (`hud::compute_panel_vp`), with `m_CachedViewportRatio`
 retargeted to the panel aspect so `Convert3DCoords`' aspect correction lands on
-the panel surface rather than the screen plane. See `docs/hud.md` for the full
+the panel surface rather than the screen plane. See `docs/mod/hud.md` for the full
 mechanism. The default (unhooked) callsites carry the render camera's VP;
 callsites are found in `CHUDUI.cpp`, `CPOI.cpp`, `CROMTrigger.cpp`,
 `CMissionTrigger.cpp`, `CUIMenu.cpp`, `NLandVehicle_Hidden.cpp`.

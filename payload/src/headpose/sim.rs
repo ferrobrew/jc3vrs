@@ -72,9 +72,24 @@ pub fn on_input_tick(look_x: f32, look_y: f32, dt: f32) {
     // advances exactly when the player is on foot. Comparing per rendered frame instead flickered
     // to `Other` on every frame without a sim tick, resetting the latch and letting the idle
     // camera pin leak through (the body tracked the head immediately).
+    //
+    // This runs regardless of the active source, *before* the VR early-return below: `sim::mode()`
+    // is read by `head_decoupled_idle` (the body-turn suppression gate), so freezing it under VR
+    // left the game's aim-relative body turn permanently unsuppressed, which the body-relative pose
+    // composition (`body × cockpit`) turns into a runaway head spin.
     let evals = crate::hooks::input::locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
     s.mode = detect_mode(s.last_orientation_evals, evals);
     s.last_orientation_evals = evals;
+
+    // The VR source owns the pose while an OpenXR session is running (it publishes a fresh HMD pose
+    // every rendered frame). The sim must not also publish, or the two would fight over the same
+    // slot; skip the rest of the tick so the VR pose stands (mode detection above still ran). The
+    // look effectors do not steer the HMD-driven head, so they are consumed here to turn the body
+    // instead (the flatscreen head-yaw path below owns this for the sim source).
+    if super::source() == super::Source::Vr {
+        super::xr::advance_body_yaw(look_x, s.mode == HeadMode::OnFoot, &config);
+        return;
+    }
 
     let body_rotation = read_body_rotation();
     let body_yaw = body_rotation.map(body_yaw_of);
@@ -301,7 +316,7 @@ fn posture_swing(up_body: Vec3, deadband_deg: f32, full_deg: f32) -> Quat {
 }
 
 /// Wrap an angle (radians) into `[-π, π]`.
-fn wrap_angle(angle: f32) -> f32 {
+pub(super) fn wrap_angle(angle: f32) -> f32 {
     let wrapped = angle.rem_euclid(std::f32::consts::TAU);
     if wrapped > std::f32::consts::PI {
         wrapped - std::f32::consts::TAU
@@ -312,7 +327,7 @@ fn wrap_angle(angle: f32) -> f32 {
 
 /// The ground-plane forward direction for a world yaw, matching the game's convention (yaw about
 /// +Y, forward -Z).
-fn yaw_forward(world_yaw: f32) -> Vec3 {
+pub(super) fn yaw_forward(world_yaw: f32) -> Vec3 {
     Quat::from_rotation_y(world_yaw) * Vec3::NEG_Z
 }
 
@@ -328,7 +343,7 @@ fn read_body_rotation() -> Option<Quat> {
 }
 
 /// The yaw component (radians) of a body rotation, for the on-foot compensation and latch math.
-fn body_yaw_of(rotation: Quat) -> f32 {
+pub(super) fn body_yaw_of(rotation: Quat) -> f32 {
     rotation.to_euler(glam::EulerRot::YXZ).0
 }
 

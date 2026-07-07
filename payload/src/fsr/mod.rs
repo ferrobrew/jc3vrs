@@ -3,7 +3,7 @@
 //! Runs FSR2 (via [`fsr_sys`]) in place of the engine's SMAA: per eye, it resolves the post-tonemap
 //! scene color (plus the engine's depth and velocity) into our own output texture, which is then
 //! copied back into the post-effect chain's working slot. The engine AA is suppressed while FSR is
-//! active. See `docs/fsr.md` for the dispatch-point rationale and the AA-first/upscaler-later plan.
+//! active. See `docs/mod/fsr.md` for the dispatch-point rationale and the AA-first/upscaler-later plan.
 //!
 //! State is one [`fsr_sys::Context`] and one output texture per eye, lazily (re)created whenever the
 //! render resolution changes -- the same compare-and-recreate pattern the debug captures use, which
