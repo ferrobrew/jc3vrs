@@ -17,9 +17,14 @@
 //!   is added downstream by the camera hook (`camera_position`), reusing the anchor machinery the
 //!   headpose already exposes rather than a parallel one.
 //!
-//! The pose is published with zero interpolation delta ([`super::set_pose_no_interp`]): it is
-//! sampled fresh at the predicted display time every rendered frame, so the engine's `dtf` lerp has
-//! no tick cadence to smooth and any residual delta would only lag the head behind the HMD.
+//! The pose is published as a tick-spaced pair ([`super::set_pose_pair`], via [`publish_pair`]): the
+//! sim-driven part (the body frame and the animated head-bone anchor) advances at the engine's sim
+//! tick rate, so its previous-tick and current-tick values feed the engine's `dtf` lerp and smooth
+//! the sub-tick frames — without this the camera stepped at the tick rate in vehicles and while
+//! parachuting, where the anchor moves ~1 m per tick. The HMD cockpit delta is sampled fresh at the
+//! predicted display time every rendered frame and is identical on both sides of the pair, so it
+//! passes through with zero added latency (any residual delta would only lag the head behind the
+//! HMD).
 //!
 //! Aim is unchanged from flatscreen: the camera follows the head, and the head *is* the aim (gaze
 //! aim is the interim model).
@@ -56,11 +61,14 @@ pub fn compose(
     }
 }
 
-/// Publish a composed VR pose. Marks the VR source active and writes the pose with zero
-/// interpolation delta (see the module docs).
-pub fn publish(pose: HeadPose) {
+/// Publish a composed VR pose pair (previous-tick, current-tick). Marks the VR source active and
+/// writes the pair so the engine's `dtf` lerp interpolates the sim-driven camera motion (the body
+/// frame and the animated head anchor, which advance at the tick rate) between ticks, while the HMD
+/// cockpit delta — identical on both sides — passes through with zero added latency (see the module
+/// docs).
+pub fn publish_pair(prev: HeadPose, cur: HeadPose) {
     super::set_source(super::Source::Vr);
-    super::set_pose_no_interp(pose);
+    super::set_pose_pair(prev, cur);
 }
 
 /// Advance the VR body-yaw accumulator from this input tick's look delta, and expose the resulting
@@ -132,12 +140,28 @@ struct VrBodyYaw {
 /// Identity when there is no local character (loading screens), so the head still tracks in a
 /// neutral upright frame.
 pub fn body_rotation() -> Quat {
+    body_rotation_from(|character| glam::Mat4::from(character.m_WorldMatrixT1))
+}
+
+/// The local player character's world rotation as of the previous sim tick (`m_WorldMatrixT0`), the
+/// T0 twin of [`body_rotation`]. Used to compose the previous-tick side of the VR pose pair so the
+/// engine's sub-frame interpolation smooths body rotation (vehicles, parachuting) rather than
+/// stepping it at the tick rate.
+pub fn body_rotation_prev() -> Quat {
+    body_rotation_from(|character| glam::Mat4::from(character.m_WorldMatrixT0))
+}
+
+/// Extract the local player's world rotation from the world matrix `world_of` selects. Identity when
+/// there is no local character (loading screens), so the head still tracks in a neutral upright
+/// frame.
+fn body_rotation_from(
+    world_of: impl Fn(&jc3gi::character::character::Character) -> glam::Mat4,
+) -> Quat {
     unsafe {
         let character = jc3gi::character::character::Character::GetLocalPlayerCharacter();
         match character.as_ref() {
             Some(character) => {
-                let world = glam::Mat4::from(character.m_WorldMatrixT1);
-                let (_, rotation, _) = world.to_scale_rotation_translation();
+                let (_, rotation, _) = world_of(character).to_scale_rotation_translation();
                 rotation
             }
             None => Quat::IDENTITY,

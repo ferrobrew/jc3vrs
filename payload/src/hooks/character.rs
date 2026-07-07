@@ -119,6 +119,12 @@ unsafe fn capture_anchors_and_queue_body_ik(character: *mut Character) {
         let mut head_joint = Joint::default();
         animation_controller.GetJoint(head_index, &mut head_joint);
         let animated_head_world = character_world.transform_point3(joint_translation(&head_joint));
+        // The previous-tick head anchor: the same animated joint through the character's T0 world
+        // matrix. Feeds the VR pose pair so the engine's sub-frame lerp smooths per-tick anchor
+        // motion (vehicles, parachuting) instead of stepping the camera at the tick rate.
+        let character_world_prev = glam::Mat4::from(character.m_WorldMatrixT0);
+        let animated_head_world_prev =
+            character_world_prev.transform_point3(joint_translation(&head_joint));
 
         let mut neck_joint = Joint::default();
         animation_controller.GetJoint(neck_index, &mut neck_joint);
@@ -138,6 +144,7 @@ unsafe fn capture_anchors_and_queue_body_ik(character: *mut Character) {
 
         headpose::set_anchors(headpose::Anchors {
             head: animated_head_world,
+            head_prev: animated_head_world_prev,
             neck: animated_neck_world,
             eye_arm,
         });

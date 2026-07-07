@@ -95,22 +95,30 @@ pub fn set_pose(pose: HeadPose) {
     state().lock().pose = pose;
 }
 
-/// Publish a pose to *both* sides of the interpolation pair (`pose` and `prev_pose`), so the
-/// engine's `dtf` lerp degenerates to zero delta. The VR source uses this: it samples a fresh pose
-/// at the predicted display time every rendered frame, so there is no tick-cadence to smooth and any
-/// residual interpolation would only lag the head behind the HMD.
-pub fn set_pose_no_interp(pose: HeadPose) {
+/// Publish a tick-spaced pose pair: `prev` as of the previous sim tick, `cur` as of the current one,
+/// so the engine's `dtf` lerp interpolates the camera between them across sub-tick frames. The VR
+/// source uses this for the sim-driven part of the pose (the body frame and the animated head
+/// anchor, which advance at the tick rate). Its HMD cockpit delta is identical on both sides, so it
+/// still passes through with zero added latency — publishing the same pose to both sides instead
+/// would freeze the tick-rate anchor/body motion too, which stepped the camera in vehicles and while
+/// parachuting.
+pub fn set_pose_pair(prev: HeadPose, cur: HeadPose) {
     let mut s = state().lock();
-    s.pose = pose;
-    s.prev_pose = pose;
+    s.pose = cur;
+    s.prev_pose = prev;
 }
 
 /// The animated bone positions the character hook captures each frame *before* it overrides the
 /// head bone, for [`set_anchors`].
 #[derive(Copy, Clone)]
 pub struct Anchors {
-    /// The head bone world position.
+    /// The head bone world position (this sim tick, from `m_WorldMatrixT1`).
     pub head: Vec3,
+    /// The head bone world position as of the previous sim tick (the same animated joint through
+    /// `m_WorldMatrixT0`). The VR source composes the previous-tick side of its pose pair from this,
+    /// so the engine's sub-frame lerp smooths fast per-tick anchor motion (vehicles, parachuting)
+    /// instead of stepping at the tick rate.
+    pub head_prev: Vec3,
     /// The neck bone world position (the camera's pitch pivot).
     pub neck: Vec3,
     /// The neck-to-eye-midpoint arm in the body frame: rotated by the published head orientation,
@@ -125,8 +133,10 @@ pub struct Anchors {
 /// anchors, sees a position anchored to this frame's animated pose.
 pub fn set_anchors(anchors: Anchors) {
     if !anchors.head.is_finite()
+        || !anchors.head_prev.is_finite()
         || !anchors.neck.is_finite()
         || anchors.head.length_squared() > MAX_ANCHOR_RADIUS * MAX_ANCHOR_RADIUS
+        || anchors.head_prev.length_squared() > MAX_ANCHOR_RADIUS * MAX_ANCHOR_RADIUS
         || anchors.neck.length_squared() > MAX_ANCHOR_RADIUS * MAX_ANCHOR_RADIUS
     {
         return;
@@ -134,6 +144,7 @@ pub fn set_anchors(anchors: Anchors) {
     let offset = crate::config::Config::lock_query(|c| c.headpose.position_offset);
     let mut s = state().lock();
     s.anchor = Some(anchors.head);
+    s.anchor_prev = Some(anchors.head_prev);
     s.neck_delta = anchors.neck - anchors.head;
     // The eye arm has its own sanity bound: a neck-to-eye distance beyond a metre is garbage bone
     // data (missing eye bones resolve to the model origin).
@@ -153,6 +164,13 @@ pub fn set_anchors(anchors: Anchors) {
 /// one (no local character yet, or only garbage bone data so far).
 pub fn anchor() -> Option<Vec3> {
     state().lock().anchor
+}
+
+/// The animated head bone world position as of the previous sim tick (see [`Anchors::head_prev`]),
+/// or `None` until the character hook has published a valid one. The VR source composes the
+/// previous-tick side of its pose pair from this.
+pub fn anchor_prev() -> Option<Vec3> {
+    state().lock().anchor_prev
 }
 
 /// The world-space vector from the head bone anchor to the neck bone: the camera pivots the
@@ -203,6 +221,8 @@ struct HeadPoseState {
     prev_pose: HeadPose,
     /// The animated head bone world position, published by the character hook.
     anchor: Option<Vec3>,
+    /// The previous sim tick's animated head bone world position (see [`Anchors::head_prev`]).
+    anchor_prev: Option<Vec3>,
     /// The world-space head-to-neck vector, published alongside the anchor (see [`neck_delta`]).
     neck_delta: Vec3,
     /// The body-frame neck-to-eye-midpoint arm (see [`Anchors::eye_arm`]).

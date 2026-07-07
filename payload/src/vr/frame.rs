@@ -72,14 +72,29 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     let body_rotation = headpose::xr::body_rotation();
     let anchor = headpose::anchor().unwrap_or(Vec3::ZERO);
 
-    let pose = headpose::xr::compose(
+    // Compose a tick-spaced pose pair sharing the fresh HMD cockpit delta but differing in the
+    // sim-driven body frame and head anchor (T1 vs T0), so the engine's `dtf` lerp smooths the
+    // per-tick body/anchor motion between rendered frames. The previous-tick anchor and body rotation
+    // fall back to the current-tick values until they are available, degenerating to no interpolation
+    // rather than a bad one.
+    let body_rotation_prev = headpose::xr::body_rotation_prev();
+    let anchor_prev = headpose::anchor_prev().unwrap_or(anchor);
+
+    let cur = headpose::xr::compose(
         center_position,
         center_orientation,
         body_rotation,
         anchor,
         cfg.world_scale,
     );
-    headpose::xr::publish(pose);
+    let prev = headpose::xr::compose(
+        center_position,
+        center_orientation,
+        body_rotation_prev,
+        anchor_prev,
+        cfg.world_scale,
+    );
+    headpose::xr::publish_pair(prev, cur);
 
     let eye_params = |eye: super::EyeView, eye_position: Vec3| EyeRenderParams {
         projection_standard: eye.projection.standard_depth,
