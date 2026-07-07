@@ -179,6 +179,17 @@ pub fn recenter() {
     crate::vr::recenter();
 }
 
+/// The desired body forward on the ground plane the locomotion hook should steer the body toward,
+/// or `None` to leave the body untouched. Dispatched by the active source: the VR source turns the
+/// body with the look input ([`xr::body_yaw_target`]), the flatscreen sim with its head-follow latch
+/// ([`sim::body_yaw_target`]).
+pub fn body_yaw_target() -> Option<Vec3> {
+    match source() {
+        Source::Vr => xr::body_yaw_target(),
+        Source::Sim => sim::body_yaw_target(),
+    }
+}
+
 /// Whether headpose-driven head control is enabled.
 pub fn is_active() -> bool {
     crate::config::Config::lock_query(|c| c.headpose.enabled)

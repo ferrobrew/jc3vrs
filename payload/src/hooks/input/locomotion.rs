@@ -236,11 +236,13 @@ fn force_face_camera(
         )
     });
 
-    // If the sim's latch is active, the body should follow the head. This applies regardless of
+    // Steer the body toward the headpose's requested heading, if any: the flatscreen sim's
+    // head-follow latch target, or the VR source's look-driven body yaw. This applies regardless of
     // the face_camera toggle (reusing face_camera_turn_step as the turn rate) and intentionally
-    // bypasses the move-dir cone check: when the latch is active, body-follow takes priority over
-    // strafe.
-    if let Some(face_dir) = crate::headpose::sim::body_yaw_target() {
+    // bypasses the move-dir cone check: the requested heading takes priority over strafe, so the
+    // native turn-toward-movement never fights it (which is what let backpedaling tank-turn the body
+    // in VR).
+    if let Some(face_dir) = crate::headpose::body_yaw_target() {
         unsafe {
             let value = Vector3 {
                 data: [face_dir.x, face_dir.y, face_dir.z],
