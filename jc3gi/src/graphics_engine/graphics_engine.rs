@@ -483,7 +483,19 @@ pub use windows::Win32::Foundation::HWND as HWND;
 /// translation-free offset view-projection, and the separate camera world position), shadow data, and
 /// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].
 pub struct RenderContext {
-    _field_0: [u8; 1100],
+    _field_0: [u8; 216],
+    /// The translation-free view-projection for this dispatch (the rotation and projection without the
+    /// camera world translation). The tessellation constant buffers bake it directly (e.g.
+    /// [`RenderBlockTypeTerrain::SetupConstantBuffers`](crate::graphics_engine::render_block::RenderBlockTypeTerrain)),
+    /// so it carries the per-view (and, off-axis, per-eye) projection.
+    pub m_OffsetViewProjection: crate::types::math::Matrix4,
+    _field_118: [u8; 816],
+    /// The per-real-frame stamp for this dispatch, set from [`get_render_frame_counters`]'s `m_FrameIndex`
+    /// during render-context setup. Passes that cache per-frame state key on it — the terrain
+    /// tessellation blocks compare it against their per-slot
+    /// [`m_WasCBApplied`](graphics_engine::render_block::RenderBlockTypeTerrain::m_WasCBApplied) stamp
+    /// to decide whether to re-upload the constant buffer.
+    pub m_RenderFrameNo: u32,
     /// The 8 per-atlas-slice projective shadow transforms, copied per dispatch from the shadow
     /// manager's parity storage. The deferred lighting shaders index them dynamically by a light's
     /// packed slice index (`cb0[63 + 4*slice .. 66 + 4*slice]` in the GlobalConstants) to project a

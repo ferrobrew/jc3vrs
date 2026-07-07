@@ -230,6 +230,84 @@ impl std::convert::AsMut<RenderBlockCharacterSkin> for RenderBlockCharacterSkin 
         self
     }
 }
+#[repr(C, align(8))]
+/// The terrain render block *type* (the `CRenderBlockTerrain::CRenderBlockTypeTerrain` singleton).
+/// Its `SetupConstantBuffers` uploads the per-LOD-slot hull/domain tessellation constant buffer —
+/// which bakes the dispatch's
+/// [`RenderContext::m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection),
+/// camera position, and tessellation factors — into `m_HDTypeConstants[slot]` (22 constant-buffer
+/// handles at `0x60`), caching it per slot keyed on the frame the upload was made for.
+pub struct RenderBlockTypeTerrain {
+    _field_0: [u8; 272],
+    /// Per-LOD-slot cache stamp: the
+    /// [`RenderContext::m_RenderFrameNo`](graphics_engine::graphics_engine::RenderContext::m_RenderFrameNo)
+    /// of the frame whose tessellation constants were last uploaded into that slot's constant buffer.
+    /// `SetupConstantBuffers` re-uploads a slot only when the current frame's stamp differs, so the
+    /// baked view-projection is written once per frame and reused for every draw of that slot within
+    /// the frame.
+    pub m_WasCBApplied: [u32; 22],
+}
+fn _RenderBlockTypeTerrain_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x168], RenderBlockTypeTerrain>([0u8; 0x168]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeTerrain {
+    pub unsafe fn get() -> Option<&'static mut Self> {
+        unsafe {
+            let ptr: *mut Self = *(5417914920usize as *mut *mut Self);
+            ptr.as_mut()
+        }
+    }
+}
+impl RenderBlockTypeTerrain {}
+impl std::convert::AsRef<RenderBlockTypeTerrain> for RenderBlockTypeTerrain {
+    fn as_ref(&self) -> &RenderBlockTypeTerrain {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeTerrain> for RenderBlockTypeTerrain {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeTerrain {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The volumetric-patch terrain render block *type* (the
+/// `NGraphicsEngine::CRenderBlockTerrainPatch::CRenderBlockTypeTerrainPatch` singleton): the tessellated
+/// cliff/overhang variant of [`RenderBlockTypeTerrain`], with the same per-slot constant-buffer caching.
+pub struct RenderBlockTypeTerrainPatch {
+    _field_0: [u8; 288],
+    /// Per-LOD-slot cache stamp; see [`RenderBlockTypeTerrain::m_WasCBApplied`]. The constant-buffer
+    /// handle array (`m_HDTypeConstants[22]`) sits at `0x70` for this variant, so the stamp array
+    /// follows at `0x120`.
+    pub m_WasCBApplied: [u32; 22],
+}
+fn _RenderBlockTypeTerrainPatch_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x178], RenderBlockTypeTerrainPatch>([0u8; 0x178]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeTerrainPatch {
+    pub unsafe fn get() -> Option<&'static mut Self> {
+        unsafe {
+            let ptr: *mut Self = *(5417914936usize as *mut *mut Self);
+            ptr.as_mut()
+        }
+    }
+}
+impl RenderBlockTypeTerrainPatch {}
+impl std::convert::AsRef<RenderBlockTypeTerrainPatch> for RenderBlockTypeTerrainPatch {
+    fn as_ref(&self) -> &RenderBlockTypeTerrainPatch {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeTerrainPatch> for RenderBlockTypeTerrainPatch {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeTerrainPatch {
+        self
+    }
+}
 #[derive(Copy, Clone)]
 #[repr(C, align(8))]
 /// A skinned draw batch within a character render block. The vertex data references palette slots;

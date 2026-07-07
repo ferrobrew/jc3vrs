@@ -11,6 +11,7 @@ use jc3gi::{
     graphics_engine::{
         gi::{GISolver, LightManager},
         graphics_engine::{GraphicsEngine, RenderFrameCounters, get_render_frame_counters},
+        render_block::{RenderBlockTypeTerrain, RenderBlockTypeTerrainPatch},
         render_engine::RenderEngine,
         render_pass::get_current_add_buffer,
     },
@@ -118,17 +119,25 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // Start of a frame: publish the master toggle (and restore_frame_counters) from config into
         // the live stereo state, which the render hooks read via `crate::stereo`. Copy the config
         // values out and drop the lock before driving the eye loop / engine work.
-        let (stereo, restore_counters, present_eye_0, restore_cb_ring, restore_ssao, restore_gi) =
-            crate::config::Config::lock_query(|c| {
-                (
-                    c.stereo.enabled,
-                    c.stereo.restore_frame_counters,
-                    c.stereo.present_eye_0,
-                    c.stereo.restore_cb_ring,
-                    c.stereo.restore_ssao_history,
-                    c.stereo.restore_gi_cascade,
-                )
-            });
+        let (
+            stereo,
+            restore_counters,
+            present_eye_0,
+            restore_cb_ring,
+            restore_ssao,
+            restore_gi,
+            invalidate_terrain_cb,
+        ) = crate::config::Config::lock_query(|c| {
+            (
+                c.stereo.enabled,
+                c.stereo.restore_frame_counters,
+                c.stereo.present_eye_0,
+                c.stereo.restore_cb_ring,
+                c.stereo.restore_ssao_history,
+                c.stereo.restore_gi_cascade,
+                c.stereo.invalidate_terrain_cb,
+            )
+        });
         // A running VR session always renders both eyes (the XR swapchain has a slice per eye), so
         // force the stereo double-Draw on regardless of the flatscreen stereo toggle.
         let stereo = stereo || vr_running;
@@ -214,6 +223,16 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             }
             if let Some(counters) = frame_counters {
                 restore_frame_counters(counters);
+            }
+            // Now that the frame counters are pinned back to eye 0's values, force the terrain
+            // tessellation blocks to re-upload their per-slot constant buffers for eye 1: they cache
+            // the baked (per-eye off-axis) view-projection keyed on the render frame number, which the
+            // restore above just made identical to eye 0's, so eye 1 would otherwise reuse eye 0's
+            // projection for the distant tessellated terrain (a sheared horizon wedge in VR). Only
+            // meaningful while the counters are restored -- otherwise eye 1 already gets a fresh frame
+            // number and re-uploads on its own.
+            if restore_counters && invalidate_terrain_cb {
+                invalidate_terrain_cbs();
             }
             if let Some(ring) = cb_ring {
                 restore_cb_ring_index(ring);
@@ -518,6 +537,23 @@ const VR_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
 
 fn snapshot_frame_counters() -> RenderFrameCounters {
     unsafe { *get_render_frame_counters() }
+}
+
+/// Force the terrain tessellation blocks to re-upload their per-slot constant buffers on the next
+/// eye, by stamping every cache slot with a frame number that cannot match the current one. The
+/// blocks cache the baked (per-eye off-axis) view-projection keyed on `m_RenderFrameNo`; the previous
+/// frame's index is guaranteed to differ from any live frame's, so it invalidates every slot. See
+/// `stereo.invalidate_terrain_cb`.
+fn invalidate_terrain_cbs() {
+    unsafe {
+        let sentinel = get_render_frame_counters().m_FrameIndex.wrapping_sub(1);
+        if let Some(terrain) = RenderBlockTypeTerrain::get() {
+            terrain.m_WasCBApplied.fill(sentinel);
+        }
+        if let Some(patch) = RenderBlockTypeTerrainPatch::get() {
+            patch.m_WasCBApplied.fill(sentinel);
+        }
+    }
 }
 
 fn restore_frame_counters(saved: RenderFrameCounters) {

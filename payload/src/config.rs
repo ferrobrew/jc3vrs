@@ -195,6 +195,14 @@ pub struct StereoConfig {
     /// cannot zero -- so eye 1 draws eye 0's stale entry plus its own, running the whole post chain
     /// (and FSR) twice. The double-stepped FSR history is the residual per-eye flicker of issue #10.
     pub dedupe_post_block: bool,
+    /// Invalidate the terrain tessellation constant-buffer cache between the two eyes, so eye 1
+    /// re-uploads it with its own projection. The terrain blocks cache the baked view-projection keyed
+    /// on the render frame number, which [`restore_frame_counters`](Self::restore_frame_counters) pins
+    /// across both eyes, so eye 1 otherwise reuses eye 0's projection for the distant tessellated
+    /// terrain -- harmless in flatscreen stereo (both eyes share the projection) but a sheared horizon
+    /// wedge in VR (the per-eye off-axis projections differ). Only meaningful while
+    /// `restore_frame_counters` is on. See [`crate::hooks::game`].
+    pub invalidate_terrain_cb: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -229,6 +237,7 @@ impl StereoConfig {
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,
+            invalidate_terrain_cb: true,
         }
     }
 }
