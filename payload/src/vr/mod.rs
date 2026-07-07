@@ -60,6 +60,10 @@ pub use resolution::apply_native_resolution;
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 /// The number of views (eyes), and the swapchain array size (one slice per eye).
 const VIEW_COUNT: u32 = 2;
+/// The maximum number of ~2 ms event polls to wait for a session to reach EXITING during the
+/// teardown exit handshake. A hard cap so teardown cannot hang if the runtime never advances the
+/// state; ~1 s is ample for a local compositor.
+const TEARDOWN_EVENT_POLLS: u32 = 500;
 
 /// The live VR runtime state, on the game's main thread. Locked briefly by [`update`] and held for a
 /// frame by [`FrameContext`]. A const-constructible [`Mutex`] singleton, the same pattern
@@ -810,25 +814,70 @@ impl VrState {
 
     /// Tear the runtime down in order: swapchain → session → instance. Ending a running session
     /// first is best-effort (the runtime may already be stopping). Clears all derived state.
+    /// Walk a running session through the OpenXR exit handshake before it is destroyed: request
+    /// exit, then pump events to `end()` it on STOPPING and wait for EXITING, so the runtime
+    /// releases the session and the instance slot it holds. Destroying a still-running session
+    /// instead leaves a headset runtime (e.g. WiVRn) holding the instance, and a reinject then fails
+    /// to create a new one with `XR_ERROR_LIMIT_REACHED`. Bounded by [`TEARDOWN_EVENT_POLLS`] so it
+    /// can never hang if the runtime never advances the state.
+    fn end_session_cleanly(&mut self) {
+        match self.session.as_mut() {
+            Some(session) if session.running => {
+                if let Err(e) = session.handle.request_exit() {
+                    tracing::debug!(target: "vr", "request_exit during teardown failed: {e}");
+                    return;
+                }
+            }
+            // Not running (never begun) or no session: nothing to hand back to the runtime.
+            _ => return,
+        }
+        let Some(instance) = self.instance.take() else {
+            return;
+        };
+        let mut events = xr::EventDataBuffer::new();
+        for _ in 0..TEARDOWN_EVENT_POLLS {
+            match instance.poll_event(&mut events) {
+                Ok(Some(xr::Event::SessionStateChanged(e))) => match e.state() {
+                    xr::SessionState::STOPPING => {
+                        if let Some(session) = self.session.as_mut() {
+                            if let Err(e) = session.handle.end() {
+                                tracing::debug!(target: "vr", "session end during teardown failed: {e}");
+                            }
+                            session.running = false;
+                        }
+                    }
+                    xr::SessionState::EXITING | xr::SessionState::IDLE => break,
+                    _ => {}
+                },
+                Ok(Some(_)) => {}
+                // No event yet: the runtime has not advanced the state; wait briefly and re-poll.
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(2)),
+                Err(e) => {
+                    tracing::debug!(target: "vr", "poll_event during teardown failed: {e}");
+                    break;
+                }
+            }
+        }
+        self.instance = Some(instance);
+    }
+
     fn teardown(&mut self) {
         // Drain the GPU before destroying the XR swapchain/session, and release the flip block, so
         // the game's own present path resumes against an idle pipeline rather than deadlocking in a
         // timestamp-query readback (see `blit::drain_gpu`). Order matters: drain while the swapchain
-        // still exists, then destroy it.
+        // still exists, then walk the session through the OpenXR exit handshake, then destroy it.
         if self.session.is_some() {
             blit::drain_gpu();
+            self.end_session_cleanly();
         }
         crate::hooks::graphics_engine::graphics_engine::BLOCK_FLIP
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
         if let Some(mut session) = self.session.take() {
+            // `end_session_cleanly` above already ran the exit handshake. Destroy the swapchain
+            // first (before the session handle), then dropping `session` drops the frame
+            // stream/waiter and the session handle.
             session.swapchain = None;
-            if session.running
-                && let Err(e) = session.handle.request_exit()
-            {
-                tracing::debug!(target: "vr", "request_exit during teardown: {e}");
-            }
-            // Dropping `session` drops the frame stream/waiter and the session handle.
         }
         self.instance = None;
         self.system = None;
