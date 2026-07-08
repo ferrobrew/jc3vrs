@@ -8,7 +8,7 @@
 //! independently locked slot ([`RENDER_PARAMS`]) that the camera hook reads per eye. The head pose
 //! is published through the [`crate::headpose::xr`] source.
 
-use glam::Vec3;
+use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
 use crate::headpose;
@@ -28,6 +28,12 @@ pub struct EyeRenderParams {
     /// `locate_views`, transformed through the cockpit→body→world chain), to add to the render
     /// camera's `m_TransformF` translation.
     pub world_offset: Vec3,
+    /// This eye's orientation relative to the center head pose (the display canting from
+    /// `locate_views`), as a head-local rotation. The camera hook applies it to the render camera's
+    /// basis, about the already-offset eye position, so the rendered content matches the per-eye pose
+    /// submitted to the compositor. Identity on parallel-panel HMDs; the Valve Index cants each eye
+    /// ~5°, and dropping it leaves the two eyes rotationally mismatched, so the stereo will not fuse.
+    pub orientation_delta: Quat,
     /// Which depth convention to write the projection in.
     pub convention: ProjectionConvention,
 }
@@ -81,9 +87,12 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     let pos0 = pose_position(eye0.pose);
     let pos1 = pose_position(eye1.pose);
     let center_position = 0.5 * (pos0 + pos1);
-    // The two eyes share (near enough) one orientation; take the left eye's as the cockpit
-    // orientation, matching the runtime's own mid-pose stand-in.
-    let center_orientation = pose_orientation(eye0.pose);
+    // The true mid orientation (slerp of the two eyes), so the cockpit/head frame sits between the
+    // eyes rather than on one of them. On canted panels the eyes' orientations differ, so anchoring
+    // the center on one eye would bias the head (and everything keyed to it -- aim, the recenter
+    // baseline) toward that eye and split the per-eye canting asymmetrically. Matches the runtime
+    // head-pose stand-in ([`super::mid_pose`]), which is likewise the slerp-mid.
+    let center_orientation = pose_orientation(eye0.pose).slerp(pose_orientation(eye1.pose), 0.5);
 
     let body_rotation = headpose::xr::body_rotation();
     let anchor = headpose::anchor().unwrap_or(Vec3::ZERO);
@@ -136,6 +145,11 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
         // space by the body frame -- the true per-eye parallax delta, replacing the synthetic
         // ±IPD/2 lateral offset.
         world_offset: body_rotation * ((eye_position - center_position) * cfg.world_scale),
+        // The eye's orientation relative to the center head pose, in the head-local frame -- the
+        // display canting. `center_orientation` is the slerp-mid, so each eye carries half the
+        // inter-eye cant (symmetric); the camera hook applies it locally so each eye renders at the
+        // orientation it is submitted with.
+        orientation_delta: center_orientation.inverse() * pose_orientation(eye.pose),
         convention: cfg.projection_convention,
     };
 

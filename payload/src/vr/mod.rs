@@ -1442,11 +1442,31 @@ fn fov_from_xr(fov: xr::Fovf) -> Fov {
     }
 }
 
-/// The midpoint pose of the two eyes (position averaged, orientation from the left eye): a stand-in
-/// head pose for the recenter baseline.
+/// The midpoint pose of the two eyes (position averaged, orientation slerped halfway): a stand-in
+/// head pose for the recenter baseline. The slerp-mid keeps the head frame between the eyes rather
+/// than on one of them, matching the render center in [`frame::begin_render_frame`]; on canted panels
+/// (e.g. the Valve Index) the eyes' orientations differ, so taking one eye's would bias the baseline.
 fn mid_pose(a: xr::Posef, b: xr::Posef) -> xr::Posef {
+    let qa = glam::Quat::from_xyzw(
+        a.orientation.x,
+        a.orientation.y,
+        a.orientation.z,
+        a.orientation.w,
+    );
+    let qb = glam::Quat::from_xyzw(
+        b.orientation.x,
+        b.orientation.y,
+        b.orientation.z,
+        b.orientation.w,
+    );
+    let mid = qa.slerp(qb, 0.5);
     xr::Posef {
-        orientation: a.orientation,
+        orientation: xr::Quaternionf {
+            x: mid.x,
+            y: mid.y,
+            z: mid.z,
+            w: mid.w,
+        },
         position: xr::Vector3f {
             x: 0.5 * (a.position.x + b.position.x),
             y: 0.5 * (a.position.y + b.position.y),
