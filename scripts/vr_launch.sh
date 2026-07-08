@@ -24,18 +24,35 @@ LAUNCHER="$JC3BOOT/scripts/proton_run.sh"
 # steam-run) inherits, so setting it here is enough; jc3boot need not name it.
 export PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1
 
-# Optionally suppress the OpenVR path. xrizer is registered as the system OpenVR
-# runtime (~/.config/openvr/openvrpaths.vrpath), so anything Proton probes for
-# OpenVR brings it up; jc3vrs uses OpenXR directly, so OpenVR is redundant. In
-# practice xrizer and jc3vrs coexist fine, so this is OFF by default -- steering
-# the OpenVR loader at an empty directory (which is what setting it did) also
-# breaks jc3vrs's OpenXR reachability, so it is not a free suppression. Enable
-# with JC3VRS_SUPPRESS_OPENVR=1 only if an OpenVR/xrizer conflict actually
-# appears (jc3vrs bring-up failing with XR_ERROR_LIMIT_REACHED).
-if [ -n "${JC3VRS_SUPPRESS_OPENVR:-}" ]; then
-  NO_OPENVR_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/jc3vrs/no-openvr"
-  mkdir -p "$NO_OPENVR_DIR"
-  export VR_OVERRIDE="$NO_OPENVR_DIR"
+# Force Proton's startup OpenVR probe through xrizer, so our OpenXR path works.
+#
+# Proton's steam_helper runs an OpenVR probe at container startup and records the
+# outcome in the prefix registry (HKCU\Software\Wine\VR "state"). wineopenxr --
+# the Wine->host OpenXR bridge our payload loads -- blocks on that state and
+# returns XR_ERROR_INITIALIZATION_FAILED until the probe succeeds (Linux SteamVR's
+# xrCreateInstance hangs if SteamVR was never brought up, so the bridge gates on
+# OpenVR having come up first). The OpenVR probe is therefore *required*, not
+# redundant: if it fails, our OpenXR bring-up fails with it, before any native
+# OpenXR call is ever made.
+#
+# The probe must resolve to xrizer (the OpenVR->OpenXR shim over whichever OpenXR
+# runtime is active -- Monado, WiVRn), not SteamVR. Once SteamVR is installed
+# (Monado's Lighthouse driver needs it) it registers itself first in
+# openvrpaths.vrpath and shadows xrizer, so the probe tries -- and fails on -- a
+# SteamVR that is not running. Point VR_OVERRIDE straight at xrizer's runtime dir
+# so the probe deterministically brings up xrizer -> the active runtime and sets
+# the state wineopenxr waits for. Honour a caller-set VR_OVERRIDE; otherwise read
+# xrizer's path out of openvrpaths.vrpath, so there is no hardcoded store path.
+if [ -z "${VR_OVERRIDE:-}" ]; then
+  OPENVR_PATHS="${XDG_CONFIG_HOME:-$HOME/.config}/openvr/openvrpaths.vrpath"
+  XRIZER_RT="$(grep -oE '"[^"]*xrizer[^"]*/lib/xrizer"' "$OPENVR_PATHS" 2>/dev/null | tr -d '"' | head -1)"
+  if [ -n "$XRIZER_RT" ] && [ -d "$XRIZER_RT" ]; then
+    export VR_OVERRIDE="$XRIZER_RT"
+  else
+    echo "vr_launch.sh: could not find the xrizer OpenVR runtime in $OPENVR_PATHS;" >&2
+    echo "  VR bring-up will likely fail -- wineopenxr gates on a successful OpenVR probe." >&2
+    echo "  Set VR_OVERRIDE to xrizer's runtime dir, or ensure xrizer is registered." >&2
+  fi
 fi
 
 # steam-run scrubs the ambient environment before the sniper entry point, so
