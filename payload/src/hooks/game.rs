@@ -88,6 +88,11 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             crate::headpose::Source::Sim
         });
 
+        // Auto-recenter when gameplay control returns (after the resume-from-menu entry animation).
+        // Must run before `frame_begin` acquires the VR runtime lock for the frame, since a recenter
+        // takes that same lock.
+        crate::vr::auto_recenter_tick();
+
         // Drive per-eye native render resolution before `frame_begin` (which holds the VR runtime
         // lock for the frame) and before the eye loop: this only populates the engine's deferred
         // display-mode state, which its own `HandleModeChange` services in the first eye's `Draw`

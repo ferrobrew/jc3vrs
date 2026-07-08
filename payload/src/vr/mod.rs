@@ -190,6 +190,81 @@ pub fn recenter() {
     }
 }
 
+/// The gameplay-resume auto-recenter state (see [`auto_recenter_tick`]).
+static AUTO_RECENTER: Mutex<AutoRecenterState> = Mutex::new(AutoRecenterState {
+    armed: false,
+    last_anchor: None,
+    settled_frames: 0,
+});
+
+struct AutoRecenterState {
+    /// Armed to fire one recenter once gameplay settles. Set while not in settled gameplay.
+    armed: bool,
+    /// The head anchor last frame, for the settle test.
+    last_anchor: Option<glam::Vec3>,
+    /// Consecutive frames the anchor has stayed within [`ANCHOR_SETTLE_EPS`].
+    settled_frames: u32,
+}
+
+/// Frames the head anchor must hold within [`ANCHOR_SETTLE_EPS`] before an armed auto-recenter fires
+/// -- long enough for the resume-from-menu entry animation (standing up from the car) to finish.
+const ANCHOR_SETTLE_FRAMES: u32 = 24;
+/// Per-frame head-anchor movement (metres) below which the pose counts as settled: above idle sway,
+/// below any scripted or locomotion motion.
+const ANCHOR_SETTLE_EPS: f32 = 0.01;
+
+/// Drive the gameplay-resume auto-recenter. Call once per frame on the game thread. Arms while the
+/// game is not in settled gameplay (frontend, loading, or no local player character), and fires a
+/// single [`recenter`] once gameplay is running and the player's head anchor has stopped moving (the
+/// entry animation has finished), so the neutral snaps to the player's real pose. In-session
+/// transitions such as exiting a vehicle keep a live character, so they never re-arm and never fire.
+/// See [`crate::config::VrConfig::auto_recenter_on_gameplay`].
+pub fn auto_recenter_tick() {
+    if !Config::lock_query(|c| c.vr.auto_recenter_on_gameplay) || !is_running() {
+        return;
+    }
+    let in_gameplay =
+        unsafe { jc3gi::game::GameState::get() } == jc3gi::game::GameState::E_GAME_RUN;
+    let has_character =
+        unsafe { jc3gi::character::character::Character::GetLocalPlayerCharacter().as_ref() }
+            .is_some();
+    let on_foot = crate::headpose::sim::mode() == crate::headpose::sim::HeadMode::OnFoot;
+    let anchor = crate::headpose::anchor();
+
+    let mut s = AUTO_RECENTER.lock();
+    // Arm whenever we are not in settled gameplay, so the next resume fires exactly one recenter while
+    // in-session transitions (which keep a live character) do not.
+    if !in_gameplay || !has_character {
+        s.armed = true;
+        s.settled_frames = 0;
+        s.last_anchor = None;
+        return;
+    }
+    if !s.armed {
+        return;
+    }
+    // Wait for the head anchor to hold still (the entry animation to end) before recentering.
+    match (on_foot, anchor) {
+        (true, Some(a)) => {
+            let settled = s
+                .last_anchor
+                .is_some_and(|prev| (a - prev).length() < ANCHOR_SETTLE_EPS);
+            s.settled_frames = if settled { s.settled_frames + 1 } else { 0 };
+            s.last_anchor = Some(a);
+            if s.settled_frames >= ANCHOR_SETTLE_FRAMES {
+                s.armed = false;
+                drop(s);
+                recenter();
+                tracing::info!(target: "vr", "auto-recentered on gameplay resume");
+            }
+        }
+        _ => {
+            s.settled_frames = 0;
+            s.last_anchor = anchor;
+        }
+    }
+}
+
 /// Tear the runtime down and clear all state. Idempotent. Registered with [`crate::lifecycle`], so it
 /// runs on uninject — where, if [`VrConfig::persist_instance`] is set, the instance and session are
 /// kept alive (their handles stashed in the game process environment, the wrappers leaked) for a

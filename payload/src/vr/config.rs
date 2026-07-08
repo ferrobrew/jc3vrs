@@ -120,6 +120,16 @@ pub struct VrConfig {
     /// (`enabled` off, or a lost session) destroys everything and clears the stashes.
     #[serde(default = "default_true")]
     pub persist_instance: bool,
+    /// Recenter automatically when gameplay control returns to the player. Injecting VR before the
+    /// scripted resume-from-menu animation (Rico standing up from the car) leaves the rig at an
+    /// offset from the camera, and a fresh session's neutral is wherever the head was at session
+    /// start rather than where the player actually is. With this on, the mod arms while the game is in
+    /// the frontend / loading / has no local player, and fires a single [`recenter`](crate::vr::recenter)
+    /// once gameplay is running and the player's head has settled (the entry animation has finished),
+    /// so the neutral snaps to the player's real pose without a manual F7. It does not fire on
+    /// in-session transitions like exiting a vehicle (the character stays present through those).
+    #[serde(default = "default_true")]
+    pub auto_recenter_on_gameplay: bool,
 }
 
 /// The serde default for [`VrConfig::native_resolution`] (the manual [`Default`] via
@@ -144,6 +154,7 @@ impl VrConfig {
             mirror: true,
             mirror_eye: 0,
             persist_instance: true,
+            auto_recenter_on_gameplay: true,
         }
     }
 }
