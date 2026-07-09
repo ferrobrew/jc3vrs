@@ -3,7 +3,7 @@ use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     UI::{
-        Input::KeyboardAndMouse::{VK_F7, VK_F10, VK_F11},
+        Input::KeyboardAndMouse::{VK_F7, VK_F8, VK_F10, VK_F11},
         WindowsAndMessaging::{
             GetClientRect, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
             WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
@@ -45,6 +45,31 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 egui_state.toggle_game_input_capture();
             }
             crate::capture::toggle();
+        }
+        return LRESULT(0);
+    }
+
+    // F8 summons/dismisses the interactive egui floating panel in VR (issue #24). The panel-up state
+    // and egui's input capture are toggled together so "panel visible" always means "egui focused":
+    // the mirror composite and the `SendMouseEvents` cursor suppression both key off the input
+    // capture, so they cannot disagree with the panel's visibility. Edge-detected like F7/F10/F11.
+    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F8.0 as usize {
+        let previous_down = (lparam.0 & 0x4000_0000) != 0;
+        if !previous_down {
+            let enabled = {
+                let mut cfg = crate::config::CONFIG.lock();
+                cfg.hud.egui_panel.enabled = !cfg.hud.egui_panel.enabled;
+                cfg.hud.egui_panel.enabled
+            };
+            if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut()
+                && egui_state.is_input_captured() != enabled
+            {
+                egui_state.toggle_game_input_capture();
+            }
+            tracing::info!(
+                "F8: egui floating panel {}",
+                if enabled { "ON" } else { "OFF" }
+            );
         }
         return LRESULT(0);
     }
@@ -94,6 +119,11 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 cursor::set_client_size((w as u32, h as u32));
             }
         }
+        // Publish the raw client-pixel mouse position for the VR panel pointer (issue #24), tracked
+        // here so it stays fresh even while the panel has captured (disabled) the game's own input.
+        let x = (lparam.0 & 0xffff) as i16 as i32;
+        let y = ((lparam.0 >> 16) & 0xffff) as i16 as i32;
+        cursor::set_mouse_pos((x, y));
     }
 
     if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {

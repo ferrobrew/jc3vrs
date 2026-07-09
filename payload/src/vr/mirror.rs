@@ -44,10 +44,12 @@ use windows::{
         Graphics::{
             Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             Direct3D11::{
-                D3D11_COMPARISON_NEVER, D3D11_CULL_NONE, D3D11_FILL_SOLID,
-                D3D11_FILTER_MIN_MAG_MIP_LINEAR, D3D11_RASTERIZER_DESC, D3D11_SAMPLER_DESC,
+                D3D11_BLEND_DESC, D3D11_BLEND_INV_SRC_ALPHA, D3D11_BLEND_ONE, D3D11_BLEND_OP_ADD,
+                D3D11_BLEND_SRC_ALPHA, D3D11_COLOR_WRITE_ENABLE_ALL, D3D11_COMPARISON_NEVER,
+                D3D11_CULL_NONE, D3D11_FILL_SOLID, D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+                D3D11_RASTERIZER_DESC, D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC,
                 D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE2D_DESC, D3D11_VIEWPORT,
-                ID3D11DeviceContext, ID3D11PixelShader, ID3D11RasterizerState,
+                ID3D11BlendState, ID3D11DeviceContext, ID3D11PixelShader, ID3D11RasterizerState,
                 ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView,
                 ID3D11Texture2D, ID3D11VertexShader,
             },
@@ -156,17 +158,32 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
         EnterCriticalSection(context.m_Mutex);
         mirror.draw(&context.m_Context, &rtv, &srv, viewport);
 
-        // Composite the egui debug overlay onto the same back buffer so it reaches the desktop while a
-        // session runs -- the overlay normally rides the engine flip path, which `BLOCK_FLIP`
-        // suppresses in VR, so without this it would be invisible on the desktop. Gated exactly as
-        // `graphics_flip` gates it: hidden while the F10 capture window is up so recordings stay clean.
-        // The overlay binds the back buffer's own RTV and lays out in window-client pixels, so on the
-        // near-square per-eye buffer it renders at the buffer's scale and is stretched with everything
-        // else -- acceptable for a debug overlay; the in-headset UI is the floating panel, not egui.
-        if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut()
-            && !crate::capture::is_active()
-        {
-            egui_state.render();
+        // Bring the debug UI to the desktop while a session runs -- the flat overlay normally rides
+        // the engine flip path, which `BLOCK_FLIP` suppresses in VR. Hidden while the F10 capture
+        // window is up so recordings stay clean.
+        //
+        // With the interactive floating panel (issue #24) the egui frame has already been tessellated
+        // into the panel texture on eye 0, so its single-use output is spent: composite that panel
+        // texture as a flat, letterboxed, alpha-blended overlay for a legible desktop copy instead of
+        // calling `render` (which would find no output, or on a race redraw a mis-sized flat frame).
+        // Off, the flat overlay renders exactly as before.
+        if !crate::capture::is_active() {
+            let panel = crate::config::Config::lock_query(|c| c.hud.egui_panel);
+            if panel.enabled {
+                if let Some(srv) = crate::hud::egui_panel::panel_srv() {
+                    let overlay = letterbox_viewport(
+                        AspectSize {
+                            width: panel.resolution.0,
+                            height: panel.resolution.1,
+                        },
+                        buffer_size,
+                        window_size,
+                    );
+                    mirror.draw_overlay(&context.m_Context, &rtv, &srv, overlay);
+                }
+            } else if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {
+                egui_state.render();
+            }
         }
 
         // Present the game swapchain ourselves -- the only present this frame (the engine's is
@@ -282,6 +299,9 @@ struct Mirror {
     pixel_shader: ID3D11PixelShader,
     sampler: ID3D11SamplerState,
     rasterizer: ID3D11RasterizerState,
+    /// Straight-alpha blend for the egui panel overlay composite (issue #24). The letterboxed eye
+    /// draw is opaque and uses no blend state; only the overlay needs one.
+    overlay_blend: ID3D11BlendState,
     /// The RTV over the game back buffer, keyed on the back-buffer texture pointer.
     rtv_cache: Option<(usize, ID3D11RenderTargetView)>,
     /// The SRV over the captured eye texture, keyed on the capture texture pointer.
@@ -337,11 +357,31 @@ impl Mirror {
             let rasterizer =
                 rasterizer.context("vr: the mirror rasterizer state was not created")?;
 
+            // Straight (non-premultiplied) alpha, matching the HUD quad, so the panel's transparent
+            // regions show the eye image behind it.
+            let mut overlay_blend: Option<ID3D11BlendState> = None;
+            let mut blend_desc = D3D11_BLEND_DESC::default();
+            blend_desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
+                BlendEnable: true.into(),
+                SrcBlend: D3D11_BLEND_SRC_ALPHA,
+                DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
+                BlendOp: D3D11_BLEND_OP_ADD,
+                SrcBlendAlpha: D3D11_BLEND_ONE,
+                DestBlendAlpha: D3D11_BLEND_INV_SRC_ALPHA,
+                BlendOpAlpha: D3D11_BLEND_OP_ADD,
+                RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL.0 as u8,
+            };
+            d3d.CreateBlendState(&blend_desc, Some(&mut overlay_blend))
+                .context("vr: creating the mirror overlay blend state")?;
+            let overlay_blend =
+                overlay_blend.context("vr: the mirror overlay blend state was not created")?;
+
             Ok(Self {
                 vertex_shader,
                 pixel_shader,
                 sampler,
                 rasterizer,
+                overlay_blend,
                 rtv_cache: None,
                 srv_cache: None,
             })
@@ -387,6 +427,48 @@ impl Mirror {
             // Unbind our SRV so the egui overlay / next frame does not see it still bound. Leave the
             // RTV bound: egui's own `render` binds the back-buffer RTV itself, and the present reads
             // the buffer regardless.
+            context.PSSetShaderResources(0, Some(&[None]));
+        }
+    }
+
+    /// Composite the egui panel texture over the back buffer as a flat, alpha-blended overlay inside
+    /// `viewport` (letterboxed to the panel aspect), leaving the eye image visible around and through
+    /// it. The eye letterbox draw must already have run; this does not clear. The caller must hold the
+    /// context mutex.
+    ///
+    /// # Safety
+    /// `context` must be the live engine immediate context; `rtv`/`srv` must be live views over the
+    /// game back buffer and the panel texture respectively.
+    unsafe fn draw_overlay(
+        &self,
+        context: &ID3D11DeviceContext,
+        rtv: &ID3D11RenderTargetView,
+        srv: &ID3D11ShaderResourceView,
+        viewport: Viewport,
+    ) {
+        unsafe {
+            context.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+            context.OMSetBlendState(&self.overlay_blend, None, 0xffff_ffff);
+            context.RSSetViewports(Some(&[D3D11_VIEWPORT {
+                TopLeftX: viewport.x,
+                TopLeftY: viewport.y,
+                Width: viewport.width,
+                Height: viewport.height,
+                MinDepth: 0.0,
+                MaxDepth: 1.0,
+            }]));
+            context.IASetInputLayout(None);
+            context.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            context.VSSetShader(&self.vertex_shader, None);
+            context.PSSetShader(&self.pixel_shader, None);
+            context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+            context.PSSetShaderResources(0, Some(&[Some(srv.clone())]));
+            context.RSSetState(&self.rasterizer);
+            context.Draw(3, 0);
+
+            // Restore opaque blending and unbind our SRV so the present / next frame does not see the
+            // overlay state still bound.
+            context.OMSetBlendState(None, None, 0xffff_ffff);
             context.PSSetShaderResources(0, Some(&[None]));
         }
     }

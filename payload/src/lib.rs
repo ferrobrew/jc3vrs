@@ -170,6 +170,16 @@ fn update() {
                 egui_state.toggle_game_input_capture();
             }
 
+            // Drive the egui UI as the VR floating panel when a session is running and the panel is
+            // enabled (issue #24): size the layout to the panel texture and re-source the pointer from
+            // the desktop mouse onto the panel surface. Off, this is `None` and the flat overlay path
+            // is unchanged.
+            let panel_size = crate::hud::egui_panel::active_size();
+            egui_state.set_panel_mode(panel_size);
+            if let Some(size) = panel_size {
+                egui_state.push_events(crate::hud::pointer::window_mouse_events(size));
+            }
+
             egui_state.run(|ctx, renderer| {
                 egui::Window::new("Debug")
                     .default_pos(egui::pos2(0.0, 0.0))

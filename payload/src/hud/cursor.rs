@@ -73,6 +73,35 @@ pub fn take_wheel_lines() -> f32 {
     raw as f32 / 120.0 * 3.0
 }
 
+/// Drain the accumulated wheel movement into notches (one `WHEEL_DELTA` per line), the unit egui's
+/// [`egui::Event::MouseWheel`] expects. Zero when the wheel has not moved. Used by the VR panel
+/// pointer (issue #24); the Flash path uses [`take_wheel_lines`] instead, and the two must not both
+/// drain the same frame (in panel mode the Scaleform path is inert).
+pub fn take_wheel_notches() -> f32 {
+    let raw = WHEEL.swap(0, Ordering::Relaxed);
+    raw as f32 / 120.0
+}
+
+/// Publish the game window's live client-pixel mouse position from the `WndProc` detour. Tracked
+/// directly from `WM_MOUSEMOVE` so it stays fresh regardless of the game's own input-enabled state
+/// (the VR panel captures game input while it is up). Used by the panel pointer (issue #24).
+pub fn set_mouse_pos(pos: (i32, i32)) {
+    STATE.lock().mouse = Some(pos);
+}
+
+/// The last window client-pixel mouse position seen, or `None` before any `WM_MOUSEMOVE`.
+pub fn mouse_pos() -> Option<(i32, i32)> {
+    STATE.lock().mouse
+}
+
+/// The space the window-pixel mouse position normalizes against: the live client rect when one has
+/// been seen, else the back-buffer size. `None` while neither is known or a dimension is degenerate.
+pub fn normalization_size() -> Option<(u32, u32)> {
+    let state = STATE.lock();
+    let size = state.client.unwrap_or(state.window);
+    (size.0 > 0 && size.1 > 0).then_some(size)
+}
+
 /// Publish the frame's coordinate-mapping geometry from the render-thread HUD tick: the game's
 /// back-buffer size (the fallback normalization space), and the redirected texture's size (`None`
 /// while the redirect is not applied, which disables the injection).
@@ -122,6 +151,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     client: None,
     movie: None,
     frame: None,
+    mouse: None,
 });
 
 /// The cross-thread cursor state: geometry written on the render thread, the client rect from the
@@ -132,4 +162,6 @@ struct State {
     client: Option<(u32, u32)>,
     movie: Option<(u32, u32)>,
     frame: Option<CursorFrame>,
+    /// The last window client-pixel mouse position from `WM_MOUSEMOVE` (VR panel pointer, issue #24).
+    mouse: Option<(i32, i32)>,
 }

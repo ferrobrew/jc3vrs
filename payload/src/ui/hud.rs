@@ -223,6 +223,31 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 });
             }
         });
+
+        // The interactive egui floating panel (issue #24): independent of the redirect, only takes
+        // effect while an OpenXR session is running. Toggle with F8 in-headset.
+        ui.separator();
+        ui.checkbox(
+            &mut cfg.hud.egui_panel.enabled,
+            "Interactive egui panel floating in VR (F8; only while a session runs)",
+        );
+        if cfg.hud.egui_panel.enabled {
+            ui.indent("egui_panel", |ui| {
+                ui.add(
+                    egui::Slider::new(&mut cfg.hud.egui_panel.distance, 0.3..=5.0)
+                        .text("Panel distance (m)"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut cfg.hud.egui_panel.scale, 0.2..=3.0)
+                        .text("Panel size (x)"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut cfg.hud.egui_panel.follow.rotation_halflife, 0.01..=2.0)
+                        .text("Panel rotation halflife (s)"),
+                );
+            });
+        }
+
         cfg.hud.redirect
     };
 

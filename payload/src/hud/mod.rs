@@ -35,7 +35,9 @@ mod binding;
 mod config;
 pub mod cursor;
 pub mod depth;
+pub(crate) mod egui_panel;
 pub mod markers;
+pub(crate) mod pointer;
 mod quad;
 pub mod scaleform;
 pub mod split;
@@ -336,7 +338,7 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
 /// (+X), `data[4..6]` = up (+Y), `data[8..10]` = +Z basis (back), `data[12..14]` = translation. We
 /// build a `Mat3` from the basis columns and convert to a quaternion that maps camera-local to world
 /// space, so `quat * Vec3::NEG_Z` yields the forward direction.
-fn render_camera_pose() -> Option<(Vec3, Quat)> {
+pub(crate) fn render_camera_pose() -> Option<(Vec3, Quat)> {
     let transform = unsafe {
         let cm = CameraManager::get()?;
         let cam = cm.m_RenderCamera.as_ref()?;

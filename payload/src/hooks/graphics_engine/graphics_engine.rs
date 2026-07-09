@@ -113,6 +113,9 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             graphics_engine.m_BackBufferLinear.as_ref(),
         ) {
             crate::hud::draw_quad(&context.m_Context, device, back_buffer, index);
+            // The interactive egui debug panel (issue #24), an independent floating surface drawn
+            // right after the gameplay HUD. A no-op unless a session is running and it is enabled.
+            crate::hud::egui_panel::draw_quad(&context.m_Context, device, back_buffer, index);
         }
 
         // Final back buffer for this eye. (The HDR scene / MainColor is captured earlier, at the

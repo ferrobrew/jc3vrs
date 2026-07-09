@@ -1,7 +1,10 @@
 use anyhow::Context as _;
 use jc3gi::graphics_engine::graphics_engine::{ActiveCursor, GraphicsEngine, get_graphics_params};
 use parking_lot::{Mutex, MutexGuard};
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::{
+    Foundation::{HWND, LPARAM, WPARAM},
+    Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11RenderTargetView},
+};
 
 pub struct EguiState {
     start_time: std::time::Instant,
@@ -10,6 +13,11 @@ pub struct EguiState {
     renderer_output: Option<egui_directx11::RendererOutput>,
     game_input_state: Option<GameInputState>,
     events: Vec<egui::Event>,
+    /// When `Some`, the egui UI is being driven as the VR floating panel (issue #24): [`run`] sizes
+    /// the layout to this panel-texture size instead of the game window, and [`render_to`] paints it
+    /// into the panel render target. Set from the game thread each frame before [`run`]; `None` is
+    /// the flat back-buffer overlay (the default, unchanged) behavior.
+    panel: Option<(u32, u32)>,
 }
 struct GameInputState {
     input_was_enabled: bool,
@@ -34,6 +42,7 @@ impl EguiState {
             renderer_output: None,
             game_input_state: None,
             events: Vec::new(),
+            panel: None,
         })
     }
 
@@ -56,12 +65,31 @@ impl EguiState {
         STATE.lock()
     }
 
+    /// Select the panel (VR) or flat (desktop) layout mode for the next [`run`]. `Some(size)` sizes
+    /// the egui layout to a panel texture of that size (VR floating panel, issue #24); `None` sizes it
+    /// to the game window (the flat back-buffer overlay). Call from the game thread before [`run`].
+    pub fn set_panel_mode(&mut self, size: Option<(u32, u32)>) {
+        self.panel = size;
+    }
+
+    /// Append externally-sourced input events (the VR panel's virtual pointer, issue #24) to the next
+    /// [`run`]'s event queue. Call from the game thread before [`run`].
+    pub fn push_events(&mut self, events: impl IntoIterator<Item = egui::Event>) {
+        self.events.extend(events);
+    }
+
     pub fn run(&mut self, mut callback: impl FnMut(&egui::Context, &mut egui_directx11::Renderer)) {
-        let params = unsafe { get_graphics_params() };
+        let screen_size = match self.panel {
+            Some((width, height)) => (width as f32, height as f32),
+            None => {
+                let params = unsafe { get_graphics_params() };
+                (params.m_Width as f32, params.m_Height as f32)
+            }
+        };
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_max(
                 Default::default(),
-                egui::Pos2::new(params.m_Width as f32, params.m_Height as f32),
+                egui::Pos2::new(screen_size.0, screen_size.1),
             )),
             time: Some(self.start_time.elapsed().as_secs_f64()),
             focused: self.game_input_state.is_some(),
@@ -71,7 +99,19 @@ impl EguiState {
         let egui_output = self
             .egui_context
             .run(input, |ctx| callback(ctx, &mut self.egui_renderer));
-        let (renderer_output, platform_output, _) = egui_directx11::split_output(egui_output);
+        let (mut renderer_output, platform_output, _) = egui_directx11::split_output(egui_output);
+
+        // Carry a still-unrendered frame's texture delta forward instead of dropping it. `run()` (game
+        // thread) can outpace `render_to()` (render thread) and overwrite an output that was never
+        // painted; egui emits the font atlas `set` only on the frame it (re)builds it, so a dropped
+        // frame silently loses the atlas upload and every later frame samples a non-existent
+        // `Managed(0)`, blanking all text. Appending the older delta first preserves those uploads (the
+        // standard egui skipped-frame handling); the newer geometry still replaces the older.
+        if let Some(prev) = self.renderer_output.take() {
+            let mut delta = prev.textures_delta;
+            delta.append(renderer_output.textures_delta);
+            renderer_output.textures_delta = delta;
+        }
 
         if self.is_input_captured()
             && let Some(graphics_engine) = unsafe { GraphicsEngine::get() }
@@ -113,6 +153,28 @@ impl EguiState {
         }
     }
 
+    /// Render the current frame's egui output into an arbitrary render target (the VR floating panel's
+    /// offscreen texture, issue #24) using the supplied context, consuming the single-use
+    /// [`renderer_output`](EguiState::renderer_output). The target is cleared to transparent first: the
+    /// egui renderer does not clear and early-returns on an empty frame, so without the clear the panel
+    /// would retain the previous frame. A no-op when the output has already been consumed this frame.
+    /// The caller must hold the engine context mutex.
+    pub fn render_to(&mut self, context: &ID3D11DeviceContext, rtv: &ID3D11RenderTargetView) {
+        // SAFETY: `rtv` is a live render-target view; `context` is the caller-locked engine context.
+        unsafe {
+            context.ClearRenderTargetView(rtv, &[0.0, 0.0, 0.0, 0.0]);
+        }
+        let Some(renderer_output) = self.renderer_output.take() else {
+            return;
+        };
+        if let Err(e) = self
+            .egui_renderer
+            .render(context, rtv, &self.egui_context, renderer_output)
+        {
+            tracing::error!("Failed to render egui panel: {e:?}");
+        }
+    }
+
     pub fn toggle_game_input_capture(&mut self) {
         unsafe {
             let Some(input_device_manager) =
@@ -147,8 +209,33 @@ impl EguiState {
         if !self.is_input_captured() {
             return;
         }
+        // In VR-panel mode the pointer is re-sourced from the panel's virtual cursor (issue #24), so
+        // the window-pixel mouse messages -- whose coordinates are in the game window's space, not the
+        // panel texture's -- must not reach egui. Keyboard, text, and paste still flow unchanged.
+        if self.panel.is_some() && is_mouse_message(msg) {
+            return;
+        }
         wndproc(&mut self.events, msg, wparam, lparam);
     }
+}
+
+/// Whether `msg` is a mouse move/button/wheel message whose coordinates are window-relative.
+fn is_mouse_message(msg: u32) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+        WM_RBUTTONDOWN, WM_RBUTTONUP,
+    };
+    matches!(
+        msg,
+        WM_MOUSEMOVE
+            | WM_LBUTTONDOWN
+            | WM_LBUTTONUP
+            | WM_RBUTTONDOWN
+            | WM_RBUTTONUP
+            | WM_MBUTTONDOWN
+            | WM_MBUTTONUP
+            | WM_MOUSEWHEEL
+    )
 }
 
 pub fn wndproc(events: &mut Vec<egui::Event>, msg: u32, wparam: WPARAM, lparam: LPARAM) {

@@ -13,7 +13,7 @@ use windows::Win32::Graphics::{
 
 /// Our offscreen HUD render target: a color texture (with an RTV to render into and an SRV to preview)
 /// and a matching depth-stencil for the UI's depth clears, plus the size they were built for.
-pub(super) struct HudTarget {
+pub(crate) struct HudTarget {
     /// Held for lifetime ownership; the views below are what we use.
     _color: ID3D11Texture2D,
     color_srv: ID3D11ShaderResourceView,
@@ -25,7 +25,7 @@ pub(super) struct HudTarget {
 
 impl HudTarget {
     /// Build the color texture (with RTV + SRV) and a matching depth-stencil at `width` x `height`.
-    pub(super) fn new(device: &Device, width: u32, height: u32) -> anyhow::Result<Self> {
+    pub(crate) fn new(device: &Device, width: u32, height: u32) -> anyhow::Result<Self> {
         let d3d = &device.m_Device;
         // SAFETY: `d3d` is the live engine device; the descriptors below are valid for these calls.
         unsafe {
@@ -101,19 +101,19 @@ impl HudTarget {
         }
     }
 
-    pub(super) fn size(&self) -> (u32, u32) {
+    pub(crate) fn size(&self) -> (u32, u32) {
         self.size
     }
 
-    pub(super) fn color_srv(&self) -> &ID3D11ShaderResourceView {
+    pub(crate) fn color_srv(&self) -> &ID3D11ShaderResourceView {
         &self.color_srv
     }
 
-    pub(super) fn color_rtv(&self) -> &ID3D11RenderTargetView {
+    pub(crate) fn color_rtv(&self) -> &ID3D11RenderTargetView {
         &self.color_rtv
     }
 
-    pub(super) fn depth_dsv(&self) -> &ID3D11DepthStencilView {
+    pub(crate) fn depth_dsv(&self) -> &ID3D11DepthStencilView {
         &self.depth_dsv
     }
 }

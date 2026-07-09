@@ -65,6 +65,16 @@ The composite draws the layers farthest-first (alpha-blended overlays without a 
 
 **Overlay suppression (issue #8).** `hud.suppress_overlays` holds the full-screen overlay clips — the drowning tint, the omni-damage flash and health paint, and both directional damage-indicator containers — invisible, forced ahead of every capture in the same game-thread hook (independent of the split).
 
+## The interactive egui debug panel (issue #24)
+
+The egui debug UI normally renders straight onto the game back buffer as a flat overlay. In VR that overlay is invisible — the desktop mouse cursor lands in neither eye, and `BLOCK_FLIP` suppresses the engine flip the overlay rides on — so the mod can render egui as a second floating panel, an interactive 2D surface in 3D space, reusing the same quad and virtual-cursor machinery as the gameplay HUD.
+
+It is a wholly independent panel (`payload/src/hud/egui_panel.rs`): its own offscreen render target, its own lazy-follow damping, and its own eye-0-cached corners, so it never touches `HUD_STATE` and cannot perturb the gameplay HUD. egui is tessellated exactly once per frame (the single-use `RendererOutput`) on eye 0 into the panel texture via `EguiState::render_to`, which clears the target to transparent first (the egui renderer neither clears nor draws on an empty frame); both eyes then draw the same cached world-space corners through their own per-eye VP, and the desktop mirror composites the same panel texture as a flat, letterboxed, alpha-blended overlay for a legible desktop copy. There is never a second egui pass.
+
+Input comes from the desktop mouse re-sourced onto the panel (`payload/src/hud/pointer.rs`): the window client-pixel position (tracked by the `WndProc` detour) is normalized against the window and fed to egui as if it were the pointer, with positions scaled to the panel texture; button and wheel state are re-sourced the same way, while keyboard, text, and paste keep flowing through the ordinary egui wndproc path. While the panel is up, `EguiState` sizes the egui layout to the panel texture (`set_panel_mode`) and suppresses the window-pixel mouse messages that would otherwise reach egui in the wrong coordinate space.
+
+The whole feature is gated behind a single predicate — an OpenXR session running **and** the opt-in `hud.egui_panel.enabled` flag — and defaults off, so with it off every path is byte-identical to the flat-overlay baseline. F8 summons and dismisses the panel in-headset, toggling the enabled flag and egui's input capture together so "panel visible" always means "egui focused". Distance, size, and follow lag are on the HUD debug tab.
+
 ## Status and future work
 
 Shipped: the redirect, the in-scene floating quad per eye, the lazy-follow damping with sliders, constant-apparent-size scaling, and the per-eye marker reprojection. Manual distance control is a slider.
