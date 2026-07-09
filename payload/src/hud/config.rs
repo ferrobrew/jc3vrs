@@ -77,6 +77,12 @@ pub struct HudConfig {
     /// excluded.
     #[serde(default)]
     pub world_lock_menus: bool,
+    /// How the aim reticle is projected onto the panel, for tuning crosshair-vs-shot alignment (issue
+    /// #6). The reticle is projected from the world aim point; the panel-subtense projection lands it
+    /// where the head->aim ray crosses the panel, while the game-projection option follows the game's
+    /// own screen-space mapping. Markers are unaffected (always panel-subtense).
+    #[serde(default)]
+    pub reticle_align: ReticleAlign,
     /// Dynamic panel distance from the scene depth distribution.
     pub depth_shift: DepthShiftConfig,
     /// The virtual mouse cursor for panel UI interaction (issue #9). See
@@ -116,10 +122,24 @@ impl HudConfig {
             cursor: CursorConfig::new(),
             suppress_overlays: true,
             world_lock_menus: true,
+            reticle_align: ReticleAlign::PanelSubtense,
             split_path_prefix: SplitPathPrefix::new(),
             egui_panel: EguiPanelConfig::new(),
         }
     }
+}
+
+/// How the aim reticle is projected onto the floating panel (issue #6). An A/B knob for the
+/// crosshair-vs-shot alignment; only the reticle projection is affected, not the world markers.
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ReticleAlign {
+    /// The panel's own angular subtense from the head pose (symmetric, off-center shear dropped) --
+    /// the reticle lands where the head-to-aim ray crosses the panel. The shipped default.
+    #[default]
+    PanelSubtense,
+    /// The game camera's own projection (off-center shear and game FOV kept) applied at the panel
+    /// pose -- the reticle follows the game's native screen-space aim mapping instead.
+    GameProjection,
 }
 
 /// The interactive egui debug panel rendered as a 2D surface floating in 3D space in VR (issue #24).

@@ -45,7 +45,7 @@ mod state;
 mod target;
 mod warp;
 
-pub use config::HudConfig;
+pub use config::{HudConfig, ReticleAlign};
 pub use state::HUD_STATE;
 
 use glam::{Mat3, Mat4, Quat, Vec3};
@@ -362,7 +362,7 @@ pub(crate) fn render_camera_pose() -> Option<(Vec3, Quat)> {
 /// camera's FOV). This ensures markers are positioned correctly on the floating quad: a POI directly
 /// ahead of the camera but off-center from the panel's facing direction appears at the correct
 /// position on the panel surface, compensating for the follow-damping lag.
-pub fn compute_panel_vp() -> Option<(Matrix4, Matrix4)> {
+pub fn compute_panel_vp(symmetric: bool) -> Option<(Matrix4, Matrix4)> {
     // Reuse the pose chosen for the quad this frame (head-following or latched world-static), so
     // markers project onto exactly the panel the quad drew.
     let (pos, rot) = HUD_STATE.lock().panel_pose()?;
@@ -406,11 +406,17 @@ pub fn compute_panel_vp() -> Option<(Matrix4, Matrix4)> {
     // the game projection, preserving its reverse-Z convention and the behind-camera `w`-sign cull in
     // `Convert3DCoords`. The marker pass also sets `m_CachedViewportRatio = 1 / aspect` so
     // `Convert3DCoords` does not re-apply the device aspect on top of this (see `hooks::ui`).
-    let cot_x = 2.0 / (panel_scale.max(f32::EPSILON) * PANEL_WIDTH_PER_DISTANCE);
-    glam_proj.x_axis.x = cot_x;
-    glam_proj.y_axis.y = cot_x * aspect.max(0.0);
-    glam_proj.z_axis.x = 0.0;
-    glam_proj.z_axis.y = 0.0;
+    // With `symmetric` false (a reticle A/B option) the override is skipped and the game camera's own
+    // projection is kept, so the reticle follows the game's native screen-space aim mapping rather than
+    // the panel subtense -- an alternative for tuning the crosshair-vs-shot alignment. Markers always
+    // pass `symmetric` true (they misplace under the game FOV, per the note above).
+    if symmetric {
+        let cot_x = 2.0 / (panel_scale.max(f32::EPSILON) * PANEL_WIDTH_PER_DISTANCE);
+        glam_proj.x_axis.x = cot_x;
+        glam_proj.y_axis.y = cot_x * aspect.max(0.0);
+        glam_proj.z_axis.x = 0.0;
+        glam_proj.z_axis.y = 0.0;
+    }
 
     let glam_vp = glam_proj * panel_view;
 

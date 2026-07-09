@@ -42,6 +42,23 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 &mut cfg.hud.world_lock_menus,
                 "World-lock panel in menus (pause/map stay put instead of head-following)",
             );
+            ui.horizontal(|ui| {
+                ui.label("Reticle align:");
+                ui.radio_value(
+                    &mut cfg.hud.reticle_align,
+                    crate::hud::ReticleAlign::PanelSubtense,
+                    "Panel subtense",
+                )
+                .on_hover_text(
+                    "Default: land the reticle where the head->aim ray crosses the panel",
+                );
+                ui.radio_value(
+                    &mut cfg.hud.reticle_align,
+                    crate::hud::ReticleAlign::GameProjection,
+                    "Game projection",
+                )
+                .on_hover_text("A/B: follow the game's own screen-space aim mapping");
+            });
             ui.checkbox(
                 &mut cfg.hud.cursor.enabled,
                 "Virtual mouse cursor on the panel (remaps mouse-to-UI coordinates)",

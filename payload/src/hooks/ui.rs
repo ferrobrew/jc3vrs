@@ -53,11 +53,12 @@ fn convert_3d_coords_default(
     out_x: *mut f32,
     out_y: *mut f32,
 ) -> bool {
-    let (panel_enabled, record_aim, max_depth) = Config::lock_query(|c| {
+    let (panel_enabled, record_aim, max_depth, reticle_align) = Config::lock_query(|c| {
         (
             c.hud.redirect && c.hud.quad,
             c.hud.center_depth_from_aim,
             c.hud.marker_max_depth,
+            c.hud.reticle_align,
         )
     });
 
@@ -71,7 +72,12 @@ fn convert_3d_coords_default(
     }
 
     let aspect = crate::hud::current_aspect();
-    let panel = panel_enabled.then(crate::hud::compute_panel_vp).flatten();
+    // The reticle's projection is a tunable A/B (issue #6): the panel subtense (default) or the game's
+    // own projection. Markers stay on the panel subtense.
+    let symmetric = reticle_align == crate::hud::ReticleAlign::PanelSubtense;
+    let panel = panel_enabled
+        .then(|| crate::hud::compute_panel_vp(symmetric))
+        .flatten();
     match panel {
         // Project through the panel VP with the aspect retarget, exactly like the Get2DInfo hook,
         // so the grapple reticle lands at the correct spot on the panel surface.
@@ -209,7 +215,10 @@ fn get_2d_info(
         )
     });
     let aspect = crate::hud::current_aspect();
-    let panel = panel_enabled.then(crate::hud::compute_panel_vp).flatten();
+    // Markers always use the panel subtense; only the reticle exposes the game-projection A/B.
+    let panel = panel_enabled
+        .then(|| crate::hud::compute_panel_vp(true))
+        .flatten();
     let (vp, camera) = panel
         .as_ref()
         .map(|(v, c)| (v as *const Matrix4, c as *const Matrix4))
