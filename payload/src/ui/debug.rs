@@ -111,6 +111,36 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                     "re-creates all shaders so the shader patches take effect (F11 toggles + reloads)",
                 );
             });
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut cfg.stereo.widen_cull_frustum,
+                    "Widen scene cull frustum (covers both eyes; stops outer-edge void/pop-in)",
+                );
+                ui.add_enabled(
+                    cfg.stereo.widen_cull_frustum,
+                    egui::Slider::new(&mut cfg.stereo.cull_fov_padding, 0.0..=0.5)
+                        .text("pad")
+                        .fixed_decimals(2),
+                )
+                .on_hover_text(
+                    "Extra fraction to widen the cull frustum on every side (incl. vertical); \
+                     raise if geometry still pops in at the edges when flying",
+                );
+            });
+            ui.add(
+                egui::Slider::new(&mut cfg.stereo.cull_size_fov_deg, 0.0..=90.0)
+                    .text("Size-cull FOV (deg)")
+                    .fixed_decimals(0),
+            )
+            .on_hover_text(
+                "FOV the screen-space size cull uses (overrides the injected 90 deg on the cull \
+                 camera); lower keeps more small/distant geometry and vehicle parts. 0 = leave alone",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.disable_bfbc_occlusion,
+                "Disable software occlusion (drops centre-viewpoint occluder culling; fixes \
+                 peripheral culling an offset eye can see past)",
+            );
         });
 
     // Investigation levers -- normally off; used to isolate what differs between the eyes.

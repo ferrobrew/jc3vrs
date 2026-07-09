@@ -125,15 +125,25 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // off-axis frusta. Each eye is laterally offset by ~IPD/2 and has its own asymmetric FOV, so the
     // superset bounds the wider of the two on each side (in tangent space) plus a near-plane margin
     // `s = (IPD/2) / near` for the lateral eye shift. `s·z` covers the shift exactly at the near plane
-    // and over-covers (harmlessly) with distance, so nothing either eye can see is culled. Vertical
-    // has no IPD term. Written standard-depth to match the cull camera's `m_ProjectionF`.
+    // and over-covers (harmlessly) with distance, so nothing either eye can see is culled. The engine
+    // culls at a single interpolated pose, so `cull_fov_padding` pads each side's tangent outward on
+    // top of that to hide edge pop-in under fast motion; the eye-shift margin and the padding are both
+    // applied on the vertical axis too (flying pitch shifts the eyes vertically). Written standard-depth
+    // to match the cull camera's `m_ProjectionF`.
     let ipd = (pos1 - pos0).length();
     let margin = 0.5 * ipd / cfg.near_clip.max(1e-3);
+    // The padding lives on the stereo config alongside its `widen_cull_frustum` sibling (and the
+    // debug slider), not on `VrConfig`, so read it from the global config here.
+    let pad = 1.0 + crate::config::Config::lock_query(|c| c.stereo.cull_fov_padding).max(0.0);
+    // Widen each side in tangent space: scale the half-extent outward by `pad`, then push out by the
+    // eye-shift margin in the side's own direction (`copysign` keeps left/down negative, right/up
+    // positive). Vertical uses tangents here (not raw angles) so it receives the same treatment.
+    let expand = |t: f32| t * pad + margin.copysign(t);
     let union_fov = Fov {
-        left: (eye0.fov.angle_left.tan().min(eye1.fov.angle_left.tan()) - margin).atan(),
-        right: (eye0.fov.angle_right.tan().max(eye1.fov.angle_right.tan()) + margin).atan(),
-        up: eye0.fov.angle_up.max(eye1.fov.angle_up),
-        down: eye0.fov.angle_down.min(eye1.fov.angle_down),
+        left: expand(eye0.fov.angle_left.tan().min(eye1.fov.angle_left.tan())).atan(),
+        right: expand(eye0.fov.angle_right.tan().max(eye1.fov.angle_right.tan())).atan(),
+        up: expand(eye0.fov.angle_up.tan().max(eye1.fov.angle_up.tan())).atan(),
+        down: expand(eye0.fov.angle_down.tan().min(eye1.fov.angle_down.tan())).atan(),
     };
     *CULL_PROJECTION.lock() =
         Some(OffAxisProjection::new(union_fov, cfg.near_clip, cfg.far_clip).standard_depth);

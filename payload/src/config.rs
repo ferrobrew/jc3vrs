@@ -230,6 +230,34 @@ pub struct StereoConfig {
     /// untouched), so the cull covers everything either eye can see. VR only. See
     /// [`crate::hooks::graphics_engine`].
     pub widen_cull_frustum: bool,
+    /// Extra fraction to expand the union-FOV cull frustum on every side, on top of the per-eye FOV
+    /// union and the lateral eye-shift margin. The union already bounds both eyes' frusta, but the
+    /// combined headset view is wide and the engine culls at a single interpolated pose, so under fast
+    /// motion (especially flying) geometry can still pop in at the outer edges before the cull catches
+    /// up. This pads each side's tangent outward -- `0.1` is 10% wider per side -- and, unlike the bare
+    /// eye-shift margin, applies to the vertical axis too (which flying pitch shifts). Costs some
+    /// over-draw of just-off-screen geometry. VR only; ignored when `widen_cull_frustum` is off.
+    pub cull_fov_padding: f32,
+    /// The FOV (degrees) the scene size-cull uses, overriding the mod's injected 90° on the main cull
+    /// camera. BFBC runs a *screen-space size cull* separate from the frustum cull: it drops an object
+    /// whose angular size falls below `tan(cullFov/2) · minScreenPercentage`. That threshold scales
+    /// with `tan(FOV/2)`, and the mod forces a 90° camera FOV (`tan 45° = 1.0`) where flat JC3 runs
+    /// ~50° (`tan ≈ 0.45`), so in VR the size cull is ~2× too aggressive -- small and distant geometry
+    /// and individual vehicle sub-meshes are dropped at double the distance and "resolve" only as you
+    /// approach. Writing a flatter FOV onto the cull camera's `m_FOVT1` (used *only* by the size and
+    /// AO-volume culls, not the frustum or LOD) restores flat-equivalent density. Lower keeps more
+    /// geometry (more overdraw); `0` leaves `m_FOVT1` untouched. VR only; gated by `widen_cull_frustum`.
+    pub cull_size_fov_deg: f32,
+    /// Disable BFBC software occlusion for the main view. On top of the frustum cull, the engine tests
+    /// each object against occluder silhouette frustums cast from the *single centre viewpoint*, so
+    /// geometry an offset eye could peek past an occluder's edge is still culled for both eyes -- and
+    /// the frustum widen re-includes edge occluders (`m_RemoveOccluderPlanesOutsideFrustum`),
+    /// concentrating the loss at the wide peripheries. This drops the occluder frustums for the main
+    /// cull camera (leaving only the widened camera frustum) by setting `m_FrustumCount` to 1 in the
+    /// frustum-cull params after the engine builds them, so only view-frustum culling remains. Costs
+    /// some overdraw of centre-occluded geometry; defensible in VR where centre-viewpoint occlusion is
+    /// geometrically wrong for both offset eyes. VR only.
+    pub disable_bfbc_occlusion: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -268,6 +296,9 @@ impl StereoConfig {
             reconstruct_offaxis_inverse: true,
             offaxis_inverse_skip_atmospheric: true,
             widen_cull_frustum: true,
+            cull_fov_padding: 0.1,
+            cull_size_fov_deg: 50.0,
+            disable_bfbc_occlusion: true,
         }
     }
 }
