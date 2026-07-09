@@ -403,6 +403,48 @@ impl std::convert::AsMut<NStateTask_LocoUtil> for NStateTask_LocoUtil {
     }
 }
 #[repr(C, align(8))]
+/// The movement actuator task active during a jump's ascending phase — the airborne analogue of
+/// [`NStateTask_MovementLocomotionTask`], on a *separate* code path that does not route through
+/// [`EvaluateCharacterOrientation`](NStateTask_LocoUtil::EvaluateCharacterOrientation) or
+/// [`GetAimMoveAngle`](NStateTask_LocoUtil::GetAimMoveAngle).
+pub struct NStateTask_MovementJumpTask {}
+impl NStateTask_MovementJumpTask {
+    pub const Update_ADDRESS: usize = 0x140833240;
+    /// The per-frame update. Computes a desired facing direction, rate-limits the body toward it,
+    /// and writes the character orientation (the release inlines the `SetOrientation` writes). The
+    /// desired facing has two head-derived sources: when
+    /// [`m_AimingWeapon`](character::character::AimState::m_AimingWeapon) is set it faces the weapon
+    /// aim target (`CPlayerAimControl`'s stored target world position — which follows the camera,
+    /// and therefore the HMD gaze in VR), so head yaw turns the body mid-jump with no stick input;
+    /// otherwise it falls back to the current world-forward plus the stick-gated camera-relative
+    /// steer from `UpdateFallSteering`. Clearing `m_AimingWeapon` around this call routes it through
+    /// the non-aiming fallback (the game's normal jump-while-not-aiming behavior).
+    pub unsafe fn Update(
+        ctx: *mut crate::state::StateContext,
+        p1: *mut ::std::ffi::c_void,
+        p2: *mut ::std::ffi::c_void,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                ctx: *mut crate::state::StateContext,
+                p1: *mut ::std::ffi::c_void,
+                p2: *mut ::std::ffi::c_void,
+            ) = ::std::mem::transmute(Self::Update_ADDRESS);
+            f(ctx, p1, p2)
+        }
+    }
+}
+impl std::convert::AsRef<NStateTask_MovementJumpTask> for NStateTask_MovementJumpTask {
+    fn as_ref(&self) -> &NStateTask_MovementJumpTask {
+        self
+    }
+}
+impl std::convert::AsMut<NStateTask_MovementJumpTask> for NStateTask_MovementJumpTask {
+    fn as_mut(&mut self) -> &mut NStateTask_MovementJumpTask {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The movement actuator task: applies this frame's locomotion to the character, computing the
 /// body orientation via
 /// [`EvaluateCharacterOrientation`](NStateTask_LocoUtil::EvaluateCharacterOrientation) (or the MS
@@ -436,5 +478,47 @@ impl std::convert::AsMut<NStateTask_MovementLocomotionTask>
 for NStateTask_MovementLocomotionTask {
     fn as_mut(&mut self) -> &mut NStateTask_MovementLocomotionTask {
         self
+    }
+}
+pub const UpdateFallSteering_ADDRESS: usize = 0x1407916F0;
+/// Air-steer helper: computes the airborne desired facing and steered velocity for a character from
+/// its stick input and the camera input matrix. `out_facing` defaults to the character's current
+/// world-forward (`-m_WorldMatrixT1` third basis row) and is overwritten with the camera-relative
+/// steer direction only under meaningful stick input — so in VR, where the camera follows the HMD,
+/// pushing the stick while airborne steers the body toward the head. `out_velocity_norm` /
+/// `out_speed` carry the steered velocity. Called from
+/// [`NStateTask_MovementJumpTask::Update`](NStateTask_MovementJumpTask::Update) (jump ascent) and
+/// `NAirMovement::UpdateAirPhysics` (fall), so it governs body facing across the whole airborne arc.
+/// The return is a leaked `out_facing` pointer the callers discard.
+pub unsafe fn UpdateFallSteering(
+    character: *mut crate::character::character::Character,
+    dt: f32,
+    tuning: *const ::std::ffi::c_void,
+    processed_velocity: *const crate::types::math::Vector3,
+    out_facing: *mut crate::types::math::Vector3,
+    out_velocity_norm: *mut crate::types::math::Vector3,
+    out_speed: *mut f32,
+) -> *mut crate::types::math::Vector3 {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            character: *mut crate::character::character::Character,
+            dt: f32,
+            tuning: *const ::std::ffi::c_void,
+            processed_velocity: *const crate::types::math::Vector3,
+            out_facing: *mut crate::types::math::Vector3,
+            out_velocity_norm: *mut crate::types::math::Vector3,
+            out_speed: *mut f32,
+        ) -> *mut crate::types::math::Vector3 = ::std::mem::transmute(
+            UpdateFallSteering_ADDRESS,
+        );
+        f(
+            character,
+            dt,
+            tuning,
+            processed_velocity,
+            out_facing,
+            out_velocity_norm,
+            out_speed,
+        )
     }
 }

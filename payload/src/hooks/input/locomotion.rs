@@ -38,6 +38,8 @@ pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&INPUT_LOCO_MOVE_TASK_UPDATE_BINDER)
         .with_static_binder(&INPUT_LOCO_AIM_RELATIVE_TASK_UPDATE_BINDER)
+        .with_static_binder(&MOVEMENT_JUMP_TASK_UPDATE_BINDER)
+        .with_static_binder(&UPDATE_FALL_STEERING_BINDER)
         .with_static_binder(&EVALUATE_CHARACTER_ORIENTATION_BINDER)
         .with_static_binder(&EVALUATE_CHARACTER_ORIENTATION_MS_BINDER)
         .with_static_binder(&EVALUATE_CHARACTER_DISPLACEMENT_BINDER)
@@ -83,6 +85,81 @@ fn input_loco_aim_relative_task_update(ctx: *mut StateContext, p1: *mut c_void, 
             .unwrap()
             .call(ctx, p1, p2);
     });
+}
+
+/// The airborne (jump) actuator. Its aim-target-facing branch turns the body toward the weapon-aim
+/// target while [`AimState::m_AimingWeapon`] is set, and in VR that target follows the HMD gaze, so a
+/// head turn yaws the body mid-jump with no stick input. While the head is decoupled (the VR source),
+/// clear the aim bit around the update for the local player so the jump takes its non-aiming fallback
+/// (current forward plus the stick-gated steer) -- the mirror of [`with_forced_aim_state`], clearing
+/// rather than forcing. Restored immediately; the character updates on its own worker thread, so the
+/// temporary clear is invisible to the aim system. Passes straight through with the toggle off, off
+/// the VR source, or for a non-local character.
+#[detour(
+    address = jc3gi::input::locomotion::NStateTask_MovementJumpTask::Update_ADDRESS
+)]
+fn movement_jump_task_update(ctx: *mut StateContext, p1: *mut c_void, p2: *mut c_void) {
+    let character = if Config::lock_query(|c| c.movement.suppress_air_aim_facing) {
+        unsafe { character_from_context(ctx) }.filter(|c| c.m_IsLocalCharacter && head_decoupled(c))
+    } else {
+        None
+    };
+    // Clear the weapon-aim bit around the update so its aim-target-facing branch takes the
+    // non-aiming fallback (mirror of `with_forced_aim_state`, clearing rather than forcing). This
+    // covers only the aim-target facing path; the stick-gated air-steer is handled separately in
+    // `update_fall_steering`.
+    match character {
+        Some(character) => {
+            let saved = character.m_AimFlags;
+            let mut cleared = saved;
+            cleared.remove(AimState::m_AimingWeapon);
+            character.m_AimFlags = cleared;
+            MOVEMENT_JUMP_TASK_UPDATE.get().unwrap().call(ctx, p1, p2);
+            character.m_AimFlags = saved;
+        }
+        None => MOVEMENT_JUMP_TASK_UPDATE.get().unwrap().call(ctx, p1, p2),
+    }
+}
+
+/// Hold the local player's body facing straight while airborne under VR. `UpdateFallSteering`
+/// overwrites `out_facing` with a camera-relative steer direction under meaningful stick input, and
+/// in VR the camera follows the HMD, so pushing to move while turning the head yaws the body
+/// mid-jump. After the original runs, restore `out_facing` to the character's current world-forward
+/// (`-m_WorldMatrixT1` third basis row -- the same value the function uses as its no-steer default)
+/// for the local player while the head is decoupled, leaving the steered velocity
+/// (`out_velocity_norm` / `out_speed`) untouched so the stick still moves the body without turning
+/// it. Governs the whole airborne arc: the jump ascent calls this directly, the fall via
+/// `NAirMovement::UpdateAirPhysics`. NPCs and the flatscreen / non-decoupled player pass through.
+#[detour(address = jc3gi::input::locomotion::UpdateFallSteering_ADDRESS)]
+fn update_fall_steering(
+    character: *mut Character,
+    dt: f32,
+    tuning: *const c_void,
+    processed_velocity: *const Vector3,
+    out_facing: *mut Vector3,
+    out_velocity_norm: *mut Vector3,
+    out_speed: *mut f32,
+) -> *mut Vector3 {
+    let result = UPDATE_FALL_STEERING.get().unwrap().call(
+        character,
+        dt,
+        tuning,
+        processed_velocity,
+        out_facing,
+        out_velocity_norm,
+        out_speed,
+    );
+    let hold_straight = Config::lock_query(|c| c.movement.suppress_air_aim_facing)
+        && unsafe { character.as_ref() }.is_some_and(|c| c.m_IsLocalCharacter && head_decoupled(c));
+    if hold_straight && !out_facing.is_null() {
+        let forward = -glam::Mat4::from(unsafe { (*character).m_WorldMatrixT1 })
+            .z_axis
+            .truncate();
+        unsafe {
+            (*out_facing).data = [forward.x, forward.y, forward.z];
+        }
+    }
+    result
 }
 
 /// Run `call` (the wrapped task update) with the local player's aim flags forced to the
@@ -316,11 +393,21 @@ fn force_face_camera(
 /// turning past its threshold, and while idle within the cone the head moves freely, so the body is
 /// held only in that specific window.
 fn head_decoupled(character: &Character) -> bool {
-    if !crate::headpose::is_active() || crate::headpose::sim::mode() != HeadMode::OnFoot {
+    if !crate::headpose::is_active() {
         return false;
     }
+    // Under the VR source the HMD owns the head and the stick owns the body in *every* mode -- on
+    // foot, airborne (a jump), hanging from a tether under a helicopter, or in a vehicle -- so the
+    // body must never turn toward the head. Gating this on `OnFoot` (as the flatscreen branch below
+    // must, since there the head *is* the mouse-look that should turn the body) let the native
+    // aim-turn drag the body around whenever the mode detector fell out of `OnFoot`: the yaw kick on
+    // jumping and the head-driven body spin while dangling from a helicopter both land in `Other`,
+    // where the suppression used to switch off.
     if crate::headpose::source() == crate::headpose::Source::Vr {
         return true;
+    }
+    if crate::headpose::sim::mode() != HeadMode::OnFoot {
+        return false;
     }
     crate::headpose::sim::latch_state() == LatchState::Decoupled
         && !character

@@ -477,6 +477,14 @@ pub struct MovementConfig {
     /// with a player-driven head, looking behind is the player's job, and the forced body turn is
     /// discomforting.
     pub suppress_reverse_look: bool,
+    /// Suppress the head-driven body turn during a jump. The airborne actuator
+    /// (`NStateTask_MovementJumpTask::Update`) faces the body at the weapon-aim target while
+    /// [`m_AimingWeapon`](jc3gi::character::character::AimState::m_AimingWeapon) is set, and in VR
+    /// that target follows the HMD gaze -- so turning your head yaws your body mid-jump with no stick
+    /// input. This clears the aim bit around the jump update for the local player while the head is
+    /// decoupled (the VR source), routing the jump through its non-aiming fallback (current forward
+    /// plus stick-gated steer). Restored immediately after. See `crate::hooks::input::locomotion`.
+    pub suppress_air_aim_facing: bool,
 }
 impl MovementConfig {
     pub const fn new() -> Self {
@@ -495,6 +503,7 @@ impl MovementConfig {
             slide_instant_speed: true,
             slide_skip_starts: true,
             suppress_reverse_look: true,
+            suppress_air_aim_facing: true,
         }
     }
 }
