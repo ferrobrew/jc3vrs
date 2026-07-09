@@ -268,6 +268,18 @@ pub struct StereoConfig {
     /// (`Camera::UpdateFrustum`), so the terrain patch set covers everything either eye can see. Once
     /// per frame; only terrain visibility reads that camera. VR only.
     pub widen_terrain_cull: bool,
+    /// Widen the sun-shadow cascade *fit* frustum to cover both eyes. The engine fits the cascaded
+    /// shadow map once per frame to the centre camera's narrow `m_ProjectionF`, so the wider, laterally
+    /// shifted VR eyes see distant/peripheral geometry that falls outside the fitted coverage box --
+    /// where shadows clamp to the atlas border or a wrong texel, differently per eye (distant shadows
+    /// disagree between the eyes) and crawling as the fit boundary re-quantizes under motion. This
+    /// scoped-widens only the two FOV-scale terms (`m_ProjectionF` data[0]/data[5]) of the active
+    /// camera to the union FOV around `ShadowManager::UpdateRender`, so the cascades cover both eyes;
+    /// the near/far/split terms are left untouched. Complements
+    /// [`fix_shadow_cascade_anchor`](Self::fix_shadow_cascade_anchor) (which re-anchors the *sampling*;
+    /// this fixes the *coverage*). Costs some shadow resolution (cascades cover more world area). VR
+    /// only; no-op on flatscreen.
+    pub widen_shadow_fit: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -310,6 +322,7 @@ impl StereoConfig {
             cull_size_fov_deg: 50.0,
             disable_bfbc_occlusion: true,
             widen_terrain_cull: true,
+            widen_shadow_fit: true,
         }
     }
 }

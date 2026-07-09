@@ -116,18 +116,28 @@ fn draw_render_pass_range(
 }
 
 // ShadowManager::UpdateRender -- the sim-side sun-shadow update, which fits the scheduled cascades to
-// the active camera (the fit frustum comes from its m_ProjectionF). If that projection ever carries a
-// sub-pixel jitter translation, the fit frustum wobbles every frame and the cascade texel snapping
-// flips back and forth, re-fitting cascades mid-transition. The toggle strips the projection's
-// translation terms for the duration of the call (jitter is a pure clip-space translation; the
-// projection is otherwise symmetric), restoring them after. The active camera is not jittered by the
-// mod, so this showed no effect on the issue-10 flicker; kept as a defensive A/B.
+// the active camera (the fit frustum comes from its m_ProjectionF via CFrustum::Compute). Two scoped
+// projection tweaks around the fit, both restored after:
+//   * unjitter_shadow_fit: strip the projection's clip-space jitter translation (data[12]/[13]) so a
+//     jittered fit frustum can't re-quantize the cascade texel snap mid-transition. The active sim
+//     camera is not jittered by the mod, so this showed no effect on issue #10; kept as a defensive
+//     A/B.
+//   * widen_shadow_fit: widen the two FOV-scale terms (data[0]/data[5]) to the union FOV so the
+//     cascades are fit to cover BOTH eyes. The fit is once-per-frame from the narrow centre camera, so
+//     the wider, laterally shifted VR eyes otherwise exceed the fitted coverage box -- their distant
+//     shadows fall outside it and disagree between the eyes, and the boundary crawls under motion.
+//     This is the coverage half of the shadow fix; fix_shadow_cascade_anchor is the sampling half. The
+//     centre, shear, and z (near/far/split) terms are left untouched, so split distances are unchanged.
 #[detour(
     address = jc3gi::graphics_engine::shadow_manager::ShadowManager::UpdateRender_ADDRESS
 )]
 fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
     let original = SHADOW_MANAGER_UPDATE_RENDER.get().unwrap();
-    if !Config::lock_query(|c| c.stereo.unjitter_shadow_fit) {
+    let (unjitter, widen) =
+        Config::lock_query(|c| (c.stereo.unjitter_shadow_fit, c.stereo.widen_shadow_fit));
+    // The widen reuses the union-FOV cull projection; `None` on flatscreen, so widening is VR-only.
+    let union = widen.then(crate::vr::cull_projection_standard).flatten();
+    if !unjitter && union.is_none() {
         return original.call(this, dt, dtf);
     }
     // SAFETY: the camera-manager singleton and the active camera are live on the game thread for
@@ -139,12 +149,21 @@ fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
         let Some(camera) = camera.as_mut() else {
             return original.call(this, dt, dtf);
         };
-        let saved = [camera.m_ProjectionF.data[12], camera.m_ProjectionF.data[13]];
-        camera.m_ProjectionF.data[12] = 0.0;
-        camera.m_ProjectionF.data[13] = 0.0;
+        let data = &mut camera.m_ProjectionF.data;
+        let saved = [data[0], data[5], data[12], data[13]];
+        if unjitter {
+            data[12] = 0.0;
+            data[13] = 0.0;
+        }
+        if let Some(union) = union {
+            data[0] = union[0];
+            data[5] = union[5];
+        }
         let result = original.call(this, dt, dtf);
-        camera.m_ProjectionF.data[12] = saved[0];
-        camera.m_ProjectionF.data[13] = saved[1];
+        data[0] = saved[0];
+        data[5] = saved[1];
+        data[12] = saved[2];
+        data[13] = saved[3];
         result
     }
 }

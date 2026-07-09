@@ -44,6 +44,11 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                 "Sun-shadow cascade anchor (the visible per-eye shadow mismatch; A/B via Present eye 0)",
             );
             ui.checkbox(
+                &mut cfg.stereo.widen_shadow_fit,
+                "Widen sun-shadow fit FOV (cascades cover both eyes; fixes distant per-eye shadow \
+                 disagreement + crawl)",
+            );
+            ui.checkbox(
                 &mut cfg.stereo.dedupe_post_block,
                 "Dedupe world post block (eye 1 otherwise runs the post chain + FSR twice)",
             );
