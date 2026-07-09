@@ -349,6 +349,42 @@ fn _RenderPassId_size_check() {
     }
     unreachable!()
 }
+#[repr(C, align(8))]
+/// The terrain patch render system's per-frame state (partial: only the fields walked to
+/// `m_TerrainCamera` are mapped). Owned by `CLandscapeManager`; updated by
+/// [`TerrainPatchSystemUpdate`].
+pub struct STerrainPatchSystem {
+    _field_0: [u8; 80],
+    /// Whether [`TerrainPatchSystemUpdate`] refreshes
+    /// [`m_TerrainCamera`](STerrainPatchSystem::m_TerrainCamera) from the LOD camera this frame; when
+    /// clear, the previous frame's copy is kept.
+    pub m_UpdateCamera: bool,
+    _field_51: [u8; 3],
+    /// The camera-space distance at which terrain patches subdivide (tessellation LOD).
+    pub m_TessellationDistance: f32,
+    /// A copy of the LOD camera (`CameraManager::m_ActiveCamera`) taken when
+    /// [`m_UpdateCamera`](STerrainPatchSystem::m_UpdateCamera) is set. The terrain render passes point
+    /// their frustum camera at this and cull patches against its
+    /// [`m_FrustumPlane`](camera::camera::Camera::m_FrustumPlane).
+    pub m_TerrainCamera: crate::camera::camera::Camera,
+}
+fn _STerrainPatchSystem_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x608], STerrainPatchSystem>([0u8; 0x608]);
+    }
+    unreachable!()
+}
+impl STerrainPatchSystem {}
+impl std::convert::AsRef<STerrainPatchSystem> for STerrainPatchSystem {
+    fn as_ref(&self) -> &STerrainPatchSystem {
+        self
+    }
+}
+impl std::convert::AsMut<STerrainPatchSystem> for STerrainPatchSystem {
+    fn as_mut(&mut self) -> &mut STerrainPatchSystem {
+        self
+    }
+}
 pub const GetRenderPassName_ADDRESS: usize = 0x140175080;
 /// The debug name for a render-pass id, from the engine's pass-name switch (the ground truth the
 /// [`RenderPassId`] values are verified against). Returns `"NONE"` for unnamed indices.
@@ -360,5 +396,22 @@ pub unsafe fn GetRenderPassName(
             pass: crate::graphics_engine::render_engine::RenderPassId,
         ) -> *const u8 = ::std::mem::transmute(GetRenderPassName_ADDRESS);
         f(pass)
+    }
+}
+pub const TerrainPatchSystemUpdate_ADDRESS: usize = 0x14032F780;
+/// The once-per-frame terrain patch system update (called from `CLandscapeManager::UpdateRender` in the
+/// sim phase). When [`STerrainPatchSystem::m_UpdateCamera`] is set it copies the LOD camera
+/// (`CameraManager::m_ActiveCamera`) into [`STerrainPatchSystem::m_TerrainCamera`] and points every
+/// terrain render pass's frustum camera at it. `ctx` carries the source camera.
+pub unsafe fn TerrainPatchSystemUpdate(
+    handle: *mut crate::graphics_engine::render_engine::STerrainPatchSystem,
+    ctx: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            handle: *mut crate::graphics_engine::render_engine::STerrainPatchSystem,
+            ctx: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(TerrainPatchSystemUpdate_ADDRESS);
+        f(handle, ctx)
     }
 }

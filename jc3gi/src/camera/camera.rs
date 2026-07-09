@@ -102,6 +102,25 @@ impl Camera {
             f(self as *mut Self as _)
         }
     }
+    pub const UpdateFrustum_ADDRESS: usize = 0x1400B2FC0;
+    /// Rebuilds the 6 world-space frustum planes (`m_FrustumPlane`) and the AABB-test acceleration
+    /// data from `m_ViewProjection`: it inverts the view-projection, transforms the NDC cube corners to
+    /// world space (using `transform`'s translation for the apex), and derives the planes. Reads the
+    /// standard-depth `m_ViewProjection` (not the reverse-Z `m_ViewProjectionF`) and asserts
+    /// `!m_IsRenderCamera`. Called from [`UpdateRender`](Camera::UpdateRender) when the view is dirty;
+    /// the frustum-cull consumers (terrain patches, occlusion) read these planes, not `m_ProjectionF`.
+    pub unsafe fn UpdateFrustum(
+        &mut self,
+        transform: *const crate::types::math::Matrix4,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                transform: *const crate::types::math::Matrix4,
+            ) = ::std::mem::transmute(Self::UpdateFrustum_ADDRESS);
+            f(self as *mut Self as _, transform)
+        }
+    }
 }
 impl std::convert::AsRef<Camera> for Camera {
     fn as_ref(&self) -> &Camera {

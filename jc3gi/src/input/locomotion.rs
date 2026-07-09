@@ -161,8 +161,8 @@ pub struct NStateTask_LocoUtil {}
 impl NStateTask_LocoUtil {
     pub const QueueMoveActions_ADDRESS: usize = 0x140832C00;
     /// Queues the run/steer acts (`ACT_MOVE_NO_AIM` and friends). The body turns to face the
-    /// movement direction, so directional input rotates the whole character — the third-person
-    /// on-foot behavior that reads as a "tank turn" in VR.
+    /// movement direction, so directional input rotates the whole character (third-person on-foot
+    /// steering).
     pub unsafe fn QueueMoveActions(
         character: *mut crate::character::character::Character,
     ) -> bool {
@@ -412,13 +412,11 @@ impl NStateTask_MovementJumpTask {
     pub const Update_ADDRESS: usize = 0x140833240;
     /// The per-frame update. Computes a desired facing direction, rate-limits the body toward it,
     /// and writes the character orientation (the release inlines the `SetOrientation` writes). The
-    /// desired facing has two head-derived sources: when
+    /// desired facing has two sources: when
     /// [`m_AimingWeapon`](character::character::AimState::m_AimingWeapon) is set it faces the weapon
-    /// aim target (`CPlayerAimControl`'s stored target world position — which follows the camera,
-    /// and therefore the HMD gaze in VR), so head yaw turns the body mid-jump with no stick input;
-    /// otherwise it falls back to the current world-forward plus the stick-gated camera-relative
-    /// steer from `UpdateFallSteering`. Clearing `m_AimingWeapon` around this call routes it through
-    /// the non-aiming fallback (the game's normal jump-while-not-aiming behavior).
+    /// aim target (`CPlayerAimControl`'s stored target world position, which tracks the aim camera);
+    /// otherwise it falls back to the current world-forward plus the stick-gated camera-relative steer
+    /// from [`UpdateFallSteering`](UpdateFallSteering).
     pub unsafe fn Update(
         ctx: *mut crate::state::StateContext,
         p1: *mut ::std::ffi::c_void,
@@ -482,10 +480,9 @@ for NStateTask_MovementLocomotionTask {
 }
 pub const UpdateFallSteering_ADDRESS: usize = 0x1407916F0;
 /// Air-steer helper: computes the airborne desired facing and steered velocity for a character from
-/// its stick input and the camera input matrix. `out_facing` defaults to the character's current
-/// world-forward (`-m_WorldMatrixT1` third basis row) and is overwritten with the camera-relative
-/// steer direction only under meaningful stick input — so in VR, where the camera follows the HMD,
-/// pushing the stick while airborne steers the body toward the head. `out_velocity_norm` /
+/// its stick input and the camera input matrix (`GetInputMatrix`). `out_facing` defaults to the
+/// character's current world-forward (`-m_WorldMatrixT1` third basis row) and is overwritten with the
+/// camera-relative steer direction only under meaningful stick input. `out_velocity_norm` /
 /// `out_speed` carry the steered velocity. Called from
 /// [`NStateTask_MovementJumpTask::Update`](NStateTask_MovementJumpTask::Update) (jump ascent) and
 /// `NAirMovement::UpdateAirPhysics` (fall), so it governs body facing across the whole airborne arc.

@@ -26,14 +26,24 @@
 //! Terrain patches are a known exception: their visibility is decided by a separate landscape system
 //! that does not read this cull frustum, so these corrections do not affect terrain-patch pop-in.
 
+use std::ffi::c_void;
+
 use detours_macro::detour;
-use jc3gi::{camera::camera::Camera, graphics_engine::graphics_engine::OccluderCollectionManager};
+use jc3gi::{
+    camera::camera::Camera,
+    graphics_engine::{
+        graphics_engine::OccluderCollectionManager, render_engine::STerrainPatchSystem,
+    },
+    types::math::Matrix4,
+};
 use re_utilities::hook_library::HookLibrary;
 
 use crate::config::Config;
 
 pub(super) fn hook_library() -> HookLibrary {
-    HookLibrary::new().with_static_binder(&GET_BFBC_FRUSTUM_PARAMS_BINDER)
+    HookLibrary::new()
+        .with_static_binder(&GET_BFBC_FRUSTUM_PARAMS_BINDER)
+        .with_static_binder(&TERRAIN_PATCH_SYSTEM_UPDATE_BINDER)
 }
 
 #[detour(
@@ -101,6 +111,53 @@ fn widen_main_cull_camera(camera: *const Camera) {
     // frustum cull and LOD untouched.
     if size_fov_deg > 0.0 {
         camera.m_FOVT1 = size_fov_deg.to_radians();
+    }
+}
+
+// `TerrainPatchSystemUpdate` copies the narrow centre `m_ActiveCamera` into the landscape system's own
+// `m_TerrainCamera` and points every terrain render pass's frustum at it, so terrain patches cull
+// against that camera's precomputed `m_FrustumPlane` -- a *separate* camera from the occluder cull
+// camera the frustum widen above touches (which is why widening the occluder camera did nothing for
+// terrain). Make `m_TerrainCamera` the binocular union camera after the copy, so the terrain patch set
+// covers both eyes (fixes the outer-edge and bottom patch holes when flying). It runs once per frame
+// and the copy reverts the camera each call it fires, so the union is re-applied unconditionally --
+// affordable here (unlike the hot occluder hook) because the full frustum rebuild runs once per frame.
+#[detour(address = jc3gi::graphics_engine::render_engine::TerrainPatchSystemUpdate_ADDRESS)]
+fn terrain_patch_system_update(handle: *mut STerrainPatchSystem, ctx: *mut c_void) {
+    TERRAIN_PATCH_SYSTEM_UPDATE.get().unwrap().call(handle, ctx);
+    if !Config::lock_query(|c| c.stereo.widen_terrain_cull) {
+        return;
+    }
+    let Some(cull) = crate::vr::cull_projection_standard() else {
+        return;
+    };
+    // SAFETY: the original just populated the patch system; `m_TerrainCamera` is a fresh copy of the
+    // active camera, so its `m_View`/`m_TransformF` are valid.
+    let Some(sys) = (unsafe { handle.as_mut() }) else {
+        return;
+    };
+    make_union_camera(&mut sys.m_TerrainCamera, cull);
+}
+
+/// Make `camera` represent the binocular union view: stamp the union projection and rebuild every
+/// frustum field derived from it -- the view-projection and the six world-space frustum planes that
+/// precomputed-plane cull consumers (terrain patches) read. The union projection is
+/// [`crate::vr::cull_projection_standard`], synthesised from both eyes' FOVs plus the lateral IPD
+/// margin. `UpdateFrustum` reads the standard-depth `m_ViewProjection`, so rebuild it from the union
+/// first (`m_ViewProjection = m_View * union`).
+fn make_union_camera(camera: &mut Camera, union: [f32; 16]) {
+    camera.m_ProjectionF.data = union;
+    let union_mat = Matrix4 { data: union };
+    // Copy the transform out so the `&mut self` `UpdateFrustum` call does not alias a borrow into the
+    // camera.
+    let transform = camera.m_TransformF;
+    unsafe {
+        Matrix4::Multiply4x4(
+            &raw const camera.m_View,
+            &raw const union_mat,
+            &raw mut camera.m_ViewProjection,
+        );
+        camera.UpdateFrustum(&raw const transform);
     }
 }
 

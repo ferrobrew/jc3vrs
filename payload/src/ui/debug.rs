@@ -141,6 +141,11 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                 "Disable software occlusion (drops centre-viewpoint occluder culling; fixes \
                  peripheral culling an offset eye can see past)",
             );
+            ui.checkbox(
+                &mut cfg.stereo.widen_terrain_cull,
+                "Widen terrain patch cull (rebuild the cull frustum planes; fixes terrain patch \
+                 holes at the edges when flying)",
+            );
         });
 
     // Investigation levers -- normally off; used to isolate what differs between the eyes.

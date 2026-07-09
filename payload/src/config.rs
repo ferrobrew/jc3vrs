@@ -258,6 +258,16 @@ pub struct StereoConfig {
     /// some overdraw of centre-occluded geometry; defensible in VR where centre-viewpoint occlusion is
     /// geometrically wrong for both offset eyes. VR only.
     pub disable_bfbc_occlusion: bool,
+    /// Make the landscape terrain patch system cull against the binocular union camera. Terrain
+    /// patches are decided by a *separate* landscape system that culls against its own
+    /// `STerrainPatchSystem.m_TerrainCamera` (a per-frame copy of the centre camera), not the occluder
+    /// manager's cull camera the frustum widen above touches -- so widening that camera does nothing
+    /// for terrain, and the narrow centre fit leaves bottom/edge patch holes when flying. This detours
+    /// `TerrainPatchSystemUpdate` and, after the engine refreshes `m_TerrainCamera`, stamps the union
+    /// projection onto it and rebuilds its view-projection and six frustum planes
+    /// (`Camera::UpdateFrustum`), so the terrain patch set covers everything either eye can see. Once
+    /// per frame; only terrain visibility reads that camera. VR only.
+    pub widen_terrain_cull: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -299,6 +309,7 @@ impl StereoConfig {
             cull_fov_padding: 0.1,
             cull_size_fov_deg: 50.0,
             disable_bfbc_occlusion: true,
+            widen_terrain_cull: true,
         }
     }
 }
