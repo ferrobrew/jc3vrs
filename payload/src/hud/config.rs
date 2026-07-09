@@ -70,6 +70,13 @@ pub struct HudConfig {
     /// cover the whole panel in VR instead. Enforced per frame on the game thread through the
     /// discovered clip handles, ahead of each capture.
     pub suppress_overlays: bool,
+    /// World-lock the panel while an in-game modal menu (pause / full-screen map) is open: snapshot
+    /// the panel pose the moment the menu opens and hold it there, so the player can look around a
+    /// stationary panel instead of it chasing the head. Reverts to head-follow on close. Only in-game
+    /// menus (`E_GAME_RUN` + a static UI background) freeze; the frontend and loading screens are
+    /// excluded.
+    #[serde(default)]
+    pub world_lock_menus: bool,
     /// Dynamic panel distance from the scene depth distribution.
     pub depth_shift: DepthShiftConfig,
     /// The virtual mouse cursor for panel UI interaction (issue #9). See
@@ -104,6 +111,7 @@ impl HudConfig {
             depth_shift: DepthShiftConfig::new(),
             cursor: CursorConfig::new(),
             suppress_overlays: true,
+            world_lock_menus: true,
             split_path_prefix: SplitPathPrefix::new(),
         }
     }

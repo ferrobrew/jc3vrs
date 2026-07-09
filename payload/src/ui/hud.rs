@@ -39,6 +39,10 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                 "Suppress full-screen overlays (damage flash, drowning)",
             );
             ui.checkbox(
+                &mut cfg.hud.world_lock_menus,
+                "World-lock panel in menus (pause/map stay put instead of head-following)",
+            );
+            ui.checkbox(
                 &mut cfg.hud.cursor.enabled,
                 "Virtual mouse cursor on the panel (remaps mouse-to-UI coordinates)",
             );

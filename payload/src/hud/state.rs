@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 
 use super::{
-    HudMode, binding,
+    binding,
     markers::MarkerDepth,
     quad::HudQuad,
     split,
@@ -331,25 +331,22 @@ impl HudState {
             .map(super::depth::DepthShift::status)
     }
 
-    /// Choose the panel pose `(position, rotation)` for the current frame from the head pose and the
-    /// [`HudMode`](crate::hud::HudMode), caching it for the marker projection to reuse.
+    /// Choose the panel pose `(position, rotation)` for the current frame from the head pose, caching
+    /// it for the marker projection to reuse.
     ///
-    /// In [`HudMode::Hud`](crate::hud::HudMode::Hud) the panel tracks the head: the position is the
-    /// live head position and the rotation is the damped follow quaternion.
-    /// [`HudMode::Movie`](crate::hud::HudMode::Movie) is world-static -- the pose is latched on the
-    /// first movie-mode frame and held, so head movement no longer moves it (the latch is cleared
-    /// whenever `Hud` mode resumes) -- but only while
-    /// [`WORLD_STATIC_MOVIE_PANEL`](crate::hud::WORLD_STATIC_MOVIE_PANEL) is enabled. While it is
-    /// disabled the panel head-follows in both modes (see that constant for why).
+    /// When `freeze` is false the panel tracks the head: the position is the live head position and the
+    /// rotation is the damped follow quaternion. When `freeze` is true (an in-game menu is open, see
+    /// [`menu_world_lock`](crate::hud::menu_world_lock)) the pose is world-locked -- latched on the
+    /// first frozen frame and held, so head movement no longer moves it -- and the latch is cleared the
+    /// moment `freeze` drops, resuming head-follow.
     pub fn update_pose(
         &mut self,
-        mode: HudMode,
+        freeze: bool,
         head_pos: Vec3,
         head_rotation: Quat,
         follow: &super::config::FollowConfig,
     ) -> (Vec3, Quat) {
-        let world_static = super::WORLD_STATIC_MOVIE_PANEL && mode == HudMode::Movie;
-        let pose = if world_static {
+        let pose = if freeze {
             *self.latched_pose.get_or_insert((head_pos, head_rotation))
         } else {
             self.latched_pose = None;
