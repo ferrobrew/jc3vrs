@@ -269,6 +269,97 @@ impl std::convert::AsMut<RenderBlockCharacterSkin> for RenderBlockCharacterSkin 
     }
 }
 #[repr(C, align(8))]
+/// The fog-volume render block *type* (the
+/// `NGraphicsEngine::CRenderBlockFogVolume::CRenderBlockTypeFogVolume` singleton): owns the froxel
+/// volumetric-fog textures and recreates them when the scene render resolution changes.
+pub struct RenderBlockTypeFogVolume {
+    _field_0: [u8; 296],
+    /// The full-resolution fog target width, in pixels, latched from the last
+    /// [`ResizeTextures`](RenderBlockTypeFogVolume::ResizeTextures) call.
+    pub m_HiResTextureWidth: u32,
+    /// The full-resolution fog target height, in pixels; see
+    /// [`m_HiResTextureWidth`](RenderBlockTypeFogVolume::m_HiResTextureWidth).
+    pub m_HiResTextureHeight: u32,
+}
+fn _RenderBlockTypeFogVolume_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x130], RenderBlockTypeFogVolume>([0u8; 0x130]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeFogVolume {
+    pub const ResizeTextures_ADDRESS: usize = 0x14010C5A0;
+    /// Recreates the fog-volume textures for a `width` x `height` render target: the full-resolution
+    /// `fogvolume_texture_0` colour target and its volume texture, plus a coarse volumetric-depth
+    /// buffer that is resized to *half* of `width` x `height`. Invoked from the graphics engine's
+    /// registered resolution-change callback, so it re-runs whenever the scene render targets are
+    /// recreated (a resolution change), not per frame.
+    pub unsafe fn ResizeTextures(&mut self, width: u32, height: u32) -> bool {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                width: u32,
+                height: u32,
+            ) -> bool = ::std::mem::transmute(Self::ResizeTextures_ADDRESS);
+            f(self as *mut Self as _, width, height)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockTypeFogVolume> for RenderBlockTypeFogVolume {
+    fn as_ref(&self) -> &RenderBlockTypeFogVolume {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeFogVolume> for RenderBlockTypeFogVolume {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeFogVolume {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The particle render block *type* (the `CRenderBlockParticle::CRenderBlockTypeParticle` singleton):
+/// the shared state and shaders for every particle render block, including the flags that decide
+/// whether a particle draw is routed to the low-resolution particle pass.
+pub struct RenderBlockTypeParticle {
+    _field_0: [u8; 2693],
+    /// When set, a particle render block whose effect opts in and that falls below the low-resolution
+    /// distance threshold routes its draw to the low-resolution particle pass (later composited back
+    /// up by the low-res upsampling pass); when clear, that particle routes to the full-resolution
+    /// transparent pass instead. Set from the particle-quality graphics setting. The per-block routing
+    /// (`CRenderBlockParticle::GetRenderDetails`) selects the pass index from this flag ORed with
+    /// [`m_ForceLowResRendering`](RenderBlockTypeParticle::m_ForceLowResRendering).
+    pub m_LowResRendering: bool,
+    /// Forces every particle render block onto the low-resolution particle pass regardless of the
+    /// per-effect opt-in or the distance threshold, ORed with
+    /// [`m_LowResRendering`](RenderBlockTypeParticle::m_LowResRendering).
+    pub m_ForceLowResRendering: bool,
+    _field_a87: [u8; 1],
+}
+fn _RenderBlockTypeParticle_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xA88], RenderBlockTypeParticle>([0u8; 0xA88]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeParticle {
+    pub unsafe fn get() -> Option<&'static mut Self> {
+        unsafe {
+            let ptr: *mut Self = *(5418086696usize as *mut *mut Self);
+            ptr.as_mut()
+        }
+    }
+}
+impl RenderBlockTypeParticle {}
+impl std::convert::AsRef<RenderBlockTypeParticle> for RenderBlockTypeParticle {
+    fn as_ref(&self) -> &RenderBlockTypeParticle {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeParticle> for RenderBlockTypeParticle {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeParticle {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The terrain render block *type* (the `CRenderBlockTerrain::CRenderBlockTypeTerrain` singleton).
 /// Its `SetupConstantBuffers` uploads the per-LOD-slot hull/domain tessellation constant buffer —
 /// which bakes the dispatch's

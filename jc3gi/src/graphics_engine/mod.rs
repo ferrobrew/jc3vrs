@@ -3,6 +3,7 @@ pub mod device;
 pub mod draw;
 pub mod gi;
 pub mod graphics_engine;
+pub mod light_manager;
 pub mod post_effects;
 pub mod render_block;
 pub mod render_engine;

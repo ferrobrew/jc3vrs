@@ -280,6 +280,34 @@ pub struct StereoConfig {
     /// this fixes the *coverage*). Costs some shadow resolution (cascades cover more world area). VR
     /// only; no-op on flatscreen.
     pub widen_shadow_fit: bool,
+    /// Recreate the froxel volumetric-fog block's coarse volumetric-depth buffer at full render
+    /// resolution instead of half. The fog block bilaterally upsamples that coarse buffer, and VR's
+    /// wide FOV magnifies its grid into the blocky tiles around lights and explosions (issue #8). The
+    /// hook no-ops the two width/height halving multiplies in
+    /// [`RenderBlockTypeFogVolume::ResizeTextures`](jc3gi::graphics_engine::render_block::RenderBlockTypeFogVolume)
+    /// around the call, leaving the full-res colour and volume textures untouched. `ResizeTextures`
+    /// only runs when the fog textures are recreated, so this takes effect at the next resolution
+    /// change, not the instant it is toggled. Costs fog fill rate and memory. **Default off** (not
+    /// headset-verified; a coarse-buffer format the shader assumes to be half-res could misregister).
+    pub fog_full_res: bool,
+    /// Route particles to the full-resolution transparent pass instead of the low-resolution particle
+    /// pass, by clearing the particle block type's
+    /// [`m_LowResRendering`](jc3gi::graphics_engine::render_block::RenderBlockTypeParticle::m_LowResRendering)
+    /// and `m_ForceLowResRendering` flags. VR's wide FOV magnifies the low-res particle grid into the
+    /// same tiles as the fog (issue #8). The engine's full-res transparent pass always draws, so
+    /// particles route rather than vanish; still, this is the riskiest lever. **Default off** and needs
+    /// live A/B — if some particle family does not survive the reroute it could look wrong or drop out,
+    /// and it costs transparent-pass fill rate. Applied one frame ahead (routing runs before the pass
+    /// draws); reverted to the engine's setting when turned off.
+    pub particles_full_res: bool,
+    /// Render volumetric spot-light cones at full resolution instead of quarter resolution, by scoping
+    /// the engine's `enable_low_res_spot_light_volume` global to `false` around the per-frame light
+    /// gather ([`LightManager::CopyLightsToUpdate`](jc3gi::graphics_engine::light_manager::LightManager)).
+    /// The engine's own full-resolution branch then runs (main render setup, cone low-res flag cleared),
+    /// removing the coarse spot-light-volume tiles VR's wide FOV magnifies (issue #8). The lowest-risk
+    /// of the three resolution levers (an engine-supported path), but still costs cone fill rate and is
+    /// not headset-verified. **Default off.**
+    pub spotlight_full_res: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -323,6 +351,9 @@ impl StereoConfig {
             disable_bfbc_occlusion: true,
             widen_terrain_cull: true,
             widen_shadow_fit: true,
+            fog_full_res: false,
+            particles_full_res: false,
+            spotlight_full_res: false,
         }
     }
 }

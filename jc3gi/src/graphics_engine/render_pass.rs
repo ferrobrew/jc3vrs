@@ -25,6 +25,34 @@ impl std::convert::AsMut<ConstantBufferPool> for ConstantBufferPool {
     }
 }
 #[repr(C, align(8))]
+/// The low-resolution particle render pass: draws the particle render blocks routed to it (see
+/// `m_LowResRendering` on the particle block type) into a reduced-resolution target that the low-res
+/// upsampling pass later composites back up.
+pub struct LRParticleRenderPass {}
+impl LRParticleRenderPass {
+    pub const Draw_ADDRESS: usize = 0x1400A4170;
+    /// Binds the reduced-resolution render setup, runs the base [`RenderPass::DoDraw`] over the routed
+    /// particle blocks, and restores the previously bound render setup.
+    pub unsafe fn Draw(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::Draw_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<LRParticleRenderPass> for LRParticleRenderPass {
+    fn as_ref(&self) -> &LRParticleRenderPass {
+        self
+    }
+}
+impl std::convert::AsMut<LRParticleRenderPass> for LRParticleRenderPass {
+    fn as_mut(&mut self) -> &mut LRParticleRenderPass {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The per-item info accompanying a render block on a draw list (transform, sort key, and the like).
 /// Opaque; handled only behind pointers.
 pub struct RBIInfo {}

@@ -20,6 +20,9 @@ mod culling;
 // only through `hook_library` below.
 mod reconstruction;
 mod render_pass;
+// The three VR resolution levers (`ResizeTextures`, LR-particle, spot-light cone) for issue #8's
+// pixelation; private, reached only through `hook_library` below.
+mod resolution;
 // `shader` is public so the debug UI can read its patched-shader count.
 pub mod shader;
 // `ssao` is crate-visible so hooks::game can read the recorded CSSAOPass pointer for the between-eye
@@ -36,6 +39,7 @@ pub(crate) fn hook_library() -> HookLibrary {
         .with_hook_library(culling::hook_library())
         .with_hook_library(reconstruction::hook_library())
         .with_hook_library(render_pass::hook_library())
+        .with_hook_library(resolution::hook_library())
         .with_hook_library(tone_mapping::hook_library())
         .with_hook_library(post_effects::hook_library())
         .with_hook_library(ssao::hook_library())

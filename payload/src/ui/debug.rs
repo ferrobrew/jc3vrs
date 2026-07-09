@@ -153,6 +153,39 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
             );
         });
 
+    // Resolution levers for issue #8's pixelation/large-tile artifact around lights and explosions:
+    // the engine's reduced-resolution fog/particle/spotlight passes, whose coarse grids VR's wide FOV
+    // magnifies. All default off (not headset-verifiable; particles can hide content).
+    ui.collapsing("Resolution (pixelation)", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.fog_full_res,
+            "Fog volume full-res (coarse froxel depth buffer; applies at next resolution change)",
+        )
+        .on_hover_text(
+            "No-ops the half-res multiplies in the fog block's ResizeTextures so the coarse \
+             volumetric-depth buffer is recreated at full resolution. Most likely fix for the \
+             light/explosion tiles. Only re-runs on a resolution change.",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.particles_full_res,
+            "Particles full-res (route to the full-res transparent pass) -- RISKY, A/B live",
+        )
+        .on_hover_text(
+            "Clears the particle block type's low-res routing flags so particles draw in the \
+             full-res transparent pass. The full-res pass always draws, so particles reroute rather \
+             than vanish -- but verify live: a family that does not survive the reroute could look \
+             wrong. Applies one frame ahead.",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.spotlight_full_res,
+            "Spotlight volumetrics full-res (engine's full-res branch)",
+        )
+        .on_hover_text(
+            "Scopes g_EnableLowResSpotLightVolume off around the light gather so spot-light cones \
+             render at full resolution into the main setup. Lowest-risk lever.",
+        );
+    });
+
     // Investigation levers -- normally off; used to isolate what differs between the eyes.
     ui.collapsing("Per-eye diagnostics", |ui| {
         ui.checkbox(
