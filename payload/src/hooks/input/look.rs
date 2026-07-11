@@ -33,7 +33,7 @@ fn input_device_manager_update(manager: *mut InputDeviceManager, dt: f32) {
         .as_ref()
         .is_some_and(|s| s.is_input_captured())
     {
-        headpose::sim::on_input_tick(0.0, 0.0, dt);
+        headpose::sim::on_input_tick(0.0, 0.0, false, dt);
         return;
     }
 
@@ -41,35 +41,39 @@ fn input_device_manager_update(manager: *mut InputDeviceManager, dt: f32) {
         return;
     };
     unsafe {
-        let look_x = read_look_axis(map, Action::LOOK_RIGHT, Action::LOOK_LEFT);
-        let look_y = read_look_axis(map, Action::LOOK_UP, Action::LOOK_DOWN);
+        let (look_x, look_x_delta) = read_look_axis(map, Action::LOOK_RIGHT, Action::LOOK_LEFT);
+        let (look_y, _) = read_look_axis(map, Action::LOOK_UP, Action::LOOK_DOWN);
 
         clear_effector(map, Action::LOOK_LEFT);
         clear_effector(map, Action::LOOK_RIGHT);
         clear_effector(map, Action::LOOK_UP);
         clear_effector(map, Action::LOOK_DOWN);
 
-        headpose::sim::on_input_tick(look_x, look_y, dt);
+        headpose::sim::on_input_tick(look_x, look_y, look_x_delta, dt);
     }
 }
 
-/// Read two opposite-direction effectors and return the net delta.
+/// Read two opposite-direction effectors and return the net value plus whether it is delta-based (a
+/// mouse per-tick displacement) rather than an absolute axis (a stick position). Delta-based if either
+/// contributing effector is non-zero and delta-based -- the two device kinds must be turned into body
+/// yaw differently (see [`headpose::xr::advance_body_yaw`]).
 unsafe fn read_look_axis(
     map: &mut LocalPlayerActionMap,
     positive: Action,
     negative: Action,
-) -> f32 {
-    let pos = unsafe { read_effector_value(map, positive) };
-    let neg = unsafe { read_effector_value(map, negative) };
-    pos - neg
+) -> (f32, bool) {
+    let (pos, pos_delta) = unsafe { read_effector_value(map, positive) };
+    let (neg, neg_delta) = unsafe { read_effector_value(map, negative) };
+    let delta_based = (pos != 0.0 && pos_delta) || (neg != 0.0 && neg_delta);
+    (pos - neg, delta_based)
 }
 
-/// Read an effector's analog value safely.
-unsafe fn read_effector_value(map: &mut LocalPlayerActionMap, action: Action) -> f32 {
+/// Read an effector's analog value and its delta-based flag safely (`(0.0, false)` when absent).
+unsafe fn read_effector_value(map: &mut LocalPlayerActionMap, action: Action) -> (f32, bool) {
     unsafe {
         map.GetActionEffector(action)
             .as_ref()
-            .map(|effector| effector.m_Value)
+            .map(|effector| (effector.m_Value, effector.m_IsDeltaBased))
             .unwrap_or_default()
     }
 }

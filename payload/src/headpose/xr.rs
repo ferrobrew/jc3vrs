@@ -80,7 +80,7 @@ pub fn publish_pair(prev: HeadPose, cur: HeadPose) {
 /// on-foot tick after a gap, so landing on foot never snaps the body, and cleared while off foot so
 /// the next landing re-seeds. `look_x` follows the same sign convention as the flatscreen head yaw:
 /// a rightward look turns the heading clockwise (a negative rotation about +Y).
-pub fn advance_body_yaw(look_x: f32, on_foot: bool, config: &HeadPoseConfig) {
+pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &HeadPoseConfig) {
     let mut s = BODY_YAW.lock();
     if !on_foot {
         s.yaw = None;
@@ -93,25 +93,41 @@ pub fn advance_body_yaw(look_x: f32, on_foot: bool, config: &HeadPoseConfig) {
         .yaw
         .unwrap_or_else(|| super::sim::body_yaw_of(body_rotation()));
 
-    if look_x.abs() >= turn.deadzone {
-        match turn.mode {
-            VrTurnMode::Smooth => {
+    match turn.mode {
+        VrTurnMode::Smooth => {
+            if delta_based {
+                // Mouse: `look_x` is a finished per-tick displacement, so add it directly at the mouse
+                // scale with no deadzone (a slow mouse move is a small real delta, not stick drift).
+                // Running it through the stick rate (sensitivity * smooth_scale) oversteers and the
+                // deadzone drops slow motion -- the reported overshoot and stop-start.
+                yaw = super::sim::wrap_angle(yaw - (look_x * turn.mouse_turn_scale).to_radians());
+            } else if look_x.abs() >= turn.deadzone {
+                // Stick: an absolute axis integrated as a per-tick rate.
                 let delta = (look_x * config.mouse_sensitivity * turn.smooth_scale).to_radians();
                 yaw = super::sim::wrap_angle(yaw - delta);
             }
-            VrTurnMode::Snap => {
-                if s.snap_armed && look_x.abs() >= turn.snap_threshold {
-                    let step = look_x.signum() * turn.snap_angle_deg.to_radians();
-                    yaw = super::sim::wrap_angle(yaw - step);
-                    s.snap_armed = false;
-                }
+        }
+        VrTurnMode::Snap => {
+            if s.snap_armed && look_x.abs() >= turn.snap_threshold {
+                let step = look_x.signum() * turn.snap_angle_deg.to_radians();
+                yaw = super::sim::wrap_angle(yaw - step);
+                s.snap_armed = false;
+            }
+            // Re-arm the snap step once the flick relaxes, with hysteresis so one flick is one step.
+            if look_x.abs() < turn.snap_threshold * 0.5 {
+                s.snap_armed = true;
             }
         }
     }
-    // Re-arm the snap step once the flick relaxes, with hysteresis so one flick is one step.
-    if look_x.abs() < turn.snap_threshold * 0.5 {
-        s.snap_armed = true;
-    }
+
+    // Clamp how far the accumulated target may lead the body's current facing: the body chases the
+    // target at a rate limit, so a big input jump (a mouse flick) otherwise keeps the body turning for
+    // many ticks after the input stops, and once the lead passes 180° the shortest-arc catch-up
+    // reverses -- the "keeps turning" and "wrong direction" reports.
+    let body = super::sim::body_yaw_of(body_rotation());
+    let max_lead = turn.max_body_lead_deg.max(0.0).to_radians();
+    let lead = super::sim::wrap_angle(yaw - body).clamp(-max_lead, max_lead);
+    yaw = super::sim::wrap_angle(body + lead);
 
     s.yaw = Some(yaw);
 }

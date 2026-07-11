@@ -120,8 +120,21 @@ pub struct VrTurnConfig {
     /// The look-input magnitude that arms a snap step; the step re-arms once the input falls back
     /// below half this, giving hysteresis so one flick is one step.
     pub snap_threshold: f32,
-    /// Look-input magnitudes below this are ignored, rejecting stick drift.
+    /// Look-input magnitudes below this are ignored, rejecting stick drift. Applies to *absolute*
+    /// (stick) input only; delta-based (mouse) input skips it, since a slow mouse move is a small but
+    /// meaningful per-tick delta, not drift.
     pub deadzone: f32,
+    /// Degrees of body yaw per unit of *delta-based* (mouse) look input. The mouse LOOK effector is a
+    /// per-tick displacement, not an absolute axis, so it is added directly at this scale rather than
+    /// run through the stick [`smooth_scale`](Self::smooth_scale) /
+    /// [`mouse_sensitivity`](HeadPoseConfig::mouse_sensitivity) rate (which oversteers on a mouse and
+    /// is gated by the stick deadzone -- the stop-start, overshoot, and runaway spin).
+    pub mouse_turn_scale: f32,
+    /// The maximum the yaw accumulator may lead the body's current facing, in degrees. The body chases
+    /// the accumulated target at a rate limit, so a big input jump (a mouse flick) otherwise pushes the
+    /// target far ahead and the body keeps turning for many ticks after the input stops -- and once the
+    /// lead exceeds 180° the shortest-arc catch-up reverses direction. Clamping the lead caps both.
+    pub max_body_lead_deg: f32,
 }
 
 impl VrTurnConfig {
@@ -132,6 +145,8 @@ impl VrTurnConfig {
             snap_angle_deg: 30.0,
             snap_threshold: 0.6,
             deadzone: 0.02,
+            mouse_turn_scale: 5.0,
+            max_body_lead_deg: 120.0,
         }
     }
 }

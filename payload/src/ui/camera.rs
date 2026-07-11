@@ -138,6 +138,46 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
     ui.add(Slider::new(&mut hp.position_offset.x, -1.0..=1.0).text("Roomscale offset X (m)"));
     ui.add(Slider::new(&mut hp.position_offset.y, -1.0..=1.0).text("Roomscale offset Y (m)"));
     ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Roomscale offset Z (m)"));
+
+    egui_vr_turn(ui, &mut hp.vr_turn);
+}
+
+/// The on-foot body-turn knobs used while the HMD owns the head (mouse and right stick turn the body,
+/// not the head). Separate from the flatscreen latch above, which never runs under an OpenXR session.
+fn egui_vr_turn(ui: &mut egui::Ui, turn: &mut headpose::config::VrTurnConfig) {
+    use headpose::config::VrTurnMode;
+
+    ui.separator();
+    ui.heading("VR body turn");
+    ui.horizontal(|ui| {
+        ui.label("Mode:");
+        ui.radio_value(&mut turn.mode, VrTurnMode::Smooth, "Smooth");
+        ui.radio_value(&mut turn.mode, VrTurnMode::Snap, "Snap");
+    });
+    match turn.mode {
+        VrTurnMode::Smooth => {
+            ui.add(
+                Slider::new(&mut turn.mouse_turn_scale, 0.5..=20.0)
+                    .text("Mouse turn scale (°/unit)"),
+            )
+            .on_hover_text(
+                "Body yaw per unit of mouse-look delta. The whole-body turn is still rate-limited \
+                 by the Game tab's face-camera turn step.",
+            );
+            ui.add(Slider::new(&mut turn.smooth_scale, 0.0..=4.0).text("Stick turn scale (×)"))
+                .on_hover_text("Right-stick turn rate as a multiple of the mouse sensitivity.");
+            ui.add(Slider::new(&mut turn.deadzone, 0.0..=0.5).text("Stick deadzone"));
+        }
+        VrTurnMode::Snap => {
+            ui.add(Slider::new(&mut turn.snap_angle_deg, 5.0..=90.0).text("Snap angle (°)"));
+            ui.add(Slider::new(&mut turn.snap_threshold, 0.1..=1.0).text("Snap threshold"));
+        }
+    }
+    ui.add(Slider::new(&mut turn.max_body_lead_deg, 0.0..=180.0).text("Max body lead (°)"))
+        .on_hover_text(
+            "How far the turn target may lead the body's facing. Caps how long the body keeps \
+             turning after a fast flick stops.",
+        );
 }
 
 pub fn matrix_grid(

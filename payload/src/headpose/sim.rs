@@ -58,7 +58,7 @@ pub enum HeadMode {
 /// thread, inside the engine's fixed-rate sim tick): detect the mode, rotate the published pose
 /// pair, integrate the look deltas, update the latch and the smoothed posture, and publish the
 /// headpose. `dt` is the engine's tick delta, used for the posture low-pass.
-pub fn on_input_tick(look_x: f32, look_y: f32, dt: f32) {
+pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     let config = crate::config::Config::lock_query(|c| c.headpose);
     if !config.enabled {
         return;
@@ -87,7 +87,7 @@ pub fn on_input_tick(look_x: f32, look_y: f32, dt: f32) {
     // look effectors do not steer the HMD-driven head, so they are consumed here to turn the body
     // instead (the flatscreen head-yaw path below owns this for the sim source).
     if super::source() == super::Source::Vr {
-        super::xr::advance_body_yaw(look_x, s.mode == HeadMode::OnFoot, &config);
+        super::xr::advance_body_yaw(look_x, look_x_delta, s.mode == HeadMode::OnFoot, &config);
         return;
     }
 
