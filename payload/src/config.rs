@@ -74,6 +74,14 @@ pub struct StereoConfig {
     pub present_eye_0: bool,
     /// Restore the TAA-jitter / shadow-phase counters between eyes.
     pub restore_frame_counters: bool,
+    /// Render the view-independent pre-passes once and reuse them for the second eye (issue #30): on
+    /// eye 1, `PreDraw` skips the reflection proxies, cloud shadows, the sun-shadow cascade atlas, and
+    /// the water simulation (all driven by the sun / reflection / world cameras, writing separate
+    /// persistent targets), reusing eye 0's output. Halves the second eye's pre-pass cost, and renders
+    /// the shared sun-shadow atlas once per frame instead of twice -- which also removes the per-eye
+    /// shadow flicker (issue #31). Requires [`restore_frame_counters`](Self::restore_frame_counters) so
+    /// both eyes share the shadow-atlas parity slot; a no-op without it. VR/stereo only.
+    pub share_prepasses: bool,
     /// Skip SetupRenderFrameData on eye 1 (experimental; normally inert).
     pub gate_setup_render_frame_data: bool,
     /// Skip HandBackBuffers on eye 1.
@@ -330,6 +338,7 @@ impl StereoConfig {
             force_ssao_first_pass: true,
             present_eye_0: false,
             restore_frame_counters: true,
+            share_prepasses: true,
             gate_setup_render_frame_data: false,
             gate_hand_back_buffers: false,
             gate_eye1_dt: true,

@@ -12,7 +12,9 @@ use std::ffi::c_void;
 
 use detours_macro::detour;
 use jc3gi::graphics_engine::{
-    graphics_engine::RenderContext, render_engine::RenderPassId, render_pass::RenderPassState,
+    graphics_engine::{HContext_t, RenderContext},
+    render_engine::{RenderEngine, RenderPassId},
+    render_pass::{RenderPass, RenderPassState},
     shadow_manager::ShadowManager,
 };
 use re_utilities::hook_library::HookLibrary;
@@ -28,6 +30,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&SETUP_RENDER_FRAME_DATA_BINDER)
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
         .with_static_binder(&DRAW_RENDER_PASS_RANGE_BINDER)
+        .with_static_binder(&PRE_DRAW_BINDER)
         .with_static_binder(&SET_GLOBAL_SHADER_CONSTANTS_BINDER)
         .with_static_binder(&COMMIT_RENDER_PASS_SETTINGS_BINDER)
         .with_static_binder(&SHADOW_MANAGER_UPDATE_RENDER_BINDER)
@@ -228,6 +231,83 @@ fn commit_render_pass_settings(this: *mut ShadowManager, ctx: *mut c_void) {
                     pass.m_StateFlags.remove(RenderPassState::m_Enabled);
                 }
             }
+        }
+    }
+}
+
+// RenderEngine::PreDraw -- the pre-pass dispatch (sky-lighting LUT, planar/env reflections, cloud
+// shadows, vegetation, the sun-shadow cascade atlas, water sim, rain occluder). Most of these are driven
+// by the sun / reflection / world-space cameras -- never the per-eye render camera -- and write separate
+// persistent render targets the per-eye passes never overwrite, so their output is identical between the
+// two eyes. On the SECOND eye, skip the view-independent categories (clear their m_Enabled so PreDraw's
+// loop no-ops them) and reuse eye 0's output: this halves the second eye's pre-pass cost (shadow-map
+// render, reflection proxies, water sim, cloud shadows), and renders the shared sun-shadow atlas once per
+// frame instead of twice -- which also removes the per-eye shadow flicker (issue #31). PreDraw runs after
+// CommitRenderPassSettings (which re-enables the frame's scheduled shadow cascades), so the clear here is
+// the last word before the loop; the passes are re-enabled after so the next frame's first eye runs them.
+// Gated on `restore_frame_counters` so both eyes share the shadow-atlas parity slot (without it, eye 1
+// advances parity and would sample the other, unrendered slot).
+#[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PreDraw_ADDRESS)]
+fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
+    let original = PRE_DRAW.get().unwrap();
+    let share = is_second_eye()
+        && Config::lock_query(|c| c.stereo.share_prepasses && c.stereo.restore_frame_counters);
+    if !share {
+        return original.call(this, ctx);
+    }
+    // SAFETY: `this` is the live render engine; its per-category `m_RenderPasses` vectors hold
+    // engine-owned, null-checked pass pointers; the `m_Enabled` flag write mirrors the shadow
+    // scheduler's own store in `commit_render_pass_settings`.
+    let disabled = unsafe { disable_shared_prepasses(this) };
+    let result = original.call(this, ctx);
+    unsafe { reenable_passes(&disabled) };
+    result
+}
+
+/// The pre-pass categories ([`RenderPassId`] indices) that render identically for both eyes and whose
+/// outputs persist for the whole frame, so eye 1 can reuse eye 0's: planar + environment reflections
+/// (`9..=17`), cloud shadows (`18`), the static/dynamic/reflective sun-shadow cascade atlas (`22..=40`,
+/// which also fixes the per-eye shadow flicker #31), and the water-simulation compute (`41..=44`).
+/// Terrain-patch prep (`1..=7`, per-eye), the sky-lighting LUT (`8`), vegetation (`19..=21`), and the
+/// rain occluder (`45`) are held per-eye for this conservative first cut.
+const SHARED_PREPASS_CATEGORIES: &[(usize, usize)] = &[(9, 18), (22, 44)];
+
+/// Clear [`RenderPassState::m_Enabled`] on every enabled pass in the shared pre-pass categories so
+/// `PreDraw`'s loop skips them, returning the passes cleared so [`reenable_passes`] can restore them.
+///
+/// # Safety
+///
+/// `this` is the live render engine during its own `PreDraw`; the passes are engine-owned.
+unsafe fn disable_shared_prepasses(this: *mut RenderEngine) -> Vec<*mut RenderPass> {
+    let Some(engine) = (unsafe { this.as_mut() }) else {
+        return Vec::new();
+    };
+    let mut disabled = Vec::new();
+    for &(lo, hi) in SHARED_PREPASS_CATEGORIES {
+        for cat in lo..=hi {
+            for &pass in unsafe { engine.m_RenderPasses[cat].as_slice() } {
+                if let Some(pass) = (unsafe { pass.as_mut() })
+                    && pass.m_StateFlags.contains(RenderPassState::m_Enabled)
+                {
+                    pass.m_StateFlags.remove(RenderPassState::m_Enabled);
+                    disabled.push(pass as *mut RenderPass);
+                }
+            }
+        }
+    }
+    disabled
+}
+
+/// Re-enable the pre-passes disabled by [`disable_shared_prepasses`], so the next frame's first eye
+/// renders them.
+///
+/// # Safety
+///
+/// The pointers came from the live `m_RenderPasses` vectors this same frame and are still valid.
+unsafe fn reenable_passes(passes: &[*mut RenderPass]) {
+    for &pass in passes {
+        if let Some(pass) = unsafe { pass.as_mut() } {
+            pass.m_StateFlags.insert(RenderPassState::m_Enabled);
         }
     }
 }

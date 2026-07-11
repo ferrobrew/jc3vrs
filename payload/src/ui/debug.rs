@@ -91,6 +91,19 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                 &mut cfg.stereo.restore_frame_counters,
                 "Restore frame counters between eyes (fixes jitter/parity flicker)",
             );
+            ui.add_enabled(
+                cfg.stereo.restore_frame_counters,
+                egui::Checkbox::new(
+                    &mut cfg.stereo.share_prepasses,
+                    "Share view-independent pre-passes across eyes (reflections, cloud shadows, \
+                     sun-shadow atlas, water sim rendered once; perf + fixes shadow flicker #31)",
+                ),
+            )
+            .on_hover_text(
+                "On eye 1, reuse eye 0's shadow atlas / reflection proxies / water sim instead of \
+                 re-rendering them. Requires 'Restore frame counters'. If distant reflections or \
+                 shadows look wrong in one eye, turn this off.",
+            );
             ui.checkbox(
                 &mut cfg.stereo.force_smaa_1x,
                 "Force SMAA 1x (T2X's shared history ghosts across eyes)",

@@ -65,6 +65,28 @@ impl RenderEngine {
             f(self as *mut Self as _, ctx, setup, first, last)
         }
     }
+    pub const PreDraw_ADDRESS: usize = 0x140186760;
+    /// The pre-pass step: iterates the pre-pass categories (`1..=45` -- terrain-patch prep, the sky
+    /// lighting LUT, planar and environment reflections, cloud shadows, vegetation, the static and
+    /// dynamic sun-shadow cascade atlas, the reflective-shadow passes, the water-simulation compute, and
+    /// the rain occluder) and vtable-dispatches each [`RenderPass`]'s `Draw`, feeding it the render
+    /// context. Called from `HandleDrawThreadTask` before the GBuffer range. Each pass's
+    /// [`m_Enabled`](graphics_engine::render_pass::RenderPassState::m_Enabled) gates whether it draws;
+    /// the pre-pass cameras are the sun / reflection / world-space cameras (own camera, `RenderPass +
+    /// 0x870`), never the per-eye render camera, except terrain-patch prep (`1..=7`), which falls
+    /// through to the render camera.
+    pub unsafe fn PreDraw(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    ) -> u64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            ) -> u64 = ::std::mem::transmute(Self::PreDraw_ADDRESS);
+            f(self as *mut Self as _, ctx)
+        }
+    }
     pub const DrawGBuffer_ADDRESS: usize = 0x140186810;
     /// The GBuffer fill: binds two global textures, then draws the GBuffer pass range (the depth and
     /// velocity prefix, static and dynamic models, and decals).
