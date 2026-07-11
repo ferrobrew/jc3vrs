@@ -14,6 +14,34 @@ fn _ActiveCursor_size_check() {
     }
     unreachable!()
 }
+#[repr(C, align(4))]
+/// A D3D11 rasterizer viewport (`D3D11_VIEWPORT`): the screen-space output rectangle the rasterizer
+/// maps NDC into and clips to, plus its depth range.
+pub struct D3D11Viewport {
+    pub TopLeftX: f32,
+    pub TopLeftY: f32,
+    pub Width: f32,
+    pub Height: f32,
+    pub MinDepth: f32,
+    pub MaxDepth: f32,
+}
+fn _D3D11Viewport_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x18], D3D11Viewport>([0u8; 0x18]);
+    }
+    unreachable!()
+}
+impl D3D11Viewport {}
+impl std::convert::AsRef<D3D11Viewport> for D3D11Viewport {
+    fn as_ref(&self) -> &D3D11Viewport {
+        self
+    }
+}
+impl std::convert::AsMut<D3D11Viewport> for D3D11Viewport {
+    fn as_mut(&mut self) -> &mut D3D11Viewport {
+        self
+    }
+}
 #[repr(C, align(8))]
 /// The opaque parameter block passed to
 /// [`HandleDrawThreadTask`](GraphicsEngine::HandleDrawThreadTask).
@@ -450,8 +478,26 @@ impl std::convert::AsMut<HDevice_t> for HDevice_t {
 }
 pub use windows::Win32::UI::WindowsAndMessaging::HICON as HICON;
 #[repr(C, align(8))]
-/// A render-target configuration a pass draws into.
-pub struct HRenderSetup_t {}
+/// A render-target configuration a pass draws into: the output views bound via `OMSetRenderTargets`,
+/// and optionally a fixed viewport. Applied by [`SetRenderSetup`]. Partial: only the viewport fields
+/// are mapped; the type extends past them (`min_size` is the 8-aligned bound just past the last field).
+pub struct HRenderSetup_t {
+    _field_0: [u8; 216],
+    /// When set, [`SetRenderSetup`] applies [`m_Viewport`](HRenderSetup_t::m_Viewport) as the
+    /// rasterizer viewport; when clear, it synthesizes a viewport covering the full render target.
+    pub m_HasCustomViewport: bool,
+    _field_d9: [u8; 3],
+    /// The fixed rasterizer viewport applied when
+    /// [`m_HasCustomViewport`](HRenderSetup_t::m_HasCustomViewport) is set.
+    pub m_Viewport: crate::graphics_engine::graphics_engine::D3D11Viewport,
+    _field_f4: [u8; 4],
+}
+fn _HRenderSetup_t_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xF8], HRenderSetup_t>([0u8; 0xF8]);
+    }
+    unreachable!()
+}
 impl HRenderSetup_t {}
 impl std::convert::AsRef<HRenderSetup_t> for HRenderSetup_t {
     fn as_ref(&self) -> &HRenderSetup_t {
@@ -650,6 +696,28 @@ pub unsafe fn get_render_frame_counters() -> &'static mut crate::graphics_engine
     unsafe {
         &mut *(0x142D3A6AC
             as *mut crate::graphics_engine::graphics_engine::RenderFrameCounters)
+    }
+}
+pub const SetRenderSetup_ADDRESS: usize = 0x141966D20;
+/// Binds a render setup as the active output on the context and sets the viewport. Applies the setup's
+/// render-target views and depth-stencil (`OMSetRenderTargets`), then sets the rasterizer viewport:
+/// [`HRenderSetup_t::m_Viewport`] when [`HRenderSetup_t::m_HasCustomViewport`] is set, otherwise a
+/// synthesized viewport covering the full render target (`0, 0, width, height, 0, 1`). It is the single
+/// viewport write on the render-setup path -- the passes that draw after it inherit this viewport.
+/// `force` re-applies the setup even when it matches the currently-bound one; its exact effect is
+/// unconfirmed.
+pub unsafe fn SetRenderSetup(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    setup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
+    force: bool,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            setup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
+            force: bool,
+        ) = ::std::mem::transmute(SetRenderSetup_ADDRESS);
+        f(context, setup, force)
     }
 }
 pub const graphics_flip_ADDRESS: usize = 0x14195A820;
