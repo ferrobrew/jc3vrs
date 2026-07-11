@@ -49,6 +49,11 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                  disagreement + crawl)",
             );
             ui.checkbox(
+                &mut cfg.stereo.stabilize_shadow_fit,
+                "Stabilize sun-shadow fit vs head tilt (yaw-only cascade centre; fixes shadows \
+                 shifting/scaling when you look around)",
+            );
+            ui.checkbox(
                 &mut cfg.stereo.dedupe_post_block,
                 "Dedupe world post block (eye 1 otherwise runs the post chain + FSR twice)",
             );

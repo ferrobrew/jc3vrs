@@ -128,20 +128,31 @@ fn draw_render_pass_range(
 //     shadows fall outside it and disagree between the eyes, and the boundary crawls under motion.
 //     This is the coverage half of the shadow fix; fix_shadow_cascade_anchor is the sampling half. The
 //     centre, shear, and z (near/far/split) terms are left untouched, so split distances are unchanged.
+//   * stabilize_shadow_fit: horizontalize the active camera's forward vector (m_TransformT1 row 2,
+//     data[8..10]) to yaw-only for the fit. The engine pushes each cascade box's centre forward along
+//     that vector, so head pitch/roll slides the cascade centre and the shadows shift, re-quantize, and
+//     scale as you look around (view-dependent shadows). Projecting the forward onto the ground plane
+//     makes the centre follow heading but not head tilt; restored after so rendering is unaffected. The
+//     box size (sphere) and orientation (sun-fixed) are already view-independent.
 #[detour(
     address = jc3gi::graphics_engine::shadow_manager::ShadowManager::UpdateRender_ADDRESS
 )]
 fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
     let original = SHADOW_MANAGER_UPDATE_RENDER.get().unwrap();
-    let (unjitter, widen) =
-        Config::lock_query(|c| (c.stereo.unjitter_shadow_fit, c.stereo.widen_shadow_fit));
+    let (unjitter, widen, stabilize) = Config::lock_query(|c| {
+        (
+            c.stereo.unjitter_shadow_fit,
+            c.stereo.widen_shadow_fit,
+            c.stereo.stabilize_shadow_fit,
+        )
+    });
     // The widen reuses the union-FOV cull projection; `None` on flatscreen, so widening is VR-only.
     let union = widen.then(crate::vr::cull_projection_standard).flatten();
-    if !unjitter && union.is_none() {
+    if !unjitter && union.is_none() && !stabilize {
         return original.call(this, dt, dtf);
     }
     // SAFETY: the camera-manager singleton and the active camera are live on the game thread for
-    // the duration of this call; the projection writes are scoped save/restore.
+    // the duration of this call; the projection and transform writes are scoped save/restore.
     unsafe {
         let camera = jc3gi::camera::camera_manager::CameraManager::get()
             .map(|cm| cm.m_ActiveCamera)
@@ -149,21 +160,45 @@ fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
         let Some(camera) = camera.as_mut() else {
             return original.call(this, dt, dtf);
         };
-        let data = &mut camera.m_ProjectionF.data;
-        let saved = [data[0], data[5], data[12], data[13]];
+        let saved_proj = [
+            camera.m_ProjectionF.data[0],
+            camera.m_ProjectionF.data[5],
+            camera.m_ProjectionF.data[12],
+            camera.m_ProjectionF.data[13],
+        ];
         if unjitter {
-            data[12] = 0.0;
-            data[13] = 0.0;
+            camera.m_ProjectionF.data[12] = 0.0;
+            camera.m_ProjectionF.data[13] = 0.0;
         }
         if let Some(union) = union {
-            data[0] = union[0];
-            data[5] = union[5];
+            camera.m_ProjectionF.data[0] = union[0];
+            camera.m_ProjectionF.data[5] = union[5];
         }
+        // Horizontalize the camera forward (row 2) so the cascade centre's forward-push is yaw-only.
+        let saved_row2 = stabilize.then(|| {
+            let row2 = [
+                camera.m_TransformT1.data[8],
+                camera.m_TransformT1.data[9],
+                camera.m_TransformT1.data[10],
+            ];
+            let len = (row2[0] * row2[0] + row2[2] * row2[2]).sqrt();
+            if len > 1e-4 {
+                camera.m_TransformT1.data[8] = row2[0] / len;
+                camera.m_TransformT1.data[9] = 0.0;
+                camera.m_TransformT1.data[10] = row2[2] / len;
+            }
+            row2
+        });
         let result = original.call(this, dt, dtf);
-        data[0] = saved[0];
-        data[5] = saved[1];
-        data[12] = saved[2];
-        data[13] = saved[3];
+        camera.m_ProjectionF.data[0] = saved_proj[0];
+        camera.m_ProjectionF.data[5] = saved_proj[1];
+        camera.m_ProjectionF.data[12] = saved_proj[2];
+        camera.m_ProjectionF.data[13] = saved_proj[3];
+        if let Some(row2) = saved_row2 {
+            camera.m_TransformT1.data[8] = row2[0];
+            camera.m_TransformT1.data[9] = row2[1];
+            camera.m_TransformT1.data[10] = row2[2];
+        }
         result
     }
 }

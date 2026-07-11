@@ -280,6 +280,15 @@ pub struct StereoConfig {
     /// this fixes the *coverage*). Costs some shadow resolution (cascades cover more world area). VR
     /// only; no-op on flatscreen.
     pub widen_shadow_fit: bool,
+    /// Stabilize the sun-shadow cascade fit against head *orientation*, so shadows don't change when
+    /// you only rotate your view. The engine pushes each cascade box's centre forward along the active
+    /// camera's forward vector (`m_TransformT1` row 2), so tilting the head slides the cascade centre --
+    /// the near cascade re-covers a different area at a different texel density, and shadows (including
+    /// the player's own) visibly shift, re-quantize, and shrink/grow with head pitch. This horizontalizes
+    /// that forward vector (yaw-only, projected onto the ground) around `ShadowManager::UpdateRender`, so
+    /// the cascade centre follows heading but not head pitch/roll -- shadows stay put as you look around.
+    /// The box *size* (sphere-based) and *orientation* (sun-fixed) are already view-independent. VR only.
+    pub stabilize_shadow_fit: bool,
     /// Recreate the froxel volumetric-fog block's coarse volumetric-depth buffer at full render
     /// resolution instead of half. The fog block bilaterally upsamples that coarse buffer, and VR's
     /// wide FOV magnifies its grid into the blocky tiles around lights and explosions (issue #8). The
@@ -351,6 +360,7 @@ impl StereoConfig {
             disable_bfbc_occlusion: true,
             widen_terrain_cull: true,
             widen_shadow_fit: true,
+            stabilize_shadow_fit: true,
             fog_full_res: false,
             particles_full_res: false,
             spotlight_full_res: false,
