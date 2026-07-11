@@ -236,7 +236,9 @@ pub struct StereoConfig {
     /// motion (especially flying) geometry can still pop in at the outer edges before the cull catches
     /// up. This pads each side's tangent outward -- `0.1` is 10% wider per side -- and, unlike the bare
     /// eye-shift margin, applies to the vertical axis too (which flying pitch shifts). Costs some
-    /// over-draw of just-off-screen geometry. VR only; ignored when `widen_cull_frustum` is off.
+    /// over-draw of just-off-screen geometry. The resulting half-angle is clamped safely below 90° so a
+    /// wide-FOV headset cannot push the tangent widen to a degenerate frustum. VR only; ignored when
+    /// `widen_cull_frustum` is off.
     pub cull_fov_padding: f32,
     /// The FOV (degrees) the scene size-cull uses, overriding the mod's injected 90° on the main cull
     /// camera. BFBC runs a *screen-space size cull* separate from the frustum cull: it drops an object
@@ -355,7 +357,7 @@ impl StereoConfig {
             reconstruct_offaxis_inverse: true,
             offaxis_inverse_skip_atmospheric: true,
             widen_cull_frustum: true,
-            cull_fov_padding: 0.1,
+            cull_fov_padding: 0.4,
             cull_size_fov_deg: 50.0,
             disable_bfbc_occlusion: true,
             widen_terrain_cull: true,

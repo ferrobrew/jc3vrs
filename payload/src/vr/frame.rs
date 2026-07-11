@@ -144,11 +144,18 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // eye-shift margin in the side's own direction (`copysign` keeps left/down negative, right/up
     // positive). Vertical uses tangents here (not raw angles) so it receives the same treatment.
     let expand = |t: f32| t * pad + margin.copysign(t);
+    // Clamp each padded half-angle safely below 90 deg. The tangent widen grows without bound as a
+    // side nears 90 deg (`tan -> inf`), so on a wide-FOV headset the padding could otherwise push the
+    // cull frustum to a degenerate, near-hemispherical projection. 85 deg (a ~170 deg cull FOV) is far
+    // wider than any real per-eye FOV, so this only guards the degenerate tail and never clips a sane
+    // headset's coverage.
+    let max_half = 85f32.to_radians();
+    let widen = |t: f32| expand(t).atan().clamp(-max_half, max_half);
     let union_fov = Fov {
-        left: expand(eye0.fov.angle_left.tan().min(eye1.fov.angle_left.tan())).atan(),
-        right: expand(eye0.fov.angle_right.tan().max(eye1.fov.angle_right.tan())).atan(),
-        up: expand(eye0.fov.angle_up.tan().max(eye1.fov.angle_up.tan())).atan(),
-        down: expand(eye0.fov.angle_down.tan().min(eye1.fov.angle_down.tan())).atan(),
+        left: widen(eye0.fov.angle_left.tan().min(eye1.fov.angle_left.tan())),
+        right: widen(eye0.fov.angle_right.tan().max(eye1.fov.angle_right.tan())),
+        up: widen(eye0.fov.angle_up.tan().max(eye1.fov.angle_up.tan())),
+        down: widen(eye0.fov.angle_down.tan().min(eye1.fov.angle_down.tan())),
     };
     *CULL_PROJECTION.lock() =
         Some(OffAxisProjection::new(union_fov, near_clip, far_clip).standard_depth);

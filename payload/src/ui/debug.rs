@@ -128,7 +128,7 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                 );
                 ui.add_enabled(
                     cfg.stereo.widen_cull_frustum,
-                    egui::Slider::new(&mut cfg.stereo.cull_fov_padding, 0.0..=0.5)
+                    egui::Slider::new(&mut cfg.stereo.cull_fov_padding, 0.0..=0.75)
                         .text("pad")
                         .fixed_decimals(2),
                 )
