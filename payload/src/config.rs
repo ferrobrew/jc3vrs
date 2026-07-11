@@ -114,6 +114,12 @@ pub struct StereoConfig {
     /// camera) so any RT whose two eyes' hashes differ is being accumulated across the two Draws --
     /// the "stronger in one eye" bug. See [`crate::debug::rt_hash`].
     pub diagnose_rt_hashes: bool,
+    /// Diagnostic: while a render trace collects, dump eye 0's final `BackBufferLinear` to a raw pixel
+    /// file each frame (beside the trace NDJSON), named with the frame index, dimensions, and DXGI
+    /// format so the frames can be reassembled and correlated with the per-frame trace events. For
+    /// localizing per-frame visual artifacts (e.g. the shadow flicker) that the numeric trace cannot
+    /// place spatially. Heavy (a full readback + disk write per frame); only for short diagnostic traces.
+    pub diagnose_rt_screenshots: bool,
     /// Diagnostic: skip the SSAO pass on both eyes in stereo, to confirm whether SSAO drives the
     /// "stronger in one eye" darkening. (Equivalent to lowering the in-game AO setting, but toggleable
     /// live.)
@@ -366,6 +372,7 @@ impl StereoConfig {
             drain_draw_fragment: true,
             fix_shadow_cascade_anchor: true,
             diagnose_rt_hashes: false,
+            diagnose_rt_screenshots: true,
             disable_ssao: false,
             ssao_eye0_only: false,
             restore_cb_ring: false,

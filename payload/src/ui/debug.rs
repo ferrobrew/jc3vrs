@@ -33,6 +33,10 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         &mut cfg.stereo.diagnose_rt_hashes,
         "Hash engine RTs per eye into the trace (run with cameras off)",
     );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_rt_screenshots,
+        "Dump eye-0 frames into the trace (BackBufferLinear per frame, for localizing artifacts)",
+    );
     ui.separator();
 
     // The stereo render corrections -- normally on; toggle off to reproduce the artifact each fixes.

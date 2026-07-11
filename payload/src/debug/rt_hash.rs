@@ -28,9 +28,17 @@ use anyhow::Context as _;
 use jc3gi::graphics_engine::{graphics_engine::GraphicsEngine, texture::Texture};
 use windows::{
     Win32::{
-        Graphics::Direct3D11::{
-            D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
-            D3D11_USAGE_STAGING, ID3D11Texture2D,
+        Graphics::{
+            Direct3D11::{
+                D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+                D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, ID3D11Texture2D,
+            },
+            Dxgi::Common::{
+                DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+                DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R11G11B10_FLOAT,
+                DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_UNORM,
+            },
         },
         System::Threading::{EnterCriticalSection, LeaveCriticalSection},
     },
@@ -48,10 +56,19 @@ use crate::{
 ///
 /// No-op unless `stereo.diagnose_rt_hashes` is set and a trace is collecting.
 pub fn hash_engine_rts() {
-    if !tracing_active() || !Config::lock_query(|c| c.stereo.diagnose_rt_hashes) {
+    if !tracing_active() {
         return;
     }
-    if let Err(e) = unsafe { hash_inner() } {
+    let (want_hashes, want_shots) = Config::lock_query(|c| {
+        (
+            c.stereo.diagnose_rt_hashes,
+            c.stereo.diagnose_rt_screenshots,
+        )
+    });
+    if !want_hashes && !want_shots {
+        return;
+    }
+    if let Err(e) = unsafe { hash_inner(want_hashes, want_shots) } {
         tracing::warn!("rt_hash: {e:#}");
     }
 }
@@ -59,12 +76,13 @@ pub fn hash_engine_rts() {
 /// # Safety
 /// Dereferences engine singletons; must be called on the game thread after `WaitForCPUDrawToFinish`,
 /// when the render worker is idle and the engine device, context, and RTs are live.
-unsafe fn hash_inner() -> anyhow::Result<()> {
+unsafe fn hash_inner(want_hashes: bool, want_shots: bool) -> anyhow::Result<()> {
     let ge = unsafe { GraphicsEngine::get() }.context("graphics engine unavailable")?;
     let device = unsafe { ge.m_Device.as_ref() }.context("graphics device unavailable")?;
     let d3d = &device.m_Device;
     let context = unsafe { device.m_Context.as_ref() }.context("graphics context unavailable")?;
     let ctx = &context.m_Context;
+    let eye = crate::stereo::draw_index();
 
     // Depth targets are deliberately excluded: a CPU readback (staging copy + map) of a depth/stencil
     // or typeless-format texture is an awkward and fault-prone D3D path under the translation layers,
@@ -82,6 +100,12 @@ unsafe fn hash_inner() -> anyhow::Result<()> {
     ];
 
     for (kind, tex_ptr) in targets {
+        // Screenshot only eye 0's final BackBufferLinear; hashing (when on) covers the whole set. Skip a
+        // target's readback entirely when neither consumer needs it.
+        let shot_this = want_shots && eye == 0 && matches!(kind, RtKind::BackBufferLinear);
+        if !want_hashes && !shot_this {
+            continue;
+        }
         let Some(tex) = (unsafe { tex_ptr.as_ref() }) else {
             continue;
         };
@@ -109,33 +133,87 @@ unsafe fn hash_inner() -> anyhow::Result<()> {
         let staging = staging.context("RT staging texture not created")?;
 
         // CopyResource + Map drive the immediate context: serialise with the render thread via the
-        // engine context mutex, exactly as the capture path does.
-        let hash = unsafe {
+        // engine context mutex, exactly as the capture path does. The screenshot pixels are copied out
+        // of the mapping under the lock but written to disk after it releases, so the render thread is
+        // never blocked on file I/O.
+        let (hash, shot) = unsafe {
             EnterCriticalSection(context.m_Mutex);
             ctx.CopyResource(&staging, &tex.m_Texture);
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            let hash = if ctx
+            let out = if ctx
                 .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
                 .is_ok()
             {
                 let len = mapped.RowPitch as usize * desc.Height as usize;
                 let bytes = std::slice::from_raw_parts(mapped.pData.cast::<u8>(), len);
-                let hash = hash_bytes(bytes);
+                let hash = want_hashes.then(|| hash_bytes(bytes));
+                let shot = shot_this
+                    .then(|| bytes_per_pixel(desc.Format))
+                    .flatten()
+                    .map(|bpp| tight_rows(bytes, mapped.RowPitch, desc.Width, desc.Height, bpp));
                 ctx.Unmap(&staging, 0);
-                Some(hash)
+                (hash, shot)
             } else {
-                None
+                (None, None)
             };
             LeaveCriticalSection(context.m_Mutex);
-            hash
+            out
         };
 
         if let Some(hash) = hash {
             TraceState::record_eye(TraceEvent::RtHash { rt: kind, hash });
         }
+        if let Some(pixels) = shot {
+            write_screenshot(eye, desc.Width, desc.Height, desc.Format, &pixels);
+        }
     }
 
     Ok(())
+}
+
+/// The tightly-packed byte size of one pixel for the formats the diagnostic screenshot supports, or
+/// `None` for a format it cannot linearize (skipped with no dump rather than writing garbage).
+fn bytes_per_pixel(format: DXGI_FORMAT) -> Option<u32> {
+    Some(match format {
+        DXGI_FORMAT_R8G8B8A8_UNORM
+        | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+        | DXGI_FORMAT_B8G8R8A8_UNORM
+        | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
+        | DXGI_FORMAT_R10G10B10A2_UNORM
+        | DXGI_FORMAT_R11G11B10_FLOAT => 4,
+        DXGI_FORMAT_R16G16B16A16_FLOAT | DXGI_FORMAT_R16G16B16A16_UNORM => 8,
+        _ => return None,
+    })
+}
+
+/// Copy the mapped staging bytes into a tightly-packed (row-pitch-stripped) buffer.
+fn tight_rows(bytes: &[u8], row_pitch: u32, width: u32, height: u32, bpp: u32) -> Vec<u8> {
+    let tight = (width * bpp) as usize;
+    let pitch = row_pitch as usize;
+    let mut out = Vec::with_capacity(tight * height as usize);
+    for y in 0..height as usize {
+        let start = y * pitch;
+        if let Some(row) = bytes.get(start..start + tight) {
+            out.extend_from_slice(row);
+        }
+    }
+    out
+}
+
+/// Write one frame's tightly-packed pixels beside the trace NDJSON. The filename carries the frame
+/// index, eye, dimensions, and DXGI format number so the raw file can be reassembled into an image
+/// (e.g. `magick -size WxH -depth 8 rgba:file out.png` for `fmt28`) and aligned with the trace events.
+fn write_screenshot(eye: usize, width: u32, height: u32, format: DXGI_FORMAT, pixels: &[u8]) {
+    let Some((dir, stamp, frame)) = TraceState::screenshot_target() else {
+        return;
+    };
+    let name = format!(
+        "jc3vrs_shot_{stamp}_f{frame:03}_eye{eye}_{width}x{height}_fmt{}.raw",
+        format.0
+    );
+    if let Err(e) = std::fs::write(dir.join(name), pixels) {
+        tracing::warn!("rt_hash: screenshot write failed: {e}");
+    }
 }
 
 /// FNV-1a over 64-bit words (with a byte tail), fast enough to hash several multi-megabyte targets per
