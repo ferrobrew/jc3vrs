@@ -13,6 +13,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [grapple-pipeline.md](engine/grapple-pipeline.md) — grapple targeting, hook flight and attach, and the zip/tether/retract dispatch.
 - [hands-and-roomscale.md](engine/hands-and-roomscale.md) — weapon-to-hand attachment, the shipped per-arm aim IK, and the character's velocity-driven collision proxy.
 - [input.md](engine/input.md) — the action effector system, action ids, the write API, the semantic button-mapping layer, and the mouse/UI pipeline.
+- [model-culling.md](engine/model-culling.md) — the two model visibility gates: the instance-level BFBC cull, and the per-render-block frustum cull against the active camera that pops buildings at a widened view's edge.
 - [render-setups-reinit.md](engine/render-setups-reinit.md) — the runtime resize path: `CreateRenderSetups`, its callers, state assumptions, and swapchain separability.
 - [profiling.md](engine/profiling.md) — what survives of the engine's profiler in release, and the recommended path to per-phase CPU/GPU timings.
 - [shaders.md](engine/shaders.md) — extracting, disassembling, and patching the game's shaders; tooling in `tools/shaders/`.
