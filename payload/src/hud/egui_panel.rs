@@ -17,15 +17,15 @@
 //! (the same compute-on-eye-0 rule as the gameplay HUD), and the desktop mirror composites the same
 //! panel texture (see [`crate::vr::mirror`]). There is never a second egui pass.
 
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use glam::Quat;
+use glam::{Quat, Vec3};
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11ShaderResourceView};
 
 use super::{
-    config::{EguiPanelConfig, FollowConfig},
+    config::EguiPanelConfig,
     cursor::CursorFrame,
     quad::{HudQuad, PanelParams, compute_cursor_corners, compute_world_corners},
     target::HudTarget,
@@ -34,6 +34,10 @@ use super::{
 /// The panel pipeline and per-frame cache. Locked briefly on the render thread (and, for the SRV
 /// handoff, on the game thread from the mirror).
 static EGUI_PANEL: Mutex<EguiPanelState> = Mutex::new(EguiPanelState::new());
+
+/// Whether the panel was active last frame, so the world-lock latch is cleared exactly once on the
+/// dismissal edge rather than every idle frame.
+static WAS_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Whether the egui floating panel is active this frame: the opt-in panel is enabled and a VR frame
 /// is rendering. The single predicate gating every panel path; off is the untouched baseline.
@@ -78,8 +82,13 @@ pub(crate) fn draw_quad(
     eye: usize,
 ) {
     if !is_active() {
+        // On the dismissal edge, drop the world-lock latch so the next open re-anchors at the head.
+        if WAS_ACTIVE.swap(false, Ordering::Relaxed) {
+            EGUI_PANEL.lock().latched_pose = None;
+        }
         return;
     }
+    WAS_ACTIVE.store(true, Ordering::Relaxed);
     let cfg = crate::config::Config::lock_query(|c| c.hud);
     let mut panel = EGUI_PANEL.lock();
     if eye == 0 {
@@ -88,11 +97,15 @@ pub(crate) fn draw_quad(
     panel.draw(context, device, target);
 }
 
-/// The panel's render target, quad pipeline, follow damping, and eye-0 corner cache.
+/// The panel's render target, quad pipeline, world-lock latch, and eye-0 corner cache.
 struct EguiPanelState {
     target: Option<HudTarget>,
     quad: Option<HudQuad>,
-    follow: PanelFollow,
+    /// The world-locked panel pose `(position, rotation)`, latched the first frame the panel is shown
+    /// and held until it is dismissed -- so the panel stays put in the world (like the pause/map menus)
+    /// rather than chasing the head, which is easier to point at. Cleared on dismissal so the next open
+    /// re-anchors at the current head pose.
+    latched_pose: Option<(Vec3, Quat)>,
     /// World-space panel corners, computed on eye 0 and reused for eye 1 (correct stereo depth).
     cached_corners: Option<[[f32; 4]; 4]>,
     /// The virtual cursor's world-space corners, computed on eye 0 alongside the panel corners.
@@ -104,7 +117,7 @@ impl EguiPanelState {
         Self {
             target: None,
             quad: None,
-            follow: PanelFollow::new(),
+            latched_pose: None,
             cached_corners: None,
             cursor_corners: None,
         }
@@ -146,10 +159,12 @@ impl EguiPanelState {
         let Some((head_pos, head_rotation)) = super::render_camera_pose() else {
             return;
         };
-        let rot = self.follow.update(head_rotation, &cfg.follow);
+        // World-lock: latch the pose the first frame the panel is shown and hold it, so it stays put
+        // in the world instead of chasing the head. Cleared on dismissal (see `draw_quad`).
+        let (pos, rot) = *self.latched_pose.get_or_insert((head_pos, head_rotation));
         let aspect = cfg.aspect.max(f32::EPSILON);
         let params = PanelParams {
-            pos: head_pos,
+            pos,
             rot,
             aspect,
             distance: cfg.distance,
@@ -185,43 +200,5 @@ impl EguiPanelState {
         if let Some(cursor_corners) = self.cursor_corners {
             quad.draw_cursor(context, device, target, &cursor_corners);
         }
-    }
-}
-
-/// Critically-damped quaternion-slerp follow for the panel orientation, independent of the gameplay
-/// HUD's follow so the two never share state.
-struct PanelFollow {
-    rotation: Quat,
-    last_time: Option<Instant>,
-    initialized: bool,
-}
-
-impl PanelFollow {
-    const fn new() -> Self {
-        Self {
-            rotation: Quat::IDENTITY,
-            last_time: None,
-            initialized: false,
-        }
-    }
-
-    /// Ease the panel rotation toward the head's current rotation: `alpha = 1 - 2^(-dt/halflife)`. The
-    /// first frame snaps to the head so the panel does not swing in from identity.
-    fn update(&mut self, head_rotation: Quat, config: &FollowConfig) -> Quat {
-        if !self.initialized {
-            self.initialized = true;
-            self.rotation = head_rotation;
-            self.last_time = Some(Instant::now());
-            return self.rotation;
-        }
-        let dt = self
-            .last_time
-            .map(|t| t.elapsed().as_secs_f32())
-            .unwrap_or(0.016)
-            .min(0.1);
-        self.last_time = Some(Instant::now());
-        let alpha = (1.0 - 2.0_f32.powf(-dt / config.rotation_halflife.max(f32::EPSILON))).min(1.0);
-        self.rotation = self.rotation.slerp(head_rotation, alpha);
-        self.rotation
     }
 }
