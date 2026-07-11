@@ -72,14 +72,19 @@ pub struct VrConfig {
     /// Override path to the OpenXR loader DLL. `None` loads `openxr_loader.dll` next to the payload
     /// DLL, falling back to the platform default search path.
     pub loader_path: Option<String>,
-    /// The near clip plane, in metres, for the per-eye off-axis projection. Defaults to `0.1`, the
-    /// value the engine's `Camera` constructor writes to `m_Near` (`docs/engine/rendering.md` §2.9).
+    /// Fallback near clip plane, in metres, for the per-eye off-axis projection, used only until the
+    /// first camera update publishes the engine's live plane. The mod reads the active camera's actual
+    /// `m_Near` each frame as the source of truth (see
+    /// [`crate::hooks::camera::main_camera_planes_or`]); this default (`0.1`) mirrors the engine's
+    /// `Camera` constructor value (`docs/engine/rendering.md` §2.9) so the bootstrap frame matches.
     pub near_clip: f32,
-    /// The far clip plane, in metres, for the per-eye off-axis projection. Defaults to `38400`, the
-    /// value the engine's `Camera` constructor writes to `m_Far` (`0x47160000`,
-    /// `docs/engine/rendering.md` §2.9) — the game renders a finite-far reverse-Z frustum out to
-    /// ~38 km, so the mod must match it or the horizon clips. The engine's reverse-Z depth keeps
-    /// precision at this distance.
+    /// Fallback far clip plane, in metres, for the per-eye off-axis projection, used only until the
+    /// first camera update publishes the engine's live plane. The mod reads the active camera's actual
+    /// `m_Far` each frame as the source of truth (see
+    /// [`crate::hooks::camera::main_camera_planes_or`]) — the game renders a finite-far reverse-Z
+    /// frustum and sets its own runtime far, so matching the live value keeps the eyes, the cull
+    /// frustum, and the depth reconstruction consistent and the horizon unclipped. This default
+    /// (`38400`) mirrors the engine's `Camera` constructor value (`0x47160000`) for the bootstrap frame.
     pub far_clip: f32,
     /// Which depth convention the per-eye off-axis projection is written in (see
     /// [`ProjectionConvention`]). Defaults to the preferred pre-`SetupRenderCamera` write.

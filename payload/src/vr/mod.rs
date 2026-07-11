@@ -748,6 +748,12 @@ impl VrState {
             .begin()
             .context("vr: begin_frame failed")?;
 
+        // The engine's live active-camera planes are the single source of truth for near/far, so the
+        // eyes render against the same frustum the engine reconstructs and culls with. Fall back to the
+        // configured planes until the first camera update publishes the live values.
+        let (near_clip, far_clip) =
+            crate::hooks::camera::main_camera_planes_or((cfg.near_clip, cfg.far_clip));
+
         let mut eyes = [EyeView {
             pose: xr::Posef::IDENTITY,
             raw_pose: xr::Posef::IDENTITY,
@@ -764,8 +770,8 @@ impl VrState {
                     up: 0.0,
                     down: 0.0,
                 },
-                cfg.near_clip,
-                cfg.far_clip,
+                near_clip,
+                far_clip,
             ),
         }; 2];
 
@@ -792,8 +798,8 @@ impl VrState {
                         fov: view.fov,
                         projection: OffAxisProjection::new(
                             fov_from_xr(view.fov),
-                            cfg.near_clip,
-                            cfg.far_clip,
+                            near_clip,
+                            far_clip,
                         ),
                     };
                 }

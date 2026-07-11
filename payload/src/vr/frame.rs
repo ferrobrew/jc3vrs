@@ -130,8 +130,13 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // top of that to hide edge pop-in under fast motion; the eye-shift margin and the padding are both
     // applied on the vertical axis too (flying pitch shifts the eyes vertically). Written standard-depth
     // to match the cull camera's `m_ProjectionF`.
+    // The engine's live active-camera planes are the single source of truth for near/far (see
+    // `crate::hooks::camera::main_camera_planes_or`), so the cull frustum matches the eyes and the
+    // reconstruction; fall back to the configured planes until the first camera update.
+    let (near_clip, far_clip) =
+        crate::hooks::camera::main_camera_planes_or((cfg.near_clip, cfg.far_clip));
     let ipd = (pos1 - pos0).length();
-    let margin = 0.5 * ipd / cfg.near_clip.max(1e-3);
+    let margin = 0.5 * ipd / near_clip.max(1e-3);
     // The padding lives on the stereo config alongside its `widen_cull_frustum` sibling (and the
     // debug slider), not on `VrConfig`, so read it from the global config here.
     let pad = 1.0 + crate::config::Config::lock_query(|c| c.stereo.cull_fov_padding).max(0.0);
@@ -146,7 +151,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
         down: expand(eye0.fov.angle_down.tan().min(eye1.fov.angle_down.tan())).atan(),
     };
     *CULL_PROJECTION.lock() =
-        Some(OffAxisProjection::new(union_fov, cfg.near_clip, cfg.far_clip).standard_depth);
+        Some(OffAxisProjection::new(union_fov, near_clip, far_clip).standard_depth);
 
     let eye_params = |eye: super::EyeView, eye_position: Vec3| EyeRenderParams {
         projection_standard: eye.projection.standard_depth,

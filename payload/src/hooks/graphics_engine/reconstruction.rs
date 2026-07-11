@@ -91,11 +91,11 @@ fn perspective_fov_inverse(
 
 /// The engine-format inverse of the off-axis projection for the VR eye currently being drawn, or
 /// `None` when the override does not apply: the toggle is off, this is not a VR eye dispatch
-/// (flatscreen frames carry no render params), or the requested near/far do not match the configured
-/// VR planes (an auxiliary camera -- e.g. a reflection -- whose own symmetric rebuild is already
-/// correct).
+/// (flatscreen frames carry no render params), or the requested near/far do not match the *live*
+/// main-camera planes (an auxiliary camera -- e.g. a reflection -- whose own symmetric rebuild is
+/// already correct).
 fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
-    let (enabled, skip_atmospheric, near_clip, far_clip) = Config::lock_query(|c| {
+    let (enabled, skip_atmospheric, near_fallback, far_fallback) = Config::lock_query(|c| {
         (
             c.stereo.reconstruct_offaxis_inverse,
             c.stereo.offaxis_inverse_skip_atmospheric,
@@ -103,21 +103,22 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
             c.vr.far_clip,
         )
     });
-    if !enabled {
-        return None;
-    }
+    let atmospheric = IN_ATMOSPHERIC.load(Ordering::Relaxed);
+    let params = crate::vr::render_params(crate::stereo::draw_index());
+    // Recognize the main-view depth passes by the engine's ACTUAL active-camera planes, the single
+    // source of truth ([`crate::hooks::camera::main_camera_planes_or`]), not a hardcoded config value:
+    // the engine writes a runtime far (~40 km) that differs from the constructor default the config
+    // mirrors (38.4 km), so comparing against the config rejected every main pass and the off-axis
+    // inverse never engaged. A pass whose near/far differ from the live main camera belongs to another
+    // camera (e.g. a reflection) whose symmetric rebuild is already correct, so leave it untouched.
+    let (near_ref, far_ref) =
+        crate::hooks::camera::main_camera_planes_or((near_fallback, far_fallback));
+    let near_ok = (near - near_ref).abs() <= near_ref.abs().max(0.01) * 0.1;
+    let far_ok = (far - far_ref).abs() <= far_ref.abs() * 0.01;
+
     // The atmospheric-scattering pass reconstructs the sky and samples the sun cascade over it, where
     // the off-axis shear throws a swimming black crescent; yield to the symmetric rebuild for it.
-    if skip_atmospheric && IN_ATMOSPHERIC.load(Ordering::Relaxed) {
-        return None;
-    }
-    let vr = crate::vr::render_params(crate::stereo::draw_index())?;
-    // The off-axis projection is built with the configured near/far, which match the engine's main
-    // camera planes; a call with different planes belongs to some other camera whose symmetric
-    // reconstruction is correct as-is, so leave it untouched.
-    if (near - near_clip).abs() > near_clip.abs().max(0.01) * 0.1
-        || (far - far_clip).abs() > far_clip.abs() * 0.01
-    {
+    if !enabled || (skip_atmospheric && atmospheric) || !near_ok || !far_ok {
         return None;
     }
     // The `Matrix4` <-> glam bridge transposes each way, so `Mat4::from(engine).inverse().to_cols_array()`
@@ -125,9 +126,11 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
     // write `m_View`. `PerspectiveFovInverse` produces a standard-depth inverse, so invert the
     // standard-depth off-axis projection: the matching depth basis, now carrying the off-center shear
     // the symmetric rebuild omitted.
-    let inverse = glam::Mat4::from(Matrix4 {
-        data: vr.projection_standard,
+    params.map(|vr| {
+        glam::Mat4::from(Matrix4 {
+            data: vr.projection_standard,
+        })
+        .inverse()
+        .to_cols_array()
     })
-    .inverse();
-    Some(inverse.to_cols_array())
 }

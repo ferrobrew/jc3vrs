@@ -269,6 +269,12 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
         {
             LAST_DTF.store(dtf.to_bits(), Ordering::Relaxed);
 
+            // Publish the engine's own near/far for the active camera so the reconstruction override
+            // can recognize the main-view depth passes by their planes. The engine sets a runtime far
+            // that differs from the `Camera` constructor default, so keying that override on a
+            // hardcoded plane silently misses every main pass (see `main_camera_planes`).
+            *MAIN_CAMERA_PLANES.lock() = Some((camera.m_Near, camera.m_Far));
+
             let camera_settings = Config::lock_query(|c| c.camera);
             if !camera_settings.enabled {
                 CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
@@ -415,6 +421,27 @@ static LAST_DTF: AtomicU32 = AtomicU32::new(0);
 /// headpose active, republished by [`game_camera_manager_get_camera_matrix`] so sim-phase readers
 /// see the headpose camera. `None` until the camera hook first runs with the headpose active.
 static LAST_CAMERA_WORLD: Mutex<Option<[f32; 16]>> = Mutex::new(None);
+
+/// The active (main) camera's near/far clip planes (`m_Near`/`m_Far`), captured each frame from the
+/// engine. The reconstruction override ([`crate::hooks::graphics_engine::reconstruction`]) keys on
+/// these to recognize the main-view depth passes -- whose off-axis inverse it must substitute -- and
+/// skip auxiliary cameras (reflections) with different planes. The engine writes a runtime far that
+/// differs from the `Camera` constructor default (~40 km vs the constructor's 38.4 km), so gating that
+/// override on a hardcoded config plane misses every main pass. `None` until the camera hook first runs.
+static MAIN_CAMERA_PLANES: Mutex<Option<(f32, f32)>> = Mutex::new(None);
+
+/// The active camera's near/far as of the last `Camera::UpdateRender`, or `None` before the first.
+pub fn main_camera_planes() -> Option<(f32, f32)> {
+    *MAIN_CAMERA_PLANES.lock()
+}
+
+/// The single source of truth for the VR near/far planes: the engine's live active-camera planes,
+/// falling back to `fallback` (the configured VR planes) only until the first camera update. The
+/// per-eye projections, the cull frustum, and the reconstruction gate all resolve through here, so the
+/// eyes render, cull, and reconstruct against the same planes the engine is actually using.
+pub fn main_camera_planes_or(fallback: (f32, f32)) -> (f32, f32) {
+    main_camera_planes().unwrap_or(fallback)
+}
 
 #[detour(address = jc3gi::camera::camera_tree::CameraTree::UpdateRenderContexts_ADDRESS)]
 fn camera_tree_update_render_contexts(
