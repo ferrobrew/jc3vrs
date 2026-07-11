@@ -170,7 +170,11 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
         if !crate::capture::is_active() {
             let panel = crate::config::Config::lock_query(|c| c.hud.egui_panel);
             if panel.enabled {
-                if let Some(srv) = crate::hud::egui_panel::panel_srv() {
+                // With `show_on_mirror` off, the panel stays in the headset only, leaving the desktop
+                // mirror showing the unobstructed scene.
+                if panel.show_on_mirror
+                    && let Some(srv) = crate::hud::egui_panel::panel_srv()
+                {
                     let overlay = letterbox_viewport(
                         AspectSize {
                             width: panel.resolution.0,

@@ -169,6 +169,10 @@ pub struct EguiPanelConfig {
     pub resolution: (u32, u32),
     /// Lazy-follow damping parameters for the panel (independent of the gameplay HUD's follow).
     pub follow: FollowConfig,
+    /// Whether to also composite the panel onto the desktop mirror while a VR session runs. Off by
+    /// default: the panel is already visible in the headset, so the desktop mirror shows the
+    /// unobstructed scene. Turn it on for a legible desktop copy of the panel.
+    pub show_on_mirror: bool,
 }
 
 impl EguiPanelConfig {
@@ -180,6 +184,7 @@ impl EguiPanelConfig {
             aspect: 4.0 / 3.0,
             resolution: (1280, 960),
             follow: FollowConfig::new(),
+            show_on_mirror: false,
         }
     }
 }

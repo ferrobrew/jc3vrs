@@ -262,6 +262,10 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
                     egui::Slider::new(&mut cfg.hud.egui_panel.follow.rotation_halflife, 0.01..=2.0)
                         .text("Panel rotation halflife (s)"),
                 );
+                ui.checkbox(
+                    &mut cfg.hud.egui_panel.show_on_mirror,
+                    "Show panel on desktop mirror (off = headset only)",
+                );
             });
         }
 
