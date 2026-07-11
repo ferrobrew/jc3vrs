@@ -31,6 +31,8 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
         .with_static_binder(&DRAW_RENDER_PASS_RANGE_BINDER)
         .with_static_binder(&PRE_DRAW_BINDER)
+        .with_static_binder(&DRAW_POSTEFFECTS_BINDER)
+        .with_static_binder(&SETUP_RENDER_STATES_BINDER)
         .with_static_binder(&SET_GLOBAL_SHADER_CONSTANTS_BINDER)
         .with_static_binder(&COMMIT_RENDER_PASS_SETTINGS_BINDER)
         .with_static_binder(&SHADOW_MANAGER_UPDATE_RENDER_BINDER)
@@ -103,19 +105,147 @@ fn draw_render_pass_range(
             || skip_range.is_some_and(|(lo, hi)| lo <= pass && pass <= hi)
     };
 
-    // Draw maximal runs of non-skipped passes, omitting the skipped ones.
-    let mut lo = first;
-    for pass in first..last {
-        if skipped(pass) {
-            if lo < pass {
-                original.call(this, ctx, setup, lo, pass);
+    // Draw maximal runs of non-skipped passes in [lo, hi), omitting the skipped ones.
+    let draw = |lo: i32, hi: i32| {
+        let mut run_start = lo;
+        for pass in lo..hi {
+            if skipped(pass) {
+                if run_start < pass {
+                    original.call(this, ctx, setup, run_start, pass);
+                }
+                run_start = pass + 1;
             }
-            lo = pass + 1;
+        }
+        if run_start < hi {
+            original.call(this, ctx, setup, run_start, hi);
+        }
+    };
+
+    // Foveation (issue #29): write the peripheral stencil mask just before the foveated shading sub-range,
+    // then force the peripheral stencil test through it so the GPU skips the dropped GBuffer pixels. The
+    // reconstruction fill-in runs later, in the `DrawPosteffects` hook, once the scene is fully lit --
+    // filling here (right after the GBuffer passes) would reconstruct an as-yet-unlit MainColor. `plan` is
+    // `None` when foveation is off or this is not a VR eye render, collapsing to the plain split above.
+    let Some(plan) = foveation_plan(first, last) else {
+        draw(first, last);
+        return;
+    };
+    draw(first, plan.fov_start);
+    if plan.do_mask {
+        run_foveation_pass(crate::vr::foveation::mask_write, plan.params, "mask-write");
+    }
+    crate::vr::foveation::FORCE_STENCIL_TEST.store(true, std::sync::atomic::Ordering::Relaxed);
+    draw(plan.fov_start, plan.fov_end);
+    crate::vr::foveation::FORCE_STENCIL_TEST.store(false, std::sync::atomic::Ordering::Relaxed);
+    draw(plan.fov_end, last);
+}
+
+/// The foveation bracketing for one [`draw_render_pass_range`] call: the clamped foveated sub-range
+/// `[fov_start, fov_end)`, whether this call owns the mask-write / fill-in (so each runs once even if the
+/// scene range is split across calls), and the per-eye pass parameters.
+struct FoveationPlan {
+    fov_start: i32,
+    fov_end: i32,
+    do_mask: bool,
+    params: crate::vr::foveation::FoveationParams,
+}
+
+/// Build the [`FoveationPlan`] for a draw-range call, or `None` when foveation is disabled, this is not a
+/// VR eye render, or the foveated range does not intersect `[first, last)`. Publishes the per-draw stencil
+/// test bits ([`crate::vr::foveation::STENCIL_TEST_BITS`]) when active.
+fn foveation_plan(first: i32, last: i32) -> Option<FoveationPlan> {
+    let cfg = Config::lock_query(|c| c.foveation.clone());
+    if !cfg.enabled {
+        return None;
+    }
+    let eye = usize::from(is_second_eye());
+    let center_uv = foveal_center_uv(eye)?;
+    let ff = cfg.foveal_first_pass as i32;
+    let fl = cfg.foveal_last_pass as i32;
+    let fov_start = first.max(ff);
+    let fov_end = last.min(fl + 1);
+    if fov_start >= fov_end {
+        return None;
+    }
+    crate::vr::foveation::STENCIL_TEST_BITS.store(
+        crate::vr::foveation::packed_stencil_test(cfg.mask_bit),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    Some(FoveationPlan {
+        fov_start,
+        fov_end,
+        do_mask: (first..last).contains(&ff),
+        params: foveation_params(&cfg, center_uv),
+    })
+}
+
+/// Build the pass parameters from the config and the eye's foveal centre.
+fn foveation_params(
+    cfg: &crate::config::FoveationConfig,
+    center_uv: [f32; 2],
+) -> crate::vr::foveation::FoveationParams {
+    crate::vr::foveation::FoveationParams {
+        center_uv,
+        inner_fraction: cfg.inner_fraction,
+        outer_fraction: cfg.outer_fraction,
+        max_drop: cfg.max_drop,
+        mask_bit: cfg.mask_bit,
+        debug_show_mask: cfg.debug_show_mask,
+    }
+}
+
+/// The per-eye foveal centre as a UV, from the eye's projection principal point (`m02`/`m12` shear terms
+/// of the column-major projection): symmetric frustums map to the buffer centre, canted HMDs to their
+/// off-axis centre. `None` when no VR frame is in flight. Clamped to the buffer.
+fn foveal_center_uv(eye: usize) -> Option<[f32; 2]> {
+    let m = crate::vr::render_params(eye)?.projection_standard;
+    Some([
+        (0.5 - 0.5 * m[8]).clamp(0.0, 1.0),
+        (0.5 + 0.5 * m[9]).clamp(0.0, 1.0),
+    ])
+}
+
+/// Run one foveation D3D pass, warning on any failure without disturbing the surrounding scene draw.
+fn run_foveation_pass(
+    pass: fn(crate::vr::foveation::FoveationParams) -> anyhow::Result<()>,
+    params: crate::vr::foveation::FoveationParams,
+    label: &str,
+) {
+    if let Err(e) = pass(params) {
+        tracing::warn!(target: "vr", "foveation {label} pass failed: {e:#}");
+    }
+}
+
+// RenderEngine::DrawPosteffects -- the post-effects pass, drawn once per eye after the scene is fully
+// composed (opaque + lighting + sky + transparency resolved into MainColor) and before post-processing
+// reads it. Foveation's reconstruction fill-in runs here (issue #29): by now the peripheral pixels the
+// mask/force-test dropped in the GBuffer passes have been lit black, so the fill reconstructs each from
+// its kept neighbours in the finished MainColor. Runs for both eyes; a no-op when foveation is off.
+#[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::DrawPosteffects_ADDRESS)]
+fn draw_posteffects(this: *mut c_void, ctx: *mut c_void, setup: *mut c_void) {
+    if let Some(cfg) = Config::lock_query(|c| c.foveation.enabled.then(|| c.foveation.clone())) {
+        let eye = usize::from(is_second_eye());
+        if let Some(center_uv) = foveal_center_uv(eye) {
+            run_foveation_pass(
+                crate::vr::foveation::fill_in,
+                foveation_params(&cfg, center_uv),
+                "fill-in",
+            );
         }
     }
-    if lo < last {
-        original.call(this, ctx, setup, lo, last);
-    }
+    DRAW_POSTEFFECTS.get().unwrap().call(this, ctx, setup);
+}
+
+// Graphics::SetupRenderStates -- the pre-draw pipeline-state flush that decodes each dirty packed state
+// index on the context and issues the underlying D3D `OMSet*State` binds. While foveation forces the
+// peripheral stencil test (issue #29), rewrite the staged depth-stencil index of each non-stencil draw to
+// add an `EQUAL 0` test against the mask bit, so the GPU skips the pixels the mask pass tagged. Patched
+// before the original flushes; a no-op unless foveation is mid-range (see `crate::vr::foveation`).
+#[detour(address = jc3gi::graphics_engine::graphics_engine::SetupRenderStates_ADDRESS)]
+fn setup_render_states(context: *mut HContext_t, a2: *mut c_void) {
+    // SAFETY: `context` is the live render context the game passed to its own state flush.
+    unsafe { crate::vr::foveation::apply_force_test(context) };
+    SETUP_RENDER_STATES.get().unwrap().call(context, a2);
 }
 
 // ShadowManager::UpdateRender -- the sim-side sun-shadow update, which fits the scheduled cascades to

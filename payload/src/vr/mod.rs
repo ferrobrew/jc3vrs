@@ -52,6 +52,7 @@ pub use projection::{Fov, OffAxisProjection};
 
 mod blit;
 mod config;
+pub mod foveation;
 mod frame;
 mod mirror;
 mod resolution;
@@ -84,6 +85,7 @@ pub fn install() {
     resolution::install();
     crate::lifecycle::on_cleanup(|_renderer| {
         blit::teardown();
+        foveation::teardown();
         mirror::teardown();
         uninstall();
     });

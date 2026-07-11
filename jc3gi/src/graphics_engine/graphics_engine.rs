@@ -449,8 +449,28 @@ impl std::convert::AsMut<GraphicsParams> for GraphicsParams {
     }
 }
 #[repr(C, align(8))]
-/// A GPU context handle.
-pub struct HContext_t {}
+/// A GPU context handle: the engine's wrapper over the D3D11 immediate context, carrying the deferred,
+/// dirty-tracked pipeline state that [`SetupRenderStates`] flushes to D3D before each draw. Partial:
+/// only the depth-stencil state index and stencil ref are mapped.
+pub struct HContext_t {
+    _field_0: [u8; 36032],
+    /// The packed depth-stencil state index staged by the granular stencil/depth setters and flushed by
+    /// [`SetupRenderStates`] into a cached `ID3D11DepthStencilState`. Bit layout, low dword: bit0
+    /// `DepthEnable`, bit1 `DepthWriteMask`, bits2-5 `DepthFunc`, bit6 `StencilEnable`, bits7-10
+    /// `StencilFunc`, bits11-18 `StencilReadMask`, bits19-26 `StencilWriteMask`, bits27-30
+    /// `StencilFailOp`; high dword bits0-3 `StencilDepthFailOp`, bits4-7 `StencilPassOp`. The D3D enum
+    /// values are stored verbatim (`D3D11_COMPARISON_*`, `D3D11_STENCIL_OP_*`).
+    pub m_DepthStencilStateIndex: u64,
+    _field_8cc8: [u8; 4],
+    /// The stencil reference value bound alongside the depth-stencil state.
+    pub m_StencilRef: u32,
+}
+fn _HContext_t_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x8CD0], HContext_t>([0u8; 0x8CD0]);
+    }
+    unreachable!()
+}
 impl HContext_t {}
 impl std::convert::AsRef<HContext_t> for HContext_t {
     fn as_ref(&self) -> &HContext_t {
@@ -696,6 +716,41 @@ pub unsafe fn get_render_frame_counters() -> &'static mut crate::graphics_engine
     unsafe {
         &mut *(0x142D3A6AC
             as *mut crate::graphics_engine::graphics_engine::RenderFrameCounters)
+    }
+}
+pub const SetupRenderStates_ADDRESS: usize = 0x14195FEA0;
+/// The pre-draw pipeline-state flush at the top of every draw wrapper: for each dirty state category
+/// (samplers, depth-stencil, blend, rasterizer) it decodes the packed state index staged on the context
+/// -- creating and caching the D3D state object on first use ([`CreateDepthStencilState`]) -- binds it,
+/// and clears the dirty flag. The depth-stencil bind reads
+/// [`HContext_t::m_DepthStencilStateIndex`] / [`HContext_t::m_StencilRef`] and issues the sole
+/// `OMSetDepthStencilState`, only when the index or ref changed since the last draw.
+pub unsafe fn SetupRenderStates(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    a2: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            a2: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(SetupRenderStates_ADDRESS);
+        f(context, a2)
+    }
+}
+pub const CreateDepthStencilState_ADDRESS: usize = 0x14195F9D0;
+/// Decodes a packed depth-stencil state index (see [`HContext_t::m_DepthStencilStateIndex`]) into a
+/// `D3D11_DEPTH_STENCIL_DESC` and creates+caches the `ID3D11DepthStencilState`. Called by
+/// [`SetupRenderStates`] on the first bind of each distinct index.
+pub unsafe fn CreateDepthStencilState(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    index: u64,
+) -> u64 {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            index: u64,
+        ) -> u64 = ::std::mem::transmute(CreateDepthStencilState_ADDRESS);
+        f(context, index)
     }
 }
 pub const SetRenderSetup_ADDRESS: usize = 0x141966D20;

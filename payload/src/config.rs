@@ -22,6 +22,8 @@ pub fn get() -> Config {
 pub struct Config {
     pub stereo: StereoConfig,
     pub exposure: ExposureConfig,
+    #[serde(default)]
+    pub foveation: FoveationConfig,
     pub post_fx: PostFxConfig,
     pub camera: CameraConfig,
     pub movement: MovementConfig,
@@ -36,6 +38,7 @@ impl Config {
         Self {
             stereo: StereoConfig::new(),
             exposure: ExposureConfig::new(),
+            foveation: FoveationConfig::new(),
             post_fx: PostFxConfig::new(),
             camera: CameraConfig::new(),
             movement: MovementConfig::new(),
@@ -396,6 +399,62 @@ impl ExposureConfig {
             force: false,
             forced_value: 0.11,
         }
+    }
+}
+
+/// Static foveated rendering (issue #29): a radial stencil mask drops a dithered fraction of the
+/// peripheral pixels before the expensive scene passes shade them, and a fill-in pass reconstructs them
+/// from their neighbours. On by default (validated in-headset); costs the mask + fill passes but saves
+/// peripheral shading. See `docs/mod/foveation.md`.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FoveationConfig {
+    /// Master toggle.
+    pub enabled: bool,
+    /// Foveal radius as a fraction of the half-diagonal from the per-eye foveal centre: inside this the
+    /// scene renders at full rate (no pixels dropped).
+    pub inner_fraction: f32,
+    /// Radius (same units as [`inner_fraction`](Self::inner_fraction)) at which the peripheral drop
+    /// reaches [`max_drop`](Self::max_drop); the drop ramps from zero at the inner radius to the max here.
+    pub outer_fraction: f32,
+    /// The maximum fraction of peripheral pixels dropped (and reconstructed), reached at
+    /// [`outer_fraction`](Self::outer_fraction) and beyond. `0.5` drops half the far periphery.
+    pub max_drop: f32,
+    /// The stencil bit the mask tags dropped pixels with. Default `0x80` (bit 7): the engine's own
+    /// stencil use is bits 0, 1, 5, 6, so bit 7 is free; change it if an effect corrupts with foveation
+    /// on (a data-driven pass may write it).
+    pub mask_bit: u32,
+    /// The first [`RenderPassId`](jc3gi::graphics_engine::render_engine::RenderPassId) (inclusive) of the
+    /// foveated shading range: the mask-write runs just before it, and the peripheral stencil test is
+    /// forced on from here. Default `0x41` (`RP_MODELS_DYNAMIC`) -- after the depth prepass, so the
+    /// dropped pixels keep full-resolution depth. A tuning knob; widen it toward the lighting passes to
+    /// save more, narrow it if an effect misbehaves.
+    pub foveal_first_pass: u32,
+    /// The last [`RenderPassId`](jc3gi::graphics_engine::render_engine::RenderPassId) (inclusive) of the
+    /// foveated shading range: the peripheral stencil test is forced through it, and the fill-in runs just
+    /// after. Default `0x4B` (`RP_CREATURES`).
+    pub foveal_last_pass: u32,
+    /// Diagnostic: paint the dropped peripheral pixels magenta (in the fill-in pass) instead of
+    /// reconstructing them, so the mask is directly visible. Off by default.
+    pub debug_show_mask: bool,
+}
+impl FoveationConfig {
+    pub const fn new() -> Self {
+        Self {
+            enabled: true,
+            inner_fraction: 0.5,
+            outer_fraction: 1.0,
+            max_drop: 0.5,
+            mask_bit: 0x80,
+            foveal_first_pass: 0x41,
+            foveal_last_pass: 0x4B,
+            debug_show_mask: false,
+        }
+    }
+}
+impl Default for FoveationConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

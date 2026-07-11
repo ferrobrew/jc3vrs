@@ -313,6 +313,39 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         );
     });
 
+    ui.collapsing("Foveation (#29, experimental)", |ui| {
+        ui.checkbox(
+            &mut cfg.foveation.enabled,
+            "Enable static foveated rendering",
+        );
+        ui.add(
+            egui::Slider::new(&mut cfg.foveation.inner_fraction, 0.0..=1.0)
+                .text("Inner radius (fraction of half-diagonal, full-res inside)"),
+        );
+        ui.add(
+            egui::Slider::new(&mut cfg.foveation.outer_fraction, 0.0..=1.5)
+                .text("Outer radius (drop reaches max here)"),
+        );
+        ui.add(
+            egui::Slider::new(&mut cfg.foveation.max_drop, 0.0..=1.0)
+                .text("Max peripheral drop fraction"),
+        );
+        ui.horizontal(|ui| {
+            ui.label("Foveated pass range (RenderPassId):");
+            ui.add(egui::DragValue::new(&mut cfg.foveation.foveal_first_pass).range(0..=0xFF));
+            ui.label("..=");
+            ui.add(egui::DragValue::new(&mut cfg.foveation.foveal_last_pass).range(0..=0xFF));
+        });
+        ui.checkbox(
+            &mut cfg.foveation.debug_show_mask,
+            "Debug: paint dropped pixels magenta (visualize the mask)",
+        );
+        ui.label(
+            "Drops a dithered radial fraction of peripheral pixels before shading, then reconstructs \
+             them. Off by default; needs in-headset tuning.",
+        );
+    });
+
     ui.collapsing("Post-FX (reprojection passes, both eyes)", |ui| {
         ui.checkbox(
             &mut cfg.post_fx.skip_motion_blur,
