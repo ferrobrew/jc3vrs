@@ -157,14 +157,15 @@ pub struct StereoConfig {
     /// Restore the SSAO temporal history index (`CSSAOPass +0x9A0`/`+0x9A4`) between the two stereo
     /// eyes. The index advances once per SSAO draw and is *not* reset by the `m_FirstPass` force, so the
     /// two eyes resolve against different history slots -- half the per-eye MainColor divergence. Pinning
-    /// it (snapshot before eye 0, restore before eye 1) makes both eyes sample the same slot. **Default
-    /// off pending validation** of the byte offsets against the RT-hash diagnostic.
+    /// it (snapshot before eye 0, restore before eye 1) makes both eyes sample the same slot. **On by
+    /// default** -- measured to cut the per-eye MainColor brightness gap substantially.
     pub restore_ssao_history: bool,
     /// Restore the global-illumination cascade index (`CGISolver::m_CascadeToUpdate`, reached via the
     /// `CLightManager` singleton) between the two stereo eyes. It toggles which LPV cascade is refreshed
     /// each GI draw, so eye 0 and eye 1 leave the two cascades in different freshness states -- the other
     /// half of the per-eye MainColor divergence. Snapshot before eye 0, restore before eye 1 so eye 1
-    /// refreshes the same cascade. **Default off pending validation.**
+    /// refreshes the same cascade. **On by default** -- pairs with
+    /// [`restore_ssao_history`](Self::restore_ssao_history) to remove the per-eye MainColor divergence.
     pub restore_gi_cascade: bool,
     /// Patch the screen-space PCF rotation hash out of the sun-shadow shaders at creation, so both
     /// eyes use the same unrotated 38-tap PCF (removes the per-eye shadow shimmer + foliage grain).
@@ -373,8 +374,8 @@ impl StereoConfig {
             skip_ao_volumes: false,
             skip_pass_range_enabled: false,
             skip_pass_range: (0x56, 0x56),
-            restore_ssao_history: false,
-            restore_gi_cascade: false,
+            restore_ssao_history: true,
+            restore_gi_cascade: true,
             patch_shadow_pcf_hash: true,
             unjitter_shadow_fit: false,
             restore_render_camera: false,
@@ -393,7 +394,10 @@ impl StereoConfig {
             widen_model_cull: true,
             widen_shadow_fit: true,
             stabilize_shadow_fit: true,
-            shadow_update_every_frame: true,
+            // Off by default: defeating the cascade amortization did not resolve the #31 flicker in
+            // testing (the flicker is distant-tree-line shadow content churn, not the update cadence),
+            // and forcing every cascade to redraw each frame carries a perf cost. Kept as a toggle.
+            shadow_update_every_frame: false,
             fog_full_res: false,
             particles_full_res: false,
             spotlight_full_res: false,
@@ -461,9 +465,9 @@ impl FoveationConfig {
     pub const fn new() -> Self {
         Self {
             enabled: true,
-            inner_fraction: 0.5,
-            outer_fraction: 1.0,
-            max_drop: 0.5,
+            inner_fraction: 0.35,
+            outer_fraction: 0.55,
+            max_drop: 0.8,
             mask_bit: 0x80,
             foveal_first_pass: 0x41,
             foveal_last_pass: 0x4B,

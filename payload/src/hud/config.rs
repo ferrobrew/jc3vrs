@@ -104,11 +104,11 @@ impl HudConfig {
         Self {
             redirect: true,
             quad: true,
-            hud_aspect: 1.0,
+            hud_aspect: 1.3,
             movie_aspect: 16.0 / 9.0,
-            render_scale: 1.0,
-            distance: 3.0,
-            panel_scale: 1.0,
+            render_scale: 1.5,
+            distance: 6.0,
+            panel_scale: 0.8,
             follow: FollowConfig::new(),
             marker_distance: 3.0,
             center_distance: 3.0,
@@ -179,8 +179,8 @@ impl EguiPanelConfig {
     pub const fn new() -> Self {
         Self {
             enabled: false,
-            distance: 1.2,
-            scale: 1.0,
+            distance: 2.5,
+            scale: 0.85,
             aspect: 4.0 / 3.0,
             resolution: (1280, 960),
             follow: FollowConfig::new(),
