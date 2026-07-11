@@ -1,4 +1,10 @@
-use std::{ffi::c_void, sync::OnceLock};
+use std::{
+    ffi::c_void,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use windows::Win32::{
     Foundation::HMODULE,
@@ -134,13 +140,22 @@ fn shutdown_from_game() {
     EguiState::uninstall();
 }
 
+/// Whether shutdown/eject has begun. Read by subsystems that must quiesce the moment F5 is pressed --
+/// notably the VR frame loop: after [`shutdown_from_game`] tears the OpenXR runtime down (persisting
+/// the instance/session handles for the next injection), the game thread keeps ticking, and an
+/// ungated `vr::update` re-acquires those persisted handles and rebuilds the swapchain, racing the
+/// hook uninstall in [`shutdown_startup`] -- the crash on uninject.
+pub(crate) fn is_shutting_down() -> bool {
+    SHUTTING_DOWN.load(Ordering::Relaxed)
+}
+
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+
 /// Request that we shut down and exit
 fn shutdown() {
-    static SHUTDOWN: OnceLock<bool> = OnceLock::new();
-    if SHUTDOWN.get().is_some() {
+    if SHUTTING_DOWN.swap(true, Ordering::SeqCst) {
         return;
     }
-    SHUTDOWN.set(true).unwrap();
 
     tracing::info!("Shutting down");
     shutdown_from_game();

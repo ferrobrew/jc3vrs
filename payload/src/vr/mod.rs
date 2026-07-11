@@ -94,6 +94,15 @@ pub fn install() {
 /// returns whether a session is currently running (so the caller can decide whether to submit VR
 /// frames). Never panics on OpenXR failure -- failures degrade to flatscreen stereo and are retried.
 pub fn update() -> bool {
+    // Once eject has begun, do nothing: the shutdown cleanup tears the runtime down (persisting the
+    // instance/session handles for the next injection), and an ungated re-entry here would see
+    // `instance.is_none()`, re-acquire those persisted handles, and rebuild the swapchain -- racing
+    // the hook uninstall and crashing the game on uninject. Returning false also skips `frame_begin`
+    // and `present_and_submit` in the caller, quiescing the whole VR frame path.
+    if crate::is_shutting_down() {
+        return false;
+    }
+
     let cfg = Config::lock_query(|c| c.vr.clone());
     let mut state = VR_STATE.lock();
 
