@@ -24,6 +24,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [hud.md](mod/hud.md) — the floating-panel HUD: the redirect, compositing, and cursor interaction.
 - [input.md](mod/input.md) — how the mod taps, consumes, and injects the game's input.
 - [fsr.md](mod/fsr.md) — FSR anti-aliasing and upscaling in the stereo pipeline.
+- [foveation.md](mod/foveation.md) — static foveated rendering (issue #29): the stencil radial-density-masking design, the depth-stencil-state seam, and the build plan.
 - [controllers-and-roomscale.md](mod/controllers-and-roomscale.md) — the motion-controller and roomscale scope: phases, seams, risks, and per-mode input tables.
 - [environment.md](mod/environment.md) — debug-UI control of time of day and weather.
 
