@@ -281,6 +281,15 @@ pub struct StereoConfig {
     /// (`Camera::UpdateFrustum`), so the terrain patch set covers everything either eye can see. Once
     /// per frame; only terrain visibility reads that camera. VR only.
     pub widen_terrain_cull: bool,
+    /// Widen the *active camera's* cull frustum to cover both eyes. Model instances re-cull each render
+    /// block against the camera manager's active-camera frustum planes (`CModelInstance::AddToRender` ->
+    /// `CCamera::IsBoxVisible`), a second gate the scene-cull widen above does not touch -- so large
+    /// buildings pop out at the combined-eye edge even with the scene cull widened (see
+    /// `docs/engine/model-culling.md`). This detours `Camera::UpdateFrustum` and, for the active camera,
+    /// rebuilds its six frustum planes from the union projection (restoring `m_ViewProjection` so
+    /// rendering is untouched), which also fixes the instant-hide-instead-of-fade pop, road meshes, and
+    /// far lights that read the same planes. Once per frame; VR only.
+    pub widen_model_cull: bool,
     /// Widen the sun-shadow cascade *fit* frustum to cover both eyes. The engine fits the cascaded
     /// shadow map once per frame to the centre camera's narrow `m_ProjectionF`, so the wider, laterally
     /// shifted VR eyes see distant/peripheral geometry that falls outside the fitted coverage box --
@@ -373,6 +382,7 @@ impl StereoConfig {
             cull_size_fov_deg: 50.0,
             disable_bfbc_occlusion: true,
             widen_terrain_cull: true,
+            widen_model_cull: true,
             widen_shadow_fit: true,
             stabilize_shadow_fit: true,
             fog_full_res: false,

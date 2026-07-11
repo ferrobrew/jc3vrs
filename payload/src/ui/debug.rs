@@ -187,6 +187,10 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                 "Widen terrain patch cull (rebuild the cull frustum planes; fixes terrain patch \
                  holes at the edges when flying)",
             );
+            ui.checkbox(
+                &mut cfg.stereo.widen_model_cull,
+                "Widen model cull (active-camera frustum; fixes buildings popping at the edges)",
+            );
         });
 
     // Resolution levers for issue #8's pixelation/large-tile artifact around lights and explosions:

@@ -30,7 +30,7 @@ use std::ffi::c_void;
 
 use detours_macro::detour;
 use jc3gi::{
-    camera::camera::Camera,
+    camera::{camera::Camera, camera_manager::CameraManager},
     graphics_engine::{
         graphics_engine::OccluderCollectionManager, render_engine::STerrainPatchSystem,
     },
@@ -44,6 +44,7 @@ pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&GET_BFBC_FRUSTUM_PARAMS_BINDER)
         .with_static_binder(&TERRAIN_PATCH_SYSTEM_UPDATE_BINDER)
+        .with_static_binder(&CAMERA_UPDATE_FRUSTUM_BINDER)
 }
 
 #[detour(
@@ -158,6 +159,46 @@ fn make_union_camera(camera: &mut Camera, union: [f32; 16]) {
             &raw mut camera.m_ViewProjection,
         );
         camera.UpdateFrustum(&raw const transform);
+    }
+}
+
+// Camera::UpdateFrustum -- rebuilds a camera's six world-space cull frustum planes (`m_FrustumPlane`)
+// from its standard-depth `m_ViewProjection`, once per frame per camera. The active camera's planes gate
+// a SECOND model-visibility cull -- `CModelInstance::AddToRender` frustum-tests each render block against
+// them (`CCamera::IsBoxVisible`), a gate the scene-cull widen never reaches, so large buildings pop out
+// at the combined-eye edge (`docs/engine/model-culling.md`). For the active camera, rebuild its planes
+// from the binocular union projection so that cull -- and the instant-hide-instead-of-fade pop, road
+// meshes, and far lights that read the same planes -- covers both eyes. `m_ViewProjection` is restored
+// afterwards, so the per-eye render matrices are untouched; only the cull planes widen. The rebuild goes
+// through the trampoline (`original.call`), not the method binding, so it does not re-enter this detour.
+#[detour(address = jc3gi::camera::camera::Camera::UpdateFrustum_ADDRESS)]
+fn camera_update_frustum(this: *mut Camera, transform: *const Matrix4) {
+    let original = CAMERA_UPDATE_FRUSTUM.get().unwrap();
+    original.call(this, transform);
+    if !Config::lock_query(|c| c.stereo.widen_model_cull) {
+        return;
+    }
+    let Some(union) = crate::vr::cull_projection_standard() else {
+        return;
+    };
+    // Scope the widen to the active camera -- other cameras (terrain, reflection, shadow) rebuild their
+    // own planes through here and must stay narrow.
+    let active = unsafe { CameraManager::get() }
+        .map(|cm| cm.m_ActiveCamera)
+        .unwrap_or(std::ptr::null_mut());
+    if this.is_null() || this != active {
+        return;
+    }
+    let union_mat = Matrix4 { data: union };
+    // SAFETY: `this` is the live active camera on the game thread; the widen saves `m_ViewProjection`,
+    // rebuilds the planes from the union, and restores it, all through raw pointers (no aliasing `&mut`
+    // across the trampoline call).
+    unsafe {
+        let vp = &raw mut (*this).m_ViewProjection;
+        let saved_vp = *vp;
+        Matrix4::Multiply4x4(&raw const (*this).m_View, &raw const union_mat, vp);
+        original.call(this, transform);
+        *vp = saved_vp;
     }
 }
 
