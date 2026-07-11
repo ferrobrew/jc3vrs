@@ -311,6 +311,14 @@ pub struct StereoConfig {
     /// the cascade centre follows heading but not head pitch/roll -- shadows stay put as you look around.
     /// The box *size* (sphere-based) and *orientation* (sun-fixed) are already view-independent. VR only.
     pub stabilize_shadow_fit: bool,
+    /// Refresh every sun-shadow cascade every frame, defeating the engine's update-pattern amortisation.
+    /// The engine re-fits and re-renders cascade level L only every `2^L` frames (via
+    /// `ShadowManager::m_CascadeUpdateLevels`), copying each cascade's fit forward between refreshes, so
+    /// the coarse cascades hold still then snap to a new texel alignment periodically. Flatscreen's T2X
+    /// averages those snaps away, but the mod forces SMAA 1x (no temporal history), so they surface as
+    /// sun-shadow flicker (issue #31). Zeroing the per-cascade levels forces all cascades to update every
+    /// frame -- smooth, at the cost of redrawing the coarse cascades each frame. VR only.
+    pub shadow_update_every_frame: bool,
     /// Recreate the froxel volumetric-fog block's coarse volumetric-depth buffer at full render
     /// resolution instead of half. The fog block bilaterally upsamples that coarse buffer, and VR's
     /// wide FOV magnifies its grid into the blocky tiles around lights and explosions (issue #8). The
@@ -385,6 +393,7 @@ impl StereoConfig {
             widen_model_cull: true,
             widen_shadow_fit: true,
             stabilize_shadow_fit: true,
+            shadow_update_every_frame: true,
             fog_full_res: false,
             particles_full_res: false,
             spotlight_full_res: false,

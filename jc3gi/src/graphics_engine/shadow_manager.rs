@@ -41,7 +41,16 @@ pub struct ShadowManager {
     _field_5: [u8; 299],
     /// The per-cascade slots (passes plus fit bookkeeping).
     pub m_Cascades: [crate::graphics_engine::shadow_manager::CascadeData; 8],
-    _field_2430: [u8; 15824],
+    _field_2430: [u8; 56],
+    /// The per-cascade shadow-map update level, indexed by cascade. A cascade re-fits and re-renders
+    /// only every `2^level` frames (level 0 = every frame); between refreshes its fit is copied
+    /// forward from the previous update. `CalculateUpdatePattern` assigns the levels (the default
+    /// pattern is `{0, 1, 2, 3}` -- the nearest cascade every frame, each further one half as often),
+    /// and [`SetActiveShadowPassCount`](ShadowManager::SetActiveShadowPassCount) reads them each frame,
+    /// gated against a rolling counter, to decide which cascades refresh. This is the mechanism that
+    /// amortises cascade re-renders across frames.
+    pub m_CascadeUpdateLevels: [i32; 6],
+    _field_2480: [u8; 15744],
 }
 fn _ShadowManager_size_check() {
     unsafe {
@@ -101,6 +110,22 @@ impl ShadowManager {
                 Self::UpdateRender_ADDRESS,
             );
             f(self as *mut Self as _, dt, dtf)
+        }
+    }
+    pub const SetActiveShadowPassCount_ADDRESS: usize = 0x14018A7D0;
+    /// Sets the number of active shadow passes (sun cascades plus spot shadows) and rebuilds the
+    /// per-frame cascade update schedule: it refreshes the amortisation pattern (recomputing
+    /// [`m_CascadeUpdateLevels`](ShadowManager::m_CascadeUpdateLevels) on a cascade/spot count change),
+    /// then marks each cascade as either refreshing this frame -- when
+    /// `((1 << m_CascadeUpdateLevels[c]) - 1) & rolling_counter == 0` -- or copying its previous fit
+    /// forward. Called from `CGameStateRun::UpdateShadows` before
+    /// [`UpdateRender`](ShadowManager::UpdateRender).
+    pub unsafe fn SetActiveShadowPassCount(&mut self, count: i32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, count: i32) = ::std::mem::transmute(
+                Self::SetActiveShadowPassCount_ADDRESS,
+            );
+            f(self as *mut Self as _, count)
         }
     }
 }

@@ -54,6 +54,10 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                  shifting/scaling when you look around)",
             );
             ui.checkbox(
+                &mut cfg.stereo.shadow_update_every_frame,
+                "Update all shadow cascades every frame (defeats amortization; fixes #31 flicker)",
+            );
+            ui.checkbox(
                 &mut cfg.stereo.reconstruct_offaxis_inverse,
                 "Off-axis depth reconstruction (per-eye inverse for deferred/SS passes; fixes \
                  specular/SSR/shadow reconstruction divergence)",

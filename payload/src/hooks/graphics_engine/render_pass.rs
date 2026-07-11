@@ -272,13 +272,22 @@ fn setup_render_states(context: *mut HContext_t, a2: *mut c_void) {
 )]
 fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
     let original = SHADOW_MANAGER_UPDATE_RENDER.get().unwrap();
-    let (unjitter, widen, stabilize) = Config::lock_query(|c| {
+    let (unjitter, widen, stabilize, update_every_frame) = Config::lock_query(|c| {
         (
             c.stereo.unjitter_shadow_fit,
             c.stereo.widen_shadow_fit,
             c.stereo.stabilize_shadow_fit,
+            c.stereo.shadow_update_every_frame,
         )
     });
+    // Defeat the cascade update-pattern amortization (issue #31): force every cascade to update level 0
+    // so it re-fits and re-renders each frame instead of on its 2^L cadence, eliminating the periodic
+    // re-fit snaps that surface as flicker with the mod's forced SMAA 1x (no T2X to average them). The
+    // levels persist frame to frame and are read by `SetActiveShadowPassCount` (which runs before this
+    // in the sim's shadow update), so zeroing them here holds for the next frame's schedule build.
+    if update_every_frame && let Some(manager) = unsafe { this.cast::<ShadowManager>().as_mut() } {
+        manager.m_CascadeUpdateLevels = [0; 6];
+    }
     // The widen reuses the union-FOV cull projection; `None` on flatscreen, so widening is VR-only.
     let union = widen.then(crate::vr::cull_projection_standard).flatten();
     if !unjitter && union.is_none() && !stabilize {
