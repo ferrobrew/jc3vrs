@@ -135,6 +135,31 @@ pub enum TraceEvent {
         active_cascades: u32,
         /// The anchor-fix delta about to be applied (zero when disparity is off).
         anchor_delta: [f32; 3],
+        /// The global sun-shadow fade scalar (`ShadowManager::GetShadowFade`) staged this dispatch --
+        /// the whole-terrain shadow-strength knob. A value that flickers frame to frame in eye 0 while
+        /// eye 1 stays put indicts a per-frame global the double-draw re-evaluates.
+        shadow_fade: f32,
+    },
+    /// Per-call state of the off-axis depth-reconstruction override (`PerspectiveFovInverse`). The
+    /// off-axis inverse is rebuilt every call from the eye's live projection and the engine's live
+    /// near/far planes; if any of those wobble frame to frame, the reconstructed world positions swim
+    /// and the sun shadow sampled through them crawls. A stable `proj`/`near`/`far` across frames
+    /// clears the matrix and points at the depth input instead; a wobbling one indicts the live
+    /// projection rebuild.
+    #[serde(rename = "ReconstructionState")]
+    ReconstructionState {
+        /// The near/far the pass requested (the engine's per-pass symmetric params).
+        req_near: f32,
+        req_far: f32,
+        /// The engine's live active-camera planes the override anchors to (its near/far reference).
+        ref_near: f32,
+        ref_far: f32,
+        /// Whether the off-axis override applied (vs. yielding to the symmetric rebuild).
+        applied: bool,
+        /// Fingerprint of the off-axis projection being inverted: `[data0 (x-scale), data5 (y-scale),
+        /// data8 (x-shear), data9 (y-shear), data10 (z-scale)]`. Any per-frame drift here is the matrix
+        /// wobbling.
+        proj: [f32; 5],
     },
     #[serde(rename = "SetupRenderFrameData")]
     SetupRenderFrameData { gated: bool },
@@ -248,6 +273,13 @@ pub fn active_frames() -> i32 {
     TRACE_FRAMES.load(Ordering::Relaxed)
 }
 
+/// The per-trace output directory `<dll dir>/traces/<stamp>`, collecting one capture's NDJSON and its
+/// per-frame screenshots together. `None` when the module path is unavailable.
+fn trace_dir(stamp: &str) -> Option<std::path::PathBuf> {
+    let base = crate::module::get_path()?.parent()?.join("traces");
+    Some(base.join(if stamp.is_empty() { "latest" } else { stamp }))
+}
+
 impl Default for TraceState {
     /// Delegates to the const [`TraceState::new`] -- the `TRACE_STATE` static needs a const
     /// initializer, which a derived `Default` can't provide, so `new` stays the single source.
@@ -287,14 +319,15 @@ impl TraceState {
     /// Write the collected log to an NDJSON file next to the injected DLL (same place as `jc3vrs.log`)
     /// and record its path for the UI (caller holds the lock).
     fn dump(&mut self) {
-        let name = if self.stamp.is_empty() {
-            "jc3vrs_render_trace.ndjson".to_string()
-        } else {
-            format!("jc3vrs_render_trace_{}.ndjson", self.stamp)
+        let Some(dir) = trace_dir(&self.stamp) else {
+            tracing::error!("Failed to write render trace: module path unavailable");
+            return;
         };
-        let path = crate::module::get_path()
-            .and_then(|p| p.parent().map(|dir| dir.join(&name)))
-            .unwrap_or_else(|| std::path::PathBuf::from(&name));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::error!("Failed to create trace dir {}: {e}", dir.display());
+            return;
+        }
+        let path = dir.join("trace.ndjson");
         match std::fs::write(&path, self.log.join("\n")) {
             Ok(()) => {
                 let shown = path.display().to_string();
@@ -309,16 +342,20 @@ impl TraceState {
         }
     }
 
-    /// The output directory, trace stamp, and current real-frame index for a diagnostic screenshot
-    /// beside the trace NDJSON, or `None` when no trace is collecting. Used by [`crate::debug::rt_hash`]
-    /// to name per-frame render-target dumps consistently with the trace file.
-    pub fn screenshot_target() -> Option<(std::path::PathBuf, String, u32)> {
+    /// The per-trace output directory (created) and current real-frame index for a diagnostic
+    /// screenshot, or `None` when no trace is collecting. Used by [`crate::debug::rt_hash`] to write
+    /// per-frame render-target dumps into the same `traces/<stamp>/` folder as the trace NDJSON.
+    pub fn screenshot_target() -> Option<(std::path::PathBuf, u32)> {
         if !tracing_active() {
             return None;
         }
-        let state = TRACE_STATE.lock();
-        let dir = crate::module::get_path()?.parent()?.to_path_buf();
-        Some((dir, state.stamp.clone(), state.frame))
+        let (stamp, frame) = {
+            let state = TRACE_STATE.lock();
+            (state.stamp.clone(), state.frame)
+        };
+        let dir = trace_dir(&stamp)?;
+        std::fs::create_dir_all(&dir).ok()?;
+        Some((dir, frame))
     }
 
     /// Append a frame/driver marker record (no dispatch eye) while a trace is active (auto-locks).

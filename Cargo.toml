@@ -40,3 +40,21 @@ detours-macro = { git = "https://github.com/ferrobrew/re-utilities.git" }
 
 # pyxis = { path = "../pyxis" }
 pyxis = { git = "https://github.com/ferrobrew/pyxis.git" }
+
+# Optimize the PNG-encode chain even in dev builds: the render-trace screenshot diagnostic encodes
+# many full-resolution frames, and unoptimized deflate makes a capture crawl. These are third-party
+# crates, so optimizing them does not slow iteration on our own code.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.flate2]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.adler2]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3

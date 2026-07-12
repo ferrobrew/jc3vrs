@@ -34,6 +34,7 @@ use jc3gi::{
 use re_utilities::hook_library::HookLibrary;
 
 use crate::config::Config;
+use crate::debug::trace::{TraceEvent, TraceState};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -118,19 +119,38 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
 
     // The atmospheric-scattering pass reconstructs the sky and samples the sun cascade over it, where
     // the off-axis shear throws a swimming black crescent; yield to the symmetric rebuild for it.
-    if !enabled || (skip_atmospheric && atmospheric) || !near_ok || !far_ok {
-        return None;
-    }
+    let applies = enabled && !(skip_atmospheric && atmospheric) && near_ok && far_ok;
     // The `Matrix4` <-> glam bridge transposes each way, so `Mat4::from(engine).inverse().to_cols_array()`
     // yields the inverse back in engine row-major format -- the same pattern the camera hook uses to
     // write `m_View`. `PerspectiveFovInverse` produces a standard-depth inverse, so invert the
     // standard-depth off-axis projection: the matching depth basis, now carrying the off-center shear
     // the symmetric rebuild omitted.
-    params.map(|vr| {
-        glam::Mat4::from(Matrix4 {
-            data: vr.projection_standard,
+    let result = applies
+        .then(|| {
+            params.map(|vr| {
+                glam::Mat4::from(Matrix4 {
+                    data: vr.projection_standard,
+                })
+                .inverse()
+                .to_cols_array()
+            })
         })
-        .inverse()
-        .to_cols_array()
-    })
+        .flatten();
+
+    // Record the reconstruction's live inputs so the trace can show whether the matrix (and hence the
+    // reconstructed positions the sun shadow samples over) wobbles frame to frame. Only for VR-eye
+    // dispatches, where `params` is populated; `record_eye` is a no-op outside an active trace.
+    if let Some(vr) = params {
+        let d = vr.projection_standard;
+        TraceState::record_eye(TraceEvent::ReconstructionState {
+            req_near: near,
+            req_far: far,
+            ref_near: near_ref,
+            ref_far: far_ref,
+            applied: result.is_some(),
+            proj: [d[0], d[5], d[8], d[9], d[10]],
+        });
+    }
+
+    result
 }

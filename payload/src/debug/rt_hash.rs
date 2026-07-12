@@ -36,8 +36,6 @@ use windows::{
             Dxgi::Common::{
                 DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
                 DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-                DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R11G11B10_FLOAT,
-                DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_UNORM,
             },
         },
         System::Threading::{EnterCriticalSection, LeaveCriticalSection},
@@ -100,9 +98,9 @@ unsafe fn hash_inner(want_hashes: bool, want_shots: bool) -> anyhow::Result<()> 
     ];
 
     for (kind, tex_ptr) in targets {
-        // Screenshot only eye 0's final BackBufferLinear; hashing (when on) covers the whole set. Skip a
+        // Screenshot each eye's final BackBufferLinear; hashing (when on) covers the whole set. Skip a
         // target's readback entirely when neither consumer needs it.
-        let shot_this = want_shots && eye == 0 && matches!(kind, RtKind::BackBufferLinear);
+        let shot_this = want_shots && matches!(kind, RtKind::BackBufferLinear);
         if !want_hashes && !shot_this {
             continue;
         }
@@ -148,9 +146,8 @@ unsafe fn hash_inner(want_hashes: bool, want_shots: bool) -> anyhow::Result<()> 
                 let bytes = std::slice::from_raw_parts(mapped.pData.cast::<u8>(), len);
                 let hash = want_hashes.then(|| hash_bytes(bytes));
                 let shot = shot_this
-                    .then(|| bytes_per_pixel(desc.Format))
-                    .flatten()
-                    .map(|bpp| tight_rows(bytes, mapped.RowPitch, desc.Width, desc.Height, bpp));
+                    .then(|| to_rgba8(bytes, mapped.RowPitch, desc.Width, desc.Height, desc.Format))
+                    .flatten();
                 ctx.Unmap(&staging, 0);
                 (hash, shot)
             } else {
@@ -163,56 +160,65 @@ unsafe fn hash_inner(want_hashes: bool, want_shots: bool) -> anyhow::Result<()> 
         if let Some(hash) = hash {
             TraceState::record_eye(TraceEvent::RtHash { rt: kind, hash });
         }
-        if let Some(pixels) = shot {
-            write_screenshot(eye, desc.Width, desc.Height, desc.Format, &pixels);
+        if let Some(rgba) = shot {
+            write_png_frame(eye, desc.Width, desc.Height, rgba);
         }
     }
 
     Ok(())
 }
 
-/// The tightly-packed byte size of one pixel for the formats the diagnostic screenshot supports, or
-/// `None` for a format it cannot linearize (skipped with no dump rather than writing garbage).
-fn bytes_per_pixel(format: DXGI_FORMAT) -> Option<u32> {
-    Some(match format {
-        DXGI_FORMAT_R8G8B8A8_UNORM
-        | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
-        | DXGI_FORMAT_B8G8R8A8_UNORM
-        | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB
-        | DXGI_FORMAT_R10G10B10A2_UNORM
-        | DXGI_FORMAT_R11G11B10_FLOAT => 4,
-        DXGI_FORMAT_R16G16B16A16_FLOAT | DXGI_FORMAT_R16G16B16A16_UNORM => 8,
-        _ => return None,
-    })
-}
-
-/// Copy the mapped staging bytes into a tightly-packed (row-pitch-stripped) buffer.
-fn tight_rows(bytes: &[u8], row_pitch: u32, width: u32, height: u32, bpp: u32) -> Vec<u8> {
-    let tight = (width * bpp) as usize;
+/// Convert the mapped staging bytes of a supported 8-bit-per-channel target into a tightly-packed
+/// (row-pitch-stripped) RGBA8 buffer, swizzling BGRA to RGBA. `None` for any other format (skipped with
+/// a log rather than writing a mislabeled image); the diagnostic only shoots `BackBufferLinear`, a
+/// presentable 8-bit target in practice.
+fn to_rgba8(
+    bytes: &[u8],
+    row_pitch: u32,
+    width: u32,
+    height: u32,
+    format: DXGI_FORMAT,
+) -> Option<Vec<u8>> {
+    let swap_rb = match format {
+        DXGI_FORMAT_R8G8B8A8_UNORM | DXGI_FORMAT_R8G8B8A8_UNORM_SRGB => false,
+        DXGI_FORMAT_B8G8R8A8_UNORM | DXGI_FORMAT_B8G8R8A8_UNORM_SRGB => true,
+        _ => {
+            tracing::warn!(
+                "rt_hash: screenshot skipped, unsupported format {}",
+                format.0
+            );
+            return None;
+        }
+    };
+    let tight = (width * 4) as usize;
     let pitch = row_pitch as usize;
     let mut out = Vec::with_capacity(tight * height as usize);
     for y in 0..height as usize {
-        let start = y * pitch;
-        if let Some(row) = bytes.get(start..start + tight) {
+        let row = bytes.get(y * pitch..y * pitch + tight)?;
+        if swap_rb {
+            for px in row.chunks_exact(4) {
+                out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+            }
+        } else {
             out.extend_from_slice(row);
         }
     }
-    out
+    Some(out)
 }
 
-/// Write one frame's tightly-packed pixels beside the trace NDJSON. The filename carries the frame
-/// index, eye, dimensions, and DXGI format number so the raw file can be reassembled into an image
-/// (e.g. `magick -size WxH -depth 8 rgba:file out.png` for `fmt28`) and aligned with the trace events.
-fn write_screenshot(eye: usize, width: u32, height: u32, format: DXGI_FORMAT, pixels: &[u8]) {
-    let Some((dir, stamp, frame)) = TraceState::screenshot_target() else {
+/// Encode one frame's RGBA8 pixels to a PNG in this trace's `traces/<stamp>/` folder, named by frame
+/// index and eye so the sequence reassembles and aligns 1:1 with the per-frame trace events.
+fn write_png_frame(eye: usize, width: u32, height: u32, rgba: Vec<u8>) {
+    let Some((dir, frame)) = TraceState::screenshot_target() else {
         return;
     };
-    let name = format!(
-        "jc3vrs_shot_{stamp}_f{frame:03}_eye{eye}_{width}x{height}_fmt{}.raw",
-        format.0
-    );
-    if let Err(e) = std::fs::write(dir.join(name), pixels) {
-        tracing::warn!("rt_hash: screenshot write failed: {e}");
+    let Some(image) = image::RgbaImage::from_raw(width, height, rgba) else {
+        tracing::warn!("rt_hash: screenshot buffer size mismatch");
+        return;
+    };
+    let path = dir.join(format!("frame{frame:03}_eye{eye}.png"));
+    if let Err(e) = image.save_with_format(&path, image::ImageFormat::Png) {
+        tracing::warn!("rt_hash: screenshot PNG write failed: {e}");
     }
 }
 

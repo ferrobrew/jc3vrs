@@ -1,7 +1,12 @@
 //! The Debug tab: the render-trace dump, the stereo render fixes, the per-eye diagnostics/bisection
 //! levers, and the engine post-FX gates. Only locks CONFIG. (FSR lives in the Render tab.)
 
+use std::sync::atomic::{AtomicI32, Ordering};
+
 use crate::{config, debug::trace};
+
+/// The frame count for the editable "Dump N frames" trace button, persisted across UI frames.
+static TRACE_FRAME_COUNT: AtomicI32 = AtomicI32::new(60);
 
 pub fn egui_debug_debug(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
@@ -17,8 +22,15 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         if ui.button("Dump render trace (4 frames)").clicked() {
             start_trace = Some(4);
         }
-        if ui.button("120 frames").clicked() {
-            start_trace = Some(120);
+        let mut count = TRACE_FRAME_COUNT.load(Ordering::Relaxed);
+        if ui.button(format!("Dump {count} frames")).clicked() {
+            start_trace = Some(count);
+        }
+        if ui
+            .add(egui::DragValue::new(&mut count).range(1..=600).speed(1))
+            .changed()
+        {
+            TRACE_FRAME_COUNT.store(count, Ordering::Relaxed);
         }
         let remaining = trace::active_frames();
         if remaining > 0 {
@@ -26,7 +38,7 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         } else if trace::TraceState::last_path().is_some() {
             ui.label("dumped");
         } else {
-            ui.label("(writes next to the DLL)");
+            ui.label("(writes to traces/<stamp>/)");
         }
     });
     ui.checkbox(
@@ -35,7 +47,7 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     );
     ui.checkbox(
         &mut cfg.stereo.diagnose_rt_screenshots,
-        "Dump eye-0 frames into the trace (BackBufferLinear per frame, for localizing artifacts)",
+        "Dump per-eye frames into the trace (BackBufferLinear PNG per eye per frame)",
     );
     ui.separator();
 
@@ -60,6 +72,10 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
             ui.checkbox(
                 &mut cfg.stereo.shadow_update_every_frame,
                 "Update all shadow cascades every frame (defeats amortization; fixes #31 flicker)",
+            );
+            ui.checkbox(
+                &mut cfg.stereo.sync_shadow_atlas,
+                "Sync shadow atlas parity halves (GPU copy; collapses the #31 ping-pong flicker)",
             );
             ui.checkbox(
                 &mut cfg.stereo.reconstruct_offaxis_inverse,

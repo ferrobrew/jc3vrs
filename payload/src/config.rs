@@ -114,11 +114,11 @@ pub struct StereoConfig {
     /// camera) so any RT whose two eyes' hashes differ is being accumulated across the two Draws --
     /// the "stronger in one eye" bug. See [`crate::debug::rt_hash`].
     pub diagnose_rt_hashes: bool,
-    /// Diagnostic: while a render trace collects, dump eye 0's final `BackBufferLinear` to a raw pixel
-    /// file each frame (beside the trace NDJSON), named with the frame index, dimensions, and DXGI
-    /// format so the frames can be reassembled and correlated with the per-frame trace events. For
-    /// localizing per-frame visual artifacts (e.g. the shadow flicker) that the numeric trace cannot
-    /// place spatially. Heavy (a full readback + disk write per frame); only for short diagnostic traces.
+    /// Diagnostic: while a render trace collects, encode eye 0's final `BackBufferLinear` to a PNG each
+    /// frame into the trace's `traces/<stamp>/` folder (alongside `trace.ndjson`), named by frame index
+    /// so the sequence reassembles and aligns 1:1 with the per-frame trace events. For localizing
+    /// per-frame visual artifacts (e.g. the shadow flicker) the numeric trace cannot place spatially.
+    /// Heavy (a full readback + PNG encode per frame); only meaningful during a manual trace.
     pub diagnose_rt_screenshots: bool,
     /// Diagnostic: skip the SSAO pass on both eyes in stereo, to confirm whether SSAO drives the
     /// "stronger in one eye" darkening. (Equivalent to lowering the in-game AO setting, but toggleable
@@ -326,6 +326,15 @@ pub struct StereoConfig {
     /// sun-shadow flicker (issue #31). Zeroing the per-cascade levels forces all cascades to update every
     /// frame -- smooth, at the cost of redrawing the coarse cascades each frame. VR only.
     pub shadow_update_every_frame: bool,
+    /// Sync the sun-shadow atlas parity double buffer (issue #31). The engine renders the cascade atlas
+    /// into the current frame parity's half of the array (`ShadowManager::m_SliceBase`) and the material
+    /// shaders sample the same-parity half; since the parity flips every frame, consecutive frames sample
+    /// slices rendered at slightly different head poses, so the whole scene's brightness alternates a few
+    /// percent -- the flicker. After the atlas renders (in `PreDraw`), copy the freshly-rendered half onto
+    /// the other half so both hold identical content: whichever the shader samples, it is the same, and
+    /// nothing alternates. A pure GPU copy on the render thread -- unlike the frame-counter parity pin, it
+    /// touches no shared CPU state. VR only.
+    pub sync_shadow_atlas: bool,
     /// Recreate the froxel volumetric-fog block's coarse volumetric-depth buffer at full render
     /// resolution instead of half. The fog block bilaterally upsamples that coarse buffer, and VR's
     /// wide FOV magnifies its grid into the blocky tiles around lights and explosions (issue #8). The
@@ -405,6 +414,7 @@ impl StereoConfig {
             // testing (the flicker is distant-tree-line shadow content churn, not the update cadence),
             // and forcing every cascade to redraw each frame carries a perf cost. Kept as a toggle.
             shadow_update_every_frame: false,
+            sync_shadow_atlas: false,
             fog_full_res: false,
             particles_full_res: false,
             spotlight_full_res: false,
