@@ -17,6 +17,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [render-setups-reinit.md](engine/render-setups-reinit.md) — the runtime resize path: `CreateRenderSetups`, its callers, state assumptions, and swapchain separability.
 - [profiling.md](engine/profiling.md) — what survives of the engine's profiler in release, and the recommended path to per-phase CPU/GPU timings.
 - [shaders.md](engine/shaders.md) — extracting, disassembling, and patching the game's shaders; tooling in `tools/shaders/`.
+- [lighting-shadow-pipeline.md](engine/lighting-shadow-pipeline.md) — the per-frame sun-shadow and global-lighting state: the frame counters, cascade fit and amortization, `SetGlobalShaderConstants`, and the table of which GlobalConstants are parity- or counter-indexed (the flicker ping-pong surface).
 
 ## mod/
 
@@ -28,6 +29,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [foveation.md](mod/foveation.md) — static foveated rendering (issue #29): the stencil radial-density-masking design, the depth-stencil-state seam, and the build plan.
 - [controllers-and-roomscale.md](mod/controllers-and-roomscale.md) — the motion-controller and roomscale scope: phases, seams, risks, and per-mode input tables.
 - [environment.md](mod/environment.md) — debug-UI control of time of day and weather.
+- [lighting-shadow-vr-interactions.md](mod/lighting-shadow-vr-interactions.md) — every default-on mod modification touching camera, frame counters, lighting, or shadows, how each interacts with the stereo double-draw, and the candidate per-frame globals behind the terrain-wide sun-shadow flicker.
 
 ## issues/
 
