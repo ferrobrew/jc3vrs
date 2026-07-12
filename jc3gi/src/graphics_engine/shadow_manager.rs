@@ -38,7 +38,14 @@ pub struct ShadowManager {
     /// syncs the engine to it via [`SetEnabled`](ShadowManager::SetEnabled) whenever it differs
     /// from the live state -- the graphics-menu path for toggling shadows.
     pub m_Enabled: bool,
-    _field_5: [u8; 299],
+    _field_5: [u8; 91],
+    /// The sun-shadow cascade atlas: a single depth `Texture2DArray` whose slices hold every cascade's
+    /// (and the spot shadows') fitted shadow map. Created by [`SetEnabled`](ShadowManager::SetEnabled)
+    /// (`CreateShadowDepthTexture`, one render target per array slice). The atlas is parity double-
+    /// buffered: [`m_SliceBase`](ShadowManager::m_SliceBase) gives the base slice for each parity, so the
+    /// scheduled cascades render into (and the material shaders sample) the parity's half of the array.
+    pub m_AtlasTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_68: [u8; 200],
     /// The per-cascade slots (passes plus fit bookkeeping).
     pub m_Cascades: [crate::graphics_engine::shadow_manager::CascadeData; 8],
     _field_2430: [u8; 56],
@@ -50,7 +57,13 @@ pub struct ShadowManager {
     /// gated against a rolling counter, to decide which cascades refresh. This is the mechanism that
     /// amortises cascade re-renders across frames.
     pub m_CascadeUpdateLevels: [i32; 6],
-    _field_2480: [u8; 15744],
+    _field_2480: [u8; 15728],
+    /// The base atlas array slice for each frame parity (`m_SliceBase[render_frame_counters.m_FrameIndex
+    /// & 1]`). `CommitRenderPassSettings` points the parity's render passes at this half, and
+    /// `SetGlobalShaderConstants` stages it as the slice the material shaders sample. The two halves hold
+    /// the shadow maps rendered on alternate frames -- the source of the per-parity sampling difference.
+    pub m_SliceBase: [u32; 2],
+    _field_61f8: [u8; 8],
 }
 fn _ShadowManager_size_check() {
     unsafe {
