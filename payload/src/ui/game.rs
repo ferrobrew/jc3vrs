@@ -49,6 +49,24 @@ pub fn egui_debug_game(ui: &mut egui::Ui) {
                  behind is the player's job with a player-driven head.",
             );
             ui.checkbox(
+                &mut cfg.movement.suppress_idle_fidget,
+                "Suppress idle fidget (one-off idle variations)",
+            )
+            .on_hover_text(
+                "Drop ACT_TO_IDLE_ONE_OFF so Rico stays in the base idle instead of playing the \
+                 periodic weight-shift/look-around fidget, which reads as the body moving on its \
+                 own under the HMD-driven head. NPCs keep their fidgets.",
+            );
+            ui.checkbox(
+                &mut cfg.movement.suppress_idle_breathing,
+                "Suppress idle breathing (freeze the base idle pose)",
+            )
+            .on_hover_text(
+                "Hold the animation clock (dt=0) for the player while standing in the base idle \
+                 state, so the subtle breathing/sway of the idle clip freezes. Movement and other \
+                 states are unaffected. Off by default -- needs in-headset validation.",
+            );
+            ui.checkbox(
                 &mut cfg.movement.face_camera,
                 "Face camera (drive the body yaw from the camera)",
             )

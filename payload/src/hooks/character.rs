@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        LazyLock,
+        OnceLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -315,6 +315,7 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         let Some(character) = character.as_mut().filter(|c| c.m_IsLocalCharacter) else {
             return;
         };
+
         let Some(animation_controller) = character.m_AnimatedModel.m_AnimationController.as_mut()
         else {
             return;
@@ -528,28 +529,37 @@ fn character_queue_act(character: *mut Character, act: *const u32) {
     if Config::lock_query(|c| c.movement.suppress_reverse_look)
         && (unsafe { character.as_ref() }).is_some_and(|c| c.m_IsLocalCharacter)
         && let Some(&id) = (unsafe { act.as_ref() })
-        && REVERSE_ACT_IDS.contains(&(id as i32))
+        && reverse_act_ids().is_some_and(|ids| ids.contains(&(id as i32)))
     {
         return;
     }
     CHARACTER_QUEUE_ACT.get().unwrap().call(character, act);
 }
 
-/// The runtime ids of the reversing acts, resolved lazily from the event-id symbol table: act ids
-/// are sequential registration indices, not name hashes, so they cannot be computed offline. The
-/// singleton is unconditionally live by first use — the game creates the table during executable
-/// initialization (the `ACT_*` id globals' dynamic initializers already resolve through it), and
-/// the payload injects into a long-running process — so a missing table is a programming error
-/// worth panicking on. Both names are registered by loaded animation data long before gameplay
-/// queues acts, so the lookups are pure reads.
-static REVERSE_ACT_IDS: LazyLock<[i32; 2]> = LazyLock::new(|| unsafe {
-    let table = EventIdSymbolTable::get().expect("the animation event-id symbol table is not live");
-    [
-        EventIdSymbolTable::ACT_REVERSE,
-        EventIdSymbolTable::ACT_REVERSE_MOTORBIKE,
-    ]
-    .map(|name| {
-        let name = std::ffi::CString::new(name).expect("an act name contains a NUL");
-        table.string_to_id(name.as_ptr() as *const u8)
-    })
-});
+/// The runtime ids of the reversing acts (`ACT_REVERSE` / `ACT_REVERSE_MOTORBIKE`): act ids are
+/// sequential registration indices, not name hashes, so they cannot be computed offline. Resolved
+/// the first time the event-id symbol table is live and cached thereafter; `None` until then — after
+/// a startup injection the table may not exist yet, and the suppression simply does not fire until
+/// it does (the acts are registered by loaded animation data before gameplay queues them).
+fn reverse_act_ids() -> Option<[i32; 2]> {
+    if let Some(ids) = REVERSE_ACT_IDS.get() {
+        return Some(*ids);
+    }
+    let ids = [
+        resolve_act_id(EventIdSymbolTable::ACT_REVERSE)?,
+        resolve_act_id(EventIdSymbolTable::ACT_REVERSE_MOTORBIKE)?,
+    ];
+    Some(*REVERSE_ACT_IDS.get_or_init(|| ids))
+}
+
+static REVERSE_ACT_IDS: OnceLock<[i32; 2]> = OnceLock::new();
+
+/// Resolve an `ACT_*` name to its runtime id via the event-id symbol table, or `None` if the table
+/// is not live yet (e.g. immediately after a startup injection, before the animation system has
+/// created it). Once the table exists the lookup is a pure read: the `ACT_*` names are registered by
+/// loaded animation data before gameplay queues acts.
+fn resolve_act_id(name: &str) -> Option<i32> {
+    let table = unsafe { EventIdSymbolTable::get() }?;
+    let name = std::ffi::CString::new(name).ok()?;
+    Some(unsafe { table.string_to_id(name.as_ptr() as *const u8) })
+}

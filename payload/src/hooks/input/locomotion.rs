@@ -39,6 +39,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&INPUT_LOCO_MOVE_TASK_UPDATE_BINDER)
         .with_static_binder(&INPUT_LOCO_AIM_RELATIVE_TASK_UPDATE_BINDER)
         .with_static_binder(&MOVEMENT_JUMP_TASK_UPDATE_BINDER)
+        .with_static_binder(&INPUT_LOCO_IDLE_TASK_UPDATE_BINDER)
         .with_static_binder(&UPDATE_FALL_STEERING_BINDER)
         .with_static_binder(&EVALUATE_CHARACTER_ORIENTATION_BINDER)
         .with_static_binder(&EVALUATE_CHARACTER_ORIENTATION_MS_BINDER)
@@ -119,6 +120,30 @@ fn movement_jump_task_update(ctx: *mut StateContext, p1: *mut c_void, p2: *mut c
         }
         None => MOVEMENT_JUMP_TASK_UPDATE.get().unwrap().call(ctx, p1, p2),
     }
+}
+
+/// The value the idle-fidget countdown ([`Character::m_IdleFidgetTimer`]) is held at while
+/// suppression is on: large enough that the task's per-frame decrement never brings it below zero
+/// within a frame.
+const IDLE_FIDGET_TIMER_HOLD: f32 = 3600.0;
+
+/// Suppress the periodic idle fidget for the local player. The idle task queues `ACT_TO_IDLE_ONE_OFF`
+/// -- and returns early, *before* its walk/start-act queuing -- once
+/// [`Character::m_IdleFidgetTimer`] drops below zero. Swallowing the act alone leaves the countdown
+/// negative forever, so the
+/// task keeps hitting that early return and stops queuing movement animations while idle. Instead,
+/// force the countdown positive before the update runs: the one-off branch is never taken, so Rico
+/// neither fidgets nor loses his walk animations. Passes straight through with the toggle off or for
+/// a non-local character.
+#[detour(address = jc3gi::input::locomotion::NStateTask_InputLocoIdleTask::Update_ADDRESS)]
+fn input_loco_idle_task_update(ctx: *mut StateContext, p1: *mut c_void, p2: *mut c_void) {
+    if Config::lock_query(|c| c.movement.suppress_idle_fidget)
+        && let Some(character) = unsafe { character_from_context(ctx) }
+        && character.m_IsLocalCharacter
+    {
+        character.m_IdleFidgetTimer = IDLE_FIDGET_TIMER_HOLD;
+    }
+    INPUT_LOCO_IDLE_TASK_UPDATE.get().unwrap().call(ctx, p1, p2);
 }
 
 /// Hold the local player's body facing straight while airborne under VR. `UpdateFallSteering`

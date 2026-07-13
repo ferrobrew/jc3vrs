@@ -74,6 +74,45 @@ for NStateTask_InputLocoAimRelativeTask {
     }
 }
 #[repr(C, align(8))]
+/// The locomotion task active while the character stands still on foot (the `S_IDLE` state). It
+/// selects on-spot behaviour -- rotate-on-spot turns, aim-relative on-spot actions -- and drives the
+/// periodic idle variation: a per-character countdown (reset to a random ~8.5-12 s whenever the
+/// character's aim reference moves) that, once elapsed while the character is idle, calm, and not on
+/// a vehicle, queues [`ACT_TO_IDLE_ONE_OFF`](animation::symbol_table::EventIdSymbolTable::ACT_TO_IDLE_ONE_OFF)
+/// to play a one-off idle break.
+pub struct NStateTask_InputLocoIdleTask {}
+impl NStateTask_InputLocoIdleTask {
+    pub const Update_ADDRESS: usize = 0x140817D70;
+    /// The per-frame idle update. When the idle countdown at `character + 0x2BB0` (a `f32`) is
+    /// negative and the character is idle, calm, and off-vehicle, it queues `ACT_TO_IDLE_ONE_OFF`
+    /// and returns; otherwise it decrements the countdown (while idle) or resets it, then queues the
+    /// applicable on-spot or start acts.
+    pub unsafe fn Update(
+        ctx: *mut crate::state::StateContext,
+        p1: *mut ::std::ffi::c_void,
+        p2: *mut ::std::ffi::c_void,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                ctx: *mut crate::state::StateContext,
+                p1: *mut ::std::ffi::c_void,
+                p2: *mut ::std::ffi::c_void,
+            ) = ::std::mem::transmute(Self::Update_ADDRESS);
+            f(ctx, p1, p2)
+        }
+    }
+}
+impl std::convert::AsRef<NStateTask_InputLocoIdleTask> for NStateTask_InputLocoIdleTask {
+    fn as_ref(&self) -> &NStateTask_InputLocoIdleTask {
+        self
+    }
+}
+impl std::convert::AsMut<NStateTask_InputLocoIdleTask> for NStateTask_InputLocoIdleTask {
+    fn as_mut(&mut self) -> &mut NStateTask_InputLocoIdleTask {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The locomotion move task active when the character is on foot and *not* holding an aim. Its
 /// [`Update`](NStateTask_InputLocoMoveTask::Update) reads [`Character::m_AimFlags`] and dispatches
 /// to run/steer versus strafe locomotion.

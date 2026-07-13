@@ -20,7 +20,13 @@ fn _AimState_size_check() {
 }
 #[repr(C, align(8))]
 pub struct AnimatedModel {
-    _field_0: [u8; 376],
+    _field_0: [u8; 152],
+    pub m_RuleSystems: crate::types::std_vector::Vector<
+        crate::types::shared_ptr::SharedPtr<
+            crate::animation::rule_system::AnimationRuleSystem,
+        >,
+    >,
+    _field_b8: [u8; 192],
     pub m_AnimationController: *mut crate::character::character::AnimationController,
     _field_180: [u8; 128],
     /// The model-instance slots (`NModelSystem::CModelInstance*`, null when unused): the base
@@ -132,6 +138,33 @@ impl AnimationController {
             f(self as *mut Self as _, index, joint)
         }
     }
+    pub const UpdateAnimationsTime_ADDRESS: usize = 0x1404794D0;
+    /// Advances the playback clocks of the controller's time-updatable blenders by `dt` (via
+    /// `CPoseProducer::UpdateBlendersTimeInRange`) without recomputing the pose. Runs each SIM frame
+    /// in the character's animation pass, before [`UpdateAnimations`](AnimationController::UpdateAnimations).
+    pub unsafe fn UpdateAnimationsTime(&mut self, dt: f32) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
+                Self::UpdateAnimationsTime_ADDRESS,
+            );
+            f(self as *mut Self as _, dt)
+        }
+    }
+    pub const UpdateAnimations_ADDRESS: usize = 0x14077E200;
+    /// Recomputes the controller's pose from its pose producers: advances each blender's clock by
+    /// `dt` (`CPoseProducer::Update` -> `CBlender::UpdateTime`) and samples and blends the active
+    /// clips into the model-space pose over `num_of_bones` bones. Runs each SIM frame in the
+    /// character's animation pass. A `dt` of `0` holds the animation clocks, producing a static pose.
+    pub unsafe fn UpdateAnimations(&mut self, dt: f32, num_of_bones: i32) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                dt: f32,
+                num_of_bones: i32,
+            ) = ::std::mem::transmute(Self::UpdateAnimations_ADDRESS);
+            f(self as *mut Self as _, dt, num_of_bones)
+        }
+    }
 }
 impl std::convert::AsRef<AnimationController> for AnimationController {
     fn as_ref(&self) -> &AnimationController {
@@ -171,7 +204,16 @@ pub struct Character {
     /// so the character stays in aim/strafe locomotion for a short tail after the aim button is
     /// released.
     pub m_AimTimer: f32,
-    _field_2a04: [u8; 2876],
+    _field_2a04: [u8; 428],
+    /// The idle-variation countdown, in seconds, driven by
+    /// [`NStateTask_InputLocoIdleTask::Update`](input::locomotion::NStateTask_InputLocoIdleTask::Update):
+    /// while the character stands idle it is decremented by the frame delta, and once it goes
+    /// negative the task queues
+    /// [`ACT_TO_IDLE_ONE_OFF`](animation::symbol_table::EventIdSymbolTable::ACT_TO_IDLE_ONE_OFF) to
+    /// play a one-off idle break, then resets it to a random ~8.5-12 s the next time the character's
+    /// aim reference moves.
+    pub m_IdleFidgetTimer: f32,
+    _field_2bb4: [u8; 2444],
 }
 fn _Character_size_check() {
     unsafe {

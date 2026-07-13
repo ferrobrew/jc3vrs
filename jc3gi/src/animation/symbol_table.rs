@@ -33,6 +33,13 @@ impl EventIdSymbolTable {
     pub const ACT_REVERSE: &str = "ACT_REVERSE";
     /// The motorbike variant of [`ACT_REVERSE`](EventIdSymbolTable::ACT_REVERSE).
     pub const ACT_REVERSE_MOTORBIKE: &str = "ACT_REVERSE_MOTORBIKE";
+    /// The one-off idle-variation act: transitions the on-foot idle from `S_IDLE` to
+    /// `S_IDLE_ONE_OFF` in `rico_base.afsmb`, playing a single idle-break animation (a weight shift,
+    /// a look-around, a fidget) before returning to `S_IDLE`. `NStateTask_InputLocoIdleTask::Update`
+    /// queues it via [`Character::QueueAct`](character::character::Character::QueueAct) once a
+    /// per-character idle countdown (reset to a random ~8.5-12 s each time the character moves)
+    /// elapses while the character is standing still, calm, and not attached to a vehicle.
+    pub const ACT_TO_IDLE_ONE_OFF: &str = "ACT_TO_IDLE_ONE_OFF";
 }
 impl std::convert::AsRef<EventIdSymbolTable> for EventIdSymbolTable {
     fn as_ref(&self) -> &EventIdSymbolTable {

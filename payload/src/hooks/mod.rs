@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 use parking_lot::{Mutex, MutexGuard};
 use re_utilities::{ThreadSuspender, hook_library::HookLibrary};
 
+pub mod animation;
 pub mod camera;
 pub mod character;
 pub mod clock;
@@ -32,6 +33,7 @@ pub(super) fn install() {
             .with_hook_library(camera::hook_library())
             .with_hook_library(wndproc::hook_library())
             .with_hook_library(character::hook_library())
+            .with_hook_library(animation::hook_library())
             .with_hook_library(input::hook_library())
             .with_hook_library(ui::hook_library())
             .enable(&mut patcher)?)

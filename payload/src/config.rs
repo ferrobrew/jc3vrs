@@ -686,6 +686,23 @@ pub struct MovementConfig {
     /// decoupled (the VR source), routing the jump through its non-aiming fallback (current forward
     /// plus stick-gated steer). Restored immediately after. See `crate::hooks::input::locomotion`.
     pub suppress_air_aim_facing: bool,
+    /// Suppress Rico's periodic idle fidget for the local player -- the weight-shifts and
+    /// look-arounds the game plays while standing still. The idle input task
+    /// (`NStateTask_InputLocoIdleTask`) queues `ACT_TO_IDLE_ONE_OFF` on an idle timer to drive the
+    /// `S_IDLE` -> `S_IDLE_ONE_OFF` variation; with the head driven by the HMD and the body meant to
+    /// hold the player's real pose, that motion reads as the body drifting on its own (issue #33).
+    /// The act is dropped at `Character::QueueAct` for the local player, so Rico stays in the base
+    /// `S_IDLE`; NPCs keep their fidgets. See `crate::hooks::character`.
+    pub suppress_idle_fidget: bool,
+    /// Suppress the idle *breathing* for the local player -- the subtle chest/shoulder motion the
+    /// base idle clip (`S_IDLE`) plays while standing still, distinct from the periodic
+    /// [`suppress_idle_fidget`](Self::suppress_idle_fidget) variations. Unlike the fidget there is no
+    /// act to drop; instead the animation-clock advance is held (`dt = 0`) for the local player's
+    /// controller while it is in `S_IDLE`, so the pose freezes at its current frame. Movement and
+    /// every other state run at normal speed, and NPCs are untouched. See `crate::hooks::animation`.
+    /// **Off by default** pending in-headset validation -- a held pose is a bigger visual change than
+    /// dropping the fidget, and the freeze wants eyes-on before it ships on.
+    pub suppress_idle_breathing: bool,
 }
 impl MovementConfig {
     pub const fn new() -> Self {
@@ -705,6 +722,8 @@ impl MovementConfig {
             slide_skip_starts: true,
             suppress_reverse_look: true,
             suppress_air_aim_facing: true,
+            suppress_idle_fidget: true,
+            suppress_idle_breathing: false,
         }
     }
 }
