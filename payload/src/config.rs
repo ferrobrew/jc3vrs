@@ -178,17 +178,6 @@ pub struct StereoConfig {
     /// Applies only to shaders created after the hook installs; trigger a shader reload (e.g. change
     /// shadow quality) if injected mid-session. See [`crate::hooks::graphics_engine::shader`].
     pub patch_shadow_pcf_hash: bool,
-    /// Strip the jitter translation from the fit camera's projection for the duration of
-    /// `ShadowManager::UpdateRender`, so the fit frustum can never ingest a sub-pixel jitter. The
-    /// fit reads the active camera, which the mod does not jitter, so this showed no effect on the
-    /// issue-10 flicker; default off, kept as a defensive A/B.
-    pub unjitter_shadow_fit: bool,
-    /// Restore the render camera's pristine (center, unjittered) matrices after the frame's eye
-    /// dispatches, so anything reading it before the next Draw sees the engine-built state rather
-    /// than the last eye's jittered, offset projection. Showed no effect on the issue-10 flicker
-    /// (the suspected sim-side reader uses the active camera instead); default off, kept as a
-    /// hygiene A/B.
-    pub restore_render_camera: bool,
     /// Patch the jitter-unstable material LOD dissolve out of the vegetation shaders at creation.
     /// Their screen-door dissolve pattern is keyed to the interpolated clip-space position (not
     /// `SV_Position`), so a camera jitter slides the whole pattern sub-pixel every frame and
@@ -326,15 +315,6 @@ pub struct StereoConfig {
     /// sun-shadow flicker (issue #31). Zeroing the per-cascade levels forces all cascades to update every
     /// frame -- smooth, at the cost of redrawing the coarse cascades each frame. VR only.
     pub shadow_update_every_frame: bool,
-    /// Sync the sun-shadow atlas parity double buffer (issue #31). The engine renders the cascade atlas
-    /// into the current frame parity's half of the array (`ShadowManager::m_SliceBase`) and the material
-    /// shaders sample the same-parity half; since the parity flips every frame, consecutive frames sample
-    /// slices rendered at slightly different head poses, so the whole scene's brightness alternates a few
-    /// percent -- the flicker. After the atlas renders (in `PreDraw`), copy the freshly-rendered half onto
-    /// the other half so both hold identical content: whichever the shader samples, it is the same, and
-    /// nothing alternates. A pure GPU copy on the render thread -- unlike the frame-counter parity pin, it
-    /// touches no shared CPU state. VR only.
-    pub sync_shadow_atlas: bool,
     /// Recreate the froxel volumetric-fog block's coarse volumetric-depth buffer at full render
     /// resolution instead of half. The fog block bilaterally upsamples that coarse buffer, and VR's
     /// wide FOV magnifies its grid into the blocky tiles around lights and explosions (issue #8). The
@@ -363,6 +343,34 @@ pub struct StereoConfig {
     /// of the three resolution levers (an engine-supported path), but still costs cone fill rate and is
     /// not headset-verified. **Default off.**
     pub spotlight_full_res: bool,
+    /// Diagnostic (issue #31 isolation, Test A): render each eye through a *symmetric* (zero-shear)
+    /// off-axis frustum instead of the true asymmetric HMD one. The replacement preserves each eye's
+    /// horizontal and vertical FOV *extent* but re-centres it, so the off-centre shear terms
+    /// (`(tl+tr)`, `(td+tu)`) go to zero -- reproducing the known-good symmetric-stereo projection
+    /// *inside* the full VR path (per-eye offset, double-draw, and the off-axis depth reconstruction all
+    /// still run). The flicker occurs only under the asymmetric off-axis projection, not symmetric
+    /// stereo, so this is the direct discriminator: if the flicker dies with the shear removed, the
+    /// shear is the amplifier; if it survives, the reconstruction inverse (or another projection oddity)
+    /// is. The headset image will look slightly stretched (the compositor still composites at the true
+    /// asymmetric FOV) -- diagnostic only. VR only; no-op on flatscreen. **Default off.**
+    pub symmetrize_eye_frusta: bool,
+    /// Diagnostic (issue #31 isolation, Test B): render *both* eyes with eye 0's exact projection and
+    /// world offset, so the two dispatches draw the identical off-axis view (mono in stereo). This
+    /// removes all per-eye divergence while keeping the off-axis projection and its depth reconstruction,
+    /// isolating "the two eyes disagree" from "each single off-axis frame wanders frame to frame": if
+    /// the flicker survives two identical off-axis draws, it is not inter-eye divergence at all. VR only;
+    /// no-op on flatscreen. **Default off.**
+    pub mirror_eye0_to_both: bool,
+    /// Diagnostic (issue #31 isolation, Test C): pin the scene render camera's world transform and view
+    /// matrix to a value captured when the toggle is enabled, so the game camera holds still -- Rico's
+    /// idle sway, breathing, and any sim-driven camera drift all freeze -- while the sun keeps moving and
+    /// the rest of the sim ticks. Unlike [`VrConfig::freeze_pose`](crate::vr::VrConfig), which only pins
+    /// the HMD head-pose contribution upstream, this freezes the actual `Camera::m_TransformF`/`m_View`
+    /// the engine renders and fits the sun-shadow cascade from. With the HMD sitting still too, this
+    /// cleanly splits a per-frame flicker driven by the sun (survives the freeze) from one driven by
+    /// camera idle motion (dies with it). Re-enabling recaptures the then-current pose. The view locks in
+    /// place -- diagnostic only. VR only. **Default off.**
+    pub freeze_render_camera: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -393,8 +401,6 @@ impl StereoConfig {
             restore_ssao_history: true,
             restore_gi_cascade: true,
             patch_shadow_pcf_hash: true,
-            unjitter_shadow_fit: false,
-            restore_render_camera: false,
             patch_lod_dissolve: false,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
@@ -410,14 +416,13 @@ impl StereoConfig {
             widen_model_cull: true,
             widen_shadow_fit: true,
             stabilize_shadow_fit: true,
-            // Off by default: defeating the cascade amortization did not resolve the #31 flicker in
-            // testing (the flicker is distant-tree-line shadow content churn, not the update cadence),
-            // and forcing every cascade to redraw each frame carries a perf cost. Kept as a toggle.
             shadow_update_every_frame: false,
-            sync_shadow_atlas: false,
             fog_full_res: false,
             particles_full_res: false,
             spotlight_full_res: false,
+            symmetrize_eye_frusta: false,
+            mirror_eye0_to_both: false,
+            freeze_render_camera: false,
         }
     }
 }

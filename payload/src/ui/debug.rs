@@ -51,171 +51,212 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     );
     ui.separator();
 
-    // The stereo render corrections -- normally on; toggle off to reproduce the artifact each fixes.
-    egui::CollapsingHeader::new("Stereo fixes")
+    // The #31 flicker-isolation A/B levers -- all default off; enable one at a time to localize the
+    // whole-terrain sun-shadow flicker. See `crate::config::StereoConfig`.
+    egui::CollapsingHeader::new("Flicker isolation (#31)")
         .default_open(true)
         .show(ui, |ui| {
             ui.checkbox(
-                &mut cfg.stereo.fix_shadow_cascade_anchor,
-                "Sun-shadow cascade anchor (the visible per-eye shadow mismatch; A/B via Present eye 0)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.widen_shadow_fit,
-                "Widen sun-shadow fit FOV (cascades cover both eyes; fixes distant per-eye shadow \
-                 disagreement + crawl)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.stabilize_shadow_fit,
-                "Stabilize sun-shadow fit vs head tilt (yaw-only cascade centre; fixes shadows \
-                 shifting/scaling when you look around)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.shadow_update_every_frame,
-                "Update all shadow cascades every frame (defeats amortization; fixes #31 flicker)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.sync_shadow_atlas,
-                "Sync shadow atlas parity halves (GPU copy; collapses the #31 ping-pong flicker)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.reconstruct_offaxis_inverse,
-                "Off-axis depth reconstruction (per-eye inverse for deferred/SS passes; fixes \
-                 specular/SSR/shadow reconstruction divergence)",
-            );
-            ui.add_enabled(
-                cfg.stereo.reconstruct_offaxis_inverse,
-                egui::Checkbox::new(
-                    &mut cfg.stereo.offaxis_inverse_skip_atmospheric,
-                    "  └ skip atmospheric-scattering pass",
-                ),
+                &mut cfg.stereo.symmetrize_eye_frusta,
+                "A: Symmetric eye frusta (zero shear, same FOV; if flicker dies, the off-axis shear is \
+                 the amplifier)",
             )
             .on_hover_text(
-                "Checked (default): the aerial-perspective pass keeps the symmetric reconstruction, \
-                 so the distant-mountain aerial shadow term flips dark with head pitch. Uncheck to \
-                 apply the per-eye off-axis inverse there too -- fixes the mountain flip, but may \
-                 reintroduce a roll-swimming crescent at the far-plane sky.",
+                "Renders each eye through a symmetric (centred) frustum instead of the true asymmetric \
+                 off-axis one, keeping the per-eye offset, double-draw, and depth reconstruction. The \
+                 headset image will look slightly stretched -- diagnostic only.",
             );
             ui.checkbox(
-                &mut cfg.stereo.dedupe_post_block,
-                "Dedupe world post block (eye 1 otherwise runs the post chain + FSR twice)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.restore_render_camera,
-                "Restore pristine render camera after draws (hygiene; no observed effect)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.unjitter_shadow_fit,
-                "Unjitter shadow fit (defensive; the fit reads the unjittered active camera)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.drain_draw_fragment,
-                "Drain draw-dispatch fragment between eyes (open-world crash fix)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.restore_frame_counters,
-                "Restore frame counters between eyes (fixes jitter/parity flicker)",
-            );
-            ui.add_enabled(
-                cfg.stereo.restore_frame_counters,
-                egui::Checkbox::new(
-                    &mut cfg.stereo.share_prepasses,
-                    "Share view-independent pre-passes across eyes (reflections, cloud shadows, \
-                     sun-shadow atlas, water sim rendered once; perf + fixes shadow flicker #31)",
-                ),
+                &mut cfg.stereo.mirror_eye0_to_both,
+                "B: Both eyes = eye 0 (identical off-axis view twice; if flicker survives, it isn't \
+                 inter-eye divergence)",
             )
             .on_hover_text(
-                "On eye 1, reuse eye 0's shadow atlas / reflection proxies / water sim instead of \
-                 re-rendering them. Requires 'Restore frame counters'. If distant reflections or \
-                 shadows look wrong in one eye, turn this off.",
+                "Renders both eyes with eye 0's projection and offset (mono), removing all per-eye \
+                 divergence while keeping the off-axis projection and its reconstruction.",
             );
             ui.checkbox(
-                &mut cfg.stereo.force_smaa_1x,
-                "Force SMAA 1x (T2X's shared history ghosts across eyes)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.force_ssao_first_pass,
-                "Force SSAO first-pass per eye (stops cross-eye AO history blend)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.restore_ssao_history,
-                "Restore SSAO history between eyes (pin the AO temporal slot so both eyes match)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.restore_gi_cascade,
-                "Restore GI cascade between eyes (pin the LPV cascade so both eyes match)",
-            );
-            ui.horizontal(|ui| {
-                ui.checkbox(
-                    &mut cfg.stereo.patch_shadow_pcf_hash,
-                    "Patch sun-shadow PCF screen-hash (kills per-eye shimmer + foliage grain)",
-                );
-                let patched = crate::hooks::graphics_engine::shader::patched_count();
-                ui.label(if patched == 0 {
-                    "(0 patched -- click Reload shaders)".to_string()
-                } else {
-                    format!("({patched} sites patched)")
-                });
-            });
-            ui.horizontal(|ui| {
-                ui.checkbox(
-                    &mut cfg.stereo.patch_lod_dissolve,
-                    "Patch jitter-unstable LOD dissolve (only matters with FSR jitter on)",
-                );
-                let patched = crate::hooks::graphics_engine::shader::dissolve_patched_count();
-                ui.label(if patched == 0 {
-                    "(0 patched -- click Reload shaders)".to_string()
-                } else {
-                    format!("({patched} sites patched)")
-                });
-            });
-            ui.horizontal(|ui| {
-                if ui.button("Reload shaders").clicked() {
-                    crate::hooks::graphics_engine::shader::request_reload();
-                }
-                ui.label(
-                    "re-creates all shaders so the shader patches take effect (F11 toggles + reloads)",
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.checkbox(
-                    &mut cfg.stereo.widen_cull_frustum,
-                    "Widen scene cull frustum (covers both eyes; stops outer-edge void/pop-in)",
-                );
-                ui.add_enabled(
-                    cfg.stereo.widen_cull_frustum,
-                    egui::Slider::new(&mut cfg.stereo.cull_fov_padding, 0.0..=0.75)
-                        .text("pad")
-                        .fixed_decimals(2),
-                )
-                .on_hover_text(
-                    "Extra fraction to widen the cull frustum on every side (incl. vertical); \
-                     raise if geometry still pops in at the edges when flying",
-                );
-            });
-            ui.add(
-                egui::Slider::new(&mut cfg.stereo.cull_size_fov_deg, 0.0..=90.0)
-                    .text("Size-cull FOV (deg)")
-                    .fixed_decimals(0),
+                &mut cfg.stereo.freeze_render_camera,
+                "C: Freeze render camera (pins m_TransformF/m_View; splits sun-driven vs camera-idle \
+                 flicker)",
             )
             .on_hover_text(
-                "FOV the screen-space size cull uses (overrides the injected 90 deg on the cull \
-                 camera); lower keeps more small/distant geometry and vehicle parts. 0 = leave alone",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.disable_bfbc_occlusion,
-                "Disable software occlusion (drops centre-viewpoint occluder culling; fixes \
-                 peripheral culling an offset eye can see past)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.widen_terrain_cull,
-                "Widen terrain patch cull (rebuild the cull frustum planes; fixes terrain patch \
-                 holes at the edges when flying)",
-            );
-            ui.checkbox(
-                &mut cfg.stereo.widen_model_cull,
-                "Widen model cull (active-camera frustum; fixes buildings popping at the edges)",
+                "Pins the game render camera to the pose captured when enabled, so the camera holds \
+                 still while the sun keeps moving. Unlike Freeze pose (VR tab), this freezes the actual \
+                 engine camera the shadow cascade fits from. The view locks in place -- diagnostic only.",
             );
         });
+    ui.separator();
+
+    // The stereo render corrections, grouped by subsystem -- normally on; toggle off to reproduce the
+    // artifact each fixes. Collapsed by default to keep the tab scannable.
+    ui.collapsing("Shadows", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.fix_shadow_cascade_anchor,
+            "Cascade anchor (the visible per-eye shadow mismatch; A/B via Present eye 0)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.widen_shadow_fit,
+            "Widen fit FOV (cascades cover both eyes; fixes distant per-eye shadow disagreement + \
+             crawl)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.stabilize_shadow_fit,
+            "Stabilize fit vs head tilt (yaw-only cascade centre; fixes shadows shifting/scaling \
+             when you look around)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.shadow_update_every_frame,
+            "Update all cascades every frame (defeats 2^L amortization; #31 parity-flip probe)",
+        )
+        .on_hover_text(
+            "Zeroes m_CascadeUpdateLevels so cascades 1-5 refresh every frame like cascade 0, instead \
+             of on the amortized schedule. Diagnostic for the #31 parity ping-pong: capture at native \
+             rate and check whether the ShadowState scale_blend.y 6<->1 flip flattens.",
+        );
+    });
+
+    ui.collapsing("Depth reconstruction", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.reconstruct_offaxis_inverse,
+            "Off-axis depth reconstruction (per-eye inverse for deferred/SS passes; fixes \
+             specular/SSR/shadow reconstruction divergence)",
+        );
+        ui.add_enabled(
+            cfg.stereo.reconstruct_offaxis_inverse,
+            egui::Checkbox::new(
+                &mut cfg.stereo.offaxis_inverse_skip_atmospheric,
+                "  └ skip atmospheric-scattering pass",
+            ),
+        )
+        .on_hover_text(
+            "Checked (default): the aerial-perspective pass keeps the symmetric reconstruction, so \
+             the distant-mountain aerial shadow term flips dark with head pitch. Uncheck to apply \
+             the per-eye off-axis inverse there too -- fixes the mountain flip, but may reintroduce \
+             a roll-swimming crescent at the far-plane sky.",
+        );
+    });
+
+    ui.collapsing("Cross-eye consistency", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.dedupe_post_block,
+            "Dedupe world post block (eye 1 otherwise runs the post chain + FSR twice)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.drain_draw_fragment,
+            "Drain draw-dispatch fragment between eyes (open-world crash fix)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_frame_counters,
+            "Restore frame counters between eyes (fixes jitter/parity flicker)",
+        );
+        ui.add_enabled(
+            cfg.stereo.restore_frame_counters,
+            egui::Checkbox::new(
+                &mut cfg.stereo.share_prepasses,
+                "Share view-independent pre-passes across eyes (reflections, cloud shadows, \
+                 sun-shadow atlas, water sim rendered once)",
+            ),
+        )
+        .on_hover_text(
+            "On eye 1, reuse eye 0's shadow atlas / reflection proxies / water sim instead of \
+             re-rendering them. Requires 'Restore frame counters'. If distant reflections or \
+             shadows look wrong in one eye, turn this off.",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.force_smaa_1x,
+            "Force SMAA 1x (T2X's shared history ghosts across eyes)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.force_ssao_first_pass,
+            "Force SSAO first-pass per eye (stops cross-eye AO history blend)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_ssao_history,
+            "Restore SSAO history between eyes (pin the AO temporal slot so both eyes match)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_gi_cascade,
+            "Restore GI cascade between eyes (pin the LPV cascade so both eyes match)",
+        );
+    });
+
+    ui.collapsing("Culling & geometry", |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut cfg.stereo.widen_cull_frustum,
+                "Widen scene cull frustum (covers both eyes; stops outer-edge void/pop-in)",
+            );
+            ui.add_enabled(
+                cfg.stereo.widen_cull_frustum,
+                egui::Slider::new(&mut cfg.stereo.cull_fov_padding, 0.0..=0.75)
+                    .text("pad")
+                    .fixed_decimals(2),
+            )
+            .on_hover_text(
+                "Extra fraction to widen the cull frustum on every side (incl. vertical); raise if \
+                 geometry still pops in at the edges when flying",
+            );
+        });
+        ui.add(
+            egui::Slider::new(&mut cfg.stereo.cull_size_fov_deg, 0.0..=90.0)
+                .text("Size-cull FOV (deg)")
+                .fixed_decimals(0),
+        )
+        .on_hover_text(
+            "FOV the screen-space size cull uses (overrides the injected 90 deg on the cull \
+             camera); lower keeps more small/distant geometry and vehicle parts. 0 = leave alone",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.disable_bfbc_occlusion,
+            "Disable software occlusion (drops centre-viewpoint occluder culling; fixes peripheral \
+             culling an offset eye can see past)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.widen_terrain_cull,
+            "Widen terrain patch cull (rebuild the cull frustum planes; fixes terrain patch holes \
+             at the edges when flying)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.widen_model_cull,
+            "Widen model cull (active-camera frustum; fixes buildings popping at the edges)",
+        );
+    });
+
+    ui.collapsing("Shader patches", |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut cfg.stereo.patch_shadow_pcf_hash,
+                "Sun-shadow PCF screen-hash (kills per-eye shimmer + foliage grain)",
+            );
+            let patched = crate::hooks::graphics_engine::shader::patched_count();
+            ui.label(if patched == 0 {
+                "(0 patched -- click Reload shaders)".to_string()
+            } else {
+                format!("({patched} sites patched)")
+            });
+        });
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut cfg.stereo.patch_lod_dissolve,
+                "Jitter-unstable LOD dissolve (only matters with FSR jitter on)",
+            );
+            let patched = crate::hooks::graphics_engine::shader::dissolve_patched_count();
+            ui.label(if patched == 0 {
+                "(0 patched -- click Reload shaders)".to_string()
+            } else {
+                format!("({patched} sites patched)")
+            });
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Reload shaders").clicked() {
+                crate::hooks::graphics_engine::shader::request_reload();
+            }
+            ui.label(
+                "re-creates all shaders so the shader patches take effect (F11 toggles + reloads)",
+            );
+        });
+    });
 
     // Resolution levers for issue #8's pixelation/large-tile artifact around lights and explosions:
     // the engine's reduced-resolution fog/particle/spotlight passes, whose coarse grids VR's wide FOV

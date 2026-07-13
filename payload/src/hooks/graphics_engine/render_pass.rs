@@ -18,13 +18,6 @@ use jc3gi::graphics_engine::{
     shadow_manager::ShadowManager,
 };
 use re_utilities::hook_library::HookLibrary;
-use windows::{
-    Win32::{
-        Graphics::Direct3D11::{D3D11_TEXTURE2D_DESC, ID3D11Resource, ID3D11Texture2D},
-        System::Threading::{EnterCriticalSection, LeaveCriticalSection},
-    },
-    core::Interface as _,
-};
 
 use crate::{
     config::Config,
@@ -257,11 +250,7 @@ fn setup_render_states(context: *mut HContext_t, a2: *mut c_void) {
 
 // ShadowManager::UpdateRender -- the sim-side sun-shadow update, which fits the scheduled cascades to
 // the active camera (the fit frustum comes from its m_ProjectionF via CFrustum::Compute). Two scoped
-// projection tweaks around the fit, both restored after:
-//   * unjitter_shadow_fit: strip the projection's clip-space jitter translation (data[12]/[13]) so a
-//     jittered fit frustum can't re-quantize the cascade texel snap mid-transition. The active sim
-//     camera is not jittered by the mod, so this showed no effect on issue #10; kept as a defensive
-//     A/B.
+// tweaks around the fit, both restored after:
 //   * widen_shadow_fit: widen the two FOV-scale terms (data[0]/data[5]) to the union FOV so the
 //     cascades are fit to cover BOTH eyes. The fit is once-per-frame from the narrow centre camera, so
 //     the wider, laterally shifted VR eyes otherwise exceed the fitted coverage box -- their distant
@@ -279,9 +268,8 @@ fn setup_render_states(context: *mut HContext_t, a2: *mut c_void) {
 )]
 fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
     let original = SHADOW_MANAGER_UPDATE_RENDER.get().unwrap();
-    let (unjitter, widen, stabilize, update_every_frame) = Config::lock_query(|c| {
+    let (widen, stabilize, update_every_frame) = Config::lock_query(|c| {
         (
-            c.stereo.unjitter_shadow_fit,
             c.stereo.widen_shadow_fit,
             c.stereo.stabilize_shadow_fit,
             c.stereo.shadow_update_every_frame,
@@ -297,7 +285,7 @@ fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
     }
     // The widen reuses the union-FOV cull projection; `None` on flatscreen, so widening is VR-only.
     let union = widen.then(crate::vr::cull_projection_standard).flatten();
-    if !unjitter && union.is_none() && !stabilize {
+    if union.is_none() && !stabilize {
         return original.call(this, dt, dtf);
     }
     // SAFETY: the camera-manager singleton and the active camera are live on the game thread for
@@ -309,16 +297,7 @@ fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
         let Some(camera) = camera.as_mut() else {
             return original.call(this, dt, dtf);
         };
-        let saved_proj = [
-            camera.m_ProjectionF.data[0],
-            camera.m_ProjectionF.data[5],
-            camera.m_ProjectionF.data[12],
-            camera.m_ProjectionF.data[13],
-        ];
-        if unjitter {
-            camera.m_ProjectionF.data[12] = 0.0;
-            camera.m_ProjectionF.data[13] = 0.0;
-        }
+        let saved_proj = [camera.m_ProjectionF.data[0], camera.m_ProjectionF.data[5]];
         if let Some(union) = union {
             camera.m_ProjectionF.data[0] = union[0];
             camera.m_ProjectionF.data[5] = union[5];
@@ -341,8 +320,6 @@ fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
         let result = original.call(this, dt, dtf);
         camera.m_ProjectionF.data[0] = saved_proj[0];
         camera.m_ProjectionF.data[5] = saved_proj[1];
-        camera.m_ProjectionF.data[12] = saved_proj[2];
-        camera.m_ProjectionF.data[13] = saved_proj[3];
         if let Some(row2) = saved_row2 {
             camera.m_TransformT1.data[8] = row2[0];
             camera.m_TransformT1.data[9] = row2[1];
@@ -396,14 +373,9 @@ fn commit_render_pass_settings(this: *mut ShadowManager, ctx: *mut c_void) {
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PreDraw_ADDRESS)]
 fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
     let original = PRE_DRAW.get().unwrap();
-    let (share_cfg, sync) = Config::lock_query(|c| {
-        (
-            c.stereo.share_prepasses && c.stereo.restore_frame_counters,
-            c.stereo.sync_shadow_atlas,
-        )
-    });
-    let share = is_second_eye() && share_cfg;
-    let result = if share {
+    let share_cfg =
+        Config::lock_query(|c| c.stereo.share_prepasses && c.stereo.restore_frame_counters);
+    if is_second_eye() && share_cfg {
         // SAFETY: `this` is the live render engine; its per-category `m_RenderPasses` vectors hold
         // engine-owned, null-checked pass pointers; the `m_Enabled` flag write mirrors the shadow
         // scheduler's own store in `commit_render_pass_settings`.
@@ -413,84 +385,6 @@ fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
         r
     } else {
         original.call(this, ctx)
-    };
-    // Sync the shadow-atlas parity after it was (re)rendered this dispatch (issue #31). When the
-    // shared-prepass skip disabled the atlas passes on eye 1, the atlas was not re-rendered -- its two
-    // halves are already in sync from eye 0 -- so skip the copy there.
-    if sync && !share {
-        sync_shadow_atlas();
-    }
-    result
-}
-
-/// Sync the sun-shadow atlas parity double buffer (issue #31). The engine renders the cascade atlas into
-/// the current frame parity's half of its `Texture2DArray` and the material shaders sample the same-parity
-/// half; the parity flips every frame, so consecutive frames sample slices rendered at slightly different
-/// head poses and the whole scene's brightness alternates a few percent -- the flicker. After the atlas
-/// renders, copy the freshly-rendered half onto the other half so both hold identical content; whichever
-/// half the shader then samples, the shadow is the same, and nothing alternates. A GPU copy on the render
-/// thread under the engine context mutex -- it mutates no shared CPU counter (the reason the earlier
-/// frame-counter parity pin raced the engine and crashed).
-fn sync_shadow_atlas() {
-    // SAFETY: called from `PreDraw` on the render thread after the atlas rendered; the engine device,
-    // context, and shadow manager are live, and only their inline COM handles are borrowed for the copy.
-    unsafe {
-        let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
-            return;
-        };
-        let Some(mgr) = ge.m_ShadowManager.as_ref() else {
-            return;
-        };
-        let Some(atlas) = mgr.m_AtlasTexture.as_ref() else {
-            return;
-        };
-        let Some(device) = ge.m_Device.as_ref() else {
-            return;
-        };
-        let Some(context) = device.m_Context.as_ref() else {
-            return;
-        };
-        // The atlas's inline `ID3D11Resource` handle, read as a raw pointer so a null slot never
-        // materializes a non-null-invariant `windows` interface.
-        let raw = *(std::ptr::addr_of!(atlas.m_Texture) as *const *mut c_void);
-        let Some(res) = ID3D11Resource::from_raw_borrowed(&raw) else {
-            return;
-        };
-        let Ok(tex2d) = res.cast::<ID3D11Texture2D>() else {
-            return;
-        };
-        let mut desc = D3D11_TEXTURE2D_DESC::default();
-        tex2d.GetDesc(&mut desc);
-        if desc.ArraySize < 2 {
-            return;
-        }
-        // The two parity halves span the array; copy the rendered parity's slices onto the other's.
-        let half = desc.ArraySize / 2;
-        let mips = desc.MipLevels.max(1);
-        let parity = (jc3gi::graphics_engine::graphics_engine::get_render_frame_counters()
-            .m_FrameIndex
-            & 1) as usize;
-        let src_base = mgr.m_SliceBase[parity];
-        let dst_base = mgr.m_SliceBase[parity ^ 1];
-        let ctx = &context.m_Context;
-        EnterCriticalSection(context.m_Mutex);
-        for i in 0..half {
-            // Guard against an unexpected slice base producing an out-of-range subresource.
-            if src_base + i >= desc.ArraySize || dst_base + i >= desc.ArraySize {
-                continue;
-            }
-            ctx.CopySubresourceRegion(
-                res,
-                (dst_base + i) * mips,
-                0,
-                0,
-                0,
-                res,
-                (src_base + i) * mips,
-                None,
-            );
-        }
-        LeaveCriticalSection(context.m_Mutex);
     }
 }
 
@@ -576,6 +470,19 @@ fn record_shadow_state(ctx: &RenderContext, anchor_delta: [f32; 3]) {
             .and_then(|ge| ge.m_ShadowManager.as_ref())
             .map_or(1.0, |mgr| mgr.GetShadowFade())
     };
+    // The interpolated active-camera translation the sun-shadow fit anchors to, and the sub-frame
+    // interpolation fraction that produced it -- so the cascade `translation` zig-zag can be correlated
+    // against the camera the fit chases (issue #31 / #20).
+    // SAFETY: the camera-manager singleton and its active camera are live on the render thread during a
+    // dispatch.
+    let (cam_translation, cam_forward) = unsafe {
+        jc3gi::camera::camera_manager::CameraManager::get()
+            .and_then(|cm| cm.m_ActiveCamera.as_ref())
+            .map_or(([0.0; 3], [0.0; 3]), |c| {
+                let d = &c.m_TransformF.data;
+                ([d[12], d[13], d[14]], [d[8], d[9], d[10]])
+            })
+    };
     let t = &ctx.m_ShadowCascades.m_Transform.data;
     TraceState::record_eye(TraceEvent::ShadowState {
         counter: counters.m_Counter,
@@ -586,6 +493,9 @@ fn record_shadow_state(ctx: &RenderContext, anchor_delta: [f32; 3]) {
         active_cascades: u32::from(ctx.m_ActiveCascadeCount),
         anchor_delta,
         shadow_fade,
+        dtf: crate::hooks::camera::last_dtf(),
+        cam_translation,
+        cam_forward,
     });
 }
 

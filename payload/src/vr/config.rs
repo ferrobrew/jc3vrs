@@ -135,6 +135,14 @@ pub struct VrConfig {
     /// in-session transitions like exiting a vehicle (the character stays present through those).
     #[serde(default = "default_true")]
     pub auto_recenter_on_gameplay: bool,
+    /// Diagnostic: freeze the rendered head pose. When on, the first frame's located eye poses (and
+    /// FOVs) are captured and reused every frame, so the rendered content is bit-identical frame to
+    /// frame -- as if the camera were a still flatscreen camera rather than a live HMD. This isolates
+    /// artifacts driven by the HMD's per-frame pose sensor-noise (which persists even sitting on a
+    /// desk) from artifacts intrinsic to the render: if a per-frame flicker vanishes with the pose
+    /// frozen, it was the pose noise driving it. Not for gameplay -- the view locks in place.
+    #[serde(default)]
+    pub freeze_pose: bool,
 }
 
 /// The serde default for [`VrConfig::native_resolution`] (the manual [`Default`] via
@@ -160,6 +168,7 @@ impl VrConfig {
             mirror_eye: 0,
             persist_instance: true,
             auto_recenter_on_gameplay: true,
+            freeze_pose: false,
         }
     }
 }

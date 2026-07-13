@@ -139,6 +139,22 @@ pub enum TraceEvent {
         /// the whole-terrain shadow-strength knob. A value that flickers frame to frame in eye 0 while
         /// eye 1 stays put indicts a per-frame global the double-draw re-evaluates.
         shadow_fade: f32,
+        /// The sub-frame interpolation fraction (`dtf`) the active camera's `UpdateRender` last
+        /// received -- the render/sim-tick decoupling knob (issue #20). The cascade fit reads the
+        /// interpolated camera `lerp(T0, T1, dtf)`, so if `translation` zig-zags frame to frame in
+        /// lockstep with `dtf`, the flicker is the fit chasing a sub-frame-oscillating camera rather
+        /// than any per-eye or projection effect.
+        dtf: f32,
+        /// The active camera's interpolated world translation (`m_TransformF` row 3, xyz) at stage
+        /// time -- the position the sun-shadow fit anchors to. Correlate against `translation`: both
+        /// zig-zagging together frame to frame confirms the fit is following the interpolated camera.
+        cam_translation: [f32; 3],
+        /// The active camera's forward basis vector (`m_TransformF` column 2, xyz) at stage time. The
+        /// engine pushes each cascade box's centre forward along this vector, so under fast rotation
+        /// (a spin) the fit centre sweeps a circle even while `cam_translation` stays put. If the
+        /// cascade `translation` zig-zag tracks this vector rotating, the flicker is the swept fit
+        /// centre texel-snapping, not the camera position.
+        cam_forward: [f32; 3],
     },
     /// Per-call state of the off-axis depth-reconstruction override (`PerspectiveFovInverse`). The
     /// off-axis inverse is rebuilt every call from the eye's live projection and the engine's live

@@ -301,13 +301,6 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             TraceState::end_frame();
         }
 
-        // Restore the render camera's pristine (center, unjittered) matrices now that the eye
-        // dispatches are done, so the sim-side consumers that read it before the next Draw -- the
-        // sun-shadow cascade fit above all -- see the engine-built state rather than the last eye's
-        // jittered, offset projection (the Halton wobble otherwise flips the cascade texel snap and
-        // the shadows blob-flicker; issue #10).
-        restore_pristine_render_camera();
-
         // Submit the VR frame: blit each captured eye into its swapchain slice and end the XR frame
         // (world layer when rendered, empty otherwise). Consumes the frame context, releasing the
         // OpenXR runtime lock so the next `vr::update` can proceed.
@@ -439,38 +432,6 @@ fn restore_gi_cascade_index(saved: u32) {
         if let Some(s) = gi_solver() {
             (*s).m_CascadeToUpdate = saved;
         }
-    }
-}
-
-/// Write the pristine render-camera snapshot (taken by the `SetupRenderCamera` hook before the
-/// mod's jitter and eye patches) back onto the render camera, once the frame's dispatches are done.
-/// The engine rebuilds the camera from the active camera during the next Draw anyway; this restore
-/// covers the window in between, when the sim reads it -- most critically the sun-shadow cascade
-/// fit, whose texel snapping flip-flops if it sees the jittered projection.
-fn restore_pristine_render_camera() {
-    if !crate::config::Config::lock_query(|c| c.stereo.restore_render_camera) {
-        return;
-    }
-    let Some(pristine) = STEREO_STATE.lock().pristine_render_camera.take() else {
-        return;
-    };
-    // SAFETY: the address check ensures a stale snapshot is never written onto a reallocated
-    // engine.
-    unsafe {
-        let Some(ge) = GraphicsEngine::get() else {
-            return;
-        };
-        let camera = &raw mut ge.m_RenderCamera;
-        if camera as usize != pristine.camera {
-            return;
-        }
-        let camera = &mut *camera;
-        camera.m_Projection.data = pristine.matrices[0];
-        camera.m_ProjectionF.data = pristine.matrices[1];
-        camera.m_View.data = pristine.matrices[2];
-        camera.m_TransformF.data = pristine.matrices[3];
-        camera.m_ViewProjection.data = pristine.matrices[4];
-        camera.m_ViewProjectionF.data = pristine.matrices[5];
     }
 }
 

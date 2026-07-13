@@ -41,6 +41,12 @@ pub fn egui_debug_vr(ui: &mut egui::Ui) {
         .on_hover_text("Show one eye in the game window while a session runs.");
     ui.checkbox(&mut cfg.body_ik.enabled, "Body IK")
         .on_hover_text("Drive the upper body toward the headpose via the engine's HumanIK solver.");
+    ui.checkbox(&mut cfg.vr.freeze_pose, "Freeze pose (diagnostic)")
+        .on_hover_text(
+            "Reuse the first frame's head pose every frame, so the render is bit-identical frame to \
+             frame. Isolates HMD pose-noise-driven flicker (present even on a desk) from intrinsic \
+             render artifacts. The view locks in place -- diagnostic only.",
+        );
     drop(cfg);
 
     ui.separator();

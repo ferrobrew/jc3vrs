@@ -22,23 +22,6 @@ pub struct StereoState {
     /// Per-eye view-projection history for the FSR motion-vector correction, maintained by the
     /// `SetupRenderCamera` hook.
     pub vp_history: VpHistory,
-    /// The render camera's engine-built state (post-`SetupRenderCamera`, before the mod's jitter
-    /// and eye patches), snapshotted each dispatch. The Draw driver writes it back after the eye
-    /// loop so sim-side consumers see the pristine center camera: the sun-shadow fit reads the
-    /// render camera at sim time, when it otherwise still holds the previous frame's eye-1
-    /// jittered projection -- the Halton wobble then flips the cascade texel snap back and forth
-    /// and every flip re-fits the cascade mid-frame, the blob-scale shadow flicker of issue #10.
-    pub pristine_render_camera: Option<PristineRenderCamera>,
-}
-
-/// A snapshot of the render camera's engine-built matrices, keyed by the camera's address so a
-/// stale snapshot is never written onto a different camera.
-pub struct PristineRenderCamera {
-    /// The camera the snapshot was taken from.
-    pub camera: usize,
-    /// `m_Projection`, `m_ProjectionF`, `m_View`, `m_TransformF`, `m_ViewProjection`,
-    /// `m_ViewProjectionF`, in that order.
-    pub matrices: [[f32; 16]; 6],
 }
 impl StereoState {
     const fn new() -> Self {
@@ -47,7 +30,6 @@ impl StereoState {
             draw_index: 0,
             shadow_anchor_delta: [0.0; 3],
             vp_history: VpHistory::new(),
-            pristine_render_camera: None,
         }
     }
 }

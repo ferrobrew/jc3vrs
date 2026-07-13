@@ -40,6 +40,12 @@ pub fn last_dtf() -> f32 {
     f32::from_bits(LAST_DTF.load(Ordering::Relaxed))
 }
 
+/// The render camera's world transform (`m_TransformF`) and view (`m_View`) captured while
+/// [`crate::config::StereoConfig::freeze_render_camera`] is on, reused every Draw so the camera holds
+/// still (issue #31 isolation, Test C). `None` when the toggle is off, so re-enabling recaptures the
+/// then-current pose.
+static FROZEN_RENDER_CAMERA: Mutex<Option<([f32; 16], [f32; 16])>> = Mutex::new(None);
+
 /// The scene render camera is the engine-owned copy (`GraphicsEngine::m_RenderCamera`), rebuilt
 /// each Draw by `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF`
 /// from `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye,
@@ -80,6 +86,27 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // needs jitter, but its own Halton sequence, applied below.
     let jitter = jitter && !fsr_enabled && !(stereo_active && force_smaa_1x);
 
+    // Flicker-isolation diagnostic (issue #31, Test C): pin the render camera's world transform and view
+    // to a value captured when the toggle is enabled, so the game camera holds still while the sun and
+    // the rest of the sim keep moving -- isolating a sun-driven per-frame flicker from a camera-idle one.
+    // Applied before SetupRenderCamera so the engine rebuilds the view-projections (and fits the shadow
+    // cascade) from the frozen centre; the per-eye offset below still runs on top. See
+    // `StereoConfig::freeze_render_camera`.
+    if is_render_camera {
+        let freeze = Config::lock_query(|c| c.stereo.freeze_render_camera);
+        let mut frozen = FROZEN_RENDER_CAMERA.lock();
+        if freeze {
+            if let Some(camera) = unsafe { camera.as_mut() } {
+                let (transform, view) =
+                    frozen.get_or_insert((camera.m_TransformF.data, camera.m_View.data));
+                camera.m_TransformF.data = *transform;
+                camera.m_View.data = *view;
+            }
+        } else {
+            *frozen = None;
+        }
+    }
+
     // The VR per-eye off-axis projection and world offset (docs/mod/vr-runtime.md blockers 1 & 3).
     // Fetch this eye's parameters once; `None` on flatscreen frames. Under the preferred convention,
     // write the standard-depth off-axis projection into `m_Projection` *before* SetupRenderCamera so
@@ -99,28 +126,14 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // Snapshot the center view-projection before the FSR-jitter and per-eye blocks below patch it.
     // This is the value the engine's own sim-side previous-VP snapshot holds (un-offset, unjittered
     // -- the engine jitter is disabled above whenever we patch), which the velocity pass reprojects
-    // with; the FSR motion-vector correction needs it as its "what the engine encoded" matrix. The
-    // full pristine matrix set is kept alongside it so the Draw driver can restore the render camera
-    // after the eye loop -- the sim-side sun-shadow fit reads this camera and must see the center,
-    // unjittered state or its cascade texel snap flip-flops (issue #10's blob flicker).
+    // with; the FSR motion-vector correction needs it as its "what the engine encoded" matrix.
     if is_render_camera && let Some(camera) = unsafe { camera.as_ref() } {
         // Coordinate-frame verification (docs/mod/vr-runtime.md "Blocker 3"): log the pristine center
         // camera's basis + travel direction before the per-eye offset below mutates m_TransformF.
         crate::debug::coord_frame::log_render_camera_frame(camera);
 
-        let mut stereo = crate::stereo::STEREO_STATE.lock();
-        stereo.vp_history.cur_center = Some(glam::Mat4::from(camera.m_ViewProjectionF));
-        stereo.pristine_render_camera = Some(crate::stereo::PristineRenderCamera {
-            camera: camera as *const Camera as usize,
-            matrices: [
-                camera.m_Projection.data,
-                camera.m_ProjectionF.data,
-                camera.m_View.data,
-                camera.m_TransformF.data,
-                camera.m_ViewProjection.data,
-                camera.m_ViewProjectionF.data,
-            ],
-        });
+        crate::stereo::STEREO_STATE.lock().vp_history.cur_center =
+            Some(glam::Mat4::from(camera.m_ViewProjectionF));
     }
 
     // FSR is a temporal reconstructor: it needs the camera jittered by its sequence, with the same

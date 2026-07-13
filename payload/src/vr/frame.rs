@@ -49,6 +49,11 @@ static RENDER_PARAMS: Mutex<Option<[EyeRenderParams; 2]>> = Mutex::new(None);
 /// rendering.
 static CULL_PROJECTION: Mutex<Option<[f32; 16]>> = Mutex::new(None);
 
+/// The captured pose reused every frame while [`VrConfig::freeze_pose`] is on: the two eye views plus
+/// the sim-driven body frame and head anchor, so the *full* composed render camera is bit-identical
+/// frame to frame (`None` when the toggle is off, so the next enable re-captures the then-current pose).
+static FROZEN_POSE: Mutex<Option<([super::EyeView; 2], Quat, Vec3)>> = Mutex::new(None);
+
 /// The render parameters for `eye` (`0` = left, `1` = right) this frame, or `None` when no VR frame
 /// is rendering. Read by the `SetupRenderCamera` hook.
 pub fn render_params(eye: usize) -> Option<EyeRenderParams> {
@@ -81,8 +86,22 @@ pub fn clear_render_params() {
 /// held guard); publishes through the headpose state and the [`RENDER_PARAMS`] slot, both
 /// independently locked.
 pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
-    let eye0 = frame.eye_view(0);
-    let eye1 = frame.eye_view(1);
+    // Freeze diagnostic: reuse the first captured pose -- eye views plus the sim-driven body frame and
+    // anchor -- so every frame renders from a bit-identical camera, isolating per-frame-input-driven
+    // artifacts (pose noise, head-bone idle animation) from intrinsic render ones (see `freeze_pose`).
+    let frozen = if cfg.freeze_pose {
+        Some(*FROZEN_POSE.lock().get_or_insert_with(|| {
+            (
+                [frame.eye_view(0), frame.eye_view(1)],
+                headpose::xr::body_rotation(),
+                headpose::anchor().unwrap_or(Vec3::ZERO),
+            )
+        }))
+    } else {
+        *FROZEN_POSE.lock() = None;
+        None
+    };
+    let [eye0, eye1] = frozen.map_or_else(|| [frame.eye_view(0), frame.eye_view(1)], |f| f.0);
 
     let pos0 = pose_position(eye0.pose);
     let pos1 = pose_position(eye1.pose);
@@ -94,16 +113,16 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // head-pose stand-in ([`super::mid_pose`]), which is likewise the slerp-mid.
     let center_orientation = pose_orientation(eye0.pose).slerp(pose_orientation(eye1.pose), 0.5);
 
-    let body_rotation = headpose::xr::body_rotation();
-    let anchor = headpose::anchor().unwrap_or(Vec3::ZERO);
+    let body_rotation = frozen.map_or_else(headpose::xr::body_rotation, |f| f.1);
+    let anchor = frozen.map_or_else(|| headpose::anchor().unwrap_or(Vec3::ZERO), |f| f.2);
 
     // Compose a tick-spaced pose pair sharing the fresh HMD cockpit delta but differing in the
     // sim-driven body frame and head anchor (T1 vs T0), so the engine's `dtf` lerp smooths the
     // per-tick body/anchor motion between rendered frames. The previous-tick anchor and body rotation
     // fall back to the current-tick values until they are available, degenerating to no interpolation
-    // rather than a bad one.
-    let body_rotation_prev = headpose::xr::body_rotation_prev();
-    let anchor_prev = headpose::anchor_prev().unwrap_or(anchor);
+    // rather than a bad one. Under the freeze diagnostic, prev == cur so the lerp is constant too.
+    let body_rotation_prev = frozen.map_or_else(headpose::xr::body_rotation_prev, |f| f.1);
+    let anchor_prev = frozen.map_or_else(|| headpose::anchor_prev().unwrap_or(anchor), |f| f.2);
 
     let cur = headpose::xr::compose(
         center_position,
@@ -160,22 +179,64 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     *CULL_PROJECTION.lock() =
         Some(OffAxisProjection::new(union_fov, near_clip, far_clip).standard_depth);
 
-    let eye_params = |eye: super::EyeView, eye_position: Vec3| EyeRenderParams {
-        projection_standard: eye.projection.standard_depth,
-        projection_reverse_z: eye.projection.reverse_z,
-        // The eye's offset from the center head pose, in the cockpit frame, rotated into world
-        // space by the body frame -- the true per-eye parallax delta, replacing the synthetic
-        // ±IPD/2 lateral offset.
-        world_offset: body_rotation * ((eye_position - center_position) * cfg.world_scale),
-        // The eye's orientation relative to the center head pose, in the head-local frame -- the
-        // display canting. `center_orientation` is the slerp-mid, so each eye carries half the
-        // inter-eye cant (symmetric); the camera hook applies it locally so each eye renders at the
-        // orientation it is submitted with.
-        orientation_delta: center_orientation.inverse() * pose_orientation(eye.pose),
-        convention: cfg.projection_convention,
+    // Flicker-isolation diagnostics (issue #31), read once for the frame. `symmetrize` swaps each eye's
+    // asymmetric off-axis frustum for a zero-shear symmetric one of the same extent (Test A); `mirror`
+    // makes eye 1 reuse eye 0's params so both eyes draw the identical view (Test B). Both feed the
+    // reconstruction consistently, since the camera hook and reconstruction read whatever lands in
+    // `RENDER_PARAMS`. See `crate::config::StereoConfig`.
+    let (symmetrize, mirror) = crate::config::Config::lock_query(|c| {
+        (c.stereo.symmetrize_eye_frusta, c.stereo.mirror_eye0_to_both)
+    });
+
+    let eye_params = |eye: super::EyeView, eye_position: Vec3| {
+        let projection = if symmetrize {
+            symmetric_projection(eye.fov, near_clip, far_clip)
+        } else {
+            eye.projection
+        };
+        EyeRenderParams {
+            projection_standard: projection.standard_depth,
+            projection_reverse_z: projection.reverse_z,
+            // The eye's offset from the center head pose, in the cockpit frame, rotated into world
+            // space by the body frame -- the true per-eye parallax delta, replacing the synthetic
+            // ±IPD/2 lateral offset.
+            world_offset: body_rotation * ((eye_position - center_position) * cfg.world_scale),
+            // The eye's orientation relative to the center head pose, in the head-local frame -- the
+            // display canting. `center_orientation` is the slerp-mid, so each eye carries half the
+            // inter-eye cant (symmetric); the camera hook applies it locally so each eye renders at the
+            // orientation it is submitted with.
+            orientation_delta: center_orientation.inverse() * pose_orientation(eye.pose),
+            convention: cfg.projection_convention,
+        }
     };
 
-    *RENDER_PARAMS.lock() = Some([eye_params(eye0, pos0), eye_params(eye1, pos1)]);
+    let eye0_params = eye_params(eye0, pos0);
+    let eye1_params = if mirror {
+        eye0_params
+    } else {
+        eye_params(eye1, pos1)
+    };
+    *RENDER_PARAMS.lock() = Some([eye0_params, eye1_params]);
+}
+
+/// Build a zero-shear (symmetric) off-axis projection that preserves the eye's horizontal and vertical
+/// FOV *extent* but re-centres the frustum, for the [`crate::config::StereoConfig::symmetrize_eye_frusta`]
+/// flicker-isolation diagnostic (issue #31). Each axis' symmetric half-extent is half the asymmetric
+/// tangent span, so `2/(tr-tl)` (the projection's scale term) is unchanged while the off-centre terms
+/// `(tl+tr)` and `(td+tu)` collapse to zero.
+fn symmetric_projection(fov: openxr::Fovf, near: f32, far: f32) -> OffAxisProjection {
+    let half_h = 0.5 * (fov.angle_right.tan() - fov.angle_left.tan());
+    let half_v = 0.5 * (fov.angle_up.tan() - fov.angle_down.tan());
+    OffAxisProjection::new(
+        Fov {
+            left: (-half_h).atan(),
+            right: half_h.atan(),
+            up: half_v.atan(),
+            down: (-half_v).atan(),
+        },
+        near,
+        far,
+    )
 }
 
 /// The position of an OpenXR pose as a [`Vec3`].
