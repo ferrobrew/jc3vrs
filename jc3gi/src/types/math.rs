@@ -67,9 +67,12 @@ impl Matrix4 {
     /// vertical field of view, an aspect ratio, and the far and near planes. The screen-space
     /// reconstruction passes (SSR, deferred clustered lighting, SSAO, screen-space subsurface,
     /// atmospheric scattering, depth of field) call it to recover a clip-to-view basis, then multiply
-    /// by the render context's camera transform to reach clip-to-world. The result is purely diagonal
-    /// (`[0][0] = aspect·tan(fov/2)`, `[1][1] = tan(fov/2)`, plus standard-depth `z` terms) and so
-    /// cannot represent an off-center (asymmetric) frustum.
+    /// by the render context's camera transform to reach clip-to-world. Its `x`/`y` scale is diagonal
+    /// (`[0][0] = aspect·tan(fov/2)`, `[1][1] = tan(fov/2)`) with no off-center shear, so it cannot
+    /// represent an asymmetric frustum. Its depth block is **reverse-Z**, matching the reverse-Z depth
+    /// buffer the engine renders: `[2][2] = 0`, `[2][3] = (far - near)/(far·near)`, `[3][2] = -1`, and
+    /// `[3][3] = 1/far`, which reconstructs view depth from an NDC `z` of 1 at the near plane and 0 at
+    /// the far plane.
     pub unsafe fn PerspectiveFovInverse(
         &mut self,
         fov: f32,

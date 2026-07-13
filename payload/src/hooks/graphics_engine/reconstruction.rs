@@ -33,8 +33,10 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
-use crate::debug::trace::{TraceEvent, TraceState};
+use crate::{
+    config::Config,
+    debug::trace::{TraceEvent, TraceState},
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -122,14 +124,20 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
     let applies = enabled && !(skip_atmospheric && atmospheric) && near_ok && far_ok;
     // The `Matrix4` <-> glam bridge transposes each way, so `Mat4::from(engine).inverse().to_cols_array()`
     // yields the inverse back in engine row-major format -- the same pattern the camera hook uses to
-    // write `m_View`. `PerspectiveFovInverse` produces a standard-depth inverse, so invert the
-    // standard-depth off-axis projection: the matching depth basis, now carrying the off-center shear
-    // the symmetric rebuild omitted.
+    // write `m_View`. The engine's `PerspectiveFovInverse` (0x1400390E0) produces a REVERSE-Z clip->view
+    // inverse (its depth entries `m23 = (far-near)/(far*near)`, `m33 = 1/far`, `m32 = -1` reconstruct
+    // near->NDC z 1, far->0), matching the reverse-Z depth buffer the game renders. So invert the
+    // reverse-Z off-axis projection, not the standard-depth one: `inverse(projection_reverse_z)`
+    // reproduces the engine's inverse exactly for a symmetric frustum and adds the off-center shear the
+    // symmetric rebuild omits. Inverting `projection_standard` (the earlier code) matched the x/y and
+    // shear -- so specular/SSR looked fixed -- but sign-flipped and mis-scaled the depth basis, so the
+    // sun shadow sampled over the reconstructed positions swam with the off-axis shear as the camera
+    // rotated (issue #31).
     let result = applies
         .then(|| {
             params.map(|vr| {
                 glam::Mat4::from(Matrix4 {
-                    data: vr.projection_standard,
+                    data: vr.projection_reverse_z,
                 })
                 .inverse()
                 .to_cols_array()
@@ -141,7 +149,7 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
     // reconstructed positions the sun shadow samples over) wobbles frame to frame. Only for VR-eye
     // dispatches, where `params` is populated; `record_eye` is a no-op outside an active trace.
     if let Some(vr) = params {
-        let d = vr.projection_standard;
+        let d = vr.projection_reverse_z;
         TraceState::record_eye(TraceEvent::ReconstructionState {
             req_near: near,
             req_far: far,
