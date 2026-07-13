@@ -15,7 +15,7 @@ use std::{
 
 use detours_macro::detour;
 use jc3gi::graphics_engine::post_effects::{
-    AAMode, AntiAliasingEffect, PostEffectContext, PostEffectRenderFlags,
+    AAMode, AntiAliasingEffect, PostEffectContext, PostEffectRenderFlags, SunHaloEffect,
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -335,15 +335,20 @@ fn player_damage_apply(
         .call(this, a2, a3, a4, input)
 }
 
-// SunHaloEffect::PreApply -- prepares the halo. Skip = clear the ready flag (this+0x114) so the
-// paired Apply early-outs, then no-op.
+// SunHaloEffect::PreApply -- prepares the halo. Skip = clear the ready flag so the paired Apply
+// early-outs, then no-op.
 #[detour(address = jc3gi::graphics_engine::post_effects::SunHaloEffect::PreApply_ADDRESS)]
-fn sun_halo_pre_apply(this: *mut c_void, a2: *mut c_void, a3: *mut c_void, a4: *mut c_void) -> u64 {
+fn sun_halo_pre_apply(
+    this: *mut SunHaloEffect,
+    a2: *mut c_void,
+    a3: *mut c_void,
+    a4: *mut c_void,
+) -> u64 {
     let skip = Config::lock_query(|c| c.post_fx.skip_sun_halo);
     TraceState::record_eye(TraceEvent::SunHaloPreApply { skip });
     if skip {
-        unsafe {
-            *(this as *mut u8).add(0x114) = 0;
+        if let Some(halo) = unsafe { this.as_mut() } {
+            halo.m_Ready = false;
         }
         return 0;
     }

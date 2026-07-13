@@ -14,6 +14,34 @@ fn _ActiveCursor_size_check() {
     }
     unreachable!()
 }
+#[repr(C, align(8))]
+/// The per-camera beam-frustum-based-culling parameters cached by
+/// [`GetBFBCFrustumParamsForCameraAndTime`](OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime),
+/// pointed at by its `out_params`.
+pub struct BFBCFrustumCullParameters {
+    _field_0: [u8; 4736],
+    /// The number of active cull frustums: the camera frustum plus one per active occluder
+    /// (`occluderCount + 1`), with up to 32 occluder slots (so `1..=33`; `1` = camera frustum only).
+    pub m_FrustumCount: u32,
+    _field_1284: [u8; 12],
+}
+fn _BFBCFrustumCullParameters_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x1290], BFBCFrustumCullParameters>([0u8; 0x1290]);
+    }
+    unreachable!()
+}
+impl BFBCFrustumCullParameters {}
+impl std::convert::AsRef<BFBCFrustumCullParameters> for BFBCFrustumCullParameters {
+    fn as_ref(&self) -> &BFBCFrustumCullParameters {
+        self
+    }
+}
+impl std::convert::AsMut<BFBCFrustumCullParameters> for BFBCFrustumCullParameters {
+    fn as_mut(&mut self) -> &mut BFBCFrustumCullParameters {
+        self
+    }
+}
 #[repr(C, align(4))]
 /// A D3D11 rasterizer viewport (`D3D11_VIEWPORT`): the screen-space output rectangle the rasterizer
 /// maps NDC into and clips to, plus its depth range.
@@ -555,12 +583,13 @@ impl OccluderCollectionManager {
     /// Build or fetch the cached BFBC cull-frustum parameters for `camera` at `time`. The frustum is
     /// derived from `camera.m_View` combined with `camera.m_ProjectionF`, so overwriting the camera's
     /// `m_ProjectionF` before this runs widens the resulting cull frustum without touching the view.
-    /// `out_params` and `out_state` receive pointers into the manager's per-camera cache slot.
+    /// `out_params` and `out_state` receive pointers into the manager's per-camera cache slot;
+    /// `*out_params` is the [`BFBCFrustumCullParameters`].
     pub unsafe fn GetBFBCFrustumParamsForCameraAndTime(
         &mut self,
         camera: *const crate::camera::camera::Camera,
         time: i32,
-        out_params: *mut u64,
+        out_params: *mut *mut crate::graphics_engine::graphics_engine::BFBCFrustumCullParameters,
         out_state: *mut u64,
     ) {
         unsafe {
@@ -568,7 +597,7 @@ impl OccluderCollectionManager {
                 this: *mut Self,
                 camera: *const crate::camera::camera::Camera,
                 time: i32,
-                out_params: *mut u64,
+                out_params: *mut *mut crate::graphics_engine::graphics_engine::BFBCFrustumCullParameters,
                 out_state: *mut u64,
             ) = ::std::mem::transmute(
                 Self::GetBFBCFrustumParamsForCameraAndTime_ADDRESS,

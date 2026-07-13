@@ -32,7 +32,8 @@ use detours_macro::detour;
 use jc3gi::{
     camera::{camera::Camera, camera_manager::CameraManager},
     graphics_engine::{
-        graphics_engine::OccluderCollectionManager, render_engine::STerrainPatchSystem,
+        graphics_engine::{BFBCFrustumCullParameters, OccluderCollectionManager},
+        render_engine::STerrainPatchSystem,
     },
     types::math::Matrix4,
 };
@@ -54,7 +55,7 @@ fn get_bfbc_frustum_params(
     this: *mut OccluderCollectionManager,
     camera: *const Camera,
     time: i32,
-    out_params: *mut u64,
+    out_params: *mut *mut BFBCFrustumCullParameters,
     out_state: *mut u64,
 ) {
     // The main cull camera is the manager's own `m_CullingCamera` at `this + 0x8` -- the exact
@@ -210,22 +211,19 @@ fn camera_update_frustum(this: *mut Camera, transform: *const Matrix4) {
 /// # Safety
 ///
 /// `out_params` is the engine's just-populated output pointer; `*out_params` addresses the per-camera
-/// `SBFBCFrustumCullParameters` in the manager's cache slot, whose `m_FrustumCount` lives at `+0x1280`
-/// (struct size `0x1290`). The caller copies these params only after this returns.
-unsafe fn relax_main_view_occlusion(out_params: *mut u64) {
+/// [`BFBCFrustumCullParameters`] in the manager's cache slot. The caller copies these params only
+/// after this returns.
+unsafe fn relax_main_view_occlusion(out_params: *mut *mut BFBCFrustumCullParameters) {
     if out_params.is_null() {
         return;
     }
-    let params = unsafe { *out_params } as *mut u8;
-    if params.is_null() {
+    let Some(params) = (unsafe { (*out_params).as_mut() }) else {
         return;
-    }
-    let count = unsafe { params.add(0x1280).cast::<u32>() };
-    let pre = unsafe { *count };
+    };
     // The count is `occluderCount + 1` with at most 32 occluder slots, so a valid value is 2..=33
     // (1 = camera frustum only, nothing to drop). Anything outside that is not a frustum count -- a
     // sign the offset is wrong -- so skip the write rather than corrupt whatever the field actually is.
-    if (2..=33).contains(&pre) {
-        unsafe { *count = 1 };
+    if (2..=33).contains(&params.m_FrustumCount) {
+        params.m_FrustumCount = 1;
     }
 }

@@ -423,8 +423,7 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
             let full = format!("{prefix}{path}.visible\0");
             let mut value = Value::new_boolean(true);
             let ok = movie_root.GetVariable(&mut value, full.as_ptr());
-            if ok && value.Type & 0x8F == Value::VT_BOOLEAN {
-                let visible = value.mValue & 0xFF != 0;
+            if ok && let Some(visible) = value.as_bool() {
                 tracing::info!("scaleform: probe {path}: visible={visible}");
             } else if ok {
                 tracing::info!("scaleform: probe {path}: resolves (non-boolean visible)");
@@ -439,13 +438,12 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
 /// heap flags in the pointer's low bits, and the characters live at `+0xC` past the `DataDesc`
 /// header (u64 size, i32 refcount), NUL-terminated.
 unsafe fn node_name(node: &AmpMovieObjectDesc) -> String {
-    if node.name.is_null() {
-        return "<null>".to_string();
-    }
     // SAFETY: forwarded from the tree walk; the string data outlives the node.
+    let Some(desc) = (unsafe { node.name_data() }) else {
+        return "<null>".to_string();
+    };
     unsafe {
-        let desc = (node.name as usize & !7) as *const u8;
-        std::ffi::CStr::from_ptr(desc.add(0xC) as *const i8)
+        std::ffi::CStr::from_ptr(desc.as_ptr())
             .to_string_lossy()
             .into_owned()
     }
@@ -524,9 +522,8 @@ fn discover_layout(movie_impl: &MovieImpl, movie_root: &Movie) -> bool {
             let full = format!("{prefix}{path}\0");
             let mut value = Box::new(Value::new_boolean(false));
             let ok = movie_root.GetVariable(value.as_mut(), full.as_ptr());
-            let is_display_object = ok
-                && value.Type & 0x8F == Value::VT_DISPLAY_OBJECT
-                && !value.pObjectInterface.is_null();
+            let is_display_object =
+                ok && value.as_display_object().is_some() && !value.pObjectInterface.is_null();
             if is_display_object {
                 resolved += 1;
             } else {

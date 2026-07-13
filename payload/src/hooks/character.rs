@@ -12,7 +12,9 @@ use jc3gi::{
         ik::{HumanIK, Pass, SolveStep},
         symbol_table::EventIdSymbolTable,
     },
-    character::character::{AnimatedModel, Character, Joint, SafeBoneIndex},
+    character::character::{
+        AnimatedModel, Character, CharacterLodFlags, Joint, SafeBoneIndex, get_Character_EnableHIK,
+    },
     hash::hashlittle,
     types::math::Vector3,
 };
@@ -30,16 +32,6 @@ pub(super) fn hook_library() -> HookLibrary {
 
 /// The tracing target for the body-IK path.
 const BODY_IK_TARGET: &str = "body_ik";
-
-/// The global HumanIK enable flag (`CCharacter::m_EnableHIK`, `byte_142D621C8`): the engine gates
-/// the whole IK pass on it in `UpdatePassFinalizePose_Parallel`. No pyxis binding exists for this
-/// standalone global, so it is read at its release RVA, matching the engine's own gate.
-const HIK_ENABLE_FLAG_ADDRESS: usize = 0x142D621C8;
-
-/// The offset of the per-character reduced-LOD flag byte within `CCharacter`: the engine skips the
-/// IK pass when `(*(this + 10124) & 2) != 0` (verified in the release decompile of
-/// `UpdatePassFinalizePose_Parallel`). Not modelled as a pyxis field, so it is read by raw offset.
-const REDUCED_LOD_FLAG_OFFSET: usize = 10124;
 
 /// The head-bone model-space orientations captured *before* the HumanIK solve, wired from the
 /// pre-call [`character_update_pass_finalize_pose_parallel`] hook to the post-solve
@@ -168,9 +160,10 @@ unsafe fn capture_anchors_and_queue_body_ik(character: *mut Character) {
         // the global HIK enable and the per-character reduced-LOD bit. Queuing while gated off would
         // leave targets unconsumed (neither the solve nor ClearTargets runs), so skip cleanly and
         // log the transition once rather than per frame.
-        let hik_globally_enabled = *(HIK_ENABLE_FLAG_ADDRESS as *const bool);
-        let reduced_lod =
-            *(character as *const Character as *const u8).add(REDUCED_LOD_FLAG_OFFSET) & 2 != 0;
+        let hik_globally_enabled = *get_Character_EnableHIK();
+        let reduced_lod = character
+            .m_LodFlags
+            .contains(CharacterLodFlags::REDUCED_LOD);
         if !hik_globally_enabled || reduced_lod {
             log_gate_skip(hik_globally_enabled, reduced_lod);
             return;

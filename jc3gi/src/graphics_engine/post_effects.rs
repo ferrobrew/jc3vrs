@@ -574,7 +574,19 @@ impl std::convert::AsMut<RenderBlockPostEffects> for RenderBlockPostEffects {
 #[repr(C, align(8))]
 /// The sun halo. [`PreApply`](SunHaloEffect::PreApply) prepares it and sets the ready flag;
 /// [`Apply`](SunHaloEffect::Apply) composites it.
-pub struct SunHaloEffect {}
+pub struct SunHaloEffect {
+    _field_0: [u8; 276],
+    /// The ready flag: [`PreApply`](SunHaloEffect::PreApply) sets it when the halo is prepared, and
+    /// [`Apply`](SunHaloEffect::Apply) early-outs when it is clear.
+    pub m_Ready: bool,
+    _field_115: [u8; 3],
+}
+fn _SunHaloEffect_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x118], SunHaloEffect>([0u8; 0x118]);
+    }
+    unreachable!()
+}
 impl SunHaloEffect {
     pub const PreApply_ADDRESS: usize = 0x140118450;
     pub unsafe fn PreApply(

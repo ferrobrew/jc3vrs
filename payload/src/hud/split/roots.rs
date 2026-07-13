@@ -493,22 +493,13 @@ unsafe fn clip_render_node(handle: &ClipHandle) -> Option<*mut TreeNode> {
     // SAFETY: capture seam; the handle's value is pinned and managed.
     unsafe {
         let value: &Value = handle.value.as_deref()?;
-        let object = value.mValue as *const u8;
-        if object.is_null() {
+        let object = value.as_display_object()?.as_ref()?;
+        // Only real display objects carry a usable DisplayObjectBase -- the same traits guard
+        // GetDisplayInfo performs.
+        if !object.m_Traits.as_ref()?.is_display_object() {
             return None;
         }
-        let traits = *(object.add(0x28) as *const *const u8);
-        if traits.is_null() {
-            return None;
-        }
-        let type_id = *(traits.add(0x78) as *const u32);
-        let flags = *traits.add(0x70);
-        if type_id.wrapping_sub(24) >= 12 || flags & 0x20 != 0 {
-            return None;
-        }
-        let display_object =
-            *(object.add(0x88) as *const *const jc3gi::ui::scaleform::DisplayObjectBase);
-        let node = display_object.as_ref()?.GetRenderNode();
+        let node = object.m_DisplayObject.as_ref()?.GetRenderNode();
         (!node.is_null()).then_some(node)
     }
 }

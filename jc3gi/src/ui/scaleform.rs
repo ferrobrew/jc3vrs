@@ -7,9 +7,8 @@
 /// Layout verified from `GetChildDescTree` at `0x141_A30_410`.
 pub struct AmpMovieObjectDesc {
     pub ref_count_impl: crate::ui::scaleform::RefCountImpl,
-    /// The clip's instance name, or `"Unnamed"`: a `Scaleform::String`, i.e. a pointer to its
-    /// `DataDesc` header (`Size: u64`, `RefCount: i32`), with the NUL-terminated characters
-    /// inline at `+0xC`.
+    /// The clip's instance name, or `"Unnamed"`: a `Scaleform::String`, i.e. a pointer to a
+    /// [`StringDataDesc`] with heap flags packed into the pointer's low 3 bits (mask with `& !7`).
     pub name: *const u8,
     /// Pointer to the child array. Each element is a `Ptr<AmpMovieObjectDesc>` (a raw pointer
     /// to another `AmpMovieObjectDesc`).
@@ -1031,6 +1030,37 @@ impl std::convert::AsMut<MovieVftable> for MovieVftable {
     }
 }
 #[repr(C, align(8))]
+/// A Scaleform AS3 object (the managed payload behind a display-object [`Value::mValue`]): its type
+/// [`m_Traits`](Object::m_Traits) classify it, and for a display object its
+/// [`m_DisplayObject`](Object::m_DisplayObject) is the presentation-side [`DisplayObjectBase`].
+pub struct Object {
+    _field_0: [u8; 40],
+    /// The object's type traits (class metadata), used to check it really is a display object
+    /// before reaching [`m_DisplayObject`](Object::m_DisplayObject).
+    pub m_Traits: *mut crate::ui::scaleform::Traits,
+    _field_30: [u8; 88],
+    /// The presentation-side display object, valid once [`m_Traits`](Object::m_Traits) confirm a
+    /// display-object kind.
+    pub m_DisplayObject: *mut crate::ui::scaleform::DisplayObjectBase,
+}
+fn _Object_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x90], Object>([0u8; 0x90]);
+    }
+    unreachable!()
+}
+impl Object {}
+impl std::convert::AsRef<Object> for Object {
+    fn as_ref(&self) -> &Object {
+        self
+    }
+}
+impl std::convert::AsMut<Object> for Object {
+    fn as_mut(&mut self) -> &mut Object {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// A stack `Render::ContextImpl::RTHandle` over a copied
 /// [`DisplayHandle::pData`] (AddRef'd first, destructed after use).
 pub struct RTHandle {
@@ -1561,6 +1591,73 @@ impl std::convert::AsMut<ScaleformInfo> for ScaleformInfo {
         self
     }
 }
+#[repr(C, align(8))]
+/// The heap data descriptor behind a `Scaleform::String`: an 8-byte allocated size and a 4-byte
+/// refcount, followed by the NUL-terminated character data. Reached from the string's pointer after
+/// masking off the heap flags in its low 3 bits (`& !7`).
+pub struct StringDataDesc {
+    _field_0: [u8; 12],
+    /// The first character of the NUL-terminated string data.
+    pub m_Data: ::std::ffi::c_char,
+    _field_d: [u8; 3],
+}
+fn _StringDataDesc_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x10], StringDataDesc>([0u8; 0x10]);
+    }
+    unreachable!()
+}
+impl StringDataDesc {}
+impl std::convert::AsRef<StringDataDesc> for StringDataDesc {
+    fn as_ref(&self) -> &StringDataDesc {
+        self
+    }
+}
+impl std::convert::AsMut<StringDataDesc> for StringDataDesc {
+    fn as_mut(&mut self) -> &mut StringDataDesc {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// A Scaleform AS3 object's type traits: the class metadata identifying an [`Object`]'s kind. The
+/// display-object type-id range and flag values are hard-coded magic in the engine too (the same
+/// constants appear inline in `Value::ObjectInterface::GetDisplayInfo`); their deeper AS3-builtin-type
+/// meaning is not recoverable from the stripped Scaleform code, so they are named here by role.
+pub struct Traits {
+    _field_0: [u8; 112],
+    /// Trait flags; see [`FLAG_NON_DISPLAY_OBJECT`](Traits::FLAG_NON_DISPLAY_OBJECT).
+    pub m_Flags: u8,
+    _field_71: [u8; 7],
+    /// The traits' AS3 builtin-class type id; see [`is_display_object`](Traits::is_display_object).
+    pub m_TypeId: u32,
+    _field_7c: [u8; 4],
+}
+fn _Traits_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x80], Traits>([0u8; 0x80]);
+    }
+    unreachable!()
+}
+impl Traits {}
+impl Traits {
+    /// The number of type ids in the display-object range (so display objects are
+    /// `FIRST..FIRST + COUNT`).
+    pub const DISPLAY_OBJECT_TYPE_ID_COUNT: u32 = 12;
+    /// The first [`m_TypeId`](Traits::m_TypeId) of the display-object AS3 builtin-class range.
+    pub const DISPLAY_OBJECT_TYPE_ID_FIRST: u32 = 24;
+    /// A [`m_Flags`](Traits::m_Flags) bit marking a kind excluded from the display-object check.
+    pub const FLAG_NON_DISPLAY_OBJECT: u8 = 32;
+}
+impl std::convert::AsRef<Traits> for Traits {
+    fn as_ref(&self) -> &Traits {
+        self
+    }
+}
+impl std::convert::AsMut<Traits> for Traits {
+    fn as_mut(&mut self) -> &mut Traits {
+        self
+    }
+}
 #[repr(C, align(1))]
 /// A render-tree container node (`Render::TreeContainer`): a [`TreeNode`] whose `NodeData` holds
 /// a child `TreeNodeArray`. The display side mirrors every `DisplayObjContainer` into one, and
@@ -1785,6 +1882,9 @@ impl Value {
     pub const VT_NUMBER: u32 = 5;
     /// The type tag for a string value (`mValue` is a `*const c_char`).
     pub const VT_STRING: u32 = 6;
+    /// The mask isolating the base `VT_*` value-type tag in [`Type`](Value::Type) from the `VTC_*`
+    /// control bits (the game compares `Type & VT_TYPE_MASK` against the `VT_*` tags).
+    pub const VT_TYPE_MASK: u32 = 143;
 }
 impl std::convert::AsRef<Value> for Value {
     fn as_ref(&self) -> &Value {
@@ -1922,6 +2022,41 @@ impl std::convert::AsMut<Viewport> for Viewport {
         self
     }
 }
+impl Traits {
+    pub fn is_display_object(&self) -> bool {
+        self.m_TypeId.wrapping_sub(Traits::DISPLAY_OBJECT_TYPE_ID_FIRST)
+            < Traits::DISPLAY_OBJECT_TYPE_ID_COUNT
+            && self.m_Flags & Traits::FLAG_NON_DISPLAY_OBJECT == 0
+    }
+}
+#[allow(dead_code)]
+impl Value {
+    pub fn value_type(&self) -> u32 {
+        self.Type & Value::VT_TYPE_MASK
+    }
+    /// The boolean payload, or `None` if this is not a boolean value.
+    pub fn as_bool(&self) -> Option<bool> {
+        (self.value_type() == Value::VT_BOOLEAN).then_some(self.mValue & 0xFF != 0)
+    }
+    /// The 32-bit integer payload, or `None` if this is not an int value.
+    pub fn as_int(&self) -> Option<i32> {
+        (self.value_type() == Value::VT_INT).then_some(self.mValue as i32)
+    }
+    /// The `f64` payload, or `None` if this is not a number value.
+    pub fn as_number(&self) -> Option<f64> {
+        (self.value_type() == Value::VT_NUMBER).then_some(f64::from_bits(self.mValue))
+    }
+    /// The NUL-terminated string payload, or `None` if this is not a string value.
+    pub fn as_string(&self) -> Option<*const ::std::ffi::c_char> {
+        (self.value_type() == Value::VT_STRING)
+            .then_some(self.mValue as *const ::std::ffi::c_char)
+    }
+    /// The managed display object payload, or `None` if this is not a display-object value.
+    pub fn as_display_object(&self) -> Option<*mut Object> {
+        (self.value_type() == Value::VT_DISPLAY_OBJECT)
+            .then_some(self.mValue as *mut Object)
+    }
+}
 #[allow(dead_code)]
 impl Value {
     /// An unmanaged boolean value, safe to pass to `Movie::SetVariable` (the movie copies it;
@@ -1931,5 +2066,21 @@ impl Value {
         v.Type = Self::VT_BOOLEAN;
         v.mValue = value as u64;
         v
+    }
+}
+impl StringDataDesc {
+    pub fn as_ptr(&self) -> *const ::std::ffi::c_char {
+        ::std::ptr::addr_of!(self.m_Data)
+    }
+}
+#[allow(dead_code)]
+impl AmpMovieObjectDesc {
+    /// The instance name's [`StringDataDesc`], with the heap flags masked off the string pointer's
+    /// low 3 bits, or `None` if the name is null.
+    ///
+    /// # Safety
+    /// The descriptor must outlive the borrow (true while the node is alive).
+    pub unsafe fn name_data(&self) -> Option<&StringDataDesc> {
+        unsafe { ((self.name as usize & !7) as *const StringDataDesc).as_ref() }
     }
 }

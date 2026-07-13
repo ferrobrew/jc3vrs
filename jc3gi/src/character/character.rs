@@ -194,7 +194,10 @@ pub struct Character {
     pub m_AimFlags: crate::character::character::AimState,
     _field_20f2: [u8; 1336],
     pub m_IsLocalCharacter: bool,
-    _field_262b: [u8; 453],
+    _field_262b: [u8; 353],
+    /// Per-character LOD/update-gating flags; see [`CharacterLodFlags`].
+    pub m_LodFlags: crate::character::character::CharacterLodFlags,
+    _field_278d: [u8; 99],
     pub m_WorldMatrixT0: crate::types::math::Matrix4,
     pub m_WorldMatrixT1: crate::types::math::Matrix4,
     _field_2870: [u8; 400],
@@ -377,6 +380,26 @@ impl std::convert::AsMut<Character> for Character {
     fn as_mut(&mut self) -> &mut Character {
         self
     }
+}
+crate::__bitflags! {
+    #[doc =
+    " Per-character LOD/update-gating flags. Checked before the SIM-phase animation and IK work:"]
+    #[doc =
+    " [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel) skips the"]
+    #[doc =
+    " HumanIK solve when [`REDUCED_LOD`](CharacterLodFlags::REDUCED_LOD) is set. Only that bit is mapped."]
+    pub struct CharacterLodFlags : u8 { const REDUCED_LOD = 2usize as _; }
+}
+fn _CharacterLodFlags_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x1], CharacterLodFlags>([0u8; 0x1]);
+    }
+    unreachable!()
+}
+/// The global HumanIK enable (`CCharacter::m_EnableHIK`): the engine gates the whole IK pass in
+/// [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel) on it.
+pub unsafe fn get_Character_EnableHIK() -> &'static mut bool {
+    unsafe { &mut *(0x142D621C8 as *mut bool) }
 }
 pub unsafe fn get_Character_EnableLocoStrafing() -> &'static mut bool {
     unsafe { &mut *(0x142F2F300 as *mut bool) }
