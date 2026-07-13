@@ -122,19 +122,6 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
             "Off-axis depth reconstruction (per-eye inverse for deferred/SS passes; fixes \
              specular/SSR/shadow reconstruction divergence)",
         );
-        ui.add_enabled(
-            cfg.stereo.reconstruct_offaxis_inverse,
-            egui::Checkbox::new(
-                &mut cfg.stereo.offaxis_inverse_skip_atmospheric,
-                "  └ skip atmospheric-scattering pass",
-            ),
-        )
-        .on_hover_text(
-            "Checked (default): the aerial-perspective pass keeps the symmetric reconstruction, so \
-             the distant-mountain aerial shadow term flips dark with head pitch. Uncheck to apply \
-             the per-eye off-axis inverse there too -- fixes the mountain flip, but may reintroduce \
-             a roll-swimming crescent at the far-plane sky.",
-        );
     });
 
     ui.collapsing("Cross-eye consistency", |ui| {
