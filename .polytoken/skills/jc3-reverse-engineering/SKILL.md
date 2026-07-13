@@ -1,5 +1,5 @@
 ---
-description: Reverse-engineer Just Cause 3 against the release IDB and a symbol-bearing release-build dump, and capture findings as pyxis definitions.
+description: Reverse-engineer Just Cause 3 against the release IDB and a symbol-bearing release-build dump, and capture findings as pyxis definitions. Should also be consulted when editing existing pyxis definitions, or interacting with the game as a whole.
 polytoken:
   tags: [reverse-engineering, jc3]
 ---
@@ -123,6 +123,10 @@ re-decompiling the release type's consumers.
 RE findings are recorded as pyxis definitions — never edit the generated
 `jc3gi/src` directly; edit the `.pyxis` source.
 
+All findings should be captured as Pyxis definitions. Do not write raw offsets or addresses
+into payload code; they should be capturable within Pyxis. Additionally, avoid magic constants
+where posisble.
+
 ### Where
 
 `jc3gi/pyxis-defs/projects/JustCause3/Steam/20206564/` — one `.pyxis` file per
@@ -131,6 +135,8 @@ module; folders nest modules; a folder that needs its own items gets a
 these. `pyxis.toml` sets `pointer_size = 8` (x86_64).
 
 ### Conventions (from `jc3gi/pyxis-defs/CONTRIBUTING.md`)
+
+The manual for Pyxis can be found at <https://raw.githubusercontent.com/ferrobrew/pyxis/refs/heads/main/docs/language.md>. It describes the language's constructs and how to use them.
 
 - **Strip engine type prefixes.** `SVector3` → `Vector3`, `CGameObject` →
   `GameObject`. Keep a prefix only to avoid a collision.
