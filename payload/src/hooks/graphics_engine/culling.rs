@@ -23,6 +23,14 @@
 //! [`cull_size_fov_deg`](crate::config::StereoConfig::cull_size_fov_deg), and
 //! [`disable_bfbc_occlusion`](crate::config::StereoConfig::disable_bfbc_occlusion).
 //!
+//! A second path widens the active camera's projection for callers that pass `m_ActiveCamera` instead
+//! of the cull camera -- `CSpawnSystem::Update` and
+//! `CGameWorldObjectManager::ProcessCharacterOcclusion` both build their BFBC frustums against the
+//! active camera, so the cull-camera widen does not reach them. The active camera's `m_ProjectionF`
+//! is widened before the original call and fully restored (all 16 floats) after, so the per-eye
+//! render projections are untouched. See
+//! [`StereoConfig::widen_spawn_cull`](crate::config::StereoConfig).
+//!
 //! Terrain patches are a known exception: their visibility is decided by a separate landscape system
 //! that does not read this cull frustum, so these corrections do not affect terrain-patch pop-in.
 
@@ -67,10 +75,34 @@ fn get_bfbc_frustum_params(
         widen_main_cull_camera(camera);
     }
 
+    // The active-camera widen: spawn system and character occlusion pass `m_ActiveCamera` (not the cull
+    // camera), so the cull-camera widen above does not reach them. Stamp the union projection, call the
+    // original (which builds the BFBC frustum from it), then restore the full projection so the per-eye
+    // render projections are untouched. No `m_FOVT1` relaxation or occlusion drop -- those are
+    // cull-camera-specific.
+    let saved_proj: Option<[f32; 16]> =
+        if !main && Config::lock_query(|c| c.stereo.widen_spawn_cull) {
+            is_active_camera(camera)
+                .then(|| stamp_union_projection(camera))
+                .flatten()
+        } else {
+            None
+        };
+
     GET_BFBC_FRUSTUM_PARAMS
         .get()
         .unwrap()
         .call(this, camera, time, out_params, out_state);
+
+    if let Some(saved) = saved_proj {
+        // SAFETY: `camera` is the live active camera; restoring the full 16-float projection after the
+        // original returned.
+        unsafe {
+            if let Some(cam) = (camera as *mut Camera).as_mut() {
+                cam.m_ProjectionF.data = saved;
+            }
+        }
+    }
 
     // Drop the software-occlusion frustums after the params are built.
     if main && Config::lock_query(|c| c.stereo.disable_bfbc_occlusion) {
@@ -86,6 +118,32 @@ fn is_main_cull_camera(this: *const OccluderCollectionManager, camera: *const Ca
     !this.is_null() && camera as usize == this as usize + 0x8
 }
 
+/// Whether `camera` is the camera manager's active camera -- the one gameplay drives and the spawn
+/// system / character occlusion build their BFBC frustums against. Null-safe: returns false if the
+/// camera manager singleton or `m_ActiveCamera` is null.
+fn is_active_camera(camera: *const Camera) -> bool {
+    if camera.is_null() {
+        return false;
+    }
+    let Some(cm) = (unsafe { CameraManager::get() }) else {
+        return false;
+    };
+    std::ptr::eq(cm.m_ActiveCamera, camera)
+}
+
+/// Overwrite `camera.m_ProjectionF.data` with the union-FOV projection and return the saved value.
+/// Returns `None` on flatscreen (no cull projection published) or if the camera is null. The caller is
+/// responsible for restoring the saved value when a temporary widen is needed.
+fn stamp_union_projection(camera: *const Camera) -> Option<[f32; 16]> {
+    let cull = crate::vr::cull_projection_standard()?;
+    // SAFETY: `camera` is the live active camera the engine passes by const reference; the projection
+    // field is written and the previous value returned for restoration.
+    let cam = unsafe { (camera as *mut Camera).as_mut()? };
+    let saved = cam.m_ProjectionF.data;
+    cam.m_ProjectionF.data = cull;
+    Some(saved)
+}
+
 /// Overwrite the (already-identified main) cull camera's `m_ProjectionF` with the union-FOV projection
 /// so the frustum the engine builds covers both eyes, and relax its `m_FOVT1` so the screen-space size
 /// cull stops over-dropping. A no-op on flatscreen (no cull projection published) or with the toggle
@@ -97,22 +155,20 @@ fn widen_main_cull_camera(camera: *const Camera) {
     if !widen {
         return;
     }
-    let Some(cull) = crate::vr::cull_projection_standard() else {
-        return;
-    };
-    // SAFETY: `camera` is the live main cull camera the engine passes by const reference; only its
-    // projection and size-cull FOV fields are written.
-    let Some(camera) = (unsafe { (camera as *mut Camera).as_mut() }) else {
-        return;
-    };
-    camera.m_ProjectionF.data = cull;
+    // Stamp the union projection (permanent overwrite on the cull camera -- the saved value is
+    // discarded). A no-op on flatscreen (no cull projection published). Rewriting to the same union
+    // value is idempotent, so re-entry from parallel cull jobs is harmless.
+    stamp_union_projection(camera);
     // Relax the screen-space size cull, which reads `m_FOVT1` and is otherwise ~2x too aggressive under
     // the mod's injected 90 deg FOV -- dropping small/distant geometry and vehicle sub-meshes at double
     // the distance (see `StereoConfig::cull_size_fov_deg`). `m_FOVT1` is radians, matching the injected
     // `context.m_FOV`. Only the size and AO-volume culls read it on the cull camera, so this leaves the
     // frustum cull and LOD untouched.
     if size_fov_deg > 0.0 {
-        camera.m_FOVT1 = size_fov_deg.to_radians();
+        // SAFETY: `camera` is the live main cull camera; only the `m_FOVT1` field is written.
+        if let Some(cam) = unsafe { (camera as *mut Camera).as_mut() } {
+            cam.m_FOVT1 = size_fov_deg.to_radians();
+        }
     }
 }
 

@@ -277,6 +277,13 @@ pub struct StereoConfig {
     /// rendering is untouched), which also fixes the instant-hide-instead-of-fade pop, road meshes, and
     /// far lights that read the same planes. Once per frame; VR only.
     pub widen_model_cull: bool,
+    /// Widen the spawn system and character occlusion BFBC frustums to cover both eyes. Both
+    /// `CSpawnSystem::Update` and `CGameWorldObjectManager::ProcessCharacterOcclusion` build their BFBC
+    /// cull frustums against the camera manager's active camera (not the occluder manager's cull camera),
+    /// so the scene-cull widen does not reach them. This widens the active camera's projection for those
+    /// calls (with a full save/restore so the per-eye render projections are untouched), so the spawn
+    /// visibility gate and character occlusion cull account for the combined VR eye frusta. VR only.
+    pub widen_spawn_cull: bool,
     /// Widen the sun-shadow cascade *fit* frustum to cover both eyes. The engine fits the cascaded
     /// shadow map once per frame to the centre camera's narrow `m_ProjectionF`, so the wider, laterally
     /// shifted VR eyes see distant/peripheral geometry that falls outside the fitted coverage box --
@@ -404,6 +411,7 @@ impl StereoConfig {
             disable_bfbc_occlusion: true,
             widen_terrain_cull: true,
             widen_model_cull: true,
+            widen_spawn_cull: true,
             widen_shadow_fit: true,
             stabilize_shadow_fit: true,
             shadow_update_every_frame: false,
