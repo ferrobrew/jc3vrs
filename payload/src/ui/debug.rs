@@ -124,6 +124,14 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         );
     });
 
+    ui.collapsing("Clustered lighting", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.fix_clustered_light_frustum,
+            "Off-axis froxel tile bounds (replaces symmetric cb1 with per-eye projection-derived \
+             bounds; fixes blocky 64px lighting tiles in VR)",
+        );
+    });
+
     ui.collapsing("Cross-eye consistency", |ui| {
         ui.checkbox(
             &mut cfg.stereo.dedupe_post_block,

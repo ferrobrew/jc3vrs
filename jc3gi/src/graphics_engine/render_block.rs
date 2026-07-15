@@ -269,6 +269,42 @@ impl std::convert::AsMut<RenderBlockCharacterSkin> for RenderBlockCharacterSkin 
     }
 }
 #[repr(C, align(8))]
+/// The deferred-lighting render block. Its `Draw` method dispatches either the clustered (tiled)
+/// lighting pass or a pass-through fallback.
+pub struct RenderBlockDeferredLighting {}
+impl RenderBlockDeferredLighting {
+    pub const DrawClustered_ADDRESS: usize = 0x14013CFD0;
+    /// The clustered-lighting entry point: runs the "LightAssignment" pass (rasterizing light proxy
+    /// geometry into the froxel light-lookup target) and the "ClusteredLighting" pass (shading from
+    /// it). Called from `Draw` when wireframe is disabled.
+    pub unsafe fn DrawClustered(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        a3: *mut ::std::ffi::c_void,
+        a4: *mut crate::graphics_engine::graphics_engine::HTexture_t,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                a3: *mut ::std::ffi::c_void,
+                a4: *mut crate::graphics_engine::graphics_engine::HTexture_t,
+            ) = ::std::mem::transmute(Self::DrawClustered_ADDRESS);
+            f(self as *const Self as _, rc, a3, a4)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockDeferredLighting> for RenderBlockDeferredLighting {
+    fn as_ref(&self) -> &RenderBlockDeferredLighting {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockDeferredLighting> for RenderBlockDeferredLighting {
+    fn as_mut(&mut self) -> &mut RenderBlockDeferredLighting {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The fog-volume render block *type* (the
 /// `NGraphicsEngine::CRenderBlockFogVolume::CRenderBlockTypeFogVolume` singleton): owns the froxel
 /// volumetric-fog textures and recreates them when the scene render resolution changes.

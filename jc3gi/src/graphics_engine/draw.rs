@@ -328,3 +328,25 @@ pub unsafe fn CreateFragmentProgram(
         f(device, params)
     }
 }
+pub const SetFragmentProgramConstants_ADDRESS: usize = 0x141964840;
+/// Stages `count` float4 constants into the given fragment constant buffer slot, starting at
+/// `start_offset`, writing to the context's per-slot staging buffer and setting the dirty flag. The
+/// actual GPU upload happens at the next state flush.
+pub unsafe fn SetFragmentProgramConstants(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    data: *const f32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            data: *const f32,
+            count: u32,
+        ) = ::std::mem::transmute(SetFragmentProgramConstants_ADDRESS);
+        f(ctx, cb_index, start_offset, data, count)
+    }
+}

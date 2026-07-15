@@ -621,13 +621,38 @@ impl std::convert::AsMut<OccluderCollectionManager> for OccluderCollectionManage
 /// translation-free offset view-projection, and the separate camera world position), shadow data, and
 /// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].
 pub struct RenderContext {
-    _field_0: [u8; 216],
+    _field_0: [u8; 88],
+    /// The projection matrix for this dispatch, copied from [`Camera::m_ProjectionF`] by
+    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera). The deferred-lighting
+    /// clustered pass reads it to build the geometry proxy transform (cb0) and the froxel tile
+    /// bounds (cb1).
+    pub m_ProjectionF: crate::types::math::Matrix4,
+    _field_98: [u8; 64],
     /// The translation-free view-projection for this dispatch (the rotation and projection without the
     /// camera world translation). The tessellation constant buffers bake it directly (e.g.
     /// [`RenderBlockTypeTerrain::SetupConstantBuffers`](crate::graphics_engine::render_block::RenderBlockTypeTerrain)),
     /// so it carries the per-view (and, off-axis, per-eye) projection.
     pub m_OffsetViewProjection: crate::types::math::Matrix4,
-    _field_118: [u8; 816],
+    _field_118: [u8; 484],
+    /// The vertical field of view in radians, copied from [`Camera::m_FOV`] by
+    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera).
+    pub CameraFOV: f32,
+    _field_300: [u8; 4],
+    /// The near clip plane distance, copied from [`Camera::m_Near`] by
+    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera).
+    pub CameraNear: f32,
+    /// The far clip plane distance, copied from [`Camera::m_Far`] by
+    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera).
+    pub CameraFar: f32,
+    /// The display width in pixels. The clustered deferred-lighting pass derives the froxel tile
+    /// count from this (width / 64).
+    pub m_DisplayWidth: i32,
+    /// The display height in pixels. The clustered deferred-lighting pass derives the froxel tile
+    /// count from this (height / 64).
+    pub m_DisplayHeight: i32,
+    /// The display aspect ratio (`m_DisplayWidth / m_DisplayHeight`).
+    pub m_DisplayRatio: f32,
+    _field_318: [u8; 304],
     /// The per-real-frame stamp for this dispatch, set from [`get_render_frame_counters`]'s `m_FrameIndex`
     /// during render-context setup. Passes that cache per-frame state key on it — the terrain
     /// tessellation blocks compare it against their per-slot

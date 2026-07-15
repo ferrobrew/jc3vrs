@@ -376,6 +376,14 @@ pub struct StereoConfig {
     /// camera idle motion (dies with it). Re-enabling recaptures the then-current pose. The view locks in
     /// place -- diagnostic only. VR only. **Default off.**
     pub freeze_render_camera: bool,
+    /// Replace the symmetric froxel tile-bounds constants that `DrawClustered` uploads to the
+    /// light-assignment fragment shader (cb1) with per-eye off-axis-derived values. The engine
+    /// reconstructs a symmetric frustum from the vertical FOV and aspect ratio, which cannot encode
+    /// the off-axis shift that VR per-eye projections introduce — so lights are assigned to the wrong
+    /// 64-pixel tiles, producing blocky, screen-aligned lighting artifacts. The fix intercepts the
+    /// cb1 upload during the light-assignment pass and replaces it with bounds computed from the
+    /// per-eye projection matrix. VR only; a no-op when no VR frame is in flight. **Default on.**
+    pub fix_clustered_light_frustum: bool,
 }
 impl StereoConfig {
     pub const fn new() -> Self {
@@ -429,6 +437,7 @@ impl StereoConfig {
             symmetrize_eye_frusta: false,
             mirror_eye0_to_both: false,
             freeze_render_camera: false,
+            fix_clustered_light_frustum: true,
         }
     }
 }

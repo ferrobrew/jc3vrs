@@ -29,6 +29,9 @@ pub mod shader;
 // history-index restore.
 pub(crate) mod ssao;
 mod tone_mapping;
+// The clustered-lighting froxel tile-bounds fix for off-axis VR projections (issue #35); private,
+// reached only through `hook_library` below.
+mod clustered_lighting;
 
 /// Bundle every CGraphicsEngine-area detour into one hook library, mirroring how the game groups
 /// these classes.
@@ -44,4 +47,5 @@ pub(crate) fn hook_library() -> HookLibrary {
         .with_hook_library(post_effects::hook_library())
         .with_hook_library(ssao::hook_library())
         .with_hook_library(shader::hook_library())
+        .with_hook_library(clustered_lighting::hook_library())
 }
