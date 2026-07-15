@@ -339,11 +339,19 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
 /// build a `Mat3` from the basis columns and convert to a quaternion that maps camera-local to world
 /// space, so `quat * Vec3::NEG_Z` yields the forward direction.
 pub(crate) fn render_camera_pose() -> Option<(Vec3, Quat)> {
-    let transform = unsafe {
-        let cm = CameraManager::get()?;
-        let cam = cm.m_RenderCamera.as_ref()?;
-        cam.m_TransformF.data
-    };
+    // Prefer the center (un-offset) transform snapshotted in `SetupRenderCamera` before the per-eye
+    // parallax offset is applied. By the time `draw_quad` runs on eye 0, `m_TransformF` already
+    // carries eye 0's half-IPD offset, which would leak into the cached panel position and double
+    // the stereo disparity for eye 1. Fall back to the live transform when the snapshot is absent
+    // (e.g. stereo not active, or the hook has not run yet).
+    let transform = crate::stereo::STEREO_STATE
+        .lock()
+        .center_transform
+        .or_else(|| unsafe {
+            let cm = CameraManager::get()?;
+            let cam = cm.m_RenderCamera.as_ref()?;
+            Some(cam.m_TransformF.data)
+        })?;
 
     let right = Vec3::new(transform[0], transform[1], transform[2]);
     let up = Vec3::new(transform[4], transform[5], transform[6]);

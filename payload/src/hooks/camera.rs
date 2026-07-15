@@ -22,6 +22,7 @@ use re_utilities::hook_library::HookLibrary;
 use crate::{
     config::Config,
     debug::trace::{TraceEvent, TraceState},
+    stereo::STEREO_STATE,
 };
 
 pub(super) fn hook_library() -> HookLibrary {
@@ -57,7 +58,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     };
     if is_render_camera {
         TraceState::record_eye(TraceEvent::SetupRenderCamera);
-        let mut stereo = crate::stereo::STEREO_STATE.lock();
+        let mut stereo = STEREO_STATE.lock();
         // Clear the shadow-anchor delta; the parallax block below sets it when disparity is on, so a
         // stale value can't leak into the sun-shadow cascade correction when disparity is off.
         stereo.shadow_anchor_delta = [0.0; 3];
@@ -132,8 +133,11 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         // camera's basis + travel direction before the per-eye offset below mutates m_TransformF.
         crate::debug::coord_frame::log_render_camera_frame(camera);
 
-        crate::stereo::STEREO_STATE.lock().vp_history.cur_center =
+        STEREO_STATE.lock().vp_history.cur_center =
             Some(glam::Mat4::from(camera.m_ViewProjectionF));
+
+        // Snapshot the un-offset world transform for the HUD panel pose (see `StereoState::center_transform`).
+        STEREO_STATE.lock().center_transform = Some(camera.m_TransformF.data);
     }
 
     // FSR is a temporal reconstructor: it needs the camera jittered by its sequence, with the same
@@ -153,7 +157,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 // jittered projection, so every vector carries this shift as a constant offset).
                 let jitter_uv = crate::fsr::current_camera_jitter_ndc(w, h)
                     .map_or((0.0, 0.0), |(x, y)| (0.5 * x, -0.5 * y));
-                crate::stereo::STEREO_STATE.lock().vp_history.cur_jitter_uv = jitter_uv;
+                STEREO_STATE.lock().vp_history.cur_jitter_uv = jitter_uv;
                 let view = &camera.m_View as *const Matrix4;
                 let proj = &camera.m_Projection as *const Matrix4;
                 let proj_f = &camera.m_ProjectionF as *const Matrix4;
@@ -206,8 +210,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                     Matrix4::Multiply4x4(view, proj_f, &mut camera.m_ViewProjectionF);
                     // Publish this eye's world offset for the sun-shadow cascade correction (see
                     // SetGlobalShaderConstants hook / stereo::StereoState::shadow_anchor_delta).
-                    crate::stereo::STEREO_STATE.lock().shadow_anchor_delta =
-                        [delta.x, delta.y, delta.z];
+                    STEREO_STATE.lock().shadow_anchor_delta = [delta.x, delta.y, delta.z];
                 }
             }
         } else if stereo_cameras {
@@ -229,7 +232,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                     camera.m_TransformF.data[14] += delta[2];
                     // Publish this eye's world offset for the sun-shadow cascade correction (see
                     // SetGlobalShaderConstants hook / stereo::StereoState::shadow_anchor_delta).
-                    crate::stereo::STEREO_STATE.lock().shadow_anchor_delta = delta;
+                    STEREO_STATE.lock().shadow_anchor_delta = delta;
 
                     // m_View == inverse(m_TransformF), so the +offset*right shift of the camera world
                     // position is a -offset shift of the view translation-X (data[12]).
@@ -252,7 +255,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // applied). The FSR motion-vector correction inverts it to reconstruct each pixel's position and
     // re-anchor the velocity reprojection at this eye's own previous pose.
     if is_render_camera && let Some(camera) = unsafe { camera.as_ref() } {
-        let mut stereo = crate::stereo::STEREO_STATE.lock();
+        let mut stereo = STEREO_STATE.lock();
         let index = stereo.draw_index;
         stereo.vp_history.cur_eye[index] = Some(glam::Mat4::from(camera.m_ViewProjectionF));
     }

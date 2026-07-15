@@ -22,6 +22,12 @@ pub struct StereoState {
     /// Per-eye view-projection history for the FSR motion-vector correction, maintained by the
     /// `SetupRenderCamera` hook.
     pub vp_history: VpHistory,
+    /// The render camera's center (un-offset) world transform (`m_TransformF`), snapshotted in
+    /// `SetupRenderCamera` before the per-eye parallax offset is applied. The HUD panel pose reads
+    /// this instead of the live `m_TransformF`, which by the time `draw_quad` runs on eye 0 already
+    /// carries eye 0's half-IPD offset. Using the offset transform would shift the cached panel
+    /// position toward eye 0, doubling the stereo disparity for eye 1.
+    pub center_transform: Option<[f32; 16]>,
 }
 impl StereoState {
     const fn new() -> Self {
@@ -30,6 +36,7 @@ impl StereoState {
             draw_index: 0,
             shadow_anchor_delta: [0.0; 3],
             vp_history: VpHistory::new(),
+            center_transform: None,
         }
     }
 }
