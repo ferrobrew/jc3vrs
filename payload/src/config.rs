@@ -284,6 +284,13 @@ pub struct StereoConfig {
     /// calls (with a full save/restore so the per-eye render projections are untouched), so the spawn
     /// visibility gate and character occlusion cull account for the combined VR eye frusta. VR only.
     pub widen_spawn_cull: bool,
+    /// Scale factor for spawn system budget limits. The spawn system enforces per-resource-def max
+    /// object counts (loaded from `settings/spawn_budget_pools.bin`); when the count is exceeded it
+    /// despawns the highest-rank object, which under VR's wider FOV can pop vehicles/NPCs in front of
+    /// the player. This multiplies every budget entry by the given factor (e.g. `2.0` doubles all
+    /// limits) via a one-time patch on first `CSpawnSystem::Update` call (auto-reverted on uninject).
+    /// `1.0` leaves them unchanged. Read once at startup; requires restart to change.
+    pub spawn_budget_scale: f32,
     /// Widen the sun-shadow cascade *fit* frustum to cover both eyes. The engine fits the cascaded
     /// shadow map once per frame to the centre camera's narrow `m_ProjectionF`, so the wider, laterally
     /// shifted VR eyes see distant/peripheral geometry that falls outside the fitted coverage box --
@@ -412,6 +419,7 @@ impl StereoConfig {
             widen_terrain_cull: true,
             widen_model_cull: true,
             widen_spawn_cull: true,
+            spawn_budget_scale: 2.0,
             widen_shadow_fit: true,
             stabilize_shadow_fit: true,
             shadow_update_every_frame: false,

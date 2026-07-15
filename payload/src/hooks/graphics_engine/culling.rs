@@ -34,7 +34,10 @@
 //! Terrain patches are a known exception: their visibility is decided by a separate landscape system
 //! that does not read this cull frustum, so these corrections do not affect terrain-patch pop-in.
 
-use std::ffi::c_void;
+use std::{
+    ffi::c_void,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use detours_macro::detour;
 use jc3gi::{
@@ -43,6 +46,7 @@ use jc3gi::{
         graphics_engine::{BFBCFrustumCullParameters, OccluderCollectionManager},
         render_engine::STerrainPatchSystem,
     },
+    spawn_system::SpawnSystem,
     types::math::Matrix4,
 };
 use re_utilities::hook_library::HookLibrary;
@@ -54,6 +58,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&GET_BFBC_FRUSTUM_PARAMS_BINDER)
         .with_static_binder(&TERRAIN_PATCH_SYSTEM_UPDATE_BINDER)
         .with_static_binder(&CAMERA_UPDATE_FRUSTUM_BINDER)
+        .with_static_binder(&SPAWN_SYSTEM_UPDATE_BINDER)
 }
 
 #[detour(
@@ -256,6 +261,48 @@ fn camera_update_frustum(this: *mut Camera, transform: *const Matrix4) {
         Matrix4::Multiply4x4(&raw const (*this).m_View, &raw const union_mat, vp);
         original.call(this, transform);
         *vp = saved_vp;
+    }
+}
+
+// CSpawnSystem::Update -- the per-frame spawn system update. The spawn system enforces per-tag budget
+// limits (loaded from `settings/spawn_budget_pools.bin`); when the live count exceeds the budget, the
+// highest-despawn-rank object is despawned. Under VR's wider FOV, the despawn rank's view-direction
+// weighting can cause vehicles in front of the player to be despawned when the budget is pressed. This
+// detour patches every budget entry's `m_Budget` field once (via the patcher, so it auto-reverts on
+// uninject), scaling by `spawn_budget_scale`.
+#[detour(address = jc3gi::spawn_system::SpawnSystem::Update_ADDRESS)]
+fn spawn_system_update(this: *mut SpawnSystem) {
+    if !BUDGETS_SCALED.swap(true, Ordering::Relaxed) {
+        let scale = Config::lock_query(|c| c.stereo.spawn_budget_scale);
+        if scale != 1.0 {
+            patch_spawn_budgets(this, scale);
+        }
+    }
+    SPAWN_SYSTEM_UPDATE.get().unwrap().call(this);
+}
+
+/// Guard so the one-time budget patch only fires on the first `Update` call.
+static BUDGETS_SCALED: AtomicBool = AtomicBool::new(false);
+
+/// Patch every budget entry's `m_Budget` to `original * scale` through the patcher, which auto-reverts
+/// on uninject.
+fn patch_spawn_budgets(spawn_system: *mut SpawnSystem, scale: f32) {
+    let Some(mut patcher) = crate::hooks::patcher() else {
+        return;
+    };
+    // SAFETY: `spawn_system` is the live singleton on the game thread.
+    let Some(ss) = (unsafe { spawn_system.as_mut() }) else {
+        return;
+    };
+    // SAFETY: `begin..end` points to live `SpawnBudgetEntry`s on the game thread.
+    let entries = unsafe { ss.m_BudgetEntries.as_slice_mut() };
+    for entry in entries {
+        let scaled = (entry.m_Budget as f32 * scale) as u32;
+        // SAFETY: `entry.m_Budget` is a live field; the patcher saves the original bytes for
+        // auto-revert on uninject.
+        unsafe {
+            patcher.patch((&raw const entry.m_Budget) as usize, &scaled.to_le_bytes());
+        }
     }
 }
 

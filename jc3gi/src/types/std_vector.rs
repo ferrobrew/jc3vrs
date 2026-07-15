@@ -37,4 +37,15 @@ impl<T> Vector<T> {
             unsafe { ::core::slice::from_raw_parts(self.begin, self.len()) }
         }
     }
+    /// The live elements as a mutable slice.
+    ///
+    /// # Safety
+    /// `begin..end` must point to `len()` live `T`s for the borrow.
+    pub unsafe fn as_slice_mut(&mut self) -> &mut [T] {
+        if self.begin.is_null() {
+            &mut []
+        } else {
+            unsafe { ::core::slice::from_raw_parts_mut(self.begin, self.len()) }
+        }
+    }
 }

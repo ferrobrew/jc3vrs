@@ -48,13 +48,49 @@ impl std::convert::AsMut<SBFBCProcessState> for SBFBCProcessState {
     }
 }
 #[repr(C, align(8))]
+/// One per-tag spawn budget entry. `CSpawnSystem::Update` iterates these each frame; when the live
+/// count exceeds the budget, the highest-despawn-rank object is despawned. Partial: only the budget
+/// field is mapped.
+pub struct SpawnBudgetEntry {
+    _field_0: [u8; 64],
+    /// The maximum number of live objects for this spawn tag. When
+    /// `count - unloading_count >= budget`, the spawn system despawns the object with the highest
+    /// despawn rank.
+    pub m_Budget: u32,
+    _field_44: [u8; 244],
+}
+fn _SpawnBudgetEntry_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x138], SpawnBudgetEntry>([0u8; 0x138]);
+    }
+    unreachable!()
+}
+impl SpawnBudgetEntry {}
+impl std::convert::AsRef<SpawnBudgetEntry> for SpawnBudgetEntry {
+    fn as_ref(&self) -> &SpawnBudgetEntry {
+        self
+    }
+}
+impl std::convert::AsMut<SpawnBudgetEntry> for SpawnBudgetEntry {
+    fn as_mut(&mut self) -> &mut SpawnBudgetEntry {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The spawn system: manages streaming (de)spawn of characters and vehicles around the player. Each
 /// frame, [`Update`](SpawnSystem::Update) builds a BFBC cull frustum from the camera manager's active
 /// camera and uses it as a "don't (de)spawn while visible" gate in `CSpawnFactoryImpl::CheckInternal`, so
 /// objects are not spawned or despawned inside the player's view. Its budgets are characters and
 /// vehicles, so it governs NPC/vehicle (de)spawns near the view edge, not buildings.
 pub struct SpawnSystem {
-    _field_0: [u8; 360],
+    _field_0: [u8; 48],
+    /// The per-tag spawn budget entries. Each entry tracks the max object count (budget), current
+    /// count, and despawn-rank state for one spawn tag. When the count exceeds the budget, the
+    /// highest-despawn-rank object is despawned.
+    pub m_BudgetEntries: crate::types::std_vector::Vector<
+        crate::spawn_system::SpawnBudgetEntry,
+    >,
+    _field_50: [u8; 280],
     /// The BFBC cull context the spawn system's visibility gate runs against.
     pub m_SpawnBFBC: *mut crate::spawn_system::SBFBCContext,
     /// The BFBC cull-frustum parameters, populated each frame by
