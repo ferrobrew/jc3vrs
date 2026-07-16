@@ -1,5 +1,262 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// The abstract render-block type interface (`NGraphicsEngine::IRenderBlockType`): the per-type
+/// singleton every render block's `GetType` returns, holding the type's shaders and per-pass setup.
+/// Mapped by vtable only.
+pub struct RenderBlockTypeBase {
+    vftable: *const crate::graphics_engine::render_engine::RenderBlockTypeBaseVftable,
+}
+fn _RenderBlockTypeBase_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x8], RenderBlockTypeBase>([0u8; 0x8]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeBase {
+    pub fn vftable(
+        &self,
+    ) -> *const crate::graphics_engine::render_engine::RenderBlockTypeBaseVftable {
+        self.vftable
+            as *const crate::graphics_engine::render_engine::RenderBlockTypeBaseVftable
+    }
+    /// Creates the type's GPU resources (shaders, buffers) against the given
+    /// `SResourceContext`. Each type's `RegisterType` calls this at startup with the render
+    /// engine's own resource context.
+    pub unsafe fn Create(&mut self, resource_context: *mut ::std::ffi::c_void) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Create).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Destroys the type's GPU resources.
+    pub unsafe fn Destroy(&mut self, resource_context: *mut ::std::ffi::c_void) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Destroy).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Recreates the type's GPU resources against the given `SResourceContext`.
+    /// `CRenderEngine::RecreateRenderBlockTypes` calls this on every registered type with the
+    /// render engine's own resource context (the settings-change path) — but several types,
+    /// including the terrain setup types, implement it as a no-op; re-creating those requires
+    /// calling [`Destroy`](RenderBlockTypeBase::Destroy) and
+    /// [`Create`](RenderBlockTypeBase::Create) directly.
+    pub unsafe fn Recreate(&mut self, resource_context: *mut ::std::ffi::c_void) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Recreate).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Returns the type's display name (e.g. `"VolumetricTerrain"`, `"TerrainPatch"`).
+    pub unsafe fn GetTypeName(&self) -> *const u8 {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetTypeName).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Returns the type's name hash (the registry sort key).
+    pub unsafe fn GetHash(&self) -> u32 {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetHash).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Whether render passes draw blocks of this type: `CRenderPass::DoDraw` dispatches this
+    /// per type run (vtable offset `0x90`) and skips every block whose type reports disabled.
+    /// In the release build the base implementation is compiled to a constant `true`.
+    pub unsafe fn IsEnabled(&self) -> bool {
+        unsafe {
+            let f = (&raw const (*self.vftable()).IsEnabled).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Enables drawing of this type's blocks. In the release build the base implementation is
+    /// compiled to a no-op (the enabled flag was optimized out).
+    pub unsafe fn Enable(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Enable).read();
+            f(self as *mut Self as _)
+        }
+    }
+    /// Disables drawing of this type's blocks. In the release build the base implementation is
+    /// compiled to a no-op (the enabled flag was optimized out), so suppressing a type requires
+    /// replacing its [`IsEnabled`](RenderBlockTypeBase::IsEnabled) vtable entry.
+    pub unsafe fn Disable(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Disable).read();
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockTypeBase> for RenderBlockTypeBase {
+    fn as_ref(&self) -> &RenderBlockTypeBase {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeBase> for RenderBlockTypeBase {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeBase {
+        self
+    }
+}
+#[repr(C, align(8))]
+pub struct RenderBlockTypeBaseVftable {
+    _vfunc_0: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    /// Creates the type's GPU resources (shaders, buffers) against the given
+    /// `SResourceContext`. Each type's `RegisterType` calls this at startup with the render
+    /// engine's own resource context.
+    pub Create: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+        resource_context: *mut ::std::ffi::c_void,
+    ),
+    /// Destroys the type's GPU resources.
+    pub Destroy: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+        resource_context: *mut ::std::ffi::c_void,
+    ),
+    /// Recreates the type's GPU resources against the given `SResourceContext`.
+    /// `CRenderEngine::RecreateRenderBlockTypes` calls this on every registered type with the
+    /// render engine's own resource context (the settings-change path) — but several types,
+    /// including the terrain setup types, implement it as a no-op; re-creating those requires
+    /// calling [`Destroy`](RenderBlockTypeBase::Destroy) and
+    /// [`Create`](RenderBlockTypeBase::Create) directly.
+    pub Recreate: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+        resource_context: *mut ::std::ffi::c_void,
+    ),
+    /// Returns the type's display name (e.g. `"VolumetricTerrain"`, `"TerrainPatch"`).
+    pub GetTypeName: unsafe extern "system" fn(
+        this: *const crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ) -> *const u8,
+    /// Returns the type's name hash (the registry sort key).
+    pub GetHash: unsafe extern "system" fn(
+        this: *const crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ) -> u32,
+    _vfunc_6: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_7: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_8: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_9: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_10: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_11: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_12: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_13: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_14: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_15: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_16: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    _vfunc_17: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    /// Whether render passes draw blocks of this type: `CRenderPass::DoDraw` dispatches this
+    /// per type run (vtable offset `0x90`) and skips every block whose type reports disabled.
+    /// In the release build the base implementation is compiled to a constant `true`.
+    pub IsEnabled: unsafe extern "system" fn(
+        this: *const crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ) -> bool,
+    /// Enables drawing of this type's blocks. In the release build the base implementation is
+    /// compiled to a no-op (the enabled flag was optimized out).
+    pub Enable: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+    /// Disables drawing of this type's blocks. In the release build the base implementation is
+    /// compiled to a no-op (the enabled flag was optimized out), so suppressing a type requires
+    /// replacing its [`IsEnabled`](RenderBlockTypeBase::IsEnabled) vtable entry.
+    pub Disable: unsafe extern "system" fn(
+        this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    ),
+}
+fn _RenderBlockTypeBaseVftable_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xA8], RenderBlockTypeBaseVftable>([0u8; 0xA8]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeBaseVftable {}
+impl std::convert::AsRef<RenderBlockTypeBaseVftable> for RenderBlockTypeBaseVftable {
+    fn as_ref(&self) -> &RenderBlockTypeBaseVftable {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeBaseVftable> for RenderBlockTypeBaseVftable {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeBaseVftable {
+        self
+    }
+}
+#[derive(Copy, Clone)]
+#[repr(C, align(8))]
+/// One entry in the global render-block-type registry: the type's hash (its `GetHash`) and the
+/// type object.
+pub struct RenderBlockTypeEntry {
+    pub m_Hash: u32,
+    _field_4: [u8; 4],
+    pub m_Type: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+}
+fn _RenderBlockTypeEntry_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x10], RenderBlockTypeEntry>([0u8; 0x10]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeEntry {}
+impl std::convert::AsRef<RenderBlockTypeEntry> for RenderBlockTypeEntry {
+    fn as_ref(&self) -> &RenderBlockTypeEntry {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeEntry> for RenderBlockTypeEntry {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeEntry {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The global render-block-type registry that `CRenderEngine::AddType` and `RemoveType` maintain
+/// (the leading fields of the `CRenderBlockFactory` object): a begin/end vector of
+/// [`RenderBlockTypeEntry`], kept sorted by type hash for binary search. The factory itself sits
+/// behind a pointer in static storage.
+pub struct RenderBlockTypeRegistry {
+    pub m_Begin: *mut crate::graphics_engine::render_engine::RenderBlockTypeEntry,
+    pub m_End: *mut crate::graphics_engine::render_engine::RenderBlockTypeEntry,
+}
+fn _RenderBlockTypeRegistry_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x10], RenderBlockTypeRegistry>([0u8; 0x10]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeRegistry {}
+impl std::convert::AsRef<RenderBlockTypeRegistry> for RenderBlockTypeRegistry {
+    fn as_ref(&self) -> &RenderBlockTypeRegistry {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeRegistry> for RenderBlockTypeRegistry {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeRegistry {
+        self
+    }
+}
+#[repr(C, align(8))]
 pub struct RenderEngine {
     _field_0: [u8; 128],
     /// The per-pass render-block-item lists: one vector of [`RenderPass`] pointers per pass id.
@@ -13,7 +270,12 @@ pub struct RenderEngine {
     /// selects a constant-buffer pool slot from this and advances it, wrapping at the limit in the `u32`
     /// immediately after. It advances independently of the engine frame counters.
     pub m_ConstantBufferRingIndex: u32,
-    _field_16c4: [u8; 2908],
+    _field_16c4: [u8; 524],
+    /// The render engine's embedded `SResourceContext` (opaque here; only its address is taken).
+    /// `RecreateRenderBlockTypes` passes a pointer to this field to every type's
+    /// [`Recreate`](RenderBlockTypeBase::Recreate).
+    pub m_ResourceContext: u64,
+    _field_18d8: [u8; 2376],
 }
 fn _RenderEngine_size_check() {
     unsafe {
@@ -407,6 +669,40 @@ impl std::convert::AsMut<STerrainPatchSystem> for STerrainPatchSystem {
         self
     }
 }
+#[repr(C, align(8))]
+/// The immediate operands inside the terrain setup types' `Create` functions that size the GPU
+/// detail-tessellation budget buffers (see `CRenderBlockTerrainDetailSetup::Create` at
+/// `0x14032C000` and `CRenderBlockTerrainSetup::Create` at `0x14032EA10`). The detail-quad
+/// pipeline allocates from these buffers with unbounded GPU cursors, so their sizes are the hard
+/// budget of the detail tessellation skin; each constant is the address of a 32-bit element-count
+/// immediate, paired with the shipped value.
+pub struct TerrainDetailBudgetPatchSites {}
+impl TerrainDetailBudgetPatchSites {}
+impl TerrainDetailBudgetPatchSites {
+    /// "Detail debug tessellation vertex buffer": 0x10000 elements of 80 bytes.
+    pub const DEBUG_VERTEX_COUNT: u64 = 5372035357;
+    /// "Detail tessellation index texture buffer" (the raw index buffer): 0x40000 bytes.
+    pub const INDEX_BYTES: u64 = 5372035429;
+    /// "Detail tessellation index texture buffer" (the 4-byte-typed view on the setup type):
+    /// 0x8000 elements.
+    pub const INDEX_VIEW_COUNT: u64 = 5372046286;
+    /// "Detail tessellation texel buffer": 0x8000 elements of 16 bytes.
+    pub const TEXEL_COUNT: u64 = 5372035501;
+    /// "Detail tessellation vertex buffer": 0x10000 elements of 16 bytes.
+    pub const VERTEX_COUNT: u64 = 5372035278;
+}
+impl std::convert::AsRef<TerrainDetailBudgetPatchSites>
+for TerrainDetailBudgetPatchSites {
+    fn as_ref(&self) -> &TerrainDetailBudgetPatchSites {
+        self
+    }
+}
+impl std::convert::AsMut<TerrainDetailBudgetPatchSites>
+for TerrainDetailBudgetPatchSites {
+    fn as_mut(&mut self) -> &mut TerrainDetailBudgetPatchSites {
+        self
+    }
+}
 pub const GetRenderPassName_ADDRESS: usize = 0x140175080;
 /// The debug name for a render-pass id, from the engine's pass-name switch (the ground truth the
 /// [`RenderPassId`] values are verified against). Returns `"NONE"` for unnamed indices.
@@ -435,5 +731,12 @@ pub unsafe fn TerrainPatchSystemUpdate(
             ctx: *mut ::std::ffi::c_void,
         ) = ::std::mem::transmute(TerrainPatchSystemUpdate_ADDRESS);
         f(handle, ctx)
+    }
+}
+impl RenderBlockTypeRegistry {
+    /// The live registry: the static slot holds a pointer to the factory object whose leading
+    /// fields are the vector.
+    pub unsafe fn get() -> Option<&'static mut RenderBlockTypeRegistry> {
+        unsafe { (*(0x142ED0F60usize as *const *mut RenderBlockTypeRegistry)).as_mut() }
     }
 }

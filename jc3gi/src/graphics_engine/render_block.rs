@@ -309,11 +309,18 @@ impl std::convert::AsMut<RenderBlockDeferredLighting> for RenderBlockDeferredLig
 pub struct RenderBlockTerrain {}
 impl RenderBlockTerrain {
     pub const HullClipType_ADDRESS: usize = 0x14032B450;
-    /// Returns the hull-clip type (0, 1, or 2) that selects the hull program `Draw` binds for the
-    /// current pass (`m_HullProgram[clip + 4*variant]`). The color pass (render-status bit 3) resolves
-    /// to type 2 — the LOD-clipping hull that discards patches by their LOD against the tessellation
-    /// metrics — while the depth prepass uses a non-clipping variant, so the depth and colour passes
-    /// can disagree on which patches survive.
+    /// Returns the hull-clip type (`ETerrainHullClipType`: 0, 1, or 2) that selects the hull program
+    /// `Setup`, `SetupZ`, and `Draw` bind (`m_HullProgram[clip + 4*scheme]`). Type 1 is the LOD clip:
+    /// its hull samples the global terrain mask (the `VisibilityMask` texture bound from
+    /// `SGlobalRBTerrainContext`) at the patch's four corners and zeroes the tessellation factors —
+    /// discarding the patch — when every corner reads below 0.05, i.e. when a finer-LOD tile has fully
+    /// faded in over that footprint. Type 2 is the water clip: patches below the cached water level
+    /// are discarded when the camera is above water. Type 0 clips nothing. Tiles above the base LOD
+    /// (`m_PatchLOD > 9`) always resolve to type 1; base-LOD tiles resolve to type 2 when the tile is
+    /// at the context's high-detail LOD and the camera is above water (or the render context has
+    /// render-status bit 3 set), and to type 0 otherwise — except that when
+    /// `CWaterPatchManager::m_EnableWaterRenderPass` is clear, base-LOD tiles also resolve to type 1.
+    /// The same selection runs in every pass (depth prepass and color alike).
     pub unsafe fn HullClipType(
         &self,
         render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -436,7 +443,13 @@ impl std::convert::AsMut<RenderBlockTypeParticle> for RenderBlockTypeParticle {
 /// camera position, and tessellation factors — into `m_HDTypeConstants[slot]` (22 constant-buffer
 /// handles at `0x60`), caching it per slot keyed on the frame the upload was made for.
 pub struct RenderBlockTypeTerrain {
-    _field_0: [u8; 272],
+    _field_0: [u8; 76],
+    /// The debug visualization mode. When `<= 0`, `Setup` selects the normal shading fragment
+    /// programs; when `> 0`, it selects the debug fragment program at index `m_DebugMode + 13`
+    /// instead (LOD colours, tessellation, and similar overlays; the program array holds 21
+    /// entries, so 1..=7 are valid).
+    pub m_DebugMode: i32,
+    _field_50: [u8; 192],
     /// Per-LOD-slot cache stamp: the
     /// [`RenderContext::m_RenderFrameNo`](graphics_engine::graphics_engine::RenderContext::m_RenderFrameNo)
     /// of the frame whose tessellation constants were last uploaded into that slot's constant buffer.
@@ -444,7 +457,10 @@ pub struct RenderBlockTypeTerrain {
     /// baked view-projection is written once per frame and reused for every draw of that slot within
     /// the frame.
     pub m_WasCBApplied: [u32; 22],
-    _field_168: [u8; 812],
+    _field_168: [u8; 803],
+    /// When set, `Draw` returns before issuing any draw call, suppressing every base-terrain block.
+    pub m_NoDraw: bool,
+    _field_48c: [u8; 8],
     /// Enables back-patch culling in the color pass. When set, `SetupConstantBuffers` bakes a cull flag
     /// (gated on the color-pass render-status bit) into the hull/domain constant buffer alongside the
     /// normalized forward vector of the camera manager's render camera and the
@@ -525,7 +541,15 @@ pub struct RenderBlockTypeTerrainPatch {
     /// handle array (`m_HDTypeConstants[22]`) sits at `0x70` for this variant, so the stamp array
     /// follows at `0x120`.
     pub m_WasCBApplied: [u32; 22],
-    _field_178: [u8; 721],
+    _field_178: [u8; 264],
+    /// The hull-program holders, indexed by clip type (each holder is two pointers; the first is
+    /// what `Setup` passes to `SetHullProgram`). The type's `Setup` inlines the clip selection: the
+    /// near passes (56..=57) bind index 0 (no clipping); every other tessellating pass (58, 60)
+    /// binds index 2 — the LOD clip, whose hull discards patches that a finer-LOD tile's global
+    /// mask footprint covers. Index 1 is the disabled-clip variant the (compiled-out) debug flag
+    /// would select, and index 3 the detail-clip variant.
+    pub m_HullProgramHolders: [u64; 8],
+    _field_2c0: [u8; 393],
     /// When set, `Setup` binds the material-inspection fragment program instead of the shading one,
     /// overriding the debug-mode and tint selection.
     pub m_ShowMaterial: bool,
@@ -574,7 +598,26 @@ impl RenderBlockTypeTerrainPatch {
         }
     }
 }
-impl RenderBlockTypeTerrainPatch {}
+impl RenderBlockTypeTerrainPatch {
+    pub const Setup_ADDRESS: usize = 0x14034BB30;
+    /// The type-level per-pass setup for the color-family passes: binds the pass's vertex, hull,
+    /// domain, and fragment programs (the depth-family passes route to `SetupZ` via the render
+    /// status). The hull-clip selection is inlined here: passes 56..=57 bind
+    /// [`m_HullProgramHolders`](RenderBlockTypeTerrainPatch::m_HullProgramHolders) index 0, other
+    /// tessellating passes index 2.
+    pub unsafe fn Setup(
+        &mut self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+            ) = ::std::mem::transmute(Self::Setup_ADDRESS);
+            f(self as *mut Self as _, render_context)
+        }
+    }
+}
 impl std::convert::AsRef<RenderBlockTypeTerrainPatch> for RenderBlockTypeTerrainPatch {
     fn as_ref(&self) -> &RenderBlockTypeTerrainPatch {
         self
