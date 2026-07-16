@@ -124,6 +124,12 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     let body_rotation_prev = frozen.map_or_else(headpose::xr::body_rotation_prev, |f| f.1);
     let anchor_prev = frozen.map_or_else(|| headpose::anchor_prev().unwrap_or(anchor), |f| f.2);
 
+    // Publish the raw cockpit-frame HMD pose (the tracking delta before the body-frame composition
+    // below), so the camera hook can compose it onto the engine's own camera when the game owns the
+    // camera outside gameplay (loading screens, teleports) — keeping head-tracking through the
+    // transition without pinning the camera to the body (issue #27).
+    headpose::xr::set_cockpit_pose(center_position, center_orientation);
+
     let cur = headpose::xr::compose(
         center_position,
         center_orientation,

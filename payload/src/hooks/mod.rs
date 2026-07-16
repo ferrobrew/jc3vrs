@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+use jc3gi::game::GameState;
 use parking_lot::{Mutex, MutexGuard};
 use re_utilities::{ThreadSuspender, hook_library::HookLibrary};
 
@@ -13,6 +14,15 @@ pub mod graphics_engine;
 pub mod input;
 pub mod ui;
 pub mod wndproc;
+
+/// Whether the game is in interactive gameplay (`GameState::E_GAME_RUN`), as opposed to any
+/// non-gameplay state (install, init, frontend, loading, startup). The single gameplay-boundary
+/// predicate the hooks, the HUD, and the VR runtime gate on, so "are we in gameplay" is defined in
+/// exactly one place and every consumer flips together.
+pub fn in_gameplay() -> bool {
+    // SAFETY: reads the process-global game-state word.
+    unsafe { GameState::get() == GameState::E_GAME_RUN }
+}
 
 static HOOK_STATE: OnceLock<HookState> = OnceLock::new();
 struct HookState {

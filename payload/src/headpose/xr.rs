@@ -71,6 +71,40 @@ pub fn publish_pair(prev: HeadPose, cur: HeadPose) {
     super::set_pose_pair(prev, cur);
 }
 
+/// The HMD's head pose in the cockpit frame: its position delta and orientation relative to the
+/// recenter baseline, before the body-frame composition [`compose`] applies. This is the raw
+/// tracking delta the camera hook composes onto the engine's own camera when the game owns the
+/// camera (loading screens, teleports), so head-tracking persists through the transition without
+/// pinning the camera to the player's body (issue #27).
+#[derive(Copy, Clone)]
+pub struct CockpitPose {
+    /// The head position relative to the recenter baseline, in the cockpit frame (metres, pre
+    /// world-scale).
+    pub position: Vec3,
+    /// The head orientation relative to the recenter baseline.
+    pub orientation: Quat,
+}
+
+/// The latest cockpit-frame HMD pose (see [`CockpitPose`]), published each rendered VR frame by
+/// [`super::super::vr::begin_render_frame`]. `None` until the first VR frame renders.
+static COCKPIT_POSE: Mutex<Option<CockpitPose>> = Mutex::new(None);
+
+/// Publish the cockpit-frame HMD pose for the frame in flight (see [`CockpitPose`]). Called by the VR
+/// frame loop alongside [`publish_pair`].
+pub fn set_cockpit_pose(position: Vec3, orientation: Quat) {
+    *COCKPIT_POSE.lock() = Some(CockpitPose {
+        position,
+        orientation,
+    });
+}
+
+/// The latest cockpit-frame HMD pose (see [`CockpitPose`]), or `None` until the first VR frame has
+/// rendered. Read by the camera hook to compose the tracking delta onto the engine camera outside
+/// gameplay.
+pub fn cockpit_pose() -> Option<CockpitPose> {
+    *COCKPIT_POSE.lock()
+}
+
 /// Advance the VR body-yaw accumulator from this input tick's look delta, and expose the resulting
 /// heading through [`body_yaw_target`]. Driven on the input tick (the game's input cadence) by
 /// [`super::sim::on_input_tick`] under the VR source, since the HMD owns the head and the look

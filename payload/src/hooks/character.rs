@@ -150,9 +150,16 @@ unsafe fn capture_anchors_and_queue_body_ik(character: *mut Character) {
             neck_orientation: quat_of(&neck_joint),
         });
 
-        // From here on: the HumanIK body-follow targets, behind the body_ik config.
+        // From here on: the HumanIK body-follow targets, behind the body_ik config. Only while
+        // gameplay owns the character: outside E_GAME_RUN the engine repositions Rico for a teleport,
+        // so queuing head-follow targets would fight that (issue #27). The anchor capture above still
+        // runs so the pose stays fresh for the auto-recenter rebase on resume.
         let cfg = Config::lock_query(|c| c.body_ik);
-        if !cfg.enabled || !headpose::is_active() || headpose::anchor().is_none() {
+        if !cfg.enabled
+            || !headpose::is_active()
+            || headpose::anchor().is_none()
+            || !crate::hooks::in_gameplay()
+        {
             return;
         }
 
@@ -409,9 +416,14 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
             joint.m_Scale.data = [scale, scale, scale];
         }
 
+        // Only drive the head/neck from the headpose while gameplay owns the character. Outside
+        // E_GAME_RUN the engine repositions Rico for a teleport (issue #27), so the mod stops driving
+        // his pose and lets the animation/engine place him; the head-hide above still applies.
+        let in_gameplay = crate::hooks::in_gameplay();
+
         // Only override the pose once a valid anchor exists; until then (loading screens, garbage
         // bone data) the bone keeps its animated pose and only the legacy scale-hide applies.
-        if headpose::is_active() && headpose::anchor().is_some() {
+        if in_gameplay && headpose::is_active() && headpose::anchor().is_some() {
             // Compose the player's body-relative offset onto the *animated* model-space
             // orientation, exactly like the neck twist below. The previous absolute write assumed
             // the bone's rest frame matched the model axes, which it does not — observed in the
@@ -457,7 +469,7 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         // model-space Y rotation, so the twist pre-multiplies the *animated* model-space neck
         // orientation captured above — no rest-frame knowledge needed, and the neck's translation
         // (its own origin) is untouched.
-        if headpose::is_active() && headpose::anchor().is_some() {
+        if in_gameplay && headpose::is_active() && headpose::anchor().is_some() {
             let (yaw, _, _) = headpose::sim::euler_angles();
             let (start_deg, max_deg) = Config::lock_query(|c| {
                 (

@@ -2,7 +2,6 @@ use std::sync::atomic::AtomicBool;
 
 use detours_macro::detour;
 use jc3gi::{
-    game::GameState,
     graphics_engine::{
         device::{Context, Device},
         graphics_engine::GraphicsEngine,
@@ -32,7 +31,7 @@ fn graphics_engine_draw(graphics_engine: *mut GraphicsEngine, dt: f32) {
     // SAFETY: runs inside `CGame::Draw` (which just set the flag) before the draw is dispatched, on
     // the render thread; `graphics_engine` is the live engine and `GetIUIManager` the live UI.
     unsafe {
-        if GameState::get() == GameState::E_GAME_RUN
+        if crate::hooks::in_gameplay()
             && let Some(ge) = graphics_engine.as_mut()
             && let Some(ui) = GetIUIManager().as_ref()
             && ui.IsUsingStaticBackGround()

@@ -234,8 +234,7 @@ pub fn auto_recenter_tick() {
     if !Config::lock_query(|c| c.vr.auto_recenter_on_gameplay) || !is_running() {
         return;
     }
-    let in_gameplay =
-        unsafe { jc3gi::game::GameState::get() } == jc3gi::game::GameState::E_GAME_RUN;
+    let in_gameplay = crate::hooks::in_gameplay();
     let has_character =
         unsafe { jc3gi::character::character::Character::GetLocalPlayerCharacter().as_ref() }
             .is_some();

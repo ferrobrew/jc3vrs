@@ -122,6 +122,19 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         camera.m_Projection.data = vr.projection_standard;
     }
 
+    // Outside gameplay (loading screens, fast-travel teleports) the engine parks its own camera at the
+    // teleport destination and drives world streaming from it, so the mod must leave that sim camera
+    // untouched or the load never completes (issue #27). Head-track the *render* copy only -- which the
+    // streaming/LOD system does not read -- around the frozen upright loading base, so the player can
+    // look around during the load. Written before the engine call so it builds the view-projections
+    // from the head-tracked view; the per-eye offset below then applies on top.
+    if is_render_camera
+        && vr_loading_view_active()
+        && let Some(camera) = unsafe { camera.as_mut() }
+    {
+        head_track_render_camera(camera);
+    }
+
     let result = SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter);
 
     // Snapshot the center view-projection before the FSR-jitter and per-eye blocks below patch it.
@@ -297,6 +310,19 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
                 return;
             }
 
+            // Outside gameplay (loading screens, fast-travel teleports, the frontend) the engine resets
+            // its own camera to the teleport destination and drives world streaming from it, so the mod
+            // must leave this sim camera entirely alone: pinning it to Rico's head bone -- or to any
+            // frozen pose -- feeds the streaming/LOD system the wrong position and the loading screen
+            // never completes (issue #27). Stop absolute placement here and touch nothing. The player's
+            // head-tracking for the *view* is applied to the render camera copy in `setup_render_camera`
+            // (which the streaming system does not read); absolute placement resumes and the
+            // auto-recenter re-bases onto Rico's updated head once gameplay returns.
+            if !super::in_gameplay() {
+                CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
+                return;
+            }
+
             // The headpose path needs a valid anchor; until one exists (loading screens), fall
             // back to the translation-only bone-derived placement below.
             let headpose_active =
@@ -363,6 +389,15 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
                     camera.m_TransformT0.data[14] = head_position_t0.z;
                 }
             }
+
+            // Capture this gameplay frame's viewpoint as the upright loading base (issue #27): its
+            // world position and yaw only, dropping pitch and roll so the base stays comfortable.
+            // Refreshed every gameplay frame and read (frozen) while the game parks its own camera
+            // outside gameplay, giving the loading-screen head-tracking a stable, well-formed base to
+            // look around and the floating panel a fixed world anchor.
+            let (_, gameplay_rotation, gameplay_position) =
+                glam::Mat4::from(camera.m_TransformT1).to_scale_rotation_translation();
+            *LOADING_BASE.lock() = Some((gameplay_position, yaw_only(gameplay_rotation)));
         }
     }
 
@@ -405,6 +440,81 @@ fn write_camera_transform(target: &mut Matrix4, orientation: glam::Quat, positio
     }
 }
 
+/// Whether the mod should present the VR loading view this frame: outside gameplay
+/// (`GameState != E_GAME_RUN`), VR is the headpose source, and a gameplay frame has captured a
+/// [`LOADING_BASE`] to present against. The single source of truth for the loading-presentation regime,
+/// shared by the render-camera head-track ([`head_track_render_camera`], gated on this in
+/// `setup_render_camera`) and the floating panel's world-lock in `crate::hud`, so the render camera and
+/// the panel always agree on when it is active and hand off together.
+pub fn vr_loading_view_active() -> bool {
+    !super::in_gameplay()
+        && crate::headpose::source() == crate::headpose::Source::Vr
+        && LOADING_BASE.lock().is_some()
+}
+
+/// Head-track the *render* camera around the [`LOADING_BASE`] (the last gameplay viewpoint, upright)
+/// while the game owns the sim camera outside gameplay (issue #27). Writes the render camera's world
+/// transform (`m_TransformF`) and view (`m_View = inverse(world)`) from the HMD-composed pose; the
+/// caller lets `SetupRenderCamera` build the view-projections from the new view, and the per-eye offset
+/// applies on top.
+///
+/// This targets only the render camera copy, never the active/sim camera: outside gameplay the engine
+/// parks its own camera at the teleport destination and streams the world from it, so writing the sim
+/// camera would soft-lock the load. The render copy affects only what is displayed, so head-tracking it
+/// lets the player look around a stable viewpoint without disturbing the teleport. The floating panel
+/// world-locks to this same head-tracked render pose (see the panel's world-lock in `crate::hud`) so it
+/// stays put in the world while the head looks about.
+///
+/// The caller gates on [`vr_loading_view_active`] (non-gameplay, VR source, base captured), so this only
+/// resolves the frame's data: it no-ops on a VR frame that published no cockpit pose (a skipped render),
+/// leaving the render copy as the engine left it.
+fn head_track_render_camera(camera: &mut Camera) {
+    let Some(cockpit) = crate::headpose::xr::cockpit_pose() else {
+        return;
+    };
+    let Some((base_position, base_rotation)) = *LOADING_BASE.lock() else {
+        return;
+    };
+    let base = glam::Mat4::from_rotation_translation(base_rotation, base_position);
+    let world_scale = Config::lock_query(|c| c.vr.world_scale);
+    let world = compose_relative(base, &cockpit, world_scale);
+    camera.m_TransformF.data = world.to_cols_array();
+    camera.m_View.data = world.inverse().to_cols_array();
+}
+
+/// Compose a cockpit-frame HMD pose onto a base camera transform: rotate the head relative to the base
+/// orientation and apply the room-scale head translation in the base frame. The identity cockpit pose
+/// (looking straight ahead at the recenter neutral) reproduces the base transform exactly, so the
+/// composition adds only the player's tracking delta.
+fn compose_relative(
+    base: glam::Mat4,
+    cockpit: &crate::headpose::xr::CockpitPose,
+    world_scale: f32,
+) -> glam::Mat4 {
+    let (_, base_rotation, base_position) = base.to_scale_rotation_translation();
+    let position = base_position + base_rotation * (cockpit.position * world_scale);
+    let orientation = base_rotation * cockpit.orientation;
+    glam::Mat4::from_rotation_translation(orientation, position)
+}
+
+/// The upright loading base pose `(position, yaw-only rotation)`: the last gameplay viewpoint, held
+/// frozen while the game parks its own camera outside gameplay so the render camera has a stable,
+/// well-formed frame to head-track around during the load (issue #27). `None` until the first gameplay
+/// frame captures one.
+static LOADING_BASE: Mutex<Option<(glam::Vec3, glam::Quat)>> = Mutex::new(None);
+
+/// Project a rotation onto yaw only (rotation about the world up axis), zeroing pitch and roll. A
+/// degenerate (looking straight up or down) rotation falls back to identity yaw. Mirrors the recenter
+/// baseline's yaw extraction ([`crate::vr`]).
+fn yaw_only(rotation: glam::Quat) -> glam::Quat {
+    let yaw = glam::Quat::from_xyzw(0.0, rotation.y, 0.0, rotation.w);
+    if yaw.length_squared() > 1e-6 {
+        yaw.normalize()
+    } else {
+        glam::Quat::IDENTITY
+    }
+}
+
 /// The sim-phase camera matrix reader: `m_NextCameraContext`'s transform, which the game's
 /// sim-phase camera update rewrites from its internal camera *after* the mod's render-phase
 /// context patch. With the look input consumed by the headpose, that internal camera's yaw is
@@ -421,6 +531,13 @@ fn game_camera_manager_get_camera_matrix(manager: *const GameCameraManager, matr
         .unwrap()
         .call(manager, matrix);
     if !crate::headpose::is_active() {
+        return;
+    }
+    // Outside gameplay the render-phase hooks stop absolute placement and `LAST_CAMERA_WORLD` holds
+    // the last gameplay pose, which no longer matches where the engine has moved its camera for the
+    // teleport. Feeding that stale pose to the sim-phase readers would desync them from the engine's
+    // own camera during the transition, so let the engine's value pass through (issue #27).
+    if !super::in_gameplay() {
         return;
     }
     if let Some(data) = *LAST_CAMERA_WORLD.lock()
@@ -479,6 +596,14 @@ fn camera_tree_update_render_contexts(
 
         let camera_settings = Config::lock_query(|c| c.camera);
         if !camera_settings.enabled {
+            return;
+        }
+
+        // Outside gameplay the engine owns the camera (issue #27): leave its render contexts alone so
+        // its teleport can move the camera to the destination and stream the world from it. Absolute
+        // placement stops entirely here; the player's head-tracking for the view is applied to the
+        // render camera copy in `setup_render_camera`, which does not touch these contexts.
+        if !super::in_gameplay() {
             return;
         }
 
@@ -641,5 +766,60 @@ fn calculate_head_position(
         head_position += character_rotation * camera_settings.body_offset;
 
         head_position
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::headpose::xr::CockpitPose;
+
+    /// The identity cockpit pose (looking straight ahead at the recenter neutral, no room-scale
+    /// translation) reproduces the engine base transform exactly, so the relative composition adds
+    /// nothing on its own.
+    #[test]
+    fn identity_cockpit_reproduces_base() {
+        let base = glam::Mat4::from_rotation_translation(
+            glam::Quat::from_rotation_y(0.7),
+            glam::Vec3::new(3.0, 1.0, -4.0),
+        );
+        let cockpit = CockpitPose {
+            position: glam::Vec3::ZERO,
+            orientation: glam::Quat::IDENTITY,
+        };
+        let composed = compose_relative(base, &cockpit, 1.0);
+        assert!((composed - base).abs_diff_eq(glam::Mat4::ZERO, 1e-5));
+    }
+
+    /// The cockpit orientation rotates relative to the base orientation, and the room-scale head
+    /// translation is applied in the base frame (a 90° base yaw carries the cockpit's forward lean
+    /// into the base's facing).
+    #[test]
+    fn cockpit_delta_composes_in_base_frame() {
+        let base_rotation = glam::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let base = glam::Mat4::from_rotation_translation(base_rotation, glam::Vec3::ZERO);
+        let cockpit = CockpitPose {
+            position: glam::Vec3::new(0.0, 0.0, -1.0),
+            orientation: glam::Quat::from_rotation_x(0.3),
+        };
+        let composed = compose_relative(base, &cockpit, 1.0);
+        let (_, orientation, position) = composed.to_scale_rotation_translation();
+        // +Y yaw of 90° maps the cockpit's forward -Z to -X.
+        assert!((position - glam::Vec3::new(-1.0, 0.0, 0.0)).length() < 1e-5);
+        assert!(orientation.abs_diff_eq(base_rotation * cockpit.orientation, 1e-5));
+    }
+
+    /// The world scale multiplies only the room-scale translation, not the orientation.
+    #[test]
+    fn world_scale_scales_translation_only() {
+        let base = glam::Mat4::IDENTITY;
+        let cockpit = CockpitPose {
+            position: glam::Vec3::new(0.0, 0.0, -0.5),
+            orientation: glam::Quat::IDENTITY,
+        };
+        let composed = compose_relative(base, &cockpit, 2.0);
+        let (_, orientation, position) = composed.to_scale_rotation_translation();
+        assert!((position - glam::Vec3::new(0.0, 0.0, -1.0)).length() < 1e-6);
+        assert!(orientation.abs_diff_eq(glam::Quat::IDENTITY, 1e-6));
     }
 }

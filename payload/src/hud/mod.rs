@@ -51,7 +51,6 @@ pub use state::HUD_STATE;
 use glam::{Mat3, Mat4, Quat, Vec3};
 use jc3gi::{
     camera::camera_manager::CameraManager,
-    game::GameState,
     graphics_engine::{device::Device, texture::Texture},
     types::math::Matrix4,
     ui::ui_manager::GetIUIManager,
@@ -71,21 +70,22 @@ pub enum HudMode {
 }
 
 /// Determine the current [`HudMode`] from the game state and UI. Any state other than in-game play
-/// ([`GameState::E_GAME_RUN`] -- so loading screens, the frontend, and install/startup) is
+/// ([`crate::hooks::in_gameplay`] is false -- so loading screens, the frontend, and install/startup) is
 /// full-screen, as is an in-game modal menu (the pause / mission / reward screens, detected via the
 /// UI's static background grab).
 pub fn current_mode() -> HudMode {
-    // SAFETY: GameState reads a process global; GetIUIManager returns the live UI singleton (or null
-    // before it exists). IsUsingStaticBackGround is a const getter.
-    unsafe {
-        if GameState::get() != GameState::E_GAME_RUN {
-            return HudMode::Movie;
-        }
-        if let Some(ui) = GetIUIManager().as_ref()
-            && ui.IsUsingStaticBackGround()
-        {
-            return HudMode::Movie;
-        }
+    if !crate::hooks::in_gameplay() {
+        return HudMode::Movie;
+    }
+    // SAFETY: GetIUIManager returns the live UI singleton (or null before it exists);
+    // IsUsingStaticBackGround is a const getter.
+    let static_background = unsafe {
+        GetIUIManager()
+            .as_ref()
+            .is_some_and(|ui| ui.IsUsingStaticBackGround())
+    };
+    if static_background {
+        return HudMode::Movie;
     }
     HudMode::Hud
 }
@@ -96,14 +96,14 @@ pub fn current_mode() -> HudMode {
 /// camera would strand the latched pose. In-game the issue-#7 fix keeps `m_DrawScene` on, so the
 /// camera pose is real and the frozen world stays visible behind the panel.
 pub fn menu_world_lock() -> bool {
-    // SAFETY: same globals as `current_mode` -- a process-global GameState read and the live UI
-    // singleton's const static-background getter.
-    unsafe {
-        GameState::get() == GameState::E_GAME_RUN
-            && GetIUIManager()
+    // SAFETY: GetIUIManager returns the live UI singleton (or null); IsUsingStaticBackGround is a
+    // const getter.
+    crate::hooks::in_gameplay()
+        && unsafe {
+            GetIUIManager()
                 .as_ref()
                 .is_some_and(|ui| ui.IsUsingStaticBackGround())
-    }
+        }
 }
 
 /// The effective HUD aspect (width / height) for `mode`: [`HudConfig::hud_aspect`] in gameplay,
@@ -235,9 +235,14 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
     {
         let mode = current_mode();
         let aspect = aspect_for(&cfg, mode);
-        // World-lock the panel while an in-game menu (pause / map) is open, so it stays put and the
-        // player can look around it, reverting to head-follow on close.
-        let freeze = cfg.world_lock_menus && menu_world_lock();
+        // World-lock the panel while an in-game menu (pause / map) is open, or during a non-gameplay
+        // transition in VR (loading screens / fast-travel, issue #27), so it stays put and the player
+        // can look around it, reverting to head-follow on close/resume. During a loading transition the
+        // panel latches to the head-tracked render pose (`render_camera_pose`), so it appears centered on
+        // wherever the head was pointing as the load began and then holds that world spot while the head
+        // looks around it.
+        let freeze = crate::hooks::camera::vr_loading_view_active()
+            || (cfg.world_lock_menus && menu_world_lock());
         let (pos, rot) = hud.update_pose(freeze, head_pos, head_rotation, &cfg.follow);
         // Dynamic panel distance: histogram the frame's depth distribution and ease the panel
         // toward the near field when the scene is close (see `depth`). The base (far) distance
