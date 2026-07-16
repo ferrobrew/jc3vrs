@@ -376,6 +376,18 @@ pub struct StereoConfig {
     /// camera idle motion (dies with it). Re-enabling recaptures the then-current pose. The view locks in
     /// place -- diagnostic only. VR only. **Default off.**
     pub freeze_render_camera: bool,
+    /// Diagnostic: override the base VolumetricTerrain block's color-pass hull-clip type. The color
+    /// pass selects the LOD-clipping hull program (clip type 2), which discards tessellated patches by
+    /// their LOD against the tessellation metrics; the depth prepass uses a non-clipping variant, so a
+    /// patch discarded here writes depth but no G-buffer and renders black. When set, the
+    /// `HullClipType` detour replaces a returned clip type 2 with
+    /// [`terrain_hull_clip_value`](Self::terrain_hull_clip_value), letting the color pass use a
+    /// non-clipping hull to test whether that discard is the source of the black cliff-wall tiles. VR
+    /// and flatscreen; **default off.**
+    pub force_terrain_hull_clip: bool,
+    /// The clip type the [`force_terrain_hull_clip`](Self::force_terrain_hull_clip) detour substitutes
+    /// for a returned type 2 (try 1, then 0, for the non-clipping hull variants).
+    pub terrain_hull_clip_value: i32,
     /// Replace the symmetric froxel tile-bounds constants that `DrawClustered` uploads to the
     /// light-assignment fragment shader (cb1) with per-eye off-axis-derived values. The engine
     /// reconstructs a symmetric frustum from the vertical FOV and aspect ratio, which cannot encode
@@ -438,6 +450,8 @@ impl StereoConfig {
             mirror_eye0_to_both: false,
             freeze_render_camera: false,
             fix_clustered_light_frustum: true,
+            force_terrain_hull_clip: false,
+            terrain_hull_clip_value: 1,
         }
     }
 }

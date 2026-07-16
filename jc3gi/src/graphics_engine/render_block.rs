@@ -305,6 +305,39 @@ impl std::convert::AsMut<RenderBlockDeferredLighting> for RenderBlockDeferredLig
     }
 }
 #[repr(C, align(8))]
+/// A base VolumetricTerrain render block instance (`CRenderBlockTerrain`): one per terrain tile/sector.
+pub struct RenderBlockTerrain {}
+impl RenderBlockTerrain {
+    pub const HullClipType_ADDRESS: usize = 0x14032B450;
+    /// Returns the hull-clip type (0, 1, or 2) that selects the hull program `Draw` binds for the
+    /// current pass (`m_HullProgram[clip + 4*variant]`). The color pass (render-status bit 3) resolves
+    /// to type 2 — the LOD-clipping hull that discards patches by their LOD against the tessellation
+    /// metrics — while the depth prepass uses a non-clipping variant, so the depth and colour passes
+    /// can disagree on which patches survive.
+    pub unsafe fn HullClipType(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+    ) -> i64 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+            ) -> i64 = ::std::mem::transmute(Self::HullClipType_ADDRESS);
+            f(self as *const Self as _, render_context)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockTerrain> for RenderBlockTerrain {
+    fn as_ref(&self) -> &RenderBlockTerrain {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTerrain> for RenderBlockTerrain {
+    fn as_mut(&mut self) -> &mut RenderBlockTerrain {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The fog-volume render block *type* (the
 /// `NGraphicsEngine::CRenderBlockFogVolume::CRenderBlockTypeFogVolume` singleton): owns the froxel
 /// volumetric-fog textures and recreates them when the scene render resolution changes.
@@ -411,10 +444,50 @@ pub struct RenderBlockTypeTerrain {
     /// baked view-projection is written once per frame and reused for every draw of that slot within
     /// the frame.
     pub m_WasCBApplied: [u32; 22],
+    _field_168: [u8; 812],
+    /// Enables back-patch culling in the color pass. When set, `SetupConstantBuffers` bakes a cull flag
+    /// (gated on the color-pass render-status bit) into the hull/domain constant buffer alongside the
+    /// normalized forward vector of the camera manager's render camera and the
+    /// [`m_BackPatchCullThreshold`](RenderBlockTypeTerrain::m_BackPatchCullThreshold), so the hull
+    /// shader discards patches whose facing is beyond the threshold relative to that view direction.
+    pub m_EnableBackPatchCulling: bool,
+    /// Enables frustum patch culling in the color pass. When set (and the active pass is not a shadow
+    /// cascade or one of the passes 63..=64), `SetupConstantBuffers` bakes a cull flag into the
+    /// hull/domain constant buffer so the hull shader discards patches outside the baked
+    /// [`m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
+    /// frustum.
+    pub m_EnableFrustumPatchCulling: bool,
+    /// Debug flag: when set, `Setup` leaves the cull face at `NONE` in the color pass (rather than
+    /// `BACK`), so patches the hull shader would otherwise cull are still rasterized — a visualization
+    /// of what patch culling removes.
+    pub m_ShowDebugCulling: bool,
+    /// Enables the per-detail cull term baked into the hull/domain constant buffer by
+    /// `SetupConstantBuffers`.
+    pub m_EnableCullByDetail: bool,
+    /// The inner tessellation factor baked into the hull/domain constant buffer.
+    pub m_TessellationFactorInner: f32,
+    /// The edge tessellation factor baked into the hull/domain constant buffer. The hull shader scales
+    /// each patch's edge tessellation from this by the patch's projected screen-space size; when the
+    /// resulting factor falls to zero or below, the tessellator discards the patch.
+    pub m_TessellationFactorEdge: f32,
+    /// The minimum screen-space spacing target for tessellation, baked as its reciprocal into the
+    /// hull/domain constant buffer. Smaller values raise the tessellation factor a given projected
+    /// patch size resolves to.
+    pub m_TessellationFactorMinSpacing: f32,
+    /// The sphere (curvature) tessellation factor baked into the hull/domain constant buffer.
+    pub m_TessellationFactorSphere: f32,
+    /// The normal-difference tessellation factor baked into the hull/domain constant buffer.
+    pub m_TessellationFactorNormalDiff: f32,
+    _field_4ac: [u8; 16],
+    /// The facing threshold for
+    /// [`m_EnableBackPatchCulling`](RenderBlockTypeTerrain::m_EnableBackPatchCulling), baked into the
+    /// hull/domain constant buffer. A patch is culled when its facing relative to the render camera's
+    /// forward vector falls beyond this value.
+    pub m_BackPatchCullThreshold: f32,
 }
 fn _RenderBlockTypeTerrain_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x168], RenderBlockTypeTerrain>([0u8; 0x168]);
+        ::std::mem::transmute::<[u8; 0x4C0], RenderBlockTypeTerrain>([0u8; 0x4C0]);
     }
     unreachable!()
 }
@@ -442,15 +515,54 @@ impl std::convert::AsMut<RenderBlockTypeTerrain> for RenderBlockTypeTerrain {
 /// `NGraphicsEngine::CRenderBlockTerrainPatch::CRenderBlockTypeTerrainPatch` singleton): the tessellated
 /// cliff/overhang variant of [`RenderBlockTypeTerrain`], with the same per-slot constant-buffer caching.
 pub struct RenderBlockTypeTerrainPatch {
-    _field_0: [u8; 288],
+    _field_0: [u8; 76],
+    /// The debug visualization mode. When `<= 0`, `Setup` selects the normal shading fragment
+    /// programs; when `> 0`, it selects the debug fragment program at index `m_DebugMode + 60` instead
+    /// (LOD colours, tessellation, and similar overlays).
+    pub m_DebugMode: i32,
+    _field_50: [u8; 208],
     /// Per-LOD-slot cache stamp; see [`RenderBlockTypeTerrain::m_WasCBApplied`]. The constant-buffer
     /// handle array (`m_HDTypeConstants[22]`) sits at `0x70` for this variant, so the stamp array
     /// follows at `0x120`.
     pub m_WasCBApplied: [u32; 22],
+    _field_178: [u8; 721],
+    /// When set, `Setup` binds the material-inspection fragment program instead of the shading one,
+    /// overriding the debug-mode and tint selection.
+    pub m_ShowMaterial: bool,
+    _field_44a: [u8; 1],
+    /// When set, the render block's draw is suppressed.
+    pub m_NoDraw: bool,
+    _field_44c: [u8; 1],
+    /// Enables back-patch culling in the color pass. When set, `SetupConstantBuffers` bakes a cull flag
+    /// (gated on the color-pass render-status bit) into the hull/domain constant buffer alongside the
+    /// normalized forward vector of the camera manager's render camera and the
+    /// [`m_BackPatchCullThreshold`](RenderBlockTypeTerrainPatch::m_BackPatchCullThreshold), so the hull
+    /// shader discards patches whose facing is beyond the threshold relative to that view direction.
+    pub m_EnableBackPatchCulling: bool,
+    /// Enables frustum patch culling in the color pass. When set (and the active pass is not a shadow
+    /// cascade or one of the passes 57..=60), `SetupConstantBuffers` bakes a cull flag into the
+    /// hull/domain constant buffer so the hull shader discards patches outside the baked
+    /// [`m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
+    /// frustum.
+    pub m_EnableFrustumPatchCulling: bool,
+    /// Debug flag: when set, `Setup` leaves the cull face at `NONE` in the color pass (rather than
+    /// `BACK`), so patches the hull shader would otherwise cull are still rasterized — a visualization
+    /// of what patch culling removes.
+    pub m_ShowDebugCulling: bool,
+    /// Enables the per-detail cull term baked into the hull/domain constant buffer by
+    /// `SetupConstantBuffers`.
+    pub m_EnableCullByDetail: bool,
+    _field_451: [u8; 39],
+    /// The facing threshold for
+    /// [`m_EnableBackPatchCulling`](RenderBlockTypeTerrainPatch::m_EnableBackPatchCulling), baked into
+    /// the hull/domain constant buffer. A patch is culled when its facing relative to the render
+    /// camera's forward vector falls beyond this value.
+    pub m_BackPatchCullThreshold: f32,
+    _field_47c: [u8; 4],
 }
 fn _RenderBlockTypeTerrainPatch_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x178], RenderBlockTypeTerrainPatch>([0u8; 0x178]);
+        ::std::mem::transmute::<[u8; 0x480], RenderBlockTypeTerrainPatch>([0u8; 0x480]);
     }
     unreachable!()
 }

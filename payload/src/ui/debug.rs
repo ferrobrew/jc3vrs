@@ -3,6 +3,10 @@
 
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use jc3gi::graphics_engine::render_block::{
+    RenderBlockTypeTerrain as BaseTerrain, RenderBlockTypeTerrainPatch as TerrainPatch,
+};
+
 use crate::{config, debug::trace};
 
 /// The frame count for the editable "Dump N frames" trace button, persisted across UI frames.
@@ -215,6 +219,201 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         ui.checkbox(
             &mut cfg.stereo.widen_model_cull,
             "Widen model cull (active-camera frustum; fixes buildings popping at the edges)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.invalidate_terrain_cb,
+            "Invalidate terrain tess CB between eyes (forces eye 1 to re-upload its own off-axis \
+             projection; fixes distant tessellated terrain sheared to eye 0)",
+        );
+    });
+
+    // Live-writes the engine's own CRenderBlockTypeTerrainPatch debug flags (not config, not saved) to
+    // bisect which patch cull blackens tessellated cliff patches in VR: a patch culled only in the
+    // color pass keeps its Z-prepass depth but writes no G-buffer, so deferred lighting resolves it to
+    // flat black. Back-patch culling is the prime suspect -- it keys off the shared render camera's
+    // forward vector, so it culls identically in both eyes and only past a facing threshold ("at
+    // incidental angles"). Flags persist until the terrain type is recreated (level reload).
+    ui.collapsing("Terrain patch culling (engine, live)", |ui| {
+        match unsafe { TerrainPatch::get() } {
+            Some(patch) => {
+                // Sanity/discriminator: NoDraw stops every terrain-patch draw. If the cliffs (and the
+                // black patches with them) vanish, the writes land and the black patches are this
+                // render block. If the cliffs vanish but the black patches remain, the black is a
+                // different render block or a deferred artifact, not the patch shader.
+                let mut no_draw = patch.m_NoDraw;
+                if ui
+                    .checkbox(
+                        &mut no_draw,
+                        "No draw (stop ALL terrain-patch draws — sanity/discriminator test)",
+                    )
+                    .changed()
+                {
+                    patch.m_NoDraw = no_draw;
+                }
+                let mut show_material = patch.m_ShowMaterial;
+                if ui
+                    .checkbox(
+                        &mut show_material,
+                        "Show material (swaps the patch fragment program; does the black change?)",
+                    )
+                    .changed()
+                {
+                    patch.m_ShowMaterial = show_material;
+                }
+                let mut back = patch.m_EnableBackPatchCulling;
+                if ui
+                    .checkbox(
+                        &mut back,
+                        "Back-patch culling (shared view dir; prime suspect for both-eye black \
+                         patches)",
+                    )
+                    .changed()
+                {
+                    patch.m_EnableBackPatchCulling = back;
+                }
+                let mut frustum = patch.m_EnableFrustumPatchCulling;
+                if ui
+                    .checkbox(
+                        &mut frustum,
+                        "Frustum patch culling (baked off-axis view-projection)",
+                    )
+                    .changed()
+                {
+                    patch.m_EnableFrustumPatchCulling = frustum;
+                }
+                let mut detail = patch.m_EnableCullByDetail;
+                if ui.checkbox(&mut detail, "Cull by detail").changed() {
+                    patch.m_EnableCullByDetail = detail;
+                }
+                let mut show = patch.m_ShowDebugCulling;
+                if ui
+                    .checkbox(
+                        &mut show,
+                        "Show debug culling (rasterize culled patches with CULLFACE_NONE)",
+                    )
+                    .changed()
+                {
+                    patch.m_ShowDebugCulling = show;
+                }
+                ui.add(
+                    egui::Slider::new(&mut patch.m_BackPatchCullThreshold, -1.0..=1.0)
+                        .text("Back-patch threshold")
+                        .fixed_decimals(3),
+                );
+                ui.add(
+                    egui::Slider::new(&mut patch.m_DebugMode, 0..=5)
+                        .text("Debug mode (0 = normal shading)"),
+                )
+                .on_hover_text(
+                    "Selects an engine debug fragment program (LOD colours, tessellation overlays); \
+                     capped conservatively to stay in the shader array",
+                );
+            }
+            None => {
+                ui.label("Terrain patch render type not initialized yet.");
+            }
+        }
+    });
+
+    // The base VolumetricTerrain block (CRenderBlockTerrain) draws the cliff WALLS -- a separate render
+    // block from the tessellated patch (which draws the tops). Its back-patch cull discards patches
+    // whose facing is beyond a threshold relative to the shared render camera's forward vector, so a
+    // near-vertical wall viewed at a grazing angle sits right at the threshold and flips black<->drawn
+    // on a tiny rotation. Prime suspect for the rotation-dependent black wall tiles. Live engine flags,
+    // not saved; reset on level reload.
+    ui.collapsing("Base terrain culling (walls; engine, live)", |ui| {
+        match unsafe { BaseTerrain::get() } {
+            Some(terrain) => {
+                let mut back = terrain.m_EnableBackPatchCulling;
+                if ui
+                    .checkbox(
+                        &mut back,
+                        "Back-patch culling (shared view dir; PRIME suspect for black wall tiles)",
+                    )
+                    .changed()
+                {
+                    terrain.m_EnableBackPatchCulling = back;
+                }
+                let mut frustum = terrain.m_EnableFrustumPatchCulling;
+                if ui
+                    .checkbox(
+                        &mut frustum,
+                        "Frustum patch culling (baked off-axis view-projection)",
+                    )
+                    .changed()
+                {
+                    terrain.m_EnableFrustumPatchCulling = frustum;
+                }
+                let mut detail = terrain.m_EnableCullByDetail;
+                if ui.checkbox(&mut detail, "Cull by detail").changed() {
+                    terrain.m_EnableCullByDetail = detail;
+                }
+                let mut show = terrain.m_ShowDebugCulling;
+                if ui
+                    .checkbox(
+                        &mut show,
+                        "Show debug culling (rasterize culled patches with CULLFACE_NONE)",
+                    )
+                    .changed()
+                {
+                    terrain.m_ShowDebugCulling = show;
+                }
+                ui.add(
+                    egui::Slider::new(&mut terrain.m_BackPatchCullThreshold, -1.0..=1.0)
+                        .text("Back-patch threshold")
+                        .fixed_decimals(3),
+                );
+                ui.separator();
+                ui.label(
+                    "Tessellation factors -- if steep/grazing tiles collapse to zero tess (holes) \
+                     under the wide VR FOV, raising Edge / lowering MinSpacing should refill them:",
+                );
+                ui.add(
+                    egui::Slider::new(&mut terrain.m_TessellationFactorEdge, 0.0..=64.0)
+                        .text("Edge")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut terrain.m_TessellationFactorInner, 0.0..=64.0)
+                        .text("Inner")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut terrain.m_TessellationFactorMinSpacing, 0.1..=64.0)
+                        .text("MinSpacing (smaller = more tess)")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut terrain.m_TessellationFactorSphere, 0.0..=64.0)
+                        .text("Sphere")
+                        .fixed_decimals(2),
+                );
+                ui.add(
+                    egui::Slider::new(&mut terrain.m_TessellationFactorNormalDiff, 0.0..=64.0)
+                        .text("NormalDiff")
+                        .fixed_decimals(2),
+                );
+            }
+            None => {
+                ui.label("Base terrain render type not initialized yet.");
+            }
+        }
+        ui.separator();
+        ui.label(
+            "Color-pass hull clip (the stage that discards wall/ceiling patches from the G-buffer -- \
+             proven cause of the black tiles):",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.force_terrain_hull_clip,
+            "Force color-pass hull clip type (skip the LOD-clip discard)",
+        );
+        ui.add(
+            egui::Slider::new(&mut cfg.stereo.terrain_hull_clip_value, 0..=2)
+                .text("Replacement clip type (try 1, then 0)"),
+        )
+        .on_hover_text(
+            "The clip type substituted for the color pass's type 2; a non-clipping variant should let \
+             the discarded patches write the G-buffer and light up",
         );
     });
 

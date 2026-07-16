@@ -32,6 +32,9 @@ mod tone_mapping;
 // The clustered-lighting froxel tile-bounds fix for off-axis VR projections (issue #35); private,
 // reached only through `hook_library` below.
 mod clustered_lighting;
+// Diagnostic override of the base VolumetricTerrain color-pass hull-clip type (black cliff-wall tiles);
+// private, reached only through `hook_library` below.
+mod terrain;
 
 /// Bundle every CGraphicsEngine-area detour into one hook library, mirroring how the game groups
 /// these classes.
@@ -48,4 +51,5 @@ pub(crate) fn hook_library() -> HookLibrary {
         .with_hook_library(ssao::hook_library())
         .with_hook_library(shader::hook_library())
         .with_hook_library(clustered_lighting::hook_library())
+        .with_hook_library(terrain::hook_library())
 }
