@@ -26,6 +26,7 @@ mod config;
 mod crash;
 mod debug;
 mod fsr;
+mod grapple;
 mod headpose;
 mod hooks;
 mod hud;

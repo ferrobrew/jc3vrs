@@ -23,6 +23,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 
 - [vr-runtime.md](mod/vr-runtime.md) — the OpenXR runtime as built: session lifecycle, the frame loop, pose model, per-eye resolution, mirror, and the playtest checklist.
 - [head-and-body.md](mod/head-and-body.md) — how head and body yaw relate in VR: coupling schemes, the headpose abstraction, the head-bone override, head hiding, and body IK.
+- [grapple-comfort.md](mod/grapple-comfort.md) — the grapple body-frame filter (issue #36): the hold from fire to landing, the yaw handoff, the landing-snap absorber, and the telemetry capture.
 - [hud.md](mod/hud.md) — the floating-panel HUD: the redirect, compositing, and cursor interaction.
 - [input.md](mod/input.md) — how the mod taps, consumes, and injects the game's input.
 - [fsr.md](mod/fsr.md) — FSR anti-aliasing and upscaling in the stereo pipeline.

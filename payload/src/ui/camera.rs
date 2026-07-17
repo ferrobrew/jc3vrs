@@ -3,7 +3,7 @@
 use egui::Slider;
 use jc3gi::types::math::Matrix4;
 
-use crate::{config, headpose, hooks};
+use crate::{config, grapple, headpose, hooks};
 
 pub fn egui_debug_camera(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
@@ -136,11 +136,75 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
     ui.add(Slider::new(&mut hp.posture_deadband_deg, 0.0..=90.0).text("Posture deadband (°)"));
     ui.add(Slider::new(&mut hp.posture_full_deg, 0.0..=180.0).text("Posture full at (°)"));
     ui.add(Slider::new(&mut hp.posture_smoothing_s, 0.0..=2.0).text("Posture smoothing (s)"));
+    egui_grapple(ui, &mut hp.grapple);
     ui.add(Slider::new(&mut hp.position_offset.x, -1.0..=1.0).text("Roomscale offset X (m)"));
     ui.add(Slider::new(&mut hp.position_offset.y, -1.0..=1.0).text("Roomscale offset Y (m)"));
     ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Roomscale offset Z (m)"));
 
     egui_vr_turn(ui, &mut hp.vr_turn);
+}
+
+/// The grapple reel-in body-frame filter (issue #36): which rotation the reel is allowed to
+/// compose into the view, and the blend constants around the reel window.
+fn egui_grapple(ui: &mut egui::Ui, grapple: &mut grapple::GrappleComfortConfig) {
+    use crate::grapple::GrappleComfortMode;
+
+    ui.separator();
+    ui.heading("Grapple reel-in comfort");
+    let mode_label = |mode: GrappleComfortMode| match mode {
+        GrappleComfortMode::Off => "Off",
+        GrappleComfortMode::HoldView => "Hold view",
+        GrappleComfortMode::LevelPitch => "Level pitch",
+    };
+    egui::ComboBox::from_label("Mode")
+        .selected_text(mode_label(grapple.mode))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut grapple.mode, GrappleComfortMode::Off, "Off");
+            ui.selectable_value(&mut grapple.mode, GrappleComfortMode::HoldView, "Hold view")
+                .on_hover_text(
+                    "Cancel the body rotation the reel adds: the view stays where you were \
+                     looking at reel start, and only the HMD (or mouse) moves it.",
+                );
+            ui.selectable_value(
+                &mut grapple.mode,
+                GrappleComfortMode::LevelPitch,
+                "Level pitch",
+            )
+            .on_hover_text(
+                "Keep the view level while reeling: the body's pitch and roll are dropped, but \
+                 its yaw toward the target still composes.",
+            );
+        });
+    ui.add(Slider::new(&mut grapple.engage_s, 0.0..=1.0).text("Engage (s)"));
+    ui.add(Slider::new(&mut grapple.release_s, 0.0..=2.0).text("Release (s)"));
+    ui.checkbox(&mut grapple.yaw_handoff, "Yaw handoff (body turns to view)")
+        .on_hover_text(
+            "At reel end, turn the character toward where you are looking instead of sweeping \
+             the view toward the character's landing heading. VR, on foot, hold-view only.",
+        );
+    ui.add(Slider::new(&mut grapple.handoff_timeout_s, 0.0..=3.0).text("Handoff timeout (s)"));
+    ui.add(
+        Slider::new(&mut grapple.anchor_snap_threshold_mps, 0.0..=120.0)
+            .text("Landing snap threshold (m/s)"),
+    )
+    .on_hover_text(
+        "Single-step velocity change of the body-driven head position beyond which it is \
+         treated as a landing snap and absorbed; steady motion of any speed passes through. \
+         0 disables.",
+    );
+    ui.add(Slider::new(&mut grapple.anchor_snap_ease_s, 0.0..=1.0).text("Landing snap ease (s)"));
+    ui.label(format!("Blend: {:.2}", grapple::blend_factor()));
+    let mut log = grapple::telemetry::log_enabled();
+    if ui
+        .checkbox(&mut log, "Log reel telemetry")
+        .on_hover_text(
+            "Write per-tick filter state and per-frame pose composition to the log \
+             (`grapple_telemetry` target) for offline analysis.",
+        )
+        .changed()
+    {
+        grapple::telemetry::set_log_enabled(log);
+    }
 }
 
 /// The on-foot body-turn knobs used while the HMD owns the head (mouse and right stick turn the body,

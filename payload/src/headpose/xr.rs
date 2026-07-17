@@ -38,9 +38,13 @@
 use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
-use super::{
-    HeadPose,
-    config::{HeadPoseConfig, VrTurnMode},
+use crate::{
+    grapple,
+    headpose::{
+        HeadPose,
+        config::{HeadPoseConfig, VrTurnMode},
+        sim,
+    },
 };
 
 /// Compose a world-space head pose from a cockpit-frame center pose and the body frame. Pure and
@@ -119,13 +123,20 @@ pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &
     if !on_foot {
         s.yaw = None;
         s.snap_armed = true;
+        // Any pending grapple retarget is left unconsumed: it is aimed at the next on-foot tick.
         return;
+    }
+
+    // The grapple's yaw handoff may want the body turned toward a specific heading (the held view
+    // heading at a landing); it overrides the accumulator and the raw-facing seed below.
+    if let Some(yaw) = grapple::take_body_yaw_retarget() {
+        s.yaw = Some(yaw);
     }
 
     let turn = &config.vr_turn;
     let mut yaw = s
         .yaw
-        .unwrap_or_else(|| super::sim::body_yaw_of(body_rotation()));
+        .unwrap_or_else(|| sim::body_yaw_of(body_rotation_raw()));
 
     match turn.mode {
         VrTurnMode::Smooth => {
@@ -134,17 +145,17 @@ pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &
                 // scale with no deadzone (a slow mouse move is a small real delta, not stick drift).
                 // Running it through the stick rate (sensitivity * smooth_scale) oversteers and the
                 // deadzone drops slow motion -- the reported overshoot and stop-start.
-                yaw = super::sim::wrap_angle(yaw - (look_x * turn.mouse_turn_scale).to_radians());
+                yaw = sim::wrap_angle(yaw - (look_x * turn.mouse_turn_scale).to_radians());
             } else if look_x.abs() >= turn.deadzone {
                 // Stick: an absolute axis integrated as a per-tick rate.
                 let delta = (look_x * config.mouse_sensitivity * turn.smooth_scale).to_radians();
-                yaw = super::sim::wrap_angle(yaw - delta);
+                yaw = sim::wrap_angle(yaw - delta);
             }
         }
         VrTurnMode::Snap => {
             if s.snap_armed && look_x.abs() >= turn.snap_threshold {
                 let step = look_x.signum() * turn.snap_angle_deg.to_radians();
-                yaw = super::sim::wrap_angle(yaw - step);
+                yaw = sim::wrap_angle(yaw - step);
                 s.snap_armed = false;
             }
             // Re-arm the snap step once the flick relaxes, with hysteresis so one flick is one step.
@@ -158,10 +169,10 @@ pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &
     // target at a rate limit, so a big input jump (a mouse flick) otherwise keeps the body turning for
     // many ticks after the input stops, and once the lead passes 180° the shortest-arc catch-up
     // reverses -- the "keeps turning" and "wrong direction" reports.
-    let body = super::sim::body_yaw_of(body_rotation());
+    let body = sim::body_yaw_of(body_rotation_raw());
     let max_lead = turn.max_body_lead_deg.max(0.0).to_radians();
-    let lead = super::sim::wrap_angle(yaw - body).clamp(-max_lead, max_lead);
-    yaw = super::sim::wrap_angle(body + lead);
+    let lead = sim::wrap_angle(yaw - body).clamp(-max_lead, max_lead);
+    yaw = sim::wrap_angle(body + lead);
 
     s.yaw = Some(yaw);
 }
@@ -170,7 +181,7 @@ pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &
 /// the accumulator has seeded (off foot, or the first on-foot tick has not run yet). Read by the
 /// locomotion hook via [`super::body_yaw_target`], exactly as the flatscreen latch target is.
 pub fn body_yaw_target() -> Option<Vec3> {
-    BODY_YAW.lock().yaw.map(super::sim::yaw_forward)
+    BODY_YAW.lock().yaw.map(sim::yaw_forward)
 }
 
 /// The VR body-yaw accumulator state (see [`advance_body_yaw`]).
@@ -188,8 +199,18 @@ struct VrBodyYaw {
 
 /// The local player character's world rotation, the body frame the cockpit pose composes onto.
 /// Identity when there is no local character (loading screens), so the head still tracks in a
-/// neutral upright frame.
+/// neutral upright frame. Filtered by the grapple reel-in body-frame filter (issue #36): while
+/// reeling in, the rotation the reel adds is cancelled from the composed view -- the HMD keeps
+/// full rotational authority (see [`crate::grapple`]). Consumers that steer the actual character
+/// rather than the view must use [`body_rotation_raw`] instead.
 pub fn body_rotation() -> Quat {
+    grapple::filter_body_rotation(body_rotation_raw())
+}
+
+/// The local player character's world rotation as the engine holds it, unfiltered. The body-yaw
+/// accumulator seeds and clamps against this: it steers the real character, whose heading the
+/// grapple filter's view-frame does not track during a reel.
+pub fn body_rotation_raw() -> Quat {
     body_rotation_from(|character| glam::Mat4::from(character.m_WorldMatrixT1))
 }
 
@@ -198,7 +219,9 @@ pub fn body_rotation() -> Quat {
 /// engine's sub-frame interpolation smooths body rotation (vehicles, parachuting) rather than
 /// stepping it at the tick rate.
 pub fn body_rotation_prev() -> Quat {
-    body_rotation_from(|character| glam::Mat4::from(character.m_WorldMatrixT0))
+    grapple::filter_body_rotation(body_rotation_from(|character| {
+        glam::Mat4::from(character.m_WorldMatrixT0)
+    }))
 }
 
 /// Extract the local player's world rotation from the world matrix `world_of` selects. Identity when

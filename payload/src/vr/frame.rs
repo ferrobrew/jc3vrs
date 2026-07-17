@@ -12,7 +12,7 @@ use glam::{Quat, Vec3};
 use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
-use crate::headpose;
+use crate::{config, grapple, headpose};
 
 use super::{Fov, FrameContext, OffAxisProjection, VrConfig, config::ProjectionConvention};
 
@@ -104,6 +104,20 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     };
     let [eye0, eye1] = frozen.map_or_else(|| [frame.eye_view(0), frame.eye_view(1)], |f| f.0);
 
+    // Advance the grapple reel-in filter at frame cadence, before the body frame and anchor below
+    // are read through it: the engine rotates the body the instant a reel begins, and the ~33 Hz
+    // input-tick advance alone left up to a tick of that rotation reaching the view before the
+    // filter engaged (issue #36 telemetry). At frame cadence the held pre-reel frame is the one
+    // the previous render composed with, so an instant engage is seamless.
+    let anchor_raw = frozen.map_or_else(|| headpose::anchor().unwrap_or(Vec3::ZERO), |f| f.2);
+    let headpose_config = config::Config::lock_query(|c| c.headpose);
+    grapple::advance(
+        headpose::xr::body_rotation_raw(),
+        anchor_raw,
+        headpose::sim::mode() == headpose::sim::HeadMode::OnFoot,
+        &headpose_config.grapple,
+    );
+
     let pos0 = pose_position(eye0.pose);
     let pos1 = pose_position(eye1.pose);
     let center_position = 0.5 * (pos0 + pos1);
@@ -115,7 +129,11 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     let center_orientation = pose_orientation(eye0.pose).slerp(pose_orientation(eye1.pose), 0.5);
 
     let body_rotation = frozen.map_or_else(headpose::xr::body_rotation, |f| f.1);
-    let anchor = frozen.map_or_else(|| headpose::anchor().unwrap_or(Vec3::ZERO), |f| f.2);
+    // The anchor goes through the grapple filter's landing rate limit; the previous-tick anchor is
+    // offset by the same amount so the pair keeps the true tick delta for the engine's `dtf` lerp.
+    let anchor = grapple::filter_anchor(anchor_raw);
+    let anchor_prev_raw =
+        frozen.map_or_else(|| headpose::anchor_prev().unwrap_or(anchor_raw), |f| f.2);
 
     // Compose a tick-spaced pose pair sharing the fresh HMD cockpit delta but differing in the
     // sim-driven body frame and head anchor (T1 vs T0), so the engine's `dtf` lerp smooths the
@@ -123,7 +141,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // fall back to the current-tick values until they are available, degenerating to no interpolation
     // rather than a bad one. Under the freeze diagnostic, prev == cur so the lerp is constant too.
     let body_rotation_prev = frozen.map_or_else(headpose::xr::body_rotation_prev, |f| f.1);
-    let anchor_prev = frozen.map_or_else(|| headpose::anchor_prev().unwrap_or(anchor), |f| f.2);
+    let anchor_prev = anchor - (anchor_raw - anchor_prev_raw);
 
     // Publish the raw cockpit-frame HMD pose (the tracking delta before the body-frame composition
     // below), so the camera hook can compose it onto the engine's own camera when the game owns the
@@ -147,6 +165,17 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     );
     headpose::xr::publish_pair(prev, cur);
 
+    grapple::telemetry::log_frame(&grapple::telemetry::FrameTelemetry {
+        cockpit_orientation: center_orientation,
+        cockpit_position: center_position,
+        body_raw: headpose::xr::body_rotation_raw(),
+        body_filtered: body_rotation,
+        composed: cur.orientation,
+        position: cur.position,
+        // The raw anchor, so a capture shows the landing snap against the eased `position`.
+        anchor: anchor_raw,
+    });
+
     // The symmetric union-FOV cull projection: a single centred frustum that contains both eyes'
     // off-axis frusta. Each eye is laterally offset by ~IPD/2 and has its own asymmetric FOV, so the
     // superset bounds the wider of the two on each side (in tangent space) plus a near-plane margin
@@ -165,7 +194,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     let margin = 0.5 * ipd / near_clip.max(1e-3);
     // The padding lives on the stereo config alongside its `widen_cull_frustum` sibling (and the
     // debug slider), not on `VrConfig`, so read it from the global config here.
-    let pad = 1.0 + crate::config::Config::lock_query(|c| c.stereo.cull_fov_padding).max(0.0);
+    let pad = 1.0 + config::Config::lock_query(|c| c.stereo.cull_fov_padding).max(0.0);
     // Widen each side in tangent space: scale the half-extent outward by `pad`, then push out by the
     // eye-shift margin in the side's own direction (`copysign` keeps left/down negative, right/up
     // positive). Vertical uses tangents here (not raw angles) so it receives the same treatment.
@@ -191,7 +220,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // makes eye 1 reuse eye 0's params so both eyes draw the identical view (Test B). Both feed the
     // reconstruction consistently, since the camera hook and reconstruction read whatever lands in
     // `RENDER_PARAMS`. See `crate::config::StereoConfig`.
-    let (symmetrize, mirror) = crate::config::Config::lock_query(|c| {
+    let (symmetrize, mirror) = config::Config::lock_query(|c| {
         (c.stereo.symmetrize_eye_frusta, c.stereo.mirror_eye0_to_both)
     });
 

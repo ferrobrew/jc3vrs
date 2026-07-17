@@ -34,6 +34,8 @@ use std::sync::atomic::Ordering;
 use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
+use crate::{config::Config, grapple};
+
 use super::HeadPose;
 
 /// The latch state (on-foot only).
@@ -59,7 +61,7 @@ pub enum HeadMode {
 /// pair, integrate the look deltas, update the latch and the smoothed posture, and publish the
 /// headpose. `dt` is the engine's tick delta, used for the posture low-pass.
 pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
-    let config = crate::config::Config::lock_query(|c| c.headpose);
+    let config = Config::lock_query(|c| c.headpose);
     if !config.enabled {
         return;
     }
@@ -80,6 +82,20 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     let evals = crate::hooks::input::locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
     s.mode = detect_mode(s.last_orientation_evals, evals);
     s.last_orientation_evals = evals;
+
+    // Advance the grapple reel-in body-frame filter on this tick, likewise before the VR
+    // early-return: the blend it smooths (and the pre-reel frame it holds) is applied by both
+    // sources' body-frame composition (here at publish, and in `xr::body_rotation`). The VR frame
+    // loop advances it per rendered frame as well, so under VR this tick advance is the flatscreen
+    // fallback and the state read that keeps `sim` coverage.
+    {
+        let body = read_body_rotation().unwrap_or(Quat::IDENTITY);
+        let anchor = super::anchor().unwrap_or(Vec3::ZERO);
+        // `on_foot` is passed in rather than read back via `sim::mode()`: the SIM lock is held
+        // here, and re-locking it inside `advance` deadlocks the input tick.
+        grapple::advance(body, anchor, s.mode == HeadMode::OnFoot, &config.grapple);
+        grapple::telemetry::log_tick(body, dt);
+    }
 
     // The VR source owns the pose while an OpenXR session is running (it publishes a fresh HMD pose
     // every rendered frame). The sim must not also publish, or the two would fight over the same
@@ -171,8 +187,11 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     };
     s.posture = s.posture.slerp(posture_target, alpha).normalize();
     let head_offset = Quat::from_euler(glam::EulerRot::YXZ, s.yaw, s.pitch, s.roll);
-    let orientation = body_rotation.unwrap_or(Quat::IDENTITY) * s.posture * head_offset;
-    let anchor = super::anchor().unwrap_or(Vec3::ZERO);
+    // The grapple filter cancels the body rotation the reel adds while reeling in (issue #36), so
+    // the alignment toward the target never reaches the composed view; see `crate::grapple`.
+    let body_rotation = grapple::filter_body_rotation(body_rotation.unwrap_or(Quat::IDENTITY));
+    let orientation = body_rotation * s.posture * head_offset;
+    let anchor = grapple::filter_anchor(super::anchor().unwrap_or(Vec3::ZERO));
     let position = anchor + orientation * config.position_offset;
     drop(s);
     super::set_pose(HeadPose {
@@ -316,7 +335,7 @@ fn posture_swing(up_body: Vec3, deadband_deg: f32, full_deg: f32) -> Quat {
 }
 
 /// Wrap an angle (radians) into `[-π, π]`.
-pub(super) fn wrap_angle(angle: f32) -> f32 {
+pub fn wrap_angle(angle: f32) -> f32 {
     let wrapped = angle.rem_euclid(std::f32::consts::TAU);
     if wrapped > std::f32::consts::PI {
         wrapped - std::f32::consts::TAU
@@ -343,7 +362,7 @@ fn read_body_rotation() -> Option<Quat> {
 }
 
 /// The yaw component (radians) of a body rotation, for the on-foot compensation and latch math.
-pub(super) fn body_yaw_of(rotation: Quat) -> f32 {
+pub fn body_yaw_of(rotation: Quat) -> f32 {
     rotation.to_euler(glam::EulerRot::YXZ).0
 }
 

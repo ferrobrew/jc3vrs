@@ -3,6 +3,8 @@
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
+use crate::grapple::GrappleComfortConfig;
+
 /// All thresholds and tunables for the headpose simulation, added to [`crate::config::Config`] as
 /// `headpose`.
 #[derive(Copy, Clone, Serialize, Deserialize)]
@@ -66,6 +68,10 @@ pub struct HeadPoseConfig {
     /// (mouse and right stick) is free to turn the body instead (see [`VrTurnConfig`]).
     #[serde(default)]
     pub vr_turn: VrTurnConfig,
+    /// Grapple comfort settings (see [`crate::grapple`]). Owned by the grapple module; carried
+    /// here so it persists and live-edits with the rest of the headpose tunables.
+    #[serde(default)]
+    pub grapple: GrappleComfortConfig,
 }
 impl HeadPoseConfig {
     pub const fn new() -> Self {
@@ -85,6 +91,7 @@ impl HeadPoseConfig {
             posture_smoothing_s: 0.5,
             position_offset: Vec3::ZERO,
             vr_turn: VrTurnConfig::new(),
+            grapple: GrappleComfortConfig::new(),
         }
     }
 }

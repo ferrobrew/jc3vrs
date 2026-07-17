@@ -178,7 +178,10 @@ impl std::convert::AsMut<AnimationController> for AnimationController {
 }
 #[repr(C, align(8))]
 pub struct Character {
-    _field_0: [u8; 4320],
+    _field_0: [u8; 2432],
+    /// The character's embedded equipment inventory.
+    pub m_Inventory: crate::character::inventory::Inventory,
+    _field_a50: [u8; 1680],
     /// The character's embedded HumanIK solver. Driven each frame in
     /// [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel), after the
     /// animation graph finalizes the local pose and before the model-space pose is computed. See
@@ -259,6 +262,23 @@ impl Character {
                 Self::GetHeadPosition_ADDRESS,
             );
             f(self as *const Self as _, position)
+        }
+    }
+    pub const GetGrapplingHook_ADDRESS: usize = 0x140760830;
+    /// Returns a reference to the character's grappling-hook slot
+    /// ([`Inventory::m_GrapplingHook`](character::inventory::Inventory::m_GrapplingHook)).
+    pub unsafe fn GetGrapplingHook(
+        &self,
+    ) -> *const crate::types::shared_ptr::SharedPtr<
+        crate::equipment::grappling_hook::GrapplingHook,
+    > {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+            ) -> *const crate::types::shared_ptr::SharedPtr<
+                crate::equipment::grappling_hook::GrapplingHook,
+            > = ::std::mem::transmute(Self::GetGrapplingHook_ADDRESS);
+            f(self as *const Self as _)
         }
     }
     pub const GetSafeIndex_ADDRESS: usize = 0x14079AB30;

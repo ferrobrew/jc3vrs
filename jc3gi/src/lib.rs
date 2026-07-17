@@ -105,6 +105,7 @@ pub mod character;
 pub mod clock;
 pub mod cpu_fragment;
 pub mod environment;
+pub mod equipment;
 pub mod event;
 pub mod game;
 pub mod game_world_object_manager;
