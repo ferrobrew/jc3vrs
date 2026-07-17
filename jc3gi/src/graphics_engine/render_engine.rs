@@ -456,6 +456,21 @@ impl RenderEngine {
             f(self as *mut Self as _)
         }
     }
+    pub const SortRenderPasses_ADDRESS: usize = 0x1401ABC40;
+    /// The render-thread sort task's body: walks every registered pass across all pass
+    /// categories, builds a sort context from the pass's sort camera (its external camera if set,
+    /// else the render camera), and calls
+    /// [`SortList`](graphics_engine::render_pass::RenderPass::SortList) on each. Because
+    /// `SortList` latches per rotation, passes drawn before the task reaches them are sorted
+    /// lazily by `DoDraw` instead and skipped here.
+    pub unsafe fn SortRenderPasses(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::SortRenderPasses_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
 }
 impl std::convert::AsRef<RenderEngine> for RenderEngine {
     fn as_ref(&self) -> &RenderEngine {

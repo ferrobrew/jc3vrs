@@ -345,6 +345,68 @@ impl std::convert::AsMut<RenderBlockTerrain> for RenderBlockTerrain {
     }
 }
 #[repr(C, align(8))]
+/// One volumetric-terrain patch instance (`NGraphicsEngine::CRenderBlockTerrainPatch`): the
+/// per-patch render block the terrain patch system enqueues onto the terrain basemesh passes, one
+/// per quadtree patch. Partial: only the placement and sort fields are mapped.
+pub struct RenderBlockTerrainPatch {
+    _field_0: [u8; 200],
+    /// The patch's world-space placement origin. Together with
+    /// [`m_Size`](RenderBlockTerrainPatch::m_Size) it spans the patch's footprint; the patch's
+    /// 512 m tile indices ([`m_TileX`](RenderBlockTerrainPatch::m_TileX)) derive from the same
+    /// placement.
+    pub m_Position: crate::types::math::Vector3,
+    /// The patch's world-space side length (quadtree level dependent).
+    pub m_Size: f32,
+    /// The patch's quadtree LOD level.
+    pub m_PatchLOD: u16,
+    _field_da: [u8; 6],
+    /// The patch's 512 m world tile X index (offset by half the 32,768 m world).
+    pub m_TileX: i16,
+    /// The patch's 512 m world tile Z index.
+    pub m_TileZ: i16,
+    _field_e4: [u8; 12],
+    /// The block's sort identifier, rebuilt per frame by
+    /// [`UpdateSortID`](RenderBlockTerrainPatch::UpdateSortID): bits 32..47 carry the squared
+    /// camera tile distance (in 512 m tiles), bits 61+ a tessellation/LOD class, and the low 32
+    /// bits the block pointer. The block's `GetSortID` returns it verbatim, so terrain patches
+    /// sort by tessellation class, then tile distance.
+    pub m_SortID: u64,
+}
+fn _RenderBlockTerrainPatch_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xF8], RenderBlockTerrainPatch>([0u8; 0xF8]);
+    }
+    unreachable!()
+}
+impl RenderBlockTerrainPatch {
+    pub const UpdateSortID_ADDRESS: usize = 0x1410CA030;
+    /// Rebuilds [`m_SortID`](RenderBlockTerrainPatch::m_SortID) from the camera translation:
+    /// recomputes the camera-relative tile deltas and packs the squared tile distance and
+    /// tessellation class. Called by the terrain patch system's per-frame update.
+    pub unsafe fn UpdateSortID(
+        &mut self,
+        camera_translation: *const crate::types::math::Vector3,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                camera_translation: *const crate::types::math::Vector3,
+            ) = ::std::mem::transmute(Self::UpdateSortID_ADDRESS);
+            f(self as *mut Self as _, camera_translation)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockTerrainPatch> for RenderBlockTerrainPatch {
+    fn as_ref(&self) -> &RenderBlockTerrainPatch {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTerrainPatch> for RenderBlockTerrainPatch {
+    fn as_mut(&mut self) -> &mut RenderBlockTerrainPatch {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The fog-volume render block *type* (the
 /// `NGraphicsEngine::CRenderBlockFogVolume::CRenderBlockTypeFogVolume` singleton): owns the froxel
 /// volumetric-fog textures and recreates them when the scene render resolution changes.

@@ -633,7 +633,13 @@ pub struct RenderContext {
     /// [`RenderBlockTypeTerrain::SetupConstantBuffers`](crate::graphics_engine::render_block::RenderBlockTypeTerrain)),
     /// so it carries the per-view (and, off-axis, per-eye) projection.
     pub m_OffsetViewProjection: crate::types::math::Matrix4,
-    _field_118: [u8; 484],
+    _field_118: [u8; 256],
+    /// The camera world position for this dispatch, copied from the camera's transform translation
+    /// by [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera). Camera-relative geometry
+    /// subtracts it per object, and [`RenderPass::DoDraw`] hands it to
+    /// [`SortList`](RenderPass::SortList) as the sort camera position.
+    pub m_CameraPosition: crate::types::math::Vector3,
+    _field_224: [u8; 216],
     /// The vertical field of view in radians, copied from [`Camera::m_FOV`] by
     /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera).
     pub CameraFOV: f32,
@@ -652,7 +658,12 @@ pub struct RenderContext {
     pub m_DisplayHeight: i32,
     /// The display aspect ratio (`m_DisplayWidth / m_DisplayHeight`).
     pub m_DisplayRatio: f32,
-    _field_318: [u8; 304],
+    _field_318: [u8; 288],
+    /// The id (`ERenderPass`, see `render_engine::RenderPassId`) of the pass currently drawing
+    /// through this context, written by `SetupRenderContext` from the pass's index. `RP_NONE` (0)
+    /// outside a pass body.
+    pub m_ActiveRenderPass: i32,
+    _field_43c: [u8; 12],
     /// The per-real-frame stamp for this dispatch, set from [`get_render_frame_counters`]'s `m_FrameIndex`
     /// during render-context setup. Passes that cache per-frame state key on it — the terrain
     /// tessellation blocks compare it against their per-slot

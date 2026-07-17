@@ -27,4 +27,25 @@ pub fn egui_debug_performance(ui: &mut egui::Ui) {
         patchbox(ui, "Stop", &mut clock.m_Stop);
         patchbox(ui, "Force to FPS", &mut clock.m_ForceToFps);
     }
+
+    far_field_summary(ui);
+}
+
+/// The far-field split totals (issue #32), mirrored here so they can be watched alongside the
+/// frame rate while tuning in the Render tab.
+fn far_field_summary(ui: &mut egui::Ui) {
+    let mut stats = crate::far_field::stats_snapshot();
+    stats.retain(|(_, s)| s.updated.elapsed().as_secs_f32() < 1.0);
+    if stats.is_empty() {
+        return;
+    }
+    ui.separator();
+    let (near, far, windowed) = stats.iter().fold((0u64, 0u64, false), |(n, f, w), (_, s)| {
+        (n + u64::from(s.near), f + u64::from(s.far), w | s.windowed)
+    });
+    ui.label(format!(
+        "Far field: {near} near / {far} far instances ({:.0}% far{})",
+        100.0 * far as f64 / (near + far).max(1) as f64,
+        if windowed { ", skipping active" } else { "" },
+    ));
 }

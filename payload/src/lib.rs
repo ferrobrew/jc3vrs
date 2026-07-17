@@ -25,6 +25,7 @@ mod capture;
 mod config;
 mod crash;
 mod debug;
+mod far_field;
 mod fsr;
 mod grapple;
 mod headpose;
@@ -125,6 +126,7 @@ fn initialize_from_game() -> anyhow::Result<()> {
 
     EguiState::install()?;
     ui::render::install();
+    config::CONFIG.lock().far_field.gated_types = config::DEFAULT_FAR_FIELD_GATED_TYPES.to_owned();
     hud::install();
     capture::install();
     vr::install();

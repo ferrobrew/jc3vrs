@@ -28,6 +28,7 @@ use crate::{
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&SETUP_RENDER_FRAME_DATA_BINDER)
+        .with_static_binder(&DO_DRAW_BINDER)
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
         .with_static_binder(&DRAW_RENDER_PASS_RANGE_BINDER)
         .with_static_binder(&PRE_DRAW_BINDER)
@@ -65,6 +66,20 @@ fn hand_back_buffers(this: *mut c_void) {
         return;
     }
     HAND_BACK_BUFFERS.get().unwrap().call(this);
+}
+
+// RenderPass::DoDraw -- one pass's walk over its sorted draw list. The far-field split (issue #32)
+// hangs here: `before_do_draw` maintains the pass's depth-bucket registration, computes the
+// near/far partition of the sorted list, and -- in the skip modes -- narrows the list header to one
+// run for the original walk; the guard restores it afterwards. `None` (far field off, pass out of
+// range, or nothing to skip) is the stock path.
+#[detour(address = jc3gi::graphics_engine::render_pass::RenderPass::DoDraw_ADDRESS)]
+fn do_draw(this: *mut RenderPass, ctx: *mut RenderContext, color_mask: u32) -> bool {
+    // SAFETY: `this` and `ctx` are the live pass and render context of this draw call.
+    let window = unsafe { crate::far_field::before_do_draw(this, ctx) };
+    let result = DO_DRAW.get().unwrap().call(this, ctx, color_mask);
+    drop(window);
+    result
 }
 
 const RP_AO_VOLUMES: i32 = RenderPassId::RP_AO_VOLUMES as i32;
