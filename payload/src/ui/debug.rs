@@ -1,10 +1,19 @@
 //! The Debug tab: the render-trace dump, the stereo render fixes, the per-eye diagnostics/bisection
 //! levers, and the engine post-FX gates. Only locks CONFIG. (FSR lives in the Render tab.)
 
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Mutex,
+        atomic::{AtomicI32, Ordering},
+    },
+};
 
-use jc3gi::graphics_engine::render_block::{
-    RenderBlockTypeTerrain as BaseTerrain, RenderBlockTypeTerrainPatch as TerrainPatch,
+use jc3gi::graphics_engine::{
+    render_block::{
+        RenderBlockTypeTerrain as BaseTerrain, RenderBlockTypeTerrainPatch as TerrainPatch,
+    },
+    render_engine::RenderBlockTypeRegistry,
 };
 
 use crate::{config, debug::trace};
@@ -58,7 +67,7 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     // The #31 flicker-isolation A/B levers -- all default off; enable one at a time to localize the
     // whole-terrain sun-shadow flicker. See `crate::config::StereoConfig`.
     egui::CollapsingHeader::new("Flicker isolation (#31)")
-        .default_open(true)
+        .default_open(false)
         .show(ui, |ui| {
             ui.checkbox(
                 &mut cfg.stereo.symmetrize_eye_frusta,
@@ -315,12 +324,10 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         }
     });
 
-    // The base VolumetricTerrain block (CRenderBlockTerrain) draws the cliff WALLS -- a separate render
-    // block from the tessellated patch (which draws the tops). Its back-patch cull discards patches
-    // whose facing is beyond a threshold relative to the shared render camera's forward vector, so a
-    // near-vertical wall viewed at a grazing angle sits right at the threshold and flips black<->drawn
-    // on a tiny rotation. Prime suspect for the rotation-dependent black wall tiles. Live engine flags,
-    // not saved; reset on level reload.
+    // The base VolumetricTerrain block (CRenderBlockTerrain) -- dormant in the retail world (the live
+    // terrain is the volumetric-patch system + the TerrainDetail rock skin), so these engine flags are
+    // inert there; kept for other worlds. The #40 detail-budget controls sit at the bottom of this
+    // section. Live engine flags, not saved; reset on level reload.
     ui.collapsing("Base terrain culling (walls; engine, live)", |ui| {
         match unsafe { BaseTerrain::get() } {
             Some(terrain) => {
@@ -400,22 +407,45 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         }
         ui.separator();
         ui.label(
-            "Color-pass hull clip (the stage that discards wall/ceiling patches from the G-buffer -- \
-             proven cause of the black tiles):",
+            "Detail budget (the #40 black-tile fix: the GPU detail pipeline drops whatever \
+             overflows its fixed vertex/index/texel buffers, and VR's wide FOV oversubscribes \
+             them -- the losing tiles render black). Applied automatically at startup:",
         );
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::Slider::new(&mut cfg.stereo.terrain_detail_budget_scale, 1..=16)
+                    .text("budget scale"),
+            );
+            if ui
+                .button("Re-apply (patch sizes + recreate setup buffers)")
+                .clicked()
+            {
+                crate::hooks::graphics_engine::terrain::request_detail_budget_apply();
+            }
+        });
         ui.checkbox(
             &mut cfg.stereo.force_terrain_hull_clip,
-            "Force color-pass hull clip type (skip the LOD-clip discard)",
+            "Force the water-clip hull type (type 2; ruled out for #40)",
         );
         ui.add(
             egui::Slider::new(&mut cfg.stereo.terrain_hull_clip_value, 0..=2)
-                .text("Replacement clip type (try 1, then 0)"),
+                .text("Replacement clip type for type 2"),
         )
         .on_hover_text(
-            "The clip type substituted for the color pass's type 2; a non-clipping variant should let \
-             the discarded patches write the G-buffer and light up",
+            "Clip type 2 is the below-water discard for base-LOD tiles when the camera is above \
+             water -- not the LOD clip",
         );
     });
+
+    // The engine's render-block-type registry: every registered type by name, with its engine-native
+    // enable flag (CRenderPass::DoDraw skips disabled types in every pass). The definitive bisect for
+    // "which render block draws this surface": disable types one at a time until the surface vanishes.
+    ui.collapsing(
+        "Render block types (engine registry; disable to bisect)",
+        |ui| {
+            show_render_block_type_registry(ui);
+        },
+    );
 
     ui.collapsing("Shader patches", |ui| {
         ui.horizontal(|ui| {
@@ -646,5 +676,80 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     drop(cfg);
     if let Some(frames) = start_trace {
         trace::TraceState::start(frames);
+    }
+}
+
+/// A vtable-compatible `IRenderBlockType::IsEnabled` override that always reports disabled.
+/// `CRenderPass::DoDraw` calls the virtual per type run, so pointing a type's vtable slot here
+/// stops its draws in every pass.
+unsafe extern "system" fn render_block_type_always_disabled(
+    _this: *mut ::core::ffi::c_void,
+) -> bool {
+    false
+}
+
+/// The `IsEnabled` vtable slots currently patched to
+/// [`render_block_type_always_disabled`], keyed by slot address.
+static DISABLED_TYPE_SLOTS: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
+
+/// Render the engine render-block-type registry: one row per registered type, name from the type's
+/// own `GetTypeName`, and a checkbox that patches the type's `IsEnabled` vtable slot to a
+/// return-false stub (restored on re-tick or uninject). The retail build compiles the engine's own
+/// `Enable`/`Disable` to no-ops and `IsEnabled` to `return true`, but `CRenderPass::DoDraw` still
+/// dispatches `IsEnabled` through the vtable, so the slot patch is the working kill switch.
+fn show_render_block_type_registry(ui: &mut egui::Ui) {
+    // SAFETY: the registry is static engine storage; entries are live type singletons registered at
+    // startup and only removed at shutdown. The vtable slot write is an aligned qword store through
+    // the patcher while the render thread may read it -- acceptable for a diagnostic toggle.
+    unsafe {
+        let Some(reg) = RenderBlockTypeRegistry::get() else {
+            ui.label("registry not reachable");
+            return;
+        };
+        let entries = reg.as_slice();
+        if entries.is_empty() || entries.len() > 256 {
+            ui.label(format!(
+                "registry not initialized or invalid ({} entries)",
+                entries.len()
+            ));
+            return;
+        }
+        ui.label(format!(
+            "{} registered types; unticking disables the type's draws in every pass \
+             (vtable IsEnabled patch; auto-reverts on uninject)",
+            entries.len()
+        ));
+        let mut disabled_slots = DISABLED_TYPE_SLOTS.lock().unwrap();
+        egui::ScrollArea::vertical()
+            .id_salt("render_block_type_registry")
+            .max_height(240.0)
+            .show(ui, |ui| {
+                for entry in entries {
+                    let Some(ty) = entry.m_Type.as_mut() else {
+                        continue;
+                    };
+                    let name = ty.get_type_name_str().unwrap_or("(unnamed)");
+                    // The patch target: the address of the vtable's `IsEnabled` entry, with the
+                    // field offset taken from the generated vftable type.
+                    let slot = (&raw const (*ty.vftable()).IsEnabled) as usize;
+                    let mut enabled = !disabled_slots.contains(&slot);
+                    if ui
+                        .checkbox(&mut enabled, format!("{name} ({:#010x})", entry.m_Hash))
+                        .changed()
+                    {
+                        let Some(mut patcher) = crate::hooks::patcher() else {
+                            continue;
+                        };
+                        if enabled {
+                            patcher.unpatch(slot);
+                            disabled_slots.remove(&slot);
+                        } else {
+                            let stub = render_block_type_always_disabled as *const () as usize;
+                            patcher.patch(slot, &stub.to_le_bytes());
+                            disabled_slots.insert(slot);
+                        }
+                    }
+                }
+            });
     }
 }

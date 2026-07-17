@@ -25,7 +25,7 @@ use crate::{
     stereo::STEREO_STATE,
 };
 
-use super::graphics_engine::graphics_engine::BLOCK_FLIP;
+use super::graphics_engine::{self, graphics_engine::BLOCK_FLIP};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -61,7 +61,8 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // Apply a requested shader reload here, on the game thread before this frame's draws, so the
         // PCF-patch hook re-creates the already-loaded shaders (injection is normally after the game
         // has built them).
-        super::graphics_engine::shader::process_reload_request();
+        graphics_engine::shader::process_reload_request();
+        graphics_engine::terrain::process_budget_request();
 
         // Execute queued Scaleform debug operations (display-tree dump, clip visibility) here on
         // the game thread, which is the Scaleform capture thread.
@@ -206,7 +207,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             });
 
             super::draw_count::DRAW_COUNTS.clear();
-            super::graphics_engine::post_effects::reset_post_block_gate();
+            graphics_engine::post_effects::reset_post_block_gate();
             TraceState::record(TraceEvent::DrawBegin { eye: 0 });
             STEREO_STATE.lock().draw_index = 0;
             // While a VR session runs there is no desktop present at all (the compositor presents),
@@ -263,7 +264,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             *get_current_add_buffer() = saved_add_buffer;
 
             super::draw_count::DRAW_COUNTS.clear();
-            super::graphics_engine::post_effects::reset_post_block_gate();
+            graphics_engine::post_effects::reset_post_block_gate();
             TraceState::record(TraceEvent::DrawBegin { eye: 1 });
             STEREO_STATE.lock().draw_index = 1;
             BLOCK_FLIP.store(vr_running || present_eye != 1, Ordering::Relaxed);
@@ -294,7 +295,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 restore_counters: None,
             });
             STEREO_STATE.lock().draw_index = 0;
-            super::graphics_engine::post_effects::reset_post_block_gate();
+            graphics_engine::post_effects::reset_post_block_gate();
             crate::crash::mark(Phase::NonStereoDraw);
             game.Draw(spf);
             crate::debug::camera::capture_render_camera(0);
@@ -396,7 +397,7 @@ fn restore_cb_ring_index(saved: u32) {
 }
 
 fn snapshot_ssao_history() -> Option<(u32, u32)> {
-    let pass = super::graphics_engine::ssao::ssao_pass();
+    let pass = graphics_engine::ssao::ssao_pass();
     unsafe {
         pass.as_ref()
             .map(|pass| (pass.m_PrevFrameIndex, pass.m_CurrFrameIndex))
@@ -404,7 +405,7 @@ fn snapshot_ssao_history() -> Option<(u32, u32)> {
 }
 
 fn restore_ssao_history_indices((prev, curr): (u32, u32)) {
-    let pass = super::graphics_engine::ssao::ssao_pass();
+    let pass = graphics_engine::ssao::ssao_pass();
     unsafe {
         if let Some(pass) = pass.as_mut() {
             pass.m_PrevFrameIndex = prev;

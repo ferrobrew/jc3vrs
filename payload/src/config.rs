@@ -376,18 +376,28 @@ pub struct StereoConfig {
     /// camera idle motion (dies with it). Re-enabling recaptures the then-current pose. The view locks in
     /// place -- diagnostic only. VR only. **Default off.**
     pub freeze_render_camera: bool,
-    /// Diagnostic: override the base VolumetricTerrain block's color-pass hull-clip type. The color
-    /// pass selects the LOD-clipping hull program (clip type 2), which discards tessellated patches by
-    /// their LOD against the tessellation metrics; the depth prepass uses a non-clipping variant, so a
-    /// patch discarded here writes depth but no G-buffer and renders black. When set, the
-    /// `HullClipType` detour replaces a returned clip type 2 with
-    /// [`terrain_hull_clip_value`](Self::terrain_hull_clip_value), letting the color pass use a
-    /// non-clipping hull to test whether that discard is the source of the black cliff-wall tiles. VR
-    /// and flatscreen; **default off.**
+    /// Diagnostic: override the base VolumetricTerrain block's *water*-clip hull type. Clip type 2 is
+    /// the water clip (patches below the cached water level are discarded when the camera is above
+    /// water), selected for base-LOD tiles at the high-detail LOD -- it is **not** the LOD clip (that
+    /// is type 1). When set, the `HullClipType` detour replaces a returned clip type 2 with
+    /// [`terrain_hull_clip_value`](Self::terrain_hull_clip_value). Kept as a diagnostic lever; ruled
+    /// out for issue #40 (forcing it changed nothing, consistent with the water clip being irrelevant
+    /// above water). VR and flatscreen; **default off.**
     pub force_terrain_hull_clip: bool,
     /// The clip type the [`force_terrain_hull_clip`](Self::force_terrain_hull_clip) detour substitutes
     /// for a returned type 2 (try 1, then 0, for the non-clipping hull variants).
     pub terrain_hull_clip_value: i32,
+    /// The multiplier for the terrain detail-tessellation GPU budget buffers — the fix for the
+    /// world-locked black cliff-wall/cave-ceiling tiles (issue #40). The detail rock skin is built
+    /// by a GPU pipeline that allocates vertices/indices/texels from fixed-size buffers with
+    /// unbounded cursors; whatever overflows is silently dropped and the losing tiles render
+    /// black. The shipped sizes fit the flatscreen FOV; VR's wide FOV admits more quads and
+    /// oversubscribes them. The buffer-size immediates in the setup types' `Create` functions are
+    /// patched to `shipped * scale` (auto-reverting on uninject) and the two setup types are
+    /// re-created, automatically at the first frame start after injection and on demand from the
+    /// debug UI. `1` leaves the shipped sizes (and skips the automatic apply). VR and flatscreen;
+    /// **default 4.**
+    pub terrain_detail_budget_scale: u32,
     /// Replace the symmetric froxel tile-bounds constants that `DrawClustered` uploads to the
     /// light-assignment fragment shader (cb1) with per-eye off-axis-derived values. The engine
     /// reconstructs a symmetric frustum from the vertical FOV and aspect ratio, which cannot encode
@@ -452,6 +462,7 @@ impl StereoConfig {
             fix_clustered_light_frustum: true,
             force_terrain_hull_clip: false,
             terrain_hull_clip_value: 1,
+            terrain_detail_budget_scale: 4,
         }
     }
 }

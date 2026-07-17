@@ -36,3 +36,4 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [08-14-hud-overlays-and-depth.md](issues/08-14-hud-overlays-and-depth.md) — HUD overlays and depth (issues #8, #14).
 - [15-enclosed-vehicles.md](issues/15-enclosed-vehicles.md) — enclosed vehicles (issue #15).
 - [20-animation-judder.md](issues/20-animation-judder.md) — animation judder (issue #20).
+- [40-terrain-black-tiles.md](issues/40-terrain-black-tiles.md) — terrain walls and cave ceilings rendering black at grazing angles (issue #40).

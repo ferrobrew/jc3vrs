@@ -22,14 +22,20 @@ impl RenderBlockTypeBase {
     /// Creates the type's GPU resources (shaders, buffers) against the given
     /// `SResourceContext`. Each type's `RegisterType` calls this at startup with the render
     /// engine's own resource context.
-    pub unsafe fn Create(&mut self, resource_context: *mut ::std::ffi::c_void) {
+    pub unsafe fn Create(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
         unsafe {
             let f = (&raw const (*self.vftable()).Create).read();
             f(self as *mut Self as _, resource_context)
         }
     }
     /// Destroys the type's GPU resources.
-    pub unsafe fn Destroy(&mut self, resource_context: *mut ::std::ffi::c_void) {
+    pub unsafe fn Destroy(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
         unsafe {
             let f = (&raw const (*self.vftable()).Destroy).read();
             f(self as *mut Self as _, resource_context)
@@ -41,7 +47,10 @@ impl RenderBlockTypeBase {
     /// including the terrain setup types, implement it as a no-op; re-creating those requires
     /// calling [`Destroy`](RenderBlockTypeBase::Destroy) and
     /// [`Create`](RenderBlockTypeBase::Create) directly.
-    pub unsafe fn Recreate(&mut self, resource_context: *mut ::std::ffi::c_void) {
+    pub unsafe fn Recreate(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
         unsafe {
             let f = (&raw const (*self.vftable()).Recreate).read();
             f(self as *mut Self as _, resource_context)
@@ -108,12 +117,12 @@ pub struct RenderBlockTypeBaseVftable {
     /// engine's own resource context.
     pub Create: unsafe extern "system" fn(
         this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
-        resource_context: *mut ::std::ffi::c_void,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
     ),
     /// Destroys the type's GPU resources.
     pub Destroy: unsafe extern "system" fn(
         this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
-        resource_context: *mut ::std::ffi::c_void,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
     ),
     /// Recreates the type's GPU resources against the given `SResourceContext`.
     /// `CRenderEngine::RecreateRenderBlockTypes` calls this on every registered type with the
@@ -123,7 +132,7 @@ pub struct RenderBlockTypeBaseVftable {
     /// [`Create`](RenderBlockTypeBase::Create) directly.
     pub Recreate: unsafe extern "system" fn(
         this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
-        resource_context: *mut ::std::ffi::c_void,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
     ),
     /// Returns the type's display name (e.g. `"VolumetricTerrain"`, `"TerrainPatch"`).
     pub GetTypeName: unsafe extern "system" fn(
@@ -232,16 +241,17 @@ impl std::convert::AsMut<RenderBlockTypeEntry> for RenderBlockTypeEntry {
 }
 #[repr(C, align(8))]
 /// The global render-block-type registry that `CRenderEngine::AddType` and `RemoveType` maintain
-/// (the leading fields of the `CRenderBlockFactory` object): a begin/end vector of
+/// (the leading fields of the `CRenderBlockFactory` object): a vector of
 /// [`RenderBlockTypeEntry`], kept sorted by type hash for binary search. The factory itself sits
 /// behind a pointer in static storage.
 pub struct RenderBlockTypeRegistry {
-    pub m_Begin: *mut crate::graphics_engine::render_engine::RenderBlockTypeEntry,
-    pub m_End: *mut crate::graphics_engine::render_engine::RenderBlockTypeEntry,
+    pub m_Types: crate::types::std_vector::Vector<
+        crate::graphics_engine::render_engine::RenderBlockTypeEntry,
+    >,
 }
 fn _RenderBlockTypeRegistry_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x10], RenderBlockTypeRegistry>([0u8; 0x10]);
+        ::std::mem::transmute::<[u8; 0x20], RenderBlockTypeRegistry>([0u8; 0x20]);
     }
     unreachable!()
 }
@@ -271,11 +281,11 @@ pub struct RenderEngine {
     /// immediately after. It advances independently of the engine frame counters.
     pub m_ConstantBufferRingIndex: u32,
     _field_16c4: [u8; 524],
-    /// The render engine's embedded `SResourceContext` (opaque here; only its address is taken).
-    /// `RecreateRenderBlockTypes` passes a pointer to this field to every type's
-    /// [`Recreate`](RenderBlockTypeBase::Recreate).
-    pub m_ResourceContext: u64,
-    _field_18d8: [u8; 2376],
+    /// The render engine's embedded [`ResourceContext`]. `RecreateRenderBlockTypes` passes a
+    /// pointer to this field to every type's [`Recreate`](RenderBlockTypeBase::Recreate), and each
+    /// type's `RegisterType` passes it to [`Create`](RenderBlockTypeBase::Create) at startup.
+    pub m_ResourceContext: crate::graphics_engine::render_engine::ResourceContext,
+    _field_18f0: [u8; 2352],
 }
 fn _RenderEngine_size_check() {
     unsafe {
@@ -634,6 +644,36 @@ fn _RenderPassId_size_check() {
     unreachable!()
 }
 #[repr(C, align(8))]
+/// The resource-creation context (`NGraphicsEngine::SResourceContext`) handed to render-block
+/// types' `Create`/`Destroy`/`Recreate`: the graphics device plus the texture and shader caches.
+/// The render engine embeds one ([`RenderEngine::m_ResourceContext`]) that every type registration
+/// and recreation path uses.
+pub struct ResourceContext {
+    pub m_GraphicsDevice: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    pub m_TextureCache: *mut crate::graphics_engine::render_engine::TextureCache,
+    pub m_ShaderCache: *mut crate::graphics_engine::render_engine::ShaderCache,
+    /// The `Graphics::EMaxAniso` anisotropic-filtering level.
+    pub m_MaxAniso: i32,
+    _field_1c: [u8; 4],
+}
+fn _ResourceContext_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x20], ResourceContext>([0u8; 0x20]);
+    }
+    unreachable!()
+}
+impl ResourceContext {}
+impl std::convert::AsRef<ResourceContext> for ResourceContext {
+    fn as_ref(&self) -> &ResourceContext {
+        self
+    }
+}
+impl std::convert::AsMut<ResourceContext> for ResourceContext {
+    fn as_mut(&mut self) -> &mut ResourceContext {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The terrain patch render system's per-frame state (partial: only the fields walked to
 /// `m_TerrainCamera` are mapped). Owned by `CLandscapeManager`; updated by
 /// [`TerrainPatchSystemUpdate`].
@@ -666,6 +706,21 @@ impl std::convert::AsRef<STerrainPatchSystem> for STerrainPatchSystem {
 }
 impl std::convert::AsMut<STerrainPatchSystem> for STerrainPatchSystem {
     fn as_mut(&mut self) -> &mut STerrainPatchSystem {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The opaque shader cache (`SShaderCache`), the name-hash-keyed store the `ShaderCacheGet*Program`
+/// family resolves shader holders from.
+pub struct ShaderCache {}
+impl ShaderCache {}
+impl std::convert::AsRef<ShaderCache> for ShaderCache {
+    fn as_ref(&self) -> &ShaderCache {
+        self
+    }
+}
+impl std::convert::AsMut<ShaderCache> for ShaderCache {
+    fn as_mut(&mut self) -> &mut ShaderCache {
         self
     }
 }
@@ -703,6 +758,20 @@ for TerrainDetailBudgetPatchSites {
         self
     }
 }
+#[repr(C, align(8))]
+/// The opaque texture cache (`STextureCache`).
+pub struct TextureCache {}
+impl TextureCache {}
+impl std::convert::AsRef<TextureCache> for TextureCache {
+    fn as_ref(&self) -> &TextureCache {
+        self
+    }
+}
+impl std::convert::AsMut<TextureCache> for TextureCache {
+    fn as_mut(&mut self) -> &mut TextureCache {
+        self
+    }
+}
 pub const GetRenderPassName_ADDRESS: usize = 0x140175080;
 /// The debug name for a render-pass id, from the engine's pass-name switch (the ground truth the
 /// [`RenderPassId`] values are verified against). Returns `"NONE"` for unnamed indices.
@@ -733,10 +802,34 @@ pub unsafe fn TerrainPatchSystemUpdate(
         f(handle, ctx)
     }
 }
+impl RenderBlockTypeBase {
+    /// The type's display name as a string, or `None` when the vtable returns null or a non-UTF-8
+    /// name. The borrow is `'static`: the engine's type names are string literals in the module
+    /// image.
+    ///
+    /// # Safety
+    /// `self` must be a live type object with a valid vtable.
+    pub unsafe fn get_type_name_str(&self) -> Option<&'static str> {
+        unsafe {
+            let ptr = self.GetTypeName();
+            if ptr.is_null() {
+                return None;
+            }
+            std::ffi::CStr::from_ptr(ptr.cast()).to_str().ok()
+        }
+    }
+}
 impl RenderBlockTypeRegistry {
     /// The live registry: the static slot holds a pointer to the factory object whose leading
     /// fields are the vector.
     pub unsafe fn get() -> Option<&'static mut RenderBlockTypeRegistry> {
         unsafe { (*(0x142ED0F60usize as *const *mut RenderBlockTypeRegistry)).as_mut() }
+    }
+    /// The registered types as a slice.
+    ///
+    /// # Safety
+    /// The registry's element range must point to live entries for the borrow.
+    pub unsafe fn as_slice(&self) -> &[RenderBlockTypeEntry] {
+        unsafe { self.m_Types.as_slice() }
     }
 }

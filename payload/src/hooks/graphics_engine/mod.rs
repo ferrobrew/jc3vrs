@@ -34,7 +34,7 @@ mod tone_mapping;
 mod clustered_lighting;
 // Diagnostic override of the base VolumetricTerrain color-pass hull-clip type (black cliff-wall tiles);
 // private, reached only through `hook_library` below.
-mod terrain;
+pub mod terrain;
 
 /// Bundle every CGraphicsEngine-area detour into one hook library, mirroring how the game groups
 /// these classes.
