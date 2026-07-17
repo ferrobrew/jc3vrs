@@ -459,7 +459,7 @@ dependencies = [
 [[package]]
 name = "egui-directx11"
 version = "0.12.1"
-source = "git+https://github.com/ferrobrew/egui-directx11.git?branch=egui-0.35#eed6f00c830671afc9c8c8ee4646149f96d59fa6"
+source = "git+https://github.com/NekomaruQwQ/egui-directx11.git#2855e57ee6e631c097c5417e942071b88d186d73"
 dependencies = [
  "egui",
  "log",
