@@ -62,8 +62,11 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         // Clear the shadow-anchor delta; the parallax block below sets it when disparity is on, so a
         // stale value can't leak into the sun-shadow cascade correction when disparity is off.
         stereo.shadow_anchor_delta = glam::Vec3::ZERO;
-        // Eye 0 opens a new real frame: last frame's view-projection snapshots become "previous".
-        if stereo.draw_index == 0 {
+        // The frame's first dispatch opens a new real frame: last frame's view-projection
+        // snapshots become "previous". Keyed on the dispatch ordinal, not the eye index — a share
+        // frame's far dispatch and eye 0's near dispatch both carry eye index 0, and rotating
+        // twice would collapse the FSR reprojection history to intra-frame deltas.
+        if stereo.dispatch_ordinal == 0 {
             stereo.vp_history.rotate();
         }
     }

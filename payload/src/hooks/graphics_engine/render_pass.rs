@@ -113,6 +113,18 @@ fn draw_render_pass_range(
         )
     });
 
+    // The far-field share frame (issue #32): the far dispatch runs only the G-buffer range (its
+    // product is the captured G-buffer; lighting, scene, and post are per-eye work), and each near
+    // dispatch composites the captured far G-buffer between the clear/Z-prepass passes and the
+    // geometry passes.
+    let (far_phase, share_frame) = {
+        let state = crate::stereo::STEREO_STATE.lock();
+        (state.far_phase, state.share_frame)
+    };
+    if far_phase && first >= RP_FIRST_SCENE {
+        return;
+    }
+
     let skipped = |pass: i32| {
         (skip_ssr && pass == RP_SCREEN_SPACE_REFLECTIONS)
             || (skip_gi && pass == RP_GLOBAL_ILLUMINATION)
@@ -136,6 +148,37 @@ fn draw_render_pass_range(
         }
     };
 
+    // Composite the shared far G-buffer on the near dispatches, splitting the range at the first
+    // geometry pass -- after the engine's clears (RP_CLEAR) and the Z prepass, whose depth the
+    // composite's GREATER_EQUAL merge respects -- and capture the far dispatch's G-buffer once its
+    // range completes. `run_scene_range` carries the rest of the body (the skip splitting and the
+    // foveation bracketing).
+    if share_frame && (first..last).contains(&RP_FIRST_GEOMETRY) && first <= RP_Z_OCCLUDERS {
+        if far_phase {
+            run_scene_range(first, last, &draw);
+            crate::far_field::share::capture_far_gbuffer();
+        } else {
+            run_scene_range(first, RP_FIRST_GEOMETRY, &draw);
+            crate::far_field::share::composite(crate::stereo::draw_index());
+            run_scene_range(RP_FIRST_GEOMETRY, last, &draw);
+        }
+        return;
+    }
+    run_scene_range(first, last, &draw);
+}
+
+/// The first pass of the scene (lighting/main) block; the far dispatch stops before it.
+const RP_FIRST_SCENE: i32 = RenderPassId::RP_REFLECTIVE_WATER_PLANES as i32;
+/// The head of the G-buffer range (where the depth clear lands via the pass's own PreDraw flags).
+const RP_Z_OCCLUDERS: i32 = RenderPassId::RP_Z_OCCLUDERS as i32;
+/// The first G-buffer geometry pass after the clear/Z-prepass prefix: the far-field composite
+/// injects immediately before it.
+const RP_FIRST_GEOMETRY: i32 = RenderPassId::RP_ROAD_STENCIL as i32;
+
+/// One (possibly sub-)range of the G-buffer/scene pass chain: the maximal-run skip splitting plus
+/// the foveation bracketing, factored out of the detour so the far-field composite can split the
+/// range without duplicating either.
+fn run_scene_range(first: i32, last: i32, draw: &dyn Fn(i32, i32)) {
     // Foveation (issue #29): write the peripheral stencil mask just before the foveated shading sub-range,
     // then force the peripheral stencil test through it so the GPU skips the dropped GBuffer pixels. The
     // reconstruction fill-in runs later, in the `DrawPosteffects` hook, once the scene is fully lit --
@@ -238,6 +281,11 @@ fn run_foveation_pass(
 // its kept neighbours in the finished MainColor. Runs for both eyes; a no-op when foveation is off.
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::DrawPosteffects_ADDRESS)]
 fn draw_posteffects(this: *mut c_void, ctx: *mut c_void, setup: *mut c_void) {
+    // The share frame's far dispatch produces only the captured G-buffer; its post chain is
+    // skipped outright (the pass range beyond the G-buffer is already suppressed).
+    if crate::stereo::far_phase() {
+        return;
+    }
     if let Some(cfg) = Config::lock_query(|c| c.foveation.enabled.then(|| c.foveation.clone())) {
         let eye = usize::from(is_second_eye());
         if let Some(center_uv) = foveal_center_uv(eye) {
@@ -390,7 +438,7 @@ fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
     let original = PRE_DRAW.get().unwrap();
     let share_cfg =
         Config::lock_query(|c| c.stereo.share_prepasses && c.stereo.restore_frame_counters);
-    if is_second_eye() && share_cfg {
+    if crate::stereo::dispatch_ordinal() > 0 && crate::stereo::active() && share_cfg {
         // SAFETY: `this` is the live render engine; its per-category `m_RenderPasses` vectors hold
         // engine-owned, null-checked pass pointers; the `m_Enabled` flag write mirrors the shadow
         // scheduler's own store in `commit_render_pass_settings`.

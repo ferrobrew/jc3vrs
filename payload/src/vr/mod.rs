@@ -86,6 +86,7 @@ pub fn install() {
     crate::lifecycle::on_cleanup(|_renderer| {
         blit::teardown();
         foveation::teardown();
+        crate::far_field::share::teardown();
         mirror::teardown();
         uninstall();
     });

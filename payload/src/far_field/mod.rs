@@ -43,6 +43,8 @@ use parking_lot::Mutex;
 
 use crate::config::{Config, FarFieldMode};
 
+pub mod share;
+
 /// Per-pass split counters for the debug UI.
 #[derive(Clone, Copy)]
 pub struct PassSplit {
@@ -243,6 +245,17 @@ pub unsafe fn before_do_draw(pass: *mut RenderPass, ctx: *mut RenderContext) -> 
         FarFieldMode::SkipFar => Some((0, split)),
         FarFieldMode::SkipNear => Some((split, count)),
         FarFieldMode::SkipFarEye1 => crate::stereo::is_second_eye().then_some((0, split)),
+        // A share frame's far dispatch draws only the far run; the near dispatches only the
+        // near run. Outside a share frame (stereo off), Share behaves like Collect.
+        FarFieldMode::Share => {
+            if crate::stereo::far_phase() {
+                Some((split, count))
+            } else if crate::stereo::share_frame() {
+                Some((0, split))
+            } else {
+                None
+            }
+        }
     };
     STATS.lock().insert(
         id,
@@ -308,9 +321,18 @@ unsafe extern "system" fn far_gated_type_is_enabled(_this: *mut ::core::ffi::c_v
         && match mode {
             FarFieldMode::SkipFar => true,
             FarFieldMode::SkipFarEye1 => crate::stereo::is_second_eye(),
+            // The gated types are far-regime content: on a share frame they render only in the
+            // far dispatch (the near dispatches composite them from the capture).
+            FarFieldMode::Share => crate::stereo::share_frame() && !crate::stereo::far_phase(),
             FarFieldMode::Collect | FarFieldMode::SkipNear => false,
         };
     !skipping
+}
+
+/// Whether this frame should run the three-dispatch far-field share: the split is enabled in
+/// `Share` mode (the Draw driver also requires stereo to be active).
+pub fn share_configured() -> bool {
+    Config::lock_query(|c| c.far_field.enabled && c.far_field.mode == FarFieldMode::Share)
 }
 
 /// The sentinel boundary appended after the threshold. The engine's bucket search

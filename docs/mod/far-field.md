@@ -24,12 +24,16 @@ Render/Performance tabs; a dump button logs the full per-pass classification sta
 Accepted residuals for the baseline: minor distant bleed, and the non-ocean water tiles, which
 straddle the boundary — revisit after sharing lands.
 
-## Increment 2 — sharing (design)
+## Increment 2 — sharing (implemented: Variant B)
+
+`Share` mode (`far_field.mode`) runs the design below; the dial-in modes remain for
+classification work. Implementation: the dispatch loop in `hooks::game`, the far/near phase state
+in `crate::stereo`, and the capture/composite pipeline in `far_field::share`.
 
 ### Frame structure: three dispatches
 
-Reuse the stereo machinery (the double-`Draw` loop and its between-eye state save/restore) with a
-third, far-only dispatch:
+Reuse the stereo machinery (the double-`Draw` loop and its between-eye state save/restore — the
+restores now run between every consecutive dispatch pair) with a third, far-only dispatch:
 
 1. **Far dispatch** (eye-0 pose): far model runs + gated far types only (near windows empty), plus
    sky. Post-effects and screen-space passes gated off. Capture the shared far product at the end
@@ -73,18 +77,44 @@ The far image must cover the union of both eyes' frusta or eye 1's edges sample 
 mod already builds union-FOV projections (cull widen, shadow fit); the far dispatch's projection
 reuses that machinery, at a modest pixel-density cost.
 
+### Implementation notes
+
+- **Injection point**: the composite splits the G-buffer `DrawRenderPassRange` at
+  `RP_ROAD_STENCIL` (0x35) — after `RP_CLEAR` (0x34) and the Z-prepass prefix. The depth merge
+  with the near dispatch's own prepass is fixed-function (`GREATER_EQUAL` + depth write under
+  reverse-Z), so far content lands only where nothing nearer claimed the pixel, and equal depths
+  (a far model prepassed by both dispatches — the Z passes are not windowed) take the far
+  G-buffer content.
+- **Capture**: after the far dispatch's G-buffer range completes, MainDepth + GBuffer0..3 are
+  copied into the share pipeline's textures (the depth copy is typeless-family with a
+  depth-readable SRV).
+- **The warp is per-axis affine**, not the full homography: parallel same-centre eyes reduce the
+  projection difference to an NDC scale+offset per axis (identity on flatscreen stereo). Canted
+  displays (per-eye yaw) would need the full homography — not handled yet.
+- **The far dispatch is suppressed beyond the G-buffer**: the scene/post ranges early-out, post
+  effects are skipped, its `dt` is zeroed alongside eye 1's, and the shared pre-passes run only on
+  the frame's first dispatch (keyed on the dispatch ordinal, which also keys the FSR VP-history
+  rotation).
+- Screen-space passes in the near dispatches (SSAO/SSR/GI/lighting) run over the composited
+  G-buffer — correct by construction in Variant B.
+
 ### Open items
 
-- **Clear ordering**: the composite must land after the engine's own depth/G-buffer clears and
-  before geometry. The per-pass `PreDraw` clear flags and `RP_CLEAR` (0x34, which runs *after* the
-  Z passes in index order) need a trace to pin the exact injection point per target.
-- **Capture point**: end-of-scene for the far dispatch (the `capture_main_color`-style hooks are
-  precedent); G-buffer captures are new targets on the capture state.
-- **Screen-space passes in the near dispatches** (SSAO/SSR/GI) run over the composited G-buffer —
-  correct by construction in Variant B.
-- **Velocity/TAA/FSR**: the far pixels carry no per-eye velocity; FSR's stereo MV correction
-  (`fsr.md`) may need the far region treated as static — validate for shadow-edge flicker.
+- **`RP_CLEAR` semantics**: assumed to clear the G-buffer colours (not depth, which the Z prepass
+  precedes); a wrong assumption shows immediately as the composite being wiped — validate on the
+  first Share run.
+- **Coverage**: the far image is eye 0's frustum; eye 1's outer edge samples outside it and the
+  composite discards there (sky shows in a thin strip of far content at one edge). The union-FOV
+  far projection is the follow-up.
+- **Velocity/TAA/FSR**: gated far types (terrain/impostors) carry cleared (zero) velocity — fine
+  while static; far *models* keep real velocity (the Z-and-velocity pass is not windowed).
+  Validate FSR shadow-edge behaviour in Share mode.
+- **Stencil**: the composite does not carry the far G-buffer's stencil bits (material masks, e.g.
+  subsurface skin) — invisible at far-field distances.
+- **Variant A** (share the lit far colour+depth, lighting paid once) needs the lighting-resolve
+  masking dig.
+- **Transparent far content stays per-eye**: Share-gated types render only in the far dispatch's
+  G-buffer range, so transparent types cannot be gated (`Window` — car/building glass — vanished
+  entirely and was dropped from the default gate list). The future option is a per-entry split on
+  the back-to-front transparency passes, whose sort keys are raw distances.
 - **Water tiles** (non-ocean) and remaining bleed from increment 1.
-- **Between-eye state**: the third dispatch multiplies the per-dispatch side effects the stereo
-  machinery already gates (EffectInfo ring, dt accumulators, draw-done signal) — audit
-  `rendering.md` §5/§13 against three dispatches.

@@ -160,25 +160,29 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
         if stereo {
             crate::crash::mark(Phase::Eye0Snapshot);
-            // Snapshot the reflection-proxy depth-history before eye 0 and restore it before eye 1,
-            // so both dispatches make the same per-slot decisions -- the state then advances once
-            // per real frame instead of once per dispatch, otherwise water reflections flicker.
+            // Snapshot the reflection-proxy depth-history before the first dispatch and restore it
+            // before each later one, so every dispatch makes the same per-slot decisions -- the
+            // state then advances once per real frame instead of once per dispatch, otherwise
+            // water reflections flicker.
             let effect_info = snapshot_effect_info();
-            // Snapshot the prologue frame counters so we can rewind them before eye 1, keeping both
-            // eyes on the same jitter phase / shadow parity / CB ring (see RESTORE_FRAME_COUNTERS).
+            // Snapshot the prologue frame counters so we can rewind them before each later
+            // dispatch, keeping all dispatches on the same jitter phase / shadow parity / CB ring
+            // (see RESTORE_FRAME_COUNTERS).
             let frame_counters = restore_counters.then(snapshot_frame_counters);
-            // Snapshot the RenderEngine per-Draw constant-buffer ring index so we can rewind it before
-            // eye 1: it advances once per Draw and is not part of the frame counters above, so without
-            // this the two eyes select different CB pool slots (see RESTORE_CB_RING).
+            // Snapshot the RenderEngine per-Draw constant-buffer ring index so we can rewind it
+            // before each later dispatch: it advances once per Draw and is not part of the frame
+            // counters above, so without this the dispatches select different CB pool slots (see
+            // RESTORE_CB_RING).
             let cb_ring = restore_cb_ring.then(snapshot_cb_ring).flatten();
-            // Snapshot the SSAO temporal history index and the GI cascade index so eye 1 resolves
-            // against the same SSAO slot and refreshes the same LPV cascade as eye 0 -- the two passes
-            // that carry an unsynchronized per-eye history (see RESTORE_SSAO_HISTORY / RESTORE_GI_CASCADE).
+            // Snapshot the SSAO temporal history index and the GI cascade index so every dispatch
+            // resolves against the same SSAO slot and refreshes the same LPV cascade -- the two
+            // passes that carry an unsynchronized per-eye history (see RESTORE_SSAO_HISTORY /
+            // RESTORE_GI_CASCADE).
             let ssao_history = restore_ssao.then(snapshot_ssao_history).flatten();
             let gi_cascade = restore_gi.then(snapshot_gi_cascade).flatten();
-            // Diagnostic (only while a trace is collecting, so it costs nothing in normal play): confirm
-            // the between-eye restores are actually reaching live state -- a `None`/null here means the
-            // snapshot missed and the restore is a silent no-op.
+            // Diagnostic (only while a trace is collecting, so it costs nothing in normal play):
+            // confirm the between-dispatch restores are actually reaching live state -- a
+            // `None`/null here means the snapshot missed and the restore is a silent no-op.
             if crate::debug::trace::tracing_active() {
                 tracing::info!(
                     target: "stereo",
@@ -188,17 +192,22 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                     gi_cascade,
                 );
             }
-            // Snapshot the add/draw list parity so eye 1's CKeep1000Frames toggles it to the same
-            // value as eye 0, making SaveRenderFrameData set the same list pointers. This replaces the
-            // former RotateRenderFrameData eye-1 gate -- the function now runs on both eyes, so the
-            // overflow list is processed and the external render camera is updated on both eyes too.
+            // Snapshot the add/draw list parity so each later dispatch's CKeep1000Frames toggles
+            // it to the same value as the first, making SaveRenderFrameData set the same list
+            // pointers. This replaces the former RotateRenderFrameData eye-1 gate -- the function
+            // now runs on every dispatch, so the overflow list is processed and the external
+            // render camera is updated on all of them too.
             let saved_add_buffer = *get_current_add_buffer();
 
             // The per-eye camera offset is injected on the render camera in the SetupRenderCamera
-            // hook (see hooks::camera and docs/engine/rendering.md section 2); here we just drive the two
-            // dispatches and tag each with its eye index via STEREO_STATE.draw_index. present_eye_0
-            // picks which eye reaches the screen (the other's flip is blocked), so each eye can be
-            // compared live.
+            // hook (see hooks::camera and docs/engine/rendering.md section 2); here we just drive
+            // the dispatches and tag each with its eye index via STEREO_STATE.draw_index.
+            // present_eye_0 picks which eye reaches the screen (the other's flip is blocked), so
+            // each eye can be compared live. A share frame (issue #32) prepends a far-only
+            // dispatch at eye 0's pose: it renders the far draw-list runs and the gated far-regime
+            // types into the G-buffer, which the render-pass-range hook captures for the two near
+            // dispatches to composite.
+            let share_frame = crate::far_field::share_configured();
             let present_eye = usize::from(!present_eye_0);
             TraceState::record(TraceEvent::FrameBegin {
                 stereo: true,
@@ -206,95 +215,107 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 restore_counters: Some(restore_counters),
             });
 
-            super::draw_count::DRAW_COUNTS.clear();
-            graphics_engine::post_effects::reset_post_block_gate();
-            TraceState::record(TraceEvent::DrawBegin { eye: 0 });
-            STEREO_STATE.lock().draw_index = 0;
-            // While a VR session runs there is no desktop present at all (the compositor presents),
-            // so block the flip for both eyes; otherwise `present_eye_0` picks which eye reaches the
-            // game window.
-            BLOCK_FLIP.store(vr_running || present_eye != 0, Ordering::Relaxed);
-            tracing::trace!(target: "frameloop", "game_update_render: eye 0 Draw");
-            crate::crash::mark(Phase::Eye0Draw);
-            game.Draw(spf);
-            tracing::trace!(target: "frameloop", "game_update_render: eye 0 WaitForCPUDrawToFinish");
-            crate::crash::mark(Phase::Eye0Drain);
-            if let Some(ge) = GraphicsEngine::get() {
-                ge.WaitForCPUDrawToFinish();
-                drain_draw_thread_fragment(ge);
-            }
-            tracing::trace!(target: "frameloop", "game_update_render: eye 0 done");
-            crate::crash::mark(Phase::Eye0Post);
-            crate::debug::rt_hash::hash_engine_rts();
-            crate::debug::camera::capture_render_camera(0);
-            TraceState::record(TraceEvent::DrawEnd {
-                eye: 0,
-                counts: super::draw_count::DRAW_COUNTS.snapshot(),
-            });
+            // (eye index, far phase) per dispatch, in order.
+            let dispatches: &[(usize, bool)] = if share_frame {
+                &[(0, true), (0, false), (1, false)]
+            } else {
+                &[(0, false), (1, false)]
+            };
+            for (ordinal, &(eye, far_phase)) in dispatches.iter().enumerate() {
+                if ordinal > 0 {
+                    crate::crash::mark(Phase::BetweenEyesRestore);
+                    if let Some(state) = &effect_info {
+                        restore_effect_info(state);
+                    }
+                    if let Some(counters) = frame_counters {
+                        restore_frame_counters(counters);
+                    }
+                    // Now that the frame counters are pinned back to the first dispatch's values,
+                    // force the terrain tessellation blocks to re-upload their per-slot constant
+                    // buffers: they cache the baked (per-eye off-axis) view-projection keyed on
+                    // the render frame number, which the restore above just made identical to the
+                    // first dispatch's, so this dispatch would otherwise reuse its projection for
+                    // the distant tessellated terrain (a sheared horizon wedge in VR). Only
+                    // meaningful while the counters are restored -- otherwise each dispatch
+                    // already gets a fresh frame number and re-uploads on its own.
+                    if restore_counters && invalidate_terrain_cb {
+                        invalidate_terrain_cbs();
+                    }
+                    if let Some(ring) = cb_ring {
+                        restore_cb_ring_index(ring);
+                    }
+                    if let Some(history) = ssao_history {
+                        restore_ssao_history_indices(history);
+                    }
+                    if let Some(cascade) = gi_cascade {
+                        restore_gi_cascade_index(cascade);
+                    }
+                    // Restore the add/draw parity so this dispatch's CKeep1000Frames produces the
+                    // same toggle as the first, and SaveRenderFrameData zeroes the same add-list
+                    // (removing the earlier dispatch's draw-time additions like SSAO/post blocks).
+                    *get_current_add_buffer() = saved_add_buffer;
+                }
 
-            crate::crash::mark(Phase::BetweenEyesRestore);
-            if let Some(state) = &effect_info {
-                restore_effect_info(state);
+                super::draw_count::DRAW_COUNTS.clear();
+                graphics_engine::post_effects::reset_post_block_gate();
+                TraceState::record(TraceEvent::DrawBegin { eye });
+                {
+                    let mut state = STEREO_STATE.lock();
+                    state.draw_index = eye;
+                    state.far_phase = far_phase;
+                    state.share_frame = share_frame;
+                    state.dispatch_ordinal = ordinal;
+                }
+                // While a VR session runs there is no desktop present at all (the compositor
+                // presents), so block the flip for every dispatch; otherwise `present_eye_0` picks
+                // which eye reaches the game window. The far dispatch never presents.
+                BLOCK_FLIP.store(
+                    vr_running || far_phase || present_eye != eye,
+                    Ordering::Relaxed,
+                );
+                tracing::trace!(
+                    target: "frameloop",
+                    "game_update_render: dispatch {ordinal} (eye {eye}, far {far_phase}) Draw"
+                );
+                crate::crash::mark(if eye == 0 {
+                    Phase::Eye0Draw
+                } else {
+                    Phase::Eye1Draw
+                });
+                game.Draw(spf);
+                crate::crash::mark(if eye == 0 {
+                    Phase::Eye0Drain
+                } else {
+                    Phase::Eye1Drain
+                });
+                if let Some(ge) = GraphicsEngine::get() {
+                    ge.WaitForCPUDrawToFinish();
+                    drain_draw_thread_fragment(ge);
+                }
+                crate::crash::mark(if eye == 0 {
+                    Phase::Eye0Post
+                } else {
+                    Phase::Eye1Post
+                });
+                if !far_phase {
+                    crate::debug::rt_hash::hash_engine_rts();
+                    crate::debug::camera::capture_render_camera(eye);
+                }
+                TraceState::record(TraceEvent::DrawEnd {
+                    eye,
+                    counts: super::draw_count::DRAW_COUNTS.snapshot(),
+                });
             }
-            if let Some(counters) = frame_counters {
-                restore_frame_counters(counters);
-            }
-            // Now that the frame counters are pinned back to eye 0's values, force the terrain
-            // tessellation blocks to re-upload their per-slot constant buffers for eye 1: they cache
-            // the baked (per-eye off-axis) view-projection keyed on the render frame number, which the
-            // restore above just made identical to eye 0's, so eye 1 would otherwise reuse eye 0's
-            // projection for the distant tessellated terrain (a sheared horizon wedge in VR). Only
-            // meaningful while the counters are restored -- otherwise eye 1 already gets a fresh frame
-            // number and re-uploads on its own.
-            if restore_counters && invalidate_terrain_cb {
-                invalidate_terrain_cbs();
-            }
-            if let Some(ring) = cb_ring {
-                restore_cb_ring_index(ring);
-            }
-            if let Some(history) = ssao_history {
-                restore_ssao_history_indices(history);
-            }
-            if let Some(cascade) = gi_cascade {
-                restore_gi_cascade_index(cascade);
-            }
-            // Restore the add/draw parity so eye 1's CKeep1000Frames produces the same toggle as eye 0,
-            // and SaveRenderFrameData zeroes the same add-list (removing eye 0's draw-time additions
-            // like SSAO/post blocks). This replaces the former reset_per_eye() call.
-            *get_current_add_buffer() = saved_add_buffer;
-
-            super::draw_count::DRAW_COUNTS.clear();
-            graphics_engine::post_effects::reset_post_block_gate();
-            TraceState::record(TraceEvent::DrawBegin { eye: 1 });
-            STEREO_STATE.lock().draw_index = 1;
-            BLOCK_FLIP.store(vr_running || present_eye != 1, Ordering::Relaxed);
-            tracing::trace!(target: "frameloop", "game_update_render: eye 1 Draw");
-            crate::crash::mark(Phase::Eye1Draw);
-            game.Draw(spf);
-            tracing::trace!(target: "frameloop", "game_update_render: eye 1 WaitForCPUDrawToFinish");
-            crate::crash::mark(Phase::Eye1Drain);
-            if let Some(ge) = GraphicsEngine::get() {
-                ge.WaitForCPUDrawToFinish();
-                drain_draw_thread_fragment(ge);
-            }
-            tracing::trace!(target: "frameloop", "game_update_render: eye 1 done");
-            crate::crash::mark(Phase::Eye1Post);
-            crate::debug::rt_hash::hash_engine_rts();
-            crate::debug::camera::capture_render_camera(1);
-            TraceState::record(TraceEvent::DrawEnd {
-                eye: 1,
-                counts: super::draw_count::DRAW_COUNTS.snapshot(),
-            });
             TraceState::end_frame();
 
-            STEREO_STATE.lock().draw_index = 0;
+            reset_dispatch_state();
         } else {
             TraceState::record(TraceEvent::FrameBegin {
                 stereo: false,
                 present_eye: None,
                 restore_counters: None,
             });
-            STEREO_STATE.lock().draw_index = 0;
+            reset_dispatch_state();
             graphics_engine::post_effects::reset_post_block_gate();
             crate::crash::mark(Phase::NonStereoDraw);
             game.Draw(spf);
@@ -334,6 +355,17 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
 /// Snapshot of the reflection-proxy depth-history lifecycle (the 5 slot counters + the picked
 /// index). Advanced once per scene dispatch, so we restore it between the two stereo Draws.
+/// Reset the per-dispatch stereo state to the frame's baseline: eye 0, no far phase, no share
+/// frame, ordinal 0 — so state from a share frame's last dispatch never leaks into the next
+/// frame's first dispatch (or into a non-stereo frame).
+fn reset_dispatch_state() {
+    let mut state = STEREO_STATE.lock();
+    state.draw_index = 0;
+    state.far_phase = false;
+    state.share_frame = false;
+    state.dispatch_ordinal = 0;
+}
+
 struct EffectInfoState {
     frame_index: [u8; 5],
     index: u32,

@@ -130,7 +130,8 @@ fn apply_world_filters(
     a7: *mut c_void,
     a8: *mut c_void,
 ) {
-    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_eye1_dt);
+    let gated = (is_second_eye() || crate::stereo::far_phase())
+        && Config::lock_query(|c| c.stereo.gate_eye1_dt);
     TraceState::record_eye(TraceEvent::ApplyWorldFilters { gated });
     let dt = if gated { 0.0 } else { dt };
     APPLY_WORLD_FILTERS
@@ -144,7 +145,8 @@ fn apply_world_filters(
 // once-per-real-frame reason.
 #[detour(address = jc3gi::graphics_engine::post_effects::PostEffectsManager::ApplyGlobalFilters_ADDRESS)]
 fn apply_global_filters(this: *mut c_void, dt: f32, ctx: *mut c_void) {
-    let gated = is_second_eye() && Config::lock_query(|c| c.stereo.gate_eye1_dt);
+    let gated = (is_second_eye() || crate::stereo::far_phase())
+        && Config::lock_query(|c| c.stereo.gate_eye1_dt);
     TraceState::record_eye(TraceEvent::ApplyGlobalFilters { gated });
     let dt = if gated { 0.0 } else { dt };
     APPLY_GLOBAL_FILTERS.get().unwrap().call(this, dt, ctx);

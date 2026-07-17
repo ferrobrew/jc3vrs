@@ -20,8 +20,9 @@
 //!
 //! The packed-index bit layout is documented on `jc3gi`'s `HContext_t::m_DepthStencilStateIndex`. The two
 //! D3D passes borrow the engine's immediate context under `Context::m_Mutex`, the same discipline as
-//! [`crate::vr::blit`] and `crate::capture::composite`. Off by default -- experimental, and enabling it
-//! costs the two passes plus the per-draw index rewrite; see [`crate::config::FoveationConfig`].
+//! [`crate::vr::blit`] and `crate::capture::composite`. On by default, but still experimental;
+//! disabling it skips the two passes and the per-draw index rewrite; see
+//! [`crate::config::FoveationConfig`].
 
 use std::{
     ffi::c_void,
@@ -40,10 +41,11 @@ use windows::{
                 D3D11_COMPARISON_ALWAYS, D3D11_CULL_NONE, D3D11_DEPTH_STENCIL_DESC,
                 D3D11_DEPTH_STENCILOP_DESC, D3D11_DEPTH_WRITE_MASK_ZERO, D3D11_FILL_SOLID,
                 D3D11_RASTERIZER_DESC, D3D11_STENCIL_OP_KEEP, D3D11_STENCIL_OP_REPLACE,
-                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIEWPORT, ID3D11Buffer,
-                ID3D11DepthStencilState, ID3D11DepthStencilView, ID3D11Device, ID3D11DeviceContext,
-                ID3D11PixelShader, ID3D11RasterizerState, ID3D11RenderTargetView,
-                ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
+                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIEWPORT, ID3D11BlendState,
+                ID3D11Buffer, ID3D11DepthStencilState, ID3D11DepthStencilView, ID3D11Device,
+                ID3D11DeviceContext, ID3D11PixelShader, ID3D11RasterizerState,
+                ID3D11RenderTargetView, ID3D11ShaderResourceView, ID3D11Texture2D,
+                ID3D11VertexShader,
             },
             Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC},
         },
@@ -574,7 +576,10 @@ unsafe fn create_params_cb(d3d: &ID3D11Device) -> anyhow::Result<ID3D11Buffer> {
 /// restoring would leave the following passes rendering into the wrong (or no) target -- whole passes
 /// vanish. The per-draw state (shaders, input layout, constant buffers, shader resources) is re-bound by
 /// every engine draw, so it is not captured.
-struct StateBackup {
+pub(crate) struct StateBackup {
+    blend_state: Option<ID3D11BlendState>,
+    blend_factor: [f32; 4],
+    sample_mask: u32,
     render_targets: [Option<ID3D11RenderTargetView>; 8],
     depth_stencil_view: Option<ID3D11DepthStencilView>,
     depth_stencil_state: Option<ID3D11DepthStencilState>,
@@ -587,15 +592,23 @@ struct StateBackup {
 ///
 /// # Safety
 /// `context` must be the live engine immediate context, held under its mutex.
-unsafe fn capture_state(context: &ID3D11DeviceContext) -> StateBackup {
+pub(crate) unsafe fn capture_state(context: &ID3D11DeviceContext) -> StateBackup {
     let mut render_targets: [Option<ID3D11RenderTargetView>; 8] = std::array::from_fn(|_| None);
     let mut depth_stencil_view: Option<ID3D11DepthStencilView> = None;
     let mut depth_stencil_state: Option<ID3D11DepthStencilState> = None;
     let mut stencil_ref: u32 = 0;
     let mut num_viewports: u32 = 0;
+    let mut blend_state: Option<ID3D11BlendState> = None;
+    let mut blend_factor = [0.0f32; 4];
+    let mut sample_mask: u32 = 0xFFFF_FFFF;
     unsafe {
         context.OMGetRenderTargets(Some(&mut render_targets), Some(&mut depth_stencil_view));
         context.OMGetDepthStencilState(Some(&mut depth_stencil_state), Some(&mut stencil_ref));
+        context.OMGetBlendState(
+            Some(&mut blend_state),
+            Some(&mut blend_factor),
+            Some(&mut sample_mask),
+        );
         context.RSGetViewports(&mut num_viewports, None);
     }
     let mut viewports = vec![D3D11_VIEWPORT::default(); num_viewports as usize];
@@ -604,6 +617,9 @@ unsafe fn capture_state(context: &ID3D11DeviceContext) -> StateBackup {
     }
     let rasterizer = unsafe { context.RSGetState() }.ok();
     StateBackup {
+        blend_state,
+        blend_factor,
+        sample_mask,
         render_targets,
         depth_stencil_view,
         depth_stencil_state,
@@ -617,13 +633,18 @@ unsafe fn capture_state(context: &ID3D11DeviceContext) -> StateBackup {
 ///
 /// # Safety
 /// `context` must be the live engine immediate context, held under its mutex.
-unsafe fn restore_state(context: &ID3D11DeviceContext, backup: &StateBackup) {
+pub(crate) unsafe fn restore_state(context: &ID3D11DeviceContext, backup: &StateBackup) {
     unsafe {
         context.OMSetRenderTargets(
             Some(&backup.render_targets),
             backup.depth_stencil_view.as_ref(),
         );
         context.OMSetDepthStencilState(backup.depth_stencil_state.as_ref(), backup.stencil_ref);
+        context.OMSetBlendState(
+            backup.blend_state.as_ref(),
+            Some(&backup.blend_factor),
+            backup.sample_mask,
+        );
         if !backup.viewports.is_empty() {
             context.RSSetViewports(Some(&backup.viewports));
         }
@@ -634,7 +655,7 @@ unsafe fn restore_state(context: &ID3D11DeviceContext, backup: &StateBackup) {
 /// Borrow a COM view stored inline in an engine `Texture` (its `m_SRV`/`m_RTV`/`m_DSV` fields) as an owned
 /// (AddRef'd) handle, returning `None` if the slot is null. The field is read as a raw pointer so a null
 /// slot never materializes a non-null-invariant `windows` interface.
-fn view_ptr<T: windows::core::Interface>(field: *const T) -> Option<T> {
+pub(crate) fn view_ptr<T: windows::core::Interface>(field: *const T) -> Option<T> {
     // SAFETY: `field` addresses a live `Texture`'s inline COM slot; reading it as a raw pointer and
     // borrowing (no AddRef) is sound, and `.map(Clone::clone)` AddRefs only a non-null handle.
     let raw = unsafe { *(field as *const *mut c_void) };
@@ -643,7 +664,7 @@ fn view_ptr<T: windows::core::Interface>(field: *const T) -> Option<T> {
 
 /// Borrow the engine `Texture`'s inline `ID3D11Resource` (`m_Texture`) and query it to `ID3D11Texture2D`,
 /// returning `None` if the slot is null or the cast fails.
-fn resource_as_texture(
+pub(crate) fn resource_as_texture(
     field: *const jc3gi::graphics_engine::texture::ID3D11Resource,
 ) -> Option<ID3D11Texture2D> {
     let raw = unsafe { *(field as *const *mut c_void) };

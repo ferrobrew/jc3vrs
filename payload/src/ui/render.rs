@@ -519,6 +519,12 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                     "Skip far, eye 1",
                     "The sharing candidate: eye 1 skips the far run",
                 ),
+                (
+                    FarFieldMode::Share,
+                    "Share",
+                    "Render the far field once per frame (a third, far-only dispatch) and \
+                     composite its G-buffer under both eyes; requires stereo",
+                ),
             ] {
                 ui.selectable_value(&mut cfg.far_field.mode, mode, label)
                     .on_hover_text(hover);

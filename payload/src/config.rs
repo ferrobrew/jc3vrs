@@ -499,7 +499,8 @@ impl ExposureConfig {
 pub struct FarFieldConfig {
     /// Master toggle: register the depth-bucket boundary on the passes in range and compute the
     /// near/far split (and the UI counters) each draw. Off restores each pass's stock single
-    /// bucket.
+    /// bucket. On by default in `Share` mode: the far field renders once per frame and is
+    /// composited under both eyes (a no-op outside stereo).
     pub enabled: bool,
     /// The near/far boundary in metres (instance-centre distance to the sort camera). Large
     /// objects whose centre sits beyond this but whose extent reaches nearer are classified far,
@@ -510,6 +511,9 @@ pub struct FarFieldConfig {
     /// The volumetric terrain patches draw only distant terrain (near terrain hands off to other
     /// types as the camera approaches), and the tree impostors are the distant-tree
     /// representation; find further candidates with the Diagnostics tab's registry bisect.
+    /// Under `Share`, gated types render only in the far dispatch's G-buffer range, so only
+    /// opaque G-buffer types belong here — a transparent type (e.g. `Window`, the car/building
+    /// glass) would vanish entirely, since its passes never run in the far dispatch.
     pub gated_types: String,
     /// What to do with the partition.
     pub mode: FarFieldMode,
@@ -517,10 +521,10 @@ pub struct FarFieldConfig {
 impl FarFieldConfig {
     pub const fn new() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             threshold_m: 250.0,
             gated_types: String::new(),
-            mode: FarFieldMode::Collect,
+            mode: FarFieldMode::Share,
         }
     }
 }
@@ -534,7 +538,7 @@ impl Default for FarFieldConfig {
 /// patches and tree impostors/forest draw only the distant scene). Applied to
 /// [`FarFieldConfig::gated_types`] at startup, since the const constructor cannot own a string.
 pub const DEFAULT_FAR_FIELD_GATED_TYPES: &str =
-    "VolumetricTerrainPatch, TreeImpostor, TerrainForest, Occluder, Window";
+    "VolumetricTerrainPatch, TreeImpostor, TerrainForest, Occluder";
 
 /// What the far-field split does with the partition each draw.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -549,6 +553,10 @@ pub enum FarFieldMode {
     /// Skip the far run on the second eye only: the sharing candidate's cost saving, with eye 1
     /// showing holes where the shared far field would composite.
     SkipFarEye1,
+    /// The far-field share (issue #32 increment 2): a third, far-only dispatch renders the far field once
+    /// at eye 0's pose; both near dispatches composite its captured G-buffer and render near-only
+    /// on top. Requires stereo; falls back to `Collect` behaviour otherwise.
+    Share,
 }
 
 /// Static foveated rendering (issue #29): a radial stencil mask drops a dithered fraction of the

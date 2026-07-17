@@ -12,8 +12,21 @@ use parking_lot::Mutex;
 pub struct StereoState {
     /// Whether the current frame is being rendered in stereo (the Draw driver double-Draws).
     pub active: bool,
-    /// The eye currently being drawn: 0 = first, 1 = second.
+    /// The eye currently being drawn: 0 = first, 1 = second. During a share frame's far
+    /// dispatch this stays 0 (the far phase renders at eye 0's pose).
     pub draw_index: usize,
+    /// Whether the current dispatch is a share frame's far-only dispatch (issue #32): the far
+    /// draw-list runs and the gated far-regime types render, everything near is skipped, and the
+    /// scene/post ranges beyond the G-buffer are suppressed.
+    pub far_phase: bool,
+    /// Whether the current frame runs the three-dispatch far-field share (far + two near
+    /// dispatches). The near dispatches window their split passes to the near run and composite
+    /// the captured far G-buffer.
+    pub share_frame: bool,
+    /// The current dispatch's ordinal within the frame (0-based): 0/1 for plain stereo, 0/1/2 for
+    /// a share frame. Once-per-frame work (the shared pre-passes) keys on `> 0`, independent of
+    /// eye indexing.
+    pub dispatch_ordinal: usize,
     /// The current eye's world-space camera offset from the center camera (`offset * right`, in
     /// metres), set by the `SetupRenderCamera` hook. The sun-shadow cascade correction adds
     /// `M * shadow_anchor_delta` to the cascade transform translation so the shadow lookup stays
@@ -35,6 +48,9 @@ impl StereoState {
         Self {
             active: false,
             draw_index: 0,
+            far_phase: false,
+            share_frame: false,
+            dispatch_ordinal: 0,
             shadow_anchor_delta: glam::Vec3::ZERO,
             vp_history: VpHistory::new(),
             center_transform: None,
@@ -121,4 +137,19 @@ pub fn draw_index() -> usize {
 pub fn is_second_eye() -> bool {
     let state = STEREO_STATE.lock();
     state.active && state.draw_index == 1
+}
+
+/// True while the Draw driver is rendering a share frame's far-only dispatch.
+pub fn far_phase() -> bool {
+    STEREO_STATE.lock().far_phase
+}
+
+/// True while the current frame runs the three-dispatch far-field share.
+pub fn share_frame() -> bool {
+    STEREO_STATE.lock().share_frame
+}
+
+/// The current dispatch's 0-based ordinal within the frame (see [`StereoState::dispatch_ordinal`]).
+pub fn dispatch_ordinal() -> usize {
+    STEREO_STATE.lock().dispatch_ordinal
 }

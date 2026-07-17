@@ -137,6 +137,11 @@ fn initialize_from_game() -> anyhow::Result<()> {
 
 /// Called to undo `initialize_from_game`; called once shutdown is triggered
 fn shutdown_from_game() {
+    // Revert the far-field type gates and release the share pipeline's COM objects before the
+    // hooks (and their patches) are torn down: the gated IsEnabled slots and the composite
+    // pipeline must never outlive the payload code they point into.
+    far_field::sync_type_gates("");
+    far_field::share::teardown();
     if let Some(egui_state) = EguiState::get().as_mut() {
         lifecycle::run_cleanups(&mut egui_state.egui_renderer);
     }
