@@ -10,7 +10,6 @@ use jc3gi::environment::{LandscapeManager, Weather, WeatherController, WorldTime
 /// Render the Environment tab body.
 pub(crate) fn render(ui: &mut egui::Ui) {
     fn time_of_day_ui(ui: &mut egui::Ui) {
-        ui.heading("Time of day");
         let wt = unsafe { WorldTime::get() };
         let Some(wt) = wt else {
             ui.label("WorldTime singleton unavailable.");
@@ -31,7 +30,6 @@ pub(crate) fn render(ui: &mut egui::Ui) {
     }
 
     fn weather_ui(ui: &mut egui::Ui) {
-        ui.heading("Weather");
         // The named events the WeatherController subscribes: the engine-sanctioned way to *pin* a
         // weather state, where the direct scalar writes below drift back each frame.
         ui.horizontal(|ui| {
@@ -65,9 +63,12 @@ pub(crate) fn render(ui: &mut egui::Ui) {
         );
     }
 
-    time_of_day_ui(ui);
-    ui.separator();
-    weather_ui(ui);
+    egui::CollapsingHeader::new("Time of day")
+        .default_open(true)
+        .show(ui, time_of_day_ui);
+    egui::CollapsingHeader::new("Weather")
+        .default_open(true)
+        .show(ui, weather_ui);
 }
 
 /// The named weather events the [`WeatherController`] subscribes in its `Init`, as button label

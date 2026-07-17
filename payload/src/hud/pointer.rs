@@ -71,6 +71,8 @@ pub fn window_mouse_events(panel_size: (u32, u32)) -> Vec<egui::Event> {
         events.push(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
             delta: egui::Vec2::new(0.0, notches),
+            // Discrete wheel notches carry no gesture phase.
+            phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::default(),
         });
     }

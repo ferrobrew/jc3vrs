@@ -281,41 +281,37 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
             *w
         };
         let mut hud = crate::hud::HUD_STATE.lock();
-        egui::CollapsingHeader::new("HUD texture")
-            .default_open(false)
-            .show(ui, |ui| match hud.preview_id(renderer) {
-                Some(id) => {
-                    // The preview matches the HUD aspect (width / height).
-                    let size = egui::vec2(preview_width, preview_width / aspect.max(f32::EPSILON));
-                    ui.add(egui::Image::new(egui::ImageSource::Texture(
-                        egui::load::SizedTexture { id, size },
-                    )));
-                }
-                None => {
-                    ui.label("(redirect not yet applied)");
-                }
-            });
+        ui.collapsing("HUD texture", |ui| match hud.preview_id(renderer) {
+            Some(id) => {
+                // The preview matches the HUD aspect (width / height).
+                let size = egui::vec2(preview_width, preview_width / aspect.max(f32::EPSILON));
+                ui.add(egui::Image::new(egui::ImageSource::Texture(
+                    egui::load::SizedTexture { id, size },
+                )));
+            }
+            None => {
+                ui.label("(redirect not yet applied)");
+            }
+        });
         let split_enabled = crate::config::Config::lock_query(|c| c.hud.split);
         if split_enabled {
-            egui::CollapsingHeader::new("Split layer textures")
-                .default_open(false)
-                .show(ui, |ui| {
-                    let ids = hud.layer_preview_ids(renderer);
-                    let size = egui::vec2(preview_width, preview_width / aspect.max(f32::EPSILON));
-                    for (id, label) in ids.iter().zip(["Markers", "Center"]) {
-                        ui.label(label);
-                        match id {
-                            Some(id) => {
-                                ui.add(egui::Image::new(egui::ImageSource::Texture(
-                                    egui::load::SizedTexture { id: *id, size },
-                                )));
-                            }
-                            None => {
-                                ui.label("(layer target not created)");
-                            }
+            ui.collapsing("Split layer textures", |ui| {
+                let ids = hud.layer_preview_ids(renderer);
+                let size = egui::vec2(preview_width, preview_width / aspect.max(f32::EPSILON));
+                for (id, label) in ids.iter().zip(["Markers", "Center"]) {
+                    ui.label(label);
+                    match id {
+                        Some(id) => {
+                            ui.add(egui::Image::new(egui::ImageSource::Texture(
+                                egui::load::SizedTexture { id: *id, size },
+                            )));
+                        }
+                        None => {
+                            ui.label("(layer target not created)");
                         }
                     }
-                });
+                }
+            });
         }
     }
 
@@ -325,42 +321,40 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
 /// The Scaleform display-tree debug controls: dump the live clip tree to the log, and toggle a
 /// clip's `_visible` by path. Requests are queued here and executed on the game thread.
 fn scaleform_debug_ui(ui: &mut egui::Ui) {
-    egui::CollapsingHeader::new("Scaleform display tree")
-        .default_open(false)
-        .show(ui, |ui| {
-            if ui
-                .button("Auto-configure split from display tree")
-                .on_hover_text(
-                    "Finds the HUD clip in the live tree, sets the split path prefix, and \
+    ui.collapsing("Scaleform display tree", |ui| {
+        if ui
+            .button("Auto-configure split from display tree")
+            .on_hover_text(
+                "Finds the HUD clip in the live tree, sets the split path prefix, and \
                      collects the anonymous POI pool for the markers layer.",
-                )
-                .clicked()
-            {
-                crate::hud::scaleform::request_layout_discovery();
-            }
-            if ui
-                .button("Dump display tree to log")
-                .on_hover_text(
-                    "Walks the live movie's clip tree on the game thread and logs one line per \
+            )
+            .clicked()
+        {
+            crate::hud::scaleform::request_layout_discovery();
+        }
+        if ui
+            .button("Dump display tree to log")
+            .on_hover_text(
+                "Walks the live movie's clip tree on the game thread and logs one line per \
                      clip, as dot-joined paths.",
-                )
-                .clicked()
-            {
-                crate::hud::scaleform::request_dump_tree();
+            )
+            .clicked()
+        {
+            crate::hud::scaleform::request_dump_tree();
+        }
+        ui.horizontal(|ui| {
+            let mut path = SCALEFORM_CLIP_PATH.lock();
+            if path.is_empty() {
+                *path = "MCI_poi_stage".to_string();
             }
-            ui.horizontal(|ui| {
-                let mut path = SCALEFORM_CLIP_PATH.lock();
-                if path.is_empty() {
-                    *path = "MCI_poi_stage".to_string();
-                }
-                ui.label("Clip path");
-                ui.text_edit_singleline(&mut *path);
-                if ui.button("Hide").clicked() {
-                    crate::hud::scaleform::request_set_clip_visible(path.clone(), false);
-                }
-                if ui.button("Show").clicked() {
-                    crate::hud::scaleform::request_set_clip_visible(path.clone(), true);
-                }
-            });
+            ui.label("Clip path");
+            ui.text_edit_singleline(&mut *path);
+            if ui.button("Hide").clicked() {
+                crate::hud::scaleform::request_set_clip_visible(path.clone(), false);
+            }
+            if ui.button("Show").clicked() {
+                crate::hud::scaleform::request_set_clip_visible(path.clone(), true);
+            }
         });
+    });
 }

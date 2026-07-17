@@ -203,9 +203,19 @@ fn update() {
             }
 
             egui_state.run(|ctx, renderer| {
+                // The per-eye capture textures feed the VR blit, the desktop mirror, and the F10
+                // capture composite — they must be (re)created every frame, independent of which
+                // UI tabs or windows are visible (or whether the Debug window is collapsed).
+                ui::render::EGUI_DEBUG_RENDER_STATE
+                    .lock()
+                    .prepare_if_necessary(renderer);
                 ui::startup_banner(ctx);
+                // The dock area fills whatever space the window gives it, so the window carries an
+                // explicit default size instead of auto-sizing to content.
                 egui::Window::new("Debug")
                     .default_pos(egui::pos2(0.0, 0.0))
+                    .default_size(egui::vec2(760.0, 560.0))
+                    .resizable(true)
                     .show(ctx, |ui| ui::egui_debug_window(ui, renderer));
             });
         }

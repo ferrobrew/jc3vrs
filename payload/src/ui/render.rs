@@ -1,34 +1,22 @@
-//! The Render tab: the core stereo widgets plus the per-eye preview grid, and the render-thread
-//! capture state that feeds it.
-
-use std::sync::atomic::Ordering;
+//! The Render tab: how the frame is produced — the core stereo widgets, FSR, and the stereo
+//! correctness/quality levers — plus the render-thread capture state that feeds the Previews tab
+//! and the VR blit.
 
 use parking_lot::Mutex;
-use windows::{
-    Win32::{
-        Graphics::{
-            Direct3D11::{
-                D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-                ID3D11ShaderResourceView, ID3D11Texture2D,
-            },
-            Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
+use windows::Win32::{
+    Graphics::{
+        Direct3D11::{
+            D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+            ID3D11ShaderResourceView, ID3D11Texture2D,
         },
-        System::Threading::{EnterCriticalSection, LeaveCriticalSection},
+        Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
     },
-    core::Interface,
+    System::Threading::{EnterCriticalSection, LeaveCriticalSection},
 };
-
-use jc3gi::camera::camera::CameraState;
-
-use crate::debug::camera::{CAMERA_SNAPSHOTS, CameraSnapshot};
 
 use crate::config;
 
-use super::camera::matrix_grid;
-
-/// Labels for the post-effect stages captured per eye, in chain order.
-const POST_STAGE_LABELS: [&str; 2] = ["after DoF", "after MB"];
-/// Post-stage indices (must match POST_STAGE_LABELS); used by the stage detours.
+/// Post-stage indices (matching the Previews tab's stage labels); used by the stage detours.
 pub const POST_STAGE_DOF: usize = 0;
 pub const POST_STAGE_MB: usize = 1;
 
@@ -36,24 +24,24 @@ pub const POST_STAGE_MB: usize = 1;
 /// created on the render thread (where the stage runs); the egui id is registered lazily on the UI
 /// thread.
 #[derive(Default)]
-struct StageCapture {
+pub(super) struct StageCapture {
     created_desc: Option<(u32, u32, i32)>,
     texture: Option<ID3D11Texture2D>,
-    srv: Option<ID3D11ShaderResourceView>,
-    egui_id: Option<egui::TextureId>,
+    pub(super) srv: Option<ID3D11ShaderResourceView>,
+    pub(super) egui_id: Option<egui::TextureId>,
 }
 
 pub struct EguiDebugRenderState {
     /// Final back-buffer capture per Draw (eye): index 0 and index 1.
-    target_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
+    pub(super) target_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
     /// HDR scene (MainColor, pre-post) capture per eye -- the first column of the pipeline rows.
-    main_color_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
+    pub(super) main_color_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
     /// (w, h) the back-buffer captures were built for; recreate them when the back buffer resizes.
     target_size: Option<(u32, u32)>,
     /// (w, h, dxgi format) the MainColor captures were built for; recreate on change.
     main_color_desc: Option<(u32, u32, i32)>,
     /// Per-(stage, eye) captures of intermediate post-effect results: index `stage * 2 + eye`.
-    post_stage_captures: Vec<StageCapture>,
+    pub(super) post_stage_captures: Vec<StageCapture>,
     /// Cache of engine SRV pointer -> egui texture id, for the live render-target thumbnails.
     srv_thumbnails: Vec<(usize, egui::TextureId)>,
 }
@@ -144,7 +132,7 @@ impl EguiDebugRenderState {
     }
 
     /// Get (registering+caching on first use) an egui texture id for an engine SRV.
-    fn thumbnail_id(
+    pub(super) fn thumbnail_id(
         &mut self,
         renderer: &mut egui_directx11::Renderer,
         srv_raw: usize,
@@ -158,7 +146,7 @@ impl EguiDebugRenderState {
         id
     }
 
-    fn prepare_if_necessary(&mut self, renderer: &mut egui_directx11::Renderer) {
+    pub(crate) fn prepare_if_necessary(&mut self, renderer: &mut egui_directx11::Renderer) {
         unsafe {
             let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
                 return;
@@ -298,9 +286,6 @@ impl EguiDebugRenderState {
 pub static EGUI_DEBUG_RENDER_STATE: Mutex<EguiDebugRenderState> =
     Mutex::new(EguiDebugRenderState::new());
 
-/// Preview thumbnail width (px) in the Render tab; user-controllable via a slider.
-static PREVIEW_WIDTH: Mutex<f32> = Mutex::new(700.0);
-
 /// Capture a post-effect stage's result texture for the given eye -- called from the stage's detour
 /// on the render thread, after the stage runs. `result` is the stage's slot result texture.
 ///
@@ -366,382 +351,369 @@ pub fn install() {
     });
 }
 
-fn gate_checkbox(ui: &mut egui::Ui, flag: &std::sync::atomic::AtomicBool, label: &str) {
-    let mut v = flag.load(Ordering::Relaxed);
-    if ui.checkbox(&mut v, label).changed() {
-        flag.store(v, Ordering::Relaxed);
-    }
-}
-
 /// Debug-UI only: swap the two eyes in the side-by-side stereo preview, so the pair can be fused
 /// cross-eyed (left image -> right eye) instead of parallel (left image -> left eye). Read by the
 /// F10 capture composite so the recording window fuses the same way as the preview.
 pub(crate) static STEREO_CROSS_EYED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
 
-fn show_target_thumbnail(
-    ui: &mut egui::Ui,
-    state: &mut EguiDebugRenderState,
-    renderer: &mut egui_directx11::Renderer,
-    label: &str,
-    texture: *mut jc3gi::graphics_engine::texture::Texture,
-    width: f32,
-) {
-    unsafe {
-        let Some(tex) = texture.as_ref() else {
-            ui.label(format!("{label}: null"));
-            return;
-        };
-        let size = egui::vec2(
-            width,
-            width * tex.m_Height as f32 / (tex.m_Width.max(1) as f32),
-        );
-        let srv_raw = tex.m_SRV.as_raw() as usize;
-        ui.vertical(|ui| {
-            if srv_raw == 0 {
-                ui.label(format!("{label}: no SRV"));
-            } else {
-                let id = state.thumbnail_id(renderer, srv_raw, &tex.m_SRV);
-                ui.add(egui::Image::new(egui::ImageSource::Texture(
-                    egui::load::SizedTexture { id, size },
-                )));
-            }
-            ui.label(format!(
-                "{} {}x{} f{}",
-                label, tex.m_Width, tex.m_Height, tex.m_Format
-            ));
-        });
-    }
-}
+pub fn egui_debug_render(ui: &mut egui::Ui) {
+    let mut cfg = config::CONFIG.lock();
 
-pub fn egui_debug_render(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
-    // Scope the CONFIG lock to just the core stereo widgets -- it must never be held at the same
-    // time as EGUI_DEBUG_RENDER_STATE (lock ordering), so it is dropped before the capture/thumbnail
-    // code.
-    {
-        let mut cfg = config::CONFIG.lock();
+    ui.checkbox(&mut cfg.stereo.enabled, "Stereo (double-Draw)")
+        .on_hover_text("Issue a second game.Draw per frame; CClock::Update is gated to once/frame");
 
-        ui.checkbox(&mut cfg.stereo.enabled, "Stereo (double-Draw)")
-            .on_hover_text(
-                "Issue a second game.Draw per frame; CClock::Update is gated to once/frame",
-            );
+    ui.checkbox(
+        &mut cfg.stereo.cameras,
+        "Stereo cameras (per-eye IPD offset)",
+    )
+    .on_hover_text("Offset the active camera per eye so the two draws diverge");
+    ui.add(egui::Slider::new(&mut cfg.stereo.ipd, 0.0..=100.0).text("IPD (m)"));
 
+    ui.collapsing("FSR", |ui| {
         ui.checkbox(
-            &mut cfg.stereo.cameras,
-            "Stereo cameras (per-eye IPD offset)",
+            &mut cfg.fsr.enabled,
+            "Anti-aliasing (replaces the engine SMAA)",
+        );
+        ui.checkbox(
+            &mut cfg.fsr.jitter,
+            "Temporal jitter (off = FSR blurs; A/B to confirm the jitter)",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Jitter sign (camera side):");
+            let (sx, sy) = &mut cfg.fsr.jitter_sign;
+            if ui.selectable_label(*sx > 0.0, "x+").clicked() {
+                *sx = 1.0;
+            }
+            if ui.selectable_label(*sx < 0.0, "x-").clicked() {
+                *sx = -1.0;
+            }
+            if ui.selectable_label(*sy > 0.0, "y+").clicked() {
+                *sy = 1.0;
+            }
+            if ui.selectable_label(*sy < 0.0, "y-").clicked() {
+                *sy = -1.0;
+            }
+        })
+        .response
+        .on_hover_text(
+            "Must agree with the offset reported to the FSR dispatch, or fine detail \
+                 pulses at the jitter cadence -- flip live to settle the convention",
+        );
+        ui.add(
+            egui::Slider::new(&mut cfg.fsr.jitter_scale, 0.0..=1.0)
+                .text("Jitter scale (diagnostic)"),
+        );
+        ui.horizontal(|ui| {
+            let mut sharpen = cfg.fsr.sharpness.is_some();
+            ui.checkbox(&mut sharpen, "Sharpening");
+            match (sharpen, cfg.fsr.sharpness) {
+                (true, None) => cfg.fsr.sharpness = Some(0.5),
+                (false, Some(_)) => cfg.fsr.sharpness = None,
+                _ => {}
+            }
+            if let Some(s) = cfg.fsr.sharpness.as_mut() {
+                ui.add(egui::Slider::new(s, 0.0..=1.0).text("strength"));
+            }
+        });
+        ui.checkbox(
+            &mut cfg.fsr.motion_vectors,
+            "Motion vectors (off = ghosts moving objects; A/B the decode)",
+        );
+        ui.checkbox(
+            &mut cfg.fsr.mv_jitter_cancel,
+            "MV jitter cancel (vectors carry the camera jitter; FSR wants them jitter-free)",
         )
-        .on_hover_text("Offset the active camera per eye so the two draws diverge");
-        ui.add(egui::Slider::new(&mut cfg.stereo.ipd, 0.0..=100.0).text("IPD (m)"));
-
-        egui::CollapsingHeader::new("FSR")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.checkbox(
-                    &mut cfg.fsr.enabled,
-                    "Anti-aliasing (replaces the engine SMAA)",
-                );
-                ui.checkbox(
-                    &mut cfg.fsr.jitter,
-                    "Temporal jitter (off = FSR blurs; A/B to confirm the jitter)",
-                );
-                ui.horizontal(|ui| {
-                    ui.label("Jitter sign (camera side):");
-                    let (sx, sy) = &mut cfg.fsr.jitter_sign;
-                    if ui.selectable_label(*sx > 0.0, "x+").clicked() {
-                        *sx = 1.0;
-                    }
-                    if ui.selectable_label(*sx < 0.0, "x-").clicked() {
-                        *sx = -1.0;
-                    }
-                    if ui.selectable_label(*sy > 0.0, "y+").clicked() {
-                        *sy = 1.0;
-                    }
-                    if ui.selectable_label(*sy < 0.0, "y-").clicked() {
-                        *sy = -1.0;
-                    }
-                })
-                .response
-                .on_hover_text(
-                    "Must agree with the offset reported to the FSR dispatch, or fine detail \
-                     pulses at the jitter cadence -- flip live to settle the convention",
-                );
-                ui.add(
-                    egui::Slider::new(&mut cfg.fsr.jitter_scale, 0.0..=1.0)
-                        .text("Jitter scale (diagnostic)"),
-                );
-                ui.horizontal(|ui| {
-                    let mut sharpen = cfg.fsr.sharpness.is_some();
-                    ui.checkbox(&mut sharpen, "Sharpening");
-                    match (sharpen, cfg.fsr.sharpness) {
-                        (true, None) => cfg.fsr.sharpness = Some(0.5),
-                        (false, Some(_)) => cfg.fsr.sharpness = None,
-                        _ => {}
-                    }
-                    if let Some(s) = cfg.fsr.sharpness.as_mut() {
-                        ui.add(egui::Slider::new(s, 0.0..=1.0).text("strength"));
-                    }
-                });
-                ui.checkbox(
-                    &mut cfg.fsr.motion_vectors,
-                    "Motion vectors (off = ghosts moving objects; A/B the decode)",
-                );
-                ui.checkbox(
-                    &mut cfg.fsr.mv_jitter_cancel,
-                    "MV jitter cancel (vectors carry the camera jitter; FSR wants them jitter-free)",
-                )
-                .on_hover_text(
-                    "The +/-0.5 px jitter wobble in the vectors flips FSR's history validation over \
-                     steep depth gradients -- region-scale one-frame pops at the jitter cadence",
-                );
-                ui.checkbox(
-                    &mut cfg.fsr.mv_stereo_correction,
-                    "Stereo MV correction (re-anchor velocity at the per-eye camera)",
-                )
-                .on_hover_text(
-                    "The engine's velocity reprojects with the center camera's previous \
-                     view-projection; each eye rasterizes with its own, so static pixels carry a \
-                     spurious parallax vector and FSR flickers shadow edges per eye under motion \
-                     (issue #10)",
-                );
-                ui.horizontal(|ui| {
-                    ui.label("MV sign:");
-                    let (sx, sy) = &mut cfg.fsr.mv_sign;
-                    if ui.selectable_label(*sx > 0.0, "x+").clicked() {
-                        *sx = 1.0;
-                    }
-                    if ui.selectable_label(*sx < 0.0, "x-").clicked() {
-                        *sx = -1.0;
-                    }
-                    if ui.selectable_label(*sy > 0.0, "y+").clicked() {
-                        *sy = 1.0;
-                    }
-                    if ui.selectable_label(*sy < 0.0, "y-").clicked() {
-                        *sy = -1.0;
-                    }
-                });
-            });
-    }
-
-    let preview_width = {
-        let mut w = PREVIEW_WIDTH.lock();
-        ui.add(egui::Slider::new(&mut *w, 48.0..=4096.0).text("Preview size (px)"));
-        *w
-    };
-
-    let mut state = EGUI_DEBUG_RENDER_STATE.lock();
-    state.prepare_if_necessary(renderer);
-
-    egui::ScrollArea::both()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // Per-eye pipeline rows: each row is one eye, columns are pipeline stages.
-            let aspect = unsafe {
-                jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()
-                    .and_then(|ge| ge.m_MainColorBuffer.as_mut())
-                    .map(|mcb| mcb.m_Height as f32 / (mcb.m_Width.max(1) as f32))
+        .on_hover_text(
+            "The +/-0.5 px jitter wobble in the vectors flips FSR's history validation over \
+                 steep depth gradients -- region-scale one-frame pops at the jitter cadence",
+        );
+        ui.checkbox(
+            &mut cfg.fsr.mv_stereo_correction,
+            "Stereo MV correction (re-anchor velocity at the per-eye camera)",
+        )
+        .on_hover_text(
+            "The engine's velocity reprojects with the center camera's previous \
+                 view-projection; each eye rasterizes with its own, so static pixels carry a \
+                 spurious parallax vector and FSR flickers shadow edges per eye under motion \
+                 (issue #10)",
+        );
+        ui.horizontal(|ui| {
+            ui.label("MV sign:");
+            let (sx, sy) = &mut cfg.fsr.mv_sign;
+            if ui.selectable_label(*sx > 0.0, "x+").clicked() {
+                *sx = 1.0;
             }
-            .unwrap_or(0.5625);
-            let size = egui::vec2(preview_width, preview_width * aspect);
-            // Register any post-stage SRVs that were created on the render thread.
-            for cap in &mut state.post_stage_captures {
-                if cap.egui_id.is_none()
-                    && let Some(srv) = &cap.srv
-                {
-                    cap.egui_id = Some(renderer.register_user_texture(srv.clone()));
-                }
+            if ui.selectable_label(*sx < 0.0, "x-").clicked() {
+                *sx = -1.0;
             }
+            if ui.selectable_label(*sy > 0.0, "y+").clicked() {
+                *sy = 1.0;
+            }
+            if ui.selectable_label(*sy < 0.0, "y-").clicked() {
+                *sy = -1.0;
+            }
+        });
+    });
 
-            // Build the columns in pipeline order: Scene -> after DoF -> after MB -> Final.
-            let columns: Vec<(&str, [Option<egui::TextureId>; 2])> = {
-                let post_id = |stage: usize, eye: usize| -> Option<egui::TextureId> {
-                    state
-                        .post_stage_captures
-                        .get(stage * 2 + eye)
-                        .and_then(|c| c.egui_id)
-                };
-                let mc_id = |eye: usize| state.main_color_textures[eye].as_ref().map(|(_, id)| *id);
-                let bb_id = |eye: usize| state.target_textures[eye].as_ref().map(|(_, id)| *id);
-                vec![
-                    ("Scene", [mc_id(0), mc_id(1)]),
-                    (POST_STAGE_LABELS[0], [post_id(0, 0), post_id(0, 1)]),
-                    (POST_STAGE_LABELS[1], [post_id(1, 0), post_id(1, 1)]),
-                    ("Final", [bb_id(0), bb_id(1)]),
-                ]
-            };
+    // The stereo render corrections, grouped by subsystem -- normally on; toggle off to reproduce
+    // the artifact each fixes. Collapsed by default to keep the tab scannable. (The investigation
+    // probes live in the Diagnostics tab.)
+    ui.collapsing("Shadows", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.fix_shadow_cascade_anchor,
+            "Cascade anchor (the visible per-eye shadow mismatch; A/B via Present eye 0)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.widen_shadow_fit,
+            "Widen fit FOV (cascades cover both eyes; fixes distant per-eye shadow disagreement + \
+             crawl)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.stabilize_shadow_fit,
+            "Stabilize fit vs head tilt (yaw-only cascade centre; fixes shadows shifting/scaling \
+             when you look around)",
+        );
+    });
 
-            // Stereo pair: the two eyes' final images side by side, for fusing into one 3D image.
-            // Parallel (default): left image -> left eye. Cross-eyed: tick the box to swap them.
-            let final_ids = columns
-                .iter()
-                .find(|(name, _)| *name == "Final")
-                .map(|(_, ids)| *ids)
-                .unwrap_or([None, None]);
-            egui::CollapsingHeader::new("Stereo pair (side-by-side — fuse for 3D)")
-                .default_open(true)
-                .show(ui, |ui| {
-                    gate_checkbox(
-                        ui,
-                        &STEREO_CROSS_EYED,
-                        "Cross-eyed (swap L/R; off = parallel/wall-eyed)",
-                    );
-                    let order = if STEREO_CROSS_EYED.load(Ordering::Relaxed) {
-                        [1usize, 0]
-                    } else {
-                        [0usize, 1]
-                    };
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        for eye in order {
-                            match final_ids[eye] {
-                                Some(id) => {
-                                    ui.add(egui::Image::new(egui::ImageSource::Texture(
-                                        egui::load::SizedTexture { id, size },
-                                    )));
-                                }
-                                None => {
-                                    ui.add_sized(size, egui::Label::new("(no capture)"));
-                                }
-                            }
-                        }
-                    });
-                });
+    ui.collapsing("Depth reconstruction", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.reconstruct_offaxis_inverse,
+            "Off-axis depth reconstruction (per-eye inverse for deferred/SS passes; fixes \
+             specular/SSR/shadow reconstruction divergence)",
+        );
+    });
 
-            ui.collapsing("Per-eye pipeline (rows = eyes, columns = stages)", |ui| {
-                for eye in 0..2 {
-                    ui.label(format!("Eye {eye}"));
-                    ui.horizontal(|ui| {
-                        for (name, ids) in &columns {
-                            ui.vertical(|ui| {
-                                match ids[eye] {
-                                    Some(id) => {
-                                        ui.add(egui::Image::new(egui::ImageSource::Texture(
-                                            egui::load::SizedTexture { id, size },
-                                        )));
-                                    }
-                                    None => {
-                                        ui.add_sized(size, egui::Label::new("(no capture)"));
-                                    }
-                                }
-                                if eye == 1 {
-                                    ui.label(*name);
-                                }
-                            });
-                        }
-                    });
-                }
-            });
+    ui.collapsing("Clustered lighting", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.fix_clustered_light_frustum,
+            "Off-axis froxel tile bounds (replaces symmetric cb1 with per-eye projection-derived \
+             bounds; fixes blocky 64px lighting tiles in VR)",
+        );
+    });
 
-            ui.collapsing("Render targets (live; eye 1 is the last-rendered pass)", |ui| {
-                let targets: Vec<(&str, *mut jc3gi::graphics_engine::texture::Texture)> = unsafe {
-                    match jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() {
-                        Some(ge) => vec![
-                            ("MainColor", ge.m_MainColorBuffer),
-                            ("MainDepth", ge.m_MainDepthTexture),
-                            ("DownsampledDepth", ge.m_DownSampledDepthTexture),
-                            ("GBuffer0", ge.m_GBufferTexture[0]),
-                            ("GBuffer1", ge.m_GBufferTexture[1]),
-                            ("GBuffer2", ge.m_GBufferTexture[2]),
-                            ("GBuffer3", ge.m_GBufferTexture[3]),
-                            ("Velocity", ge.m_VelocityBufferTexture),
-                            ("BackBufferLinear", ge.m_BackBufferLinear),
-                        ],
-                        None => vec![],
-                    }
-                };
-                ui.horizontal_wrapped(|ui| {
-                    for (label, texture) in targets {
-                        show_target_thumbnail(ui, &mut state, renderer, label, texture, preview_width);
-                    }
-                });
-            });
+    ui.collapsing("Cross-eye consistency", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.dedupe_post_block,
+            "Dedupe world post block (eye 1 otherwise runs the post chain + FSR twice)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.drain_draw_fragment,
+            "Drain draw-dispatch fragment between eyes (open-world crash fix)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_frame_counters,
+            "Restore frame counters between eyes (fixes jitter/parity flicker)",
+        );
+        ui.add_enabled(
+            cfg.stereo.restore_frame_counters,
+            egui::Checkbox::new(
+                &mut cfg.stereo.share_prepasses,
+                "Share view-independent pre-passes across eyes (reflections, cloud shadows, \
+                 sun-shadow atlas, water sim rendered once)",
+            ),
+        )
+        .on_hover_text(
+            "On eye 1, reuse eye 0's shadow atlas / reflection proxies / water sim instead of \
+             re-rendering them. Requires 'Restore frame counters'. If distant reflections or \
+             shadows look wrong in one eye, turn this off.",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.force_smaa_1x,
+            "Force SMAA 1x (T2X's shared history ghosts across eyes)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.force_ssao_first_pass,
+            "Force SSAO first-pass per eye (stops cross-eye AO history blend)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_ssao_history,
+            "Restore SSAO history between eyes (pin the AO temporal slot so both eyes match)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.restore_gi_cascade,
+            "Restore GI cascade between eyes (pin the LPV cascade so both eyes match)",
+        );
+    });
 
-            ui.collapsing("Per-eye render camera (differences in yellow)", |ui| {
-                let (s0, s1) = {
-                    let g = CAMERA_SNAPSHOTS.lock();
-                    (g[0], g[1])
-                };
-                ui.columns(2, |cols| {
-                    show_camera_snapshot(&mut cols[0], "Eye 0", &s0, &s1);
-                    show_camera_snapshot(&mut cols[1], "Eye 1", &s1, &s0);
-                });
+    ui.collapsing("Culling & geometry", |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut cfg.stereo.widen_cull_frustum,
+                "Widen scene cull frustum (covers both eyes; stops outer-edge void/pop-in)",
+            );
+            ui.add_enabled(
+                cfg.stereo.widen_cull_frustum,
+                egui::Slider::new(&mut cfg.stereo.cull_fov_padding, 0.0..=0.75)
+                    .text("pad")
+                    .fixed_decimals(2),
+            )
+            .on_hover_text(
+                "Extra fraction to widen the cull frustum on every side (incl. vertical); raise if \
+                 geometry still pops in at the edges when flying",
+            );
+        });
+        ui.add(
+            egui::Slider::new(&mut cfg.stereo.cull_size_fov_deg, 0.0..=90.0)
+                .text("Size-cull FOV (deg)")
+                .fixed_decimals(0),
+        )
+        .on_hover_text(
+            "FOV the screen-space size cull uses (overrides the injected 90 deg on the cull \
+             camera); lower keeps more small/distant geometry and vehicle parts. 0 = leave alone",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.disable_bfbc_occlusion,
+            "Disable software occlusion (drops centre-viewpoint occluder culling; fixes peripheral \
+             culling an offset eye can see past)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.widen_terrain_cull,
+            "Widen terrain patch cull (rebuild the cull frustum planes; fixes terrain patch holes \
+             at the edges when flying)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.widen_model_cull,
+            "Widen model cull (active-camera frustum; fixes buildings popping at the edges)",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.invalidate_terrain_cb,
+            "Invalidate terrain tess CB between eyes (forces eye 1 to re-upload its own off-axis \
+             projection; fixes distant tessellated terrain sheared to eye 0)",
+        );
+    });
+
+    ui.collapsing("Shader patches", |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut cfg.stereo.patch_shadow_pcf_hash,
+                "Sun-shadow PCF screen-hash (kills per-eye shimmer + foliage grain)",
+            );
+            let patched = crate::hooks::graphics_engine::shader::patched_count();
+            ui.label(if patched == 0 {
+                "(0 patched -- click Reload shaders)".to_string()
+            } else {
+                format!("({patched} sites patched)")
             });
         });
-}
+        ui.horizontal(|ui| {
+            ui.checkbox(
+                &mut cfg.stereo.patch_lod_dissolve,
+                "Jitter-unstable LOD dissolve (only matters with FSR jitter on)",
+            );
+            let patched = crate::hooks::graphics_engine::shader::dissolve_patched_count();
+            ui.label(if patched == 0 {
+                "(0 patched -- click Reload shaders)".to_string()
+            } else {
+                format!("({patched} sites patched)")
+            });
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Reload shaders").clicked() {
+                crate::hooks::graphics_engine::shader::request_reload();
+            }
+            ui.label(
+                "re-creates all shaders so the shader patches take effect (F11 toggles + reloads)",
+            );
+        });
+    });
 
-fn show_camera_snapshot(
-    ui: &mut egui::Ui,
-    label: &str,
-    snap: &CameraSnapshot,
-    other: &CameraSnapshot,
-) {
-    ui.label(egui::RichText::new(label).strong());
-    if !snap.valid {
-        ui.label("(no capture)");
-        return;
-    }
-    ui.label(format!("cam ptr: {:#x}", snap.camera_ptr));
+    // Resolution levers for issue #8's pixelation/large-tile artifact around lights and explosions:
+    // the engine's reduced-resolution fog/particle/spotlight passes, whose coarse grids VR's wide
+    // FOV magnifies. All default off (not headset-verifiable; particles can hide content).
+    ui.collapsing("Resolution (pixelation)", |ui| {
+        ui.checkbox(
+            &mut cfg.stereo.fog_full_res,
+            "Fog volume full-res (coarse froxel depth buffer; applies at next resolution change)",
+        )
+        .on_hover_text(
+            "No-ops the half-res multiplies in the fog block's ResizeTextures so the coarse \
+             volumetric-depth buffer is recreated at full resolution. Most likely fix for the \
+             light/explosion tiles. Only re-runs on a resolution change.",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.particles_full_res,
+            "Particles full-res (route to the full-res transparent pass) -- RISKY, A/B live",
+        )
+        .on_hover_text(
+            "Clears the particle block type's low-res routing flags so particles draw in the \
+             full-res transparent pass. The full-res pass always draws, so particles reroute rather \
+             than vanish -- but verify live: a family that does not survive the reroute could look \
+             wrong. Applies one frame ahead.",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.spotlight_full_res,
+            "Spotlight volumetrics full-res (engine's full-res branch)",
+        )
+        .on_hover_text(
+            "Scopes g_EnableLowResSpotLightVolume off around the light gather so spot-light cones \
+             render at full resolution into the main setup. Lowest-risk lever.",
+        );
+    });
 
-    // The flag values come from the generated bitflags, so the table's bits can never drift from
-    // the pyxis definition; only the display labels are local.
-    const FLAG_NAMES: [(CameraState, &str); 6] = [
-        (CameraState::m_UseOffCenter, "OffCenter"),
-        (CameraState::m_ScreenshotSeriesRunning, "ScreenshotSeries"),
-        (CameraState::m_Ortho, "Ortho"),
-        (CameraState::m_ComputeView, "ComputeView"),
-        (CameraState::m_DirtyProjection, "DirtyProj"),
-        (CameraState::m_IsRenderCamera, "IsRenderCam"),
-    ];
-    let state = CameraState::from_bits_truncate(snap.state_bits);
-    let active: Vec<&str> = FLAG_NAMES
-        .iter()
-        .filter(|(flag, _)| state.contains(*flag))
-        .map(|(_, name)| *name)
-        .collect();
-    let flag_text = format!("flags {:#04x}: {}", snap.state_bits, active.join(" | "));
-    if other.valid && snap.state_bits != other.state_bits {
-        ui.colored_label(egui::Color32::YELLOW, flag_text);
-    } else {
-        ui.label(flag_text);
-    }
+    ui.collapsing("Foveation (#29, experimental)", |ui| {
+        ui.checkbox(
+            &mut cfg.foveation.enabled,
+            "Enable static foveated rendering",
+        );
+        ui.add(
+            egui::Slider::new(&mut cfg.foveation.inner_fraction, 0.0..=1.0)
+                .text("Inner radius (fraction of half-diagonal, full-res inside)"),
+        );
+        ui.add(
+            egui::Slider::new(&mut cfg.foveation.outer_fraction, 0.0..=1.5)
+                .text("Outer radius (drop reaches max here)"),
+        );
+        ui.add(
+            egui::Slider::new(&mut cfg.foveation.max_drop, 0.0..=1.0)
+                .text("Max peripheral drop fraction"),
+        );
+        ui.horizontal(|ui| {
+            ui.label("Foveated pass range (RenderPassId):");
+            ui.add(egui::DragValue::new(&mut cfg.foveation.foveal_first_pass).range(0..=0xFF));
+            ui.label("..=");
+            ui.add(egui::DragValue::new(&mut cfg.foveation.foveal_last_pass).range(0..=0xFF));
+        });
+        ui.checkbox(
+            &mut cfg.foveation.debug_show_mask,
+            "Debug: paint dropped pixels magenta (visualize the mask)",
+        );
+        ui.label(
+            "Drops a dithered radial fraction of peripheral pixels before shading, then \
+             reconstructs them. Off by default; needs in-headset tuning.",
+        );
+    });
 
-    ui.label(format!(
-        "offcenter: tiles={} x={} y={}",
-        snap.offcenter_tiles, snap.offcenter_tile_x, snap.offcenter_tile_y
-    ));
-    ui.label(format!("fov={:.4}  aspect={:.4}", snap.fov, snap.aspect));
-    ui.label(format!("near={:.3}  far={:.1}", snap.near, snap.far));
-    ui.label(format!("size={}x{}", snap.width, snap.height));
+    ui.collapsing("Post-FX (reprojection passes, both eyes)", |ui| {
+        ui.checkbox(
+            &mut cfg.post_fx.skip_motion_blur,
+            "Skip MotionBlur::Apply (whole pass)",
+        );
+        ui.checkbox(
+            &mut cfg.post_fx.skip_motion_blur_recon,
+            "Skip MotionBlur recon (if pass not skipped)",
+        );
+        ui.checkbox(
+            &mut cfg.post_fx.dof_no_reproject,
+            "DoF: plain composite, no reprojection (keeps picture)",
+        );
+        ui.checkbox(
+            &mut cfg.post_fx.skip_dof,
+            "Skip DepthOfField::Apply (washes out!)",
+        );
+    });
 
-    let other_proj = other.valid.then_some(&other.projection);
-    let other_view = other.valid.then_some(&other.view);
-    let other_vpf = other.valid.then_some(&other.view_proj_f);
-    matrix_grid(
-        ui,
-        &format!("proj_{label}"),
-        "m_Projection:",
-        &snap.projection,
-        other_proj,
-    );
-    matrix_grid(
-        ui,
-        &format!("view_{label}"),
-        "m_View:",
-        &snap.view,
-        other_view,
-    );
-    matrix_grid(
-        ui,
-        &format!("vpf_{label}"),
-        "m_ViewProjectionF:",
-        &snap.view_proj_f,
-        other_vpf,
-    );
-    let other_tf = other.valid.then_some(&other.transform);
-    matrix_grid(
-        ui,
-        &format!("tf_{label}"),
-        "m_TransformF:",
-        &snap.transform,
-        other_tf,
-    );
+    ui.collapsing("Post-FX stages (skip to bisect)", |ui| {
+        ui.checkbox(
+            &mut cfg.post_fx.skip_histogram,
+            "Exposure histogram (stalls auto-exposure)",
+        );
+        ui.checkbox(&mut cfg.post_fx.skip_glare, "Glare / bloom");
+        ui.checkbox(&mut cfg.post_fx.skip_fade, "Fade");
+        ui.checkbox(&mut cfg.post_fx.skip_sun_halo, "Sun halo");
+        ui.checkbox(
+            &mut cfg.post_fx.skip_player_damage,
+            "Player-damage vignette",
+        );
+    });
 }

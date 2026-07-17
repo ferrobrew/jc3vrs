@@ -1,5 +1,6 @@
-//! The Debug tab: the render-trace dump, the stereo render fixes, the per-eye diagnostics/bisection
-//! levers, and the engine post-FX gates. Only locks CONFIG. (FSR lives in the Render tab.)
+//! The Diagnostics tab: observation and bisect tooling — the render-trace dump, the per-eye A/B
+//! isolation levers, live engine cull state, the render-block-type registry, the per-eye camera
+//! snapshot diff, and the log filter. Feature and quality toggles live in the Render tab.
 
 use std::{
     collections::BTreeSet,
@@ -9,19 +10,29 @@ use std::{
     },
 };
 
-use jc3gi::graphics_engine::{
-    render_block::{
-        RenderBlockTypeTerrain as BaseTerrain, RenderBlockTypeTerrainPatch as TerrainPatch,
+use jc3gi::{
+    camera::camera::CameraState,
+    graphics_engine::{
+        render_block::{
+            RenderBlockTypeTerrain as BaseTerrain, RenderBlockTypeTerrainPatch as TerrainPatch,
+        },
+        render_engine::RenderBlockTypeRegistry,
     },
-    render_engine::RenderBlockTypeRegistry,
 };
 
-use crate::{config, debug::trace};
+use super::camera::matrix_grid;
+use crate::{
+    config,
+    debug::{
+        camera::{CAMERA_SNAPSHOTS, CameraSnapshot},
+        trace,
+    },
+};
 
 /// The frame count for the editable "Dump N frames" trace button, persisted across UI frames.
 static TRACE_FRAME_COUNT: AtomicI32 = AtomicI32::new(60);
 
-pub fn egui_debug_debug(ui: &mut egui::Ui) {
+pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
     // Deferred so the trace button's start() doesn't re-lock CONFIG (it snapshots the config for the
     // manifest) while this guard is held -- parking_lot is not reentrant, so that self-deadlocks.
@@ -66,9 +77,7 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
 
     // The #31 flicker-isolation A/B levers -- all default off; enable one at a time to localize the
     // whole-terrain sun-shadow flicker. See `crate::config::StereoConfig`.
-    egui::CollapsingHeader::new("Flicker isolation (#31)")
-        .default_open(false)
-        .show(ui, |ui| {
+    ui.collapsing("Flicker isolation (#31)", |ui| {
             ui.checkbox(
                 &mut cfg.stereo.symmetrize_eye_frusta,
                 "A: Symmetric eye frusta (zero shear, same FOV; if flicker dies, the off-axis shear is \
@@ -98,143 +107,17 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
                  still while the sun keeps moving. Unlike Freeze pose (VR tab), this freezes the actual \
                  engine camera the shadow cascade fits from. The view locks in place -- diagnostic only.",
             );
-        });
-    ui.separator();
-
-    // The stereo render corrections, grouped by subsystem -- normally on; toggle off to reproduce the
-    // artifact each fixes. Collapsed by default to keep the tab scannable.
-    ui.collapsing("Shadows", |ui| {
-        ui.checkbox(
-            &mut cfg.stereo.fix_shadow_cascade_anchor,
-            "Cascade anchor (the visible per-eye shadow mismatch; A/B via Present eye 0)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.widen_shadow_fit,
-            "Widen fit FOV (cascades cover both eyes; fixes distant per-eye shadow disagreement + \
-             crawl)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.stabilize_shadow_fit,
-            "Stabilize fit vs head tilt (yaw-only cascade centre; fixes shadows shifting/scaling \
-             when you look around)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.shadow_update_every_frame,
-            "Update all cascades every frame (defeats 2^L amortization; #31 parity-flip probe)",
-        )
-        .on_hover_text(
-            "Zeroes m_CascadeUpdateLevels so cascades 1-5 refresh every frame like cascade 0, instead \
-             of on the amortized schedule. Diagnostic for the #31 parity ping-pong: capture at native \
-             rate and check whether the ShadowState scale_blend.y 6<->1 flip flattens.",
-        );
-    });
-
-    ui.collapsing("Depth reconstruction", |ui| {
-        ui.checkbox(
-            &mut cfg.stereo.reconstruct_offaxis_inverse,
-            "Off-axis depth reconstruction (per-eye inverse for deferred/SS passes; fixes \
-             specular/SSR/shadow reconstruction divergence)",
-        );
-    });
-
-    ui.collapsing("Clustered lighting", |ui| {
-        ui.checkbox(
-            &mut cfg.stereo.fix_clustered_light_frustum,
-            "Off-axis froxel tile bounds (replaces symmetric cb1 with per-eye projection-derived \
-             bounds; fixes blocky 64px lighting tiles in VR)",
-        );
-    });
-
-    ui.collapsing("Cross-eye consistency", |ui| {
-        ui.checkbox(
-            &mut cfg.stereo.dedupe_post_block,
-            "Dedupe world post block (eye 1 otherwise runs the post chain + FSR twice)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.drain_draw_fragment,
-            "Drain draw-dispatch fragment between eyes (open-world crash fix)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.restore_frame_counters,
-            "Restore frame counters between eyes (fixes jitter/parity flicker)",
-        );
-        ui.add_enabled(
-            cfg.stereo.restore_frame_counters,
-            egui::Checkbox::new(
-                &mut cfg.stereo.share_prepasses,
-                "Share view-independent pre-passes across eyes (reflections, cloud shadows, \
-                 sun-shadow atlas, water sim rendered once)",
-            ),
-        )
-        .on_hover_text(
-            "On eye 1, reuse eye 0's shadow atlas / reflection proxies / water sim instead of \
-             re-rendering them. Requires 'Restore frame counters'. If distant reflections or \
-             shadows look wrong in one eye, turn this off.",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.force_smaa_1x,
-            "Force SMAA 1x (T2X's shared history ghosts across eyes)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.force_ssao_first_pass,
-            "Force SSAO first-pass per eye (stops cross-eye AO history blend)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.restore_ssao_history,
-            "Restore SSAO history between eyes (pin the AO temporal slot so both eyes match)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.restore_gi_cascade,
-            "Restore GI cascade between eyes (pin the LPV cascade so both eyes match)",
-        );
-    });
-
-    ui.collapsing("Culling & geometry", |ui| {
-        ui.horizontal(|ui| {
             ui.checkbox(
-                &mut cfg.stereo.widen_cull_frustum,
-                "Widen scene cull frustum (covers both eyes; stops outer-edge void/pop-in)",
-            );
-            ui.add_enabled(
-                cfg.stereo.widen_cull_frustum,
-                egui::Slider::new(&mut cfg.stereo.cull_fov_padding, 0.0..=0.75)
-                    .text("pad")
-                    .fixed_decimals(2),
+                &mut cfg.stereo.shadow_update_every_frame,
+                "Update all shadow cascades every frame (defeats 2^L amortization; parity-flip probe)",
             )
             .on_hover_text(
-                "Extra fraction to widen the cull frustum on every side (incl. vertical); raise if \
-                 geometry still pops in at the edges when flying",
+                "Zeroes m_CascadeUpdateLevels so cascades 1-5 refresh every frame like cascade 0, instead \
+                 of on the amortized schedule. Diagnostic for the #31 parity ping-pong: capture at native \
+                 rate and check whether the ShadowState scale_blend.y 6<->1 flip flattens.",
             );
         });
-        ui.add(
-            egui::Slider::new(&mut cfg.stereo.cull_size_fov_deg, 0.0..=90.0)
-                .text("Size-cull FOV (deg)")
-                .fixed_decimals(0),
-        )
-        .on_hover_text(
-            "FOV the screen-space size cull uses (overrides the injected 90 deg on the cull \
-             camera); lower keeps more small/distant geometry and vehicle parts. 0 = leave alone",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.disable_bfbc_occlusion,
-            "Disable software occlusion (drops centre-viewpoint occluder culling; fixes peripheral \
-             culling an offset eye can see past)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.widen_terrain_cull,
-            "Widen terrain patch cull (rebuild the cull frustum planes; fixes terrain patch holes \
-             at the edges when flying)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.widen_model_cull,
-            "Widen model cull (active-camera frustum; fixes buildings popping at the edges)",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.invalidate_terrain_cb,
-            "Invalidate terrain tess CB between eyes (forces eye 1 to re-upload its own off-axis \
-             projection; fixes distant tessellated terrain sheared to eye 0)",
-        );
-    });
+    ui.separator();
 
     // Live-writes the engine's own CRenderBlockTypeTerrainPatch debug flags (not config, not saved) to
     // bisect which patch cull blackens tessellated cliff patches in VR: a patch culled only in the
@@ -447,74 +330,6 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         },
     );
 
-    ui.collapsing("Shader patches", |ui| {
-        ui.horizontal(|ui| {
-            ui.checkbox(
-                &mut cfg.stereo.patch_shadow_pcf_hash,
-                "Sun-shadow PCF screen-hash (kills per-eye shimmer + foliage grain)",
-            );
-            let patched = crate::hooks::graphics_engine::shader::patched_count();
-            ui.label(if patched == 0 {
-                "(0 patched -- click Reload shaders)".to_string()
-            } else {
-                format!("({patched} sites patched)")
-            });
-        });
-        ui.horizontal(|ui| {
-            ui.checkbox(
-                &mut cfg.stereo.patch_lod_dissolve,
-                "Jitter-unstable LOD dissolve (only matters with FSR jitter on)",
-            );
-            let patched = crate::hooks::graphics_engine::shader::dissolve_patched_count();
-            ui.label(if patched == 0 {
-                "(0 patched -- click Reload shaders)".to_string()
-            } else {
-                format!("({patched} sites patched)")
-            });
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Reload shaders").clicked() {
-                crate::hooks::graphics_engine::shader::request_reload();
-            }
-            ui.label(
-                "re-creates all shaders so the shader patches take effect (F11 toggles + reloads)",
-            );
-        });
-    });
-
-    // Resolution levers for issue #8's pixelation/large-tile artifact around lights and explosions:
-    // the engine's reduced-resolution fog/particle/spotlight passes, whose coarse grids VR's wide FOV
-    // magnifies. All default off (not headset-verifiable; particles can hide content).
-    ui.collapsing("Resolution (pixelation)", |ui| {
-        ui.checkbox(
-            &mut cfg.stereo.fog_full_res,
-            "Fog volume full-res (coarse froxel depth buffer; applies at next resolution change)",
-        )
-        .on_hover_text(
-            "No-ops the half-res multiplies in the fog block's ResizeTextures so the coarse \
-             volumetric-depth buffer is recreated at full resolution. Most likely fix for the \
-             light/explosion tiles. Only re-runs on a resolution change.",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.particles_full_res,
-            "Particles full-res (route to the full-res transparent pass) -- RISKY, A/B live",
-        )
-        .on_hover_text(
-            "Clears the particle block type's low-res routing flags so particles draw in the \
-             full-res transparent pass. The full-res pass always draws, so particles reroute rather \
-             than vanish -- but verify live: a family that does not survive the reroute could look \
-             wrong. Applies one frame ahead.",
-        );
-        ui.checkbox(
-            &mut cfg.stereo.spotlight_full_res,
-            "Spotlight volumetrics full-res (engine's full-res branch)",
-        )
-        .on_hover_text(
-            "Scopes g_EnableLowResSpotLightVolume off around the light gather so spot-light cones \
-             render at full resolution into the main setup. Lowest-risk lever.",
-        );
-    });
-
     // Investigation levers -- normally off; used to isolate what differs between the eyes.
     ui.collapsing("Per-eye diagnostics", |ui| {
         ui.checkbox(
@@ -606,70 +421,34 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
         );
     });
 
-    ui.collapsing("Foveation (#29, experimental)", |ui| {
-        ui.checkbox(
-            &mut cfg.foveation.enabled,
-            "Enable static foveated rendering",
-        );
-        ui.add(
-            egui::Slider::new(&mut cfg.foveation.inner_fraction, 0.0..=1.0)
-                .text("Inner radius (fraction of half-diagonal, full-res inside)"),
-        );
-        ui.add(
-            egui::Slider::new(&mut cfg.foveation.outer_fraction, 0.0..=1.5)
-                .text("Outer radius (drop reaches max here)"),
-        );
-        ui.add(
-            egui::Slider::new(&mut cfg.foveation.max_drop, 0.0..=1.0)
-                .text("Max peripheral drop fraction"),
-        );
-        ui.horizontal(|ui| {
-            ui.label("Foveated pass range (RenderPassId):");
-            ui.add(egui::DragValue::new(&mut cfg.foveation.foveal_first_pass).range(0..=0xFF));
-            ui.label("..=");
-            ui.add(egui::DragValue::new(&mut cfg.foveation.foveal_last_pass).range(0..=0xFF));
+    ui.collapsing("Per-eye render camera (differences in yellow)", |ui| {
+        let (s0, s1) = {
+            let g = CAMERA_SNAPSHOTS.lock();
+            (g[0], g[1])
+        };
+        ui.columns(2, |cols| {
+            show_camera_snapshot(&mut cols[0], "Eye 0", &s0, &s1);
+            show_camera_snapshot(&mut cols[1], "Eye 1", &s1, &s0);
         });
-        ui.checkbox(
-            &mut cfg.foveation.debug_show_mask,
-            "Debug: paint dropped pixels magenta (visualize the mask)",
-        );
-        ui.label(
-            "Drops a dithered radial fraction of peripheral pixels before shading, then reconstructs \
-             them. Off by default; needs in-headset tuning.",
-        );
     });
 
-    ui.collapsing("Post-FX (reprojection passes, both eyes)", |ui| {
-        ui.checkbox(
-            &mut cfg.post_fx.skip_motion_blur,
-            "Skip MotionBlur::Apply (whole pass)",
-        );
-        ui.checkbox(
-            &mut cfg.post_fx.skip_motion_blur_recon,
-            "Skip MotionBlur recon (if pass not skipped)",
-        );
-        ui.checkbox(
-            &mut cfg.post_fx.dof_no_reproject,
-            "DoF: plain composite, no reprojection (keeps picture)",
-        );
-        ui.checkbox(
-            &mut cfg.post_fx.skip_dof,
-            "Skip DepthOfField::Apply (washes out!)",
-        );
-    });
-
-    ui.collapsing("Post-FX stages (skip to bisect)", |ui| {
-        ui.checkbox(
-            &mut cfg.post_fx.skip_histogram,
-            "Exposure histogram (stalls auto-exposure)",
-        );
-        ui.checkbox(&mut cfg.post_fx.skip_glare, "Glare / bloom");
-        ui.checkbox(&mut cfg.post_fx.skip_fade, "Fade");
-        ui.checkbox(&mut cfg.post_fx.skip_sun_halo, "Sun halo");
-        ui.checkbox(
-            &mut cfg.post_fx.skip_player_damage,
-            "Player-damage vignette",
-        );
+    ui.collapsing("Logging", |ui| {
+        ui.label(match crate::logging::active_spec() {
+            Some(spec) => format!("Active filter: {spec}"),
+            None => "Active filter: (launch RUST_LOG, INFO floor)".to_string(),
+        });
+        let mut edit = FILTER_EDIT.lock();
+        let mut error = FILTER_ERROR.lock();
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(&mut *edit)
+                .on_hover_text("RUST_LOG directive syntax, e.g. warn,vr=debug,coord_frame=debug.");
+            if ui.button("Apply").clicked() {
+                *error = crate::logging::set_filter(&edit).err();
+            }
+        });
+        if let Some(e) = error.as_ref() {
+            ui.colored_label(egui::Color32::LIGHT_RED, e);
+        }
     });
 
     // Release CONFIG before start(), whose manifest snapshot re-locks it.
@@ -677,6 +456,89 @@ pub fn egui_debug_debug(ui: &mut egui::Ui) {
     if let Some(frames) = start_trace {
         trace::TraceState::start(frames);
     }
+}
+
+/// The in-progress log-filter text, kept across frames until applied.
+static FILTER_EDIT: parking_lot::Mutex<String> = parking_lot::Mutex::new(String::new());
+/// The last log-filter apply error, shown until the next successful apply.
+static FILTER_ERROR: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);
+
+fn show_camera_snapshot(
+    ui: &mut egui::Ui,
+    label: &str,
+    snap: &CameraSnapshot,
+    other: &CameraSnapshot,
+) {
+    ui.label(egui::RichText::new(label).strong());
+    if !snap.valid {
+        ui.label("(no capture)");
+        return;
+    }
+    ui.label(format!("cam ptr: {:#x}", snap.camera_ptr));
+
+    // The flag values come from the generated bitflags, so the table's bits can never drift from
+    // the pyxis definition; only the display labels are local.
+    const FLAG_NAMES: [(CameraState, &str); 6] = [
+        (CameraState::m_UseOffCenter, "OffCenter"),
+        (CameraState::m_ScreenshotSeriesRunning, "ScreenshotSeries"),
+        (CameraState::m_Ortho, "Ortho"),
+        (CameraState::m_ComputeView, "ComputeView"),
+        (CameraState::m_DirtyProjection, "DirtyProj"),
+        (CameraState::m_IsRenderCamera, "IsRenderCam"),
+    ];
+    let state = CameraState::from_bits_truncate(snap.state_bits);
+    let active: Vec<&str> = FLAG_NAMES
+        .iter()
+        .filter(|(flag, _)| state.contains(*flag))
+        .map(|(_, name)| *name)
+        .collect();
+    let flag_text = format!("flags {:#04x}: {}", snap.state_bits, active.join(" | "));
+    if other.valid && snap.state_bits != other.state_bits {
+        ui.colored_label(egui::Color32::YELLOW, flag_text);
+    } else {
+        ui.label(flag_text);
+    }
+
+    ui.label(format!(
+        "offcenter: tiles={} x={} y={}",
+        snap.offcenter_tiles, snap.offcenter_tile_x, snap.offcenter_tile_y
+    ));
+    ui.label(format!("fov={:.4}  aspect={:.4}", snap.fov, snap.aspect));
+    ui.label(format!("near={:.3}  far={:.1}", snap.near, snap.far));
+    ui.label(format!("size={}x{}", snap.width, snap.height));
+
+    let other_proj = other.valid.then_some(&other.projection);
+    let other_view = other.valid.then_some(&other.view);
+    let other_vpf = other.valid.then_some(&other.view_proj_f);
+    matrix_grid(
+        ui,
+        &format!("proj_{label}"),
+        "m_Projection:",
+        &snap.projection,
+        other_proj,
+    );
+    matrix_grid(
+        ui,
+        &format!("view_{label}"),
+        "m_View:",
+        &snap.view,
+        other_view,
+    );
+    matrix_grid(
+        ui,
+        &format!("vpf_{label}"),
+        "m_ViewProjectionF:",
+        &snap.view_proj_f,
+        other_vpf,
+    );
+    let other_tf = other.valid.then_some(&other.transform);
+    matrix_grid(
+        ui,
+        &format!("tf_{label}"),
+        "m_TransformF:",
+        &snap.transform,
+        other_tf,
+    );
 }
 
 /// A vtable-compatible `IRenderBlockType::IsEnabled` override that always reports disabled.

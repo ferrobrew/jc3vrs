@@ -37,13 +37,14 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
     ui.add(Slider::new(&mut cs.body_offset.y, -1.0..=1.0).text("Body Y"));
     ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
 
-    ui.separator();
-    egui_debug_headpose(ui, &mut cfg.headpose);
-
-    ui.separator();
-    egui::CollapsingHeader::new("Body IK")
-        .default_open(false)
-        .show(ui, |ui| egui_debug_body_ik(ui, &mut cfg.body_ik));
+    ui.collapsing("Headpose", |ui| egui_debug_headpose(ui, &mut cfg.headpose));
+    ui.collapsing("Grapple reel-in comfort", |ui| {
+        egui_grapple(ui, &mut cfg.headpose.grapple);
+    });
+    ui.collapsing("VR body turn", |ui| {
+        egui_vr_turn(ui, &mut cfg.headpose.vr_turn);
+    });
+    ui.collapsing("Body IK", |ui| egui_debug_body_ik(ui, &mut cfg.body_ik));
 }
 
 fn egui_debug_body_ik(ui: &mut egui::Ui, ik: &mut config::BodyIkConfig) {
@@ -66,8 +67,6 @@ fn egui_debug_body_ik(ui: &mut egui::Ui, ik: &mut config::BodyIkConfig) {
 }
 
 fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
-    ui.heading("Headpose");
-
     ui.checkbox(&mut hp.enabled, "Enabled");
     ui.label(format!("Mode: {:?}", headpose::sim::mode()));
     ui.label(format!("Latch: {:?}", headpose::sim::latch_state()));
@@ -136,12 +135,9 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
     ui.add(Slider::new(&mut hp.posture_deadband_deg, 0.0..=90.0).text("Posture deadband (°)"));
     ui.add(Slider::new(&mut hp.posture_full_deg, 0.0..=180.0).text("Posture full at (°)"));
     ui.add(Slider::new(&mut hp.posture_smoothing_s, 0.0..=2.0).text("Posture smoothing (s)"));
-    egui_grapple(ui, &mut hp.grapple);
     ui.add(Slider::new(&mut hp.position_offset.x, -1.0..=1.0).text("Roomscale offset X (m)"));
     ui.add(Slider::new(&mut hp.position_offset.y, -1.0..=1.0).text("Roomscale offset Y (m)"));
     ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Roomscale offset Z (m)"));
-
-    egui_vr_turn(ui, &mut hp.vr_turn);
 }
 
 /// The grapple reel-in body-frame filter (issue #36): which rotation the reel is allowed to
@@ -149,8 +145,6 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
 fn egui_grapple(ui: &mut egui::Ui, grapple: &mut grapple::GrappleComfortConfig) {
     use crate::grapple::GrappleComfortMode;
 
-    ui.separator();
-    ui.heading("Grapple reel-in comfort");
     let mode_label = |mode: GrappleComfortMode| match mode {
         GrappleComfortMode::Off => "Off",
         GrappleComfortMode::HoldView => "Hold view",
@@ -212,8 +206,6 @@ fn egui_grapple(ui: &mut egui::Ui, grapple: &mut grapple::GrappleComfortConfig) 
 fn egui_vr_turn(ui: &mut egui::Ui, turn: &mut headpose::config::VrTurnConfig) {
     use headpose::config::VrTurnMode;
 
-    ui.separator();
-    ui.heading("VR body turn");
     ui.horizontal(|ui| {
         ui.label("Mode:");
         ui.radio_value(&mut turn.mode, VrTurnMode::Smooth, "Smooth");

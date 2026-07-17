@@ -98,7 +98,7 @@ impl EguiState {
         };
         let egui_output = self
             .egui_context
-            .run(input, |ctx| callback(ctx, &mut self.egui_renderer));
+            .run_ui(input, |ctx| callback(ctx, &mut self.egui_renderer));
         let (mut renderer_output, platform_output, _) = egui_directx11::split_output(egui_output);
 
         // Carry a still-unrendered frame's texture delta forward instead of dropping it. `run()` (game
@@ -294,6 +294,8 @@ pub fn wndproc(events: &mut Vec<egui::Event>, msg: u32, wparam: WPARAM, lparam: 
             events.push(egui::Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Line,
                 delta: egui::Vec2::new(0.0, delta),
+                // Discrete win32 wheel notches carry no gesture phase.
+                phase: egui::TouchPhase::Move,
                 modifiers: get_modifiers(),
             });
         }
