@@ -81,7 +81,7 @@ only the periphery writes the bit), then continue the range.
 
 ## Implementation
 
-The design above is implemented, off by default, across:
+The design above is implemented, on by default, across:
 
 - **pyxis defs** — `Graphics::SetupRenderStates` (`0x14195FEA0`), `Graphics::CreateDepthStencilState`
   (`0x14195F9D0`), and the `HContext_t` `m_DepthStencilStateIndex` (`+0x8CC0`) / `m_StencilRef`
@@ -100,12 +100,12 @@ The design above is implemented, off by default, across:
   true optical centre, not screen centre.
 - **config + UI** — `foveation.{enabled, inner_fraction, outer_fraction, max_drop, mask_bit,
   foveal_first_pass, foveal_last_pass}` (`config.rs`), surfaced in the "Foveation" debug section.
-  `enabled` defaults **false** (see below).
+  `enabled` defaults **true**.
 
 ## Open items (needs in-headset validation)
 
-The feature ships off by default: it is untested on hardware and touches the hottest render path, so it
-must not perturb the concurrent #30 / #31 validation. Enabling it (config or debug UI) turns it on. What
+The feature ships on by default. It is untested on hardware and touches the hottest render path, so it
+can be disabled (config or debug UI) if it perturbs the concurrent #30 / #31 validation. What
 still needs confirming in a headset:
 
 - **The default foveated pass range** (`0x41 RP_MODELS_DYNAMIC` … `0x4B RP_CREATURES`) is a starting
