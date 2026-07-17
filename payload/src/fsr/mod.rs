@@ -384,9 +384,5 @@ pub fn apply_jitter_to_projection(proj: &mut Matrix4, render_width: u32, render_
             ndc_x, ndc_y, 0.0, 1.0,
         ],
     };
-    // proj = proj * jitter, the engine's Multiply4x4(proj, jitterMat) convention.
-    let mut out = Matrix4::default();
-    // SAFETY: the engine matrix-multiply reads two valid matrices and writes a third.
-    unsafe { Matrix4::Multiply4x4(proj, &jitter, &mut out) };
-    *proj = out;
+    *proj = *proj * jitter;
 }

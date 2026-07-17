@@ -15,8 +15,11 @@
 //! [`super::state::HudState::update_pose`].
 
 use anyhow::Context as _;
-use glam::{Quat, Vec3};
-use jc3gi::graphics_engine::{device::Device, texture::Texture};
+use glam::{Quat, Vec3, Vec4};
+use jc3gi::{
+    graphics_engine::{device::Device, texture::Texture},
+    types::math::Matrix4,
+};
 use windows::Win32::Graphics::{
     Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP,
     Direct3D11::{
@@ -177,7 +180,7 @@ impl HudQuad {
         device: &Device,
         target: &Texture,
         hud_srv: &ID3D11ShaderResourceView,
-        corners: &[[f32; 4]; 4],
+        corners: &[Vec4; 4],
     ) -> bool {
         self.draw_internal(
             context,
@@ -197,7 +200,7 @@ impl HudQuad {
         context: &ID3D11DeviceContext,
         device: &Device,
         target: &Texture,
-        corners: &[[f32; 4]; 4],
+        corners: &[Vec4; 4],
     ) -> bool {
         self.draw_internal(
             context,
@@ -218,7 +221,7 @@ impl HudQuad {
         target: &Texture,
         srv: Option<&ID3D11ShaderResourceView>,
         pixel_shader: &ID3D11PixelShader,
-        corners: &[[f32; 4]; 4],
+        corners: &[Vec4; 4],
     ) -> bool {
         let width = u32::from(target.m_Width);
         let height = u32::from(target.m_Height);
@@ -246,8 +249,8 @@ impl HudQuad {
             };
 
             let constants = QuadConstants {
-                view_projection: view_proj,
-                corners: *corners,
+                view_projection: view_proj.data,
+                corners: corners.map(|c| c.to_array()),
             };
 
             let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
@@ -326,7 +329,7 @@ pub(crate) struct PanelParams {
 /// The panel sits at its own world-space orientation (`rot`), positioned at `pos + forward *
 /// distance`. It is NOT rotated through the camera's transform — that would stack the rotation on
 /// top of the head rotation, swinging the panel offscreen on large turns.
-pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4]> {
+pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[Vec4; 4]> {
     if params.aspect <= 0.0 {
         return None;
     }
@@ -349,10 +352,7 @@ pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[[f32; 4]; 4
         (half_w, -half_h),
     ];
 
-    Some(layout.map(|(dx, dy)| {
-        let corner = center + right * dx + up * dy;
-        [corner.x, corner.y, corner.z, 1.0]
-    }))
+    Some(layout.map(|(dx, dy)| (center + right * dx + up * dy).extend(1.0)))
 }
 
 /// Compute the virtual mouse cursor's world-space corners: a small square quad centered on the
@@ -365,7 +365,7 @@ pub(crate) fn compute_cursor_corners(
     params: &PanelParams,
     frame: super::cursor::CursorFrame,
     cfg: &super::config::CursorConfig,
-) -> Option<[[f32; 4]; 4]> {
+) -> Option<[Vec4; 4]> {
     if params.aspect <= 0.0 || cfg.size <= 0.0 {
         return None;
     }
@@ -386,17 +386,14 @@ pub(crate) fn compute_cursor_corners(
 
     let half = cfg.size * params.distance * 0.5;
     let layout = [(-half, half), (half, half), (-half, -half), (half, -half)];
-    Some(layout.map(|(dx, dy)| {
-        let corner = point + right * dx + up * dy;
-        [corner.x, corner.y, corner.z, 1.0]
-    }))
+    Some(layout.map(|(dx, dy)| (point + right * dx + up * dy).extend(1.0)))
 }
 
 /// Fetch the render camera's view-projection matrix for the current eye.
-pub(super) fn fetch_view_projection() -> Option<[f32; 16]> {
+pub(super) fn fetch_view_projection() -> Option<Matrix4> {
     unsafe {
         let cm = jc3gi::camera::camera_manager::CameraManager::get()?;
         let cam = cm.m_RenderCamera.as_ref()?;
-        Some(cam.m_ViewProjectionF.data)
+        Some(cam.m_ViewProjectionF)
     }
 }

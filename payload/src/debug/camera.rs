@@ -2,6 +2,7 @@
 //! Each eye's `CameraManager::m_RenderCamera` projection state is captured after its Draw so the two
 //! eyes can be compared, isolating the eye-1 projection corruption.
 
+use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
 /// Snapshot of the render camera's projection state, captured after each eye's Draw so the two eyes
@@ -20,10 +21,10 @@ pub(crate) struct CameraSnapshot {
     pub aspect: f32,
     pub width: i32,
     pub height: i32,
-    pub projection: [f32; 16],
-    pub view: [f32; 16],
-    pub view_proj_f: [f32; 16],
-    pub transform: [f32; 16],
+    pub projection: Matrix4,
+    pub view: Matrix4,
+    pub view_proj_f: Matrix4,
+    pub transform: Matrix4,
 }
 impl CameraSnapshot {
     const fn empty() -> Self {
@@ -40,10 +41,10 @@ impl CameraSnapshot {
             aspect: 0.0,
             width: 0,
             height: 0,
-            projection: [0.0; 16],
-            view: [0.0; 16],
-            view_proj_f: [0.0; 16],
-            transform: [0.0; 16],
+            projection: Matrix4::ZERO,
+            view: Matrix4::ZERO,
+            view_proj_f: Matrix4::ZERO,
+            transform: Matrix4::ZERO,
         }
     }
 }
@@ -75,10 +76,10 @@ pub(crate) fn capture_render_camera(index: usize) {
             aspect: cam.m_AspectRatio,
             width: cam.m_Width,
             height: cam.m_Height,
-            projection: cam.m_Projection.data,
-            view: cam.m_View.data,
-            view_proj_f: cam.m_ViewProjectionF.data,
-            transform: cam.m_TransformF.data,
+            projection: cam.m_Projection,
+            view: cam.m_View,
+            view_proj_f: cam.m_ViewProjectionF,
+            transform: cam.m_TransformF,
         };
         if let Some(slot) = CAMERA_SNAPSHOTS.lock().get_mut(index) {
             *slot = snap;

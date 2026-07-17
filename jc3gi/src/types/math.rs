@@ -225,7 +225,39 @@ impl From<Matrix4> for glam::Mat4 {
         glam::Mat4::from_cols_array(&m.data)
     }
 }
+impl std::fmt::Debug for Matrix4 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut list = f.debug_list();
+        for row in self.data.chunks_exact(4) {
+            list.entry(&row);
+        }
+        list.finish()
+    }
+}
 impl Matrix4 {
+    /// All elements zero.
+    pub const ZERO: Self = Self { data: [0.0; 16] };
+    /// The identity matrix; identical under either the row-major or the column-major reading.
+    pub const IDENTITY: Self = Self {
+        data: [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ],
+    };
     pub fn as_ptr(&self) -> *const f32 {
         self.data.as_ptr()
     }
@@ -270,6 +302,30 @@ mod matrix4_mul_tests {
         m.data[14] = z;
         m
     }
+    /// A rotation of 90 degrees about +Z, engine row-major: the basis vectors live in the rows,
+    /// so row 0 (right) becomes +Y and row 1 (up) becomes -X.
+    fn rot_z_90() -> Matrix4 {
+        let mut m = Matrix4::IDENTITY;
+        m.data[0] = 0.0;
+        m.data[1] = 1.0;
+        m.data[4] = -1.0;
+        m.data[5] = 0.0;
+        m
+    }
+    /// The textbook row-major product the engine's Multiply4x4 documents:
+    /// `result[i][j] = sum_k a[i][k] * b[k][j]`. An independent oracle for the operator, which
+    /// reaches the same result the long way around (through glam's flipped convention).
+    fn row_major_mul(a: &Matrix4, b: &Matrix4) -> Matrix4 {
+        let mut data = [0.0f32; 16];
+        for row in 0..4 {
+            for col in 0..4 {
+                data[row * 4 + col] = (0..4)
+                    .map(|k| a.data[row * 4 + k] * b.data[k * 4 + col])
+                    .sum();
+            }
+        }
+        Matrix4 { data }
+    }
     #[test]
     fn mul_matches_engine_convention() {
         let id = translation(0.0, 0.0, 0.0);
@@ -280,6 +336,38 @@ mod matrix4_mul_tests {
         assert!((ab.data[12] - 11.0).abs() < 1e-5);
         assert!((ab.data[13] - 22.0).abs() < 1e-5);
         assert!((ab.data[14] - 33.0).abs() < 1e-5);
+    }
+    /// Composing two translations is commutative, so it cannot tell `a . b` from `b . a`. Pin the
+    /// operand order against the documented row-major product using a non-commutative pair, and
+    /// assert the pair really is non-commutative so the check has teeth.
+    #[test]
+    fn mul_operand_order_matches_row_major_product() {
+        let r = rot_z_90();
+        let t = translation(10.0, 20.0, 30.0);
+        assert_ne!((r * t).data, (t * r).data);
+        for (a, b) in [(r, t), (t, r)] {
+            let expected = row_major_mul(&a, &b);
+            for (i, (got, want)) in (a * b)
+                .data
+                .iter()
+                .zip(expected.data.iter())
+                .enumerate()
+            {
+                assert!((got - want).abs() < 1e-5, "element {i}: {got} vs {want}");
+            }
+        }
+    }
+    /// Row-vector semantics: `p . (a . b)` applies `a` first. Translating the origin along +X and
+    /// then rotating 90 degrees about +Z must land on +Y.
+    #[test]
+    fn mul_is_row_vector_apply_left_first() {
+        let m = translation(1.0, 0.0, 0.0) * rot_z_90();
+        let p = [0.0f32, 0.0, 0.0, 1.0];
+        let out: Vec<f32> = (0..4)
+            .map(|col| (0..4).map(|k| p[k] * m.data[k * 4 + col]).sum())
+            .collect();
+        assert!(out[0].abs() < 1e-5, "x = {}", out[0]);
+        assert!((out[1] - 1.0).abs() < 1e-5, "y = {}", out[1]);
     }
 }
 #[cfg(feature = "glam")]

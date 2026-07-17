@@ -15,7 +15,10 @@
 //! reconstructs each pixel from the raster depth and re-anchors its vector at the eye's own previous
 //! pose; see `velocity_decode.hlsl` for the math.
 
-use jc3gi::graphics_engine::{device::Device, texture::Texture};
+use jc3gi::{
+    graphics_engine::{device::Device, texture::Texture},
+    types::math::Matrix4,
+};
 use windows::{
     Win32::Graphics::{
         Direct3D::D3D_SRV_DIMENSION_TEXTURE2D,
@@ -55,7 +58,7 @@ pub struct DecodeInputs<'a> {
     /// FSR's sign/axis convention, applied to the decoded UV motion.
     pub sign: (f32, f32),
     /// The stereo clip-to-previous-clip reprojection matrices (center, eye), when active.
-    pub reprojection: Option<([f32; 16], [f32; 16])>,
+    pub reprojection: Option<(Matrix4, Matrix4)>,
     /// The constant camera-jitter UV offset to cancel from every vector (FSR wants jitter-free
     /// motion).
     pub jitter_uv: (f32, f32),
@@ -228,20 +231,15 @@ impl VelocityDecode {
             {
                 return false;
             }
-            let identity = [
-                1.0, 0.0, 0.0, 0.0, //
-                0.0, 1.0, 0.0, 0.0, //
-                0.0, 0.0, 1.0, 0.0, //
-                0.0, 0.0, 0.0, 1.0f32,
-            ];
-            let (reproj_center, reproj_eye) = correction.unwrap_or((identity, identity));
+            let (reproj_center, reproj_eye) =
+                correction.unwrap_or((Matrix4::IDENTITY, Matrix4::IDENTITY));
             let params = Params {
                 width: self.width,
                 height: self.height,
                 sign_x: sign.0,
                 sign_y: sign.1,
-                reproj_center,
-                reproj_eye,
+                reproj_center: reproj_center.data,
+                reproj_eye: reproj_eye.data,
                 correction_enabled: u32::from(correction.is_some()),
                 jitter_uv: [jitter_uv.0, jitter_uv.1],
                 _padding: 0,

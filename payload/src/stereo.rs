@@ -5,6 +5,7 @@
 //! read it via [`is_second_eye`] / [`draw_index`] / [`active`]. This is *runtime* state,
 //! distinct from the `stereo` config toggles in [`crate::config`].
 
+use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
 /// The live stereo render state for the frame in flight.
@@ -18,7 +19,7 @@ pub struct StereoState {
     /// `M * shadow_anchor_delta` to the cascade transform translation so the shadow lookup stays
     /// anchored at the (center-fit) shadow map instead of shifting with the per-eye camera. Zero when
     /// no per-eye offset is applied, making the correction a no-op.
-    pub shadow_anchor_delta: [f32; 3],
+    pub shadow_anchor_delta: glam::Vec3,
     /// Per-eye view-projection history for the FSR motion-vector correction, maintained by the
     /// `SetupRenderCamera` hook.
     pub vp_history: VpHistory,
@@ -27,14 +28,14 @@ pub struct StereoState {
     /// this instead of the live `m_TransformF`, which by the time `draw_quad` runs on eye 0 already
     /// carries eye 0's half-IPD offset. Using the offset transform would shift the cached panel
     /// position toward eye 0, doubling the stereo disparity for eye 1.
-    pub center_transform: Option<[f32; 16]>,
+    pub center_transform: Option<Matrix4>,
 }
 impl StereoState {
     const fn new() -> Self {
         Self {
             active: false,
             draw_index: 0,
-            shadow_anchor_delta: [0.0; 3],
+            shadow_anchor_delta: glam::Vec3::ZERO,
             vp_history: VpHistory::new(),
             center_transform: None,
         }
@@ -87,19 +88,19 @@ impl VpHistory {
         self.prev_jitter_uv = std::mem::take(&mut self.cur_jitter_uv);
     }
 
-    /// The two clip-to-previous-clip reprojection matrices for `eye`, column-major: the center
-    /// reprojection the engine's velocity pass encodes, and the per-eye reprojection FSR wants.
-    /// `None` until a full frame of history exists. The products are formed in `f64`: the
-    /// view-projections carry world-scale translations that only cancel between `prevVP` and
-    /// `inv(curVP)` at higher-than-`f32` precision.
-    pub fn reprojection_matrices(&self, eye: usize) -> Option<([f32; 16], [f32; 16])> {
+    /// The two clip-to-previous-clip reprojection matrices for `eye`: the center reprojection the
+    /// engine's velocity pass encodes, and the per-eye reprojection FSR wants. `None` until a full
+    /// frame of history exists. The products are formed in `f64`: the view-projections carry
+    /// world-scale translations that only cancel between `prevVP` and `inv(curVP)` at
+    /// higher-than-`f32` precision.
+    pub fn reprojection_matrices(&self, eye: usize) -> Option<(Matrix4, Matrix4)> {
         let cur = (*self.cur_eye.get(eye)?)?;
         let prev_center = self.prev_center?;
         let prev_eye = (*self.prev_eye.get(eye)?)?;
         let inv_cur = cur.as_dmat4().inverse();
         let center_reproj = (prev_center.as_dmat4() * inv_cur).as_mat4();
         let eye_reproj = (prev_eye.as_dmat4() * inv_cur).as_mat4();
-        Some((center_reproj.to_cols_array(), eye_reproj.to_cols_array()))
+        Some((Matrix4::from(center_reproj), Matrix4::from(eye_reproj)))
     }
 }
 

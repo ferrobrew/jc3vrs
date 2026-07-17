@@ -182,7 +182,7 @@ fn foveation_plan(first: i32, last: i32) -> Option<FoveationPlan> {
 /// Build the pass parameters from the config and the eye's foveal centre.
 fn foveation_params(
     cfg: &crate::config::FoveationConfig,
-    center_uv: [f32; 2],
+    center_uv: glam::Vec2,
 ) -> crate::vr::foveation::FoveationParams {
     crate::vr::foveation::FoveationParams {
         center_uv,
@@ -197,12 +197,12 @@ fn foveation_params(
 /// The per-eye foveal centre as a UV, from the eye's projection principal point (`m02`/`m12` shear terms
 /// of the column-major projection): symmetric frustums map to the buffer centre, canted HMDs to their
 /// off-axis centre. `None` when no VR frame is in flight. Clamped to the buffer.
-fn foveal_center_uv(eye: usize) -> Option<[f32; 2]> {
+fn foveal_center_uv(eye: usize) -> Option<glam::Vec2> {
     let m = crate::vr::render_params(eye)?.projection_standard;
-    Some([
-        (0.5 - 0.5 * m[8]).clamp(0.0, 1.0),
-        (0.5 + 0.5 * m[9]).clamp(0.0, 1.0),
-    ])
+    Some(glam::Vec2::new(
+        (0.5 - 0.5 * m.data[8]).clamp(0.0, 1.0),
+        (0.5 + 0.5 * m.data[9]).clamp(0.0, 1.0),
+    ))
 }
 
 /// Run one foveation D3D pass, warning on any failure without disturbing the surrounding scene draw.
@@ -299,8 +299,8 @@ fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
         };
         let saved_proj = [camera.m_ProjectionF.data[0], camera.m_ProjectionF.data[5]];
         if let Some(union) = union {
-            camera.m_ProjectionF.data[0] = union[0];
-            camera.m_ProjectionF.data[5] = union[5];
+            camera.m_ProjectionF.data[0] = union.data[0];
+            camera.m_ProjectionF.data[5] = union.data[5];
         }
         // Horizontalize the camera forward (row 2) so the cascade centre's forward-push is yaw-only.
         let saved_row2 = stabilize.then(|| {
@@ -458,7 +458,7 @@ fn set_global_shader_constants(this: *mut c_void, ctx: *mut c_void) {
 /// Record the staged sun-shadow constants into the active render trace (no-op outside a trace) --
 /// the raw parity-slot values, read before the anchor correction mutates them. See
 /// [`TraceEvent::ShadowState`] for how the series is analysed.
-fn record_shadow_state(ctx: &RenderContext, anchor_delta: [f32; 3]) {
+fn record_shadow_state(ctx: &RenderContext, anchor_delta: glam::Vec3) {
     if !crate::debug::trace::tracing_active() {
         return;
     }
@@ -479,8 +479,11 @@ fn record_shadow_state(ctx: &RenderContext, anchor_delta: [f32; 3]) {
         jc3gi::camera::camera_manager::CameraManager::get()
             .and_then(|cm| cm.m_ActiveCamera.as_ref())
             .map_or(([0.0; 3], [0.0; 3]), |c| {
-                let d = &c.m_TransformF.data;
-                ([d[12], d[13], d[14]], [d[8], d[9], d[10]])
+                let m = glam::Mat4::from(c.m_TransformF);
+                (
+                    m.w_axis.truncate().to_array(),
+                    m.z_axis.truncate().to_array(),
+                )
             })
     };
     let t = &ctx.m_ShadowCascades.m_Transform.data;
@@ -491,7 +494,7 @@ fn record_shadow_state(ctx: &RenderContext, anchor_delta: [f32; 3]) {
         scale_blend: std::array::from_fn(|i| ctx.m_ShadowCascades.m_ScaleBlend[i].data),
         offset_radius: std::array::from_fn(|i| ctx.m_ShadowCascades.m_OffsetRadius[i].data),
         active_cascades: u32::from(ctx.m_ActiveCascadeCount),
-        anchor_delta,
+        anchor_delta: anchor_delta.to_array(),
         shadow_fade,
         dtf: crate::hooks::camera::last_dtf(),
         cam_translation,
@@ -504,9 +507,9 @@ fn record_shadow_state(ctx: &RenderContext, anchor_delta: [f32; 3]) {
 /// sun-shadow lookup from the per-eye camera back to the center camera the cascade map was fit to. The
 /// full `float4` add is used; the linear rows' `.w` are 0 for the affine cascade transform, so the
 /// translation's `.w` is unchanged.
-fn apply_shadow_cascade_anchor_fix(ctx: &mut RenderContext, delta: [f32; 3]) {
+fn apply_shadow_cascade_anchor_fix(ctx: &mut RenderContext, delta: glam::Vec3) {
     let m = &mut ctx.m_ShadowCascades.m_Transform.data;
     for i in 0..4 {
-        m[12 + i] += delta[0] * m[i] + delta[1] * m[4 + i] + delta[2] * m[8 + i];
+        m[12 + i] += delta.x * m[i] + delta.y * m[4 + i] + delta.z * m[8 + i];
     }
 }

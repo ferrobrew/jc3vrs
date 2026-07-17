@@ -1,6 +1,7 @@
 //! The Camera tab: VR head/body camera settings, plus the shared matrix-grid widget.
 
 use egui::Slider;
+use jc3gi::types::math::Matrix4;
 
 use crate::{config, headpose, hooks};
 
@@ -180,20 +181,14 @@ fn egui_vr_turn(ui: &mut egui::Ui, turn: &mut headpose::config::VrTurnConfig) {
         );
 }
 
-pub fn matrix_grid(
-    ui: &mut egui::Ui,
-    id: &str,
-    label: &str,
-    m: &[f32; 16],
-    other: Option<&[f32; 16]>,
-) {
+pub fn matrix_grid(ui: &mut egui::Ui, id: &str, label: &str, m: &Matrix4, other: Option<&Matrix4>) {
     ui.label(label);
     egui::Grid::new(id).striped(true).show(ui, |ui| {
         for r in 0..4 {
             for c in 0..4 {
                 let i = r * 4 + c;
-                let v = m[i];
-                let differs = other.is_some_and(|o| (v - o[i]).abs() > 1e-5);
+                let v = m.data[i];
+                let differs = other.is_some_and(|o| (v - o.data[i]).abs() > 1e-5);
                 let text = format!("{v:+.3}");
                 if differs {
                     ui.colored_label(egui::Color32::YELLOW, text);

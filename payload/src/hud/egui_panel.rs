@@ -19,7 +19,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec3, Vec4};
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11ShaderResourceView};
@@ -107,9 +107,9 @@ struct EguiPanelState {
     /// re-anchors at the current head pose.
     latched_pose: Option<(Vec3, Quat)>,
     /// World-space panel corners, computed on eye 0 and reused for eye 1 (correct stereo depth).
-    cached_corners: Option<[[f32; 4]; 4]>,
+    cached_corners: Option<[Vec4; 4]>,
     /// The virtual cursor's world-space corners, computed on eye 0 alongside the panel corners.
-    cursor_corners: Option<[[f32; 4]; 4]>,
+    cursor_corners: Option<[Vec4; 4]>,
 }
 
 impl EguiPanelState {

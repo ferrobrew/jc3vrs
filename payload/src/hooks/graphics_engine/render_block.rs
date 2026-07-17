@@ -278,14 +278,13 @@ const PALETTE_BUF_LEN: usize = 256;
 
 /// How far the three basis vectors are from an orthonormal set: the layout whose 3x3 reading
 /// scores lower is the matrix's real rotation (see the layout detection in [`spoofed_matrices`]).
-fn ortho_error(x: [f32; 3], y: [f32; 3], z: [f32; 3]) -> f32 {
-    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    (dot(x, x) - 1.0).abs()
-        + (dot(y, y) - 1.0).abs()
-        + (dot(z, z) - 1.0).abs()
-        + dot(x, y).abs()
-        + dot(x, z).abs()
-        + dot(y, z).abs()
+fn ortho_error(x: glam::Vec3, y: glam::Vec3, z: glam::Vec3) -> f32 {
+    (x.dot(x) - 1.0).abs()
+        + (y.dot(y) - 1.0).abs()
+        + (z.dot(z) - 1.0).abs()
+        + x.dot(y).abs()
+        + x.dot(z).abs()
+        + y.dot(z).abs()
 }
 
 /// While the hide flag is up and this batch references a collapse bone, build a copy of the bone
@@ -372,8 +371,16 @@ unsafe fn spoofed_matrices(
         for i in 0..(b.BatchSize.max(0) as usize).min(8) {
             let bone = unsafe { *b.BatchToSkeletonLookup.add(i) } as u16 as usize;
             let m = &buf[bone].m;
-            col_error += ortho_error([m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]);
-            row_error += ortho_error([m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]);
+            col_error += ortho_error(
+                glam::Vec3::new(m[0], m[1], m[2]),
+                glam::Vec3::new(m[3], m[4], m[5]),
+                glam::Vec3::new(m[6], m[7], m[8]),
+            );
+            row_error += ortho_error(
+                glam::Vec3::new(m[0], m[1], m[2]),
+                glam::Vec3::new(m[4], m[5], m[6]),
+                glam::Vec3::new(m[8], m[9], m[10]),
+            );
         }
         let row_layout = row_error < col_error;
         let collapse_bone = |bone: usize, buf: &mut [Matrix3x4]| {

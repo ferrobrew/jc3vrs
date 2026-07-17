@@ -77,8 +77,8 @@ const STENCIL_ENABLE_BIT: u64 = 1 << 6;
 /// convert them to pixels against the live main-buffer size.
 #[derive(Clone, Copy)]
 pub struct FoveationParams {
-    /// Foveal centre as a UV in `[0, 1]` (the eye's principal point); `[0.5, 0.5]` is the buffer centre.
-    pub center_uv: [f32; 2],
+    /// Foveal centre as a UV in `[0, 1]` (the eye's principal point); `(0.5, 0.5)` is the buffer centre.
+    pub center_uv: glam::Vec2,
     /// Foveal radius as a fraction of the buffer half-diagonal: inside it nothing is dropped.
     pub inner_fraction: f32,
     /// Radius (fraction of the half-diagonal) at which the drop reaches [`max_drop`](Self::max_drop).
@@ -396,8 +396,8 @@ impl Foveation {
         // Matches `FoveationParams` in the shaders: float2 centre (px), float inner (px), float outer
         // (px), float max_drop, float debug_mode, float2 pad -- 32 bytes.
         let data: [f32; 8] = [
-            params.center_uv[0] * width as f32,
-            params.center_uv[1] * height as f32,
+            params.center_uv.x * width as f32,
+            params.center_uv.y * height as f32,
             params.inner_fraction * half_diag,
             params.outer_fraction * half_diag,
             params.max_drop,

@@ -305,7 +305,7 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
                 ]),
             );
             hud.set_warp_frame(warp_active.then(|| state::WarpFrame {
-                anchor: pos.to_array(),
+                anchor: pos,
                 markers: frame_markers.clone(),
                 base_distance: cfg.marker_distance,
             }));
@@ -324,8 +324,8 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
                     },
                 );
             }
-            hud.set_warp_frame(warp_active.then(|| state::WarpFrame {
-                anchor: pos.to_array(),
+            hud.set_warp_frame(warp_active.then_some(state::WarpFrame {
+                anchor: pos,
                 markers: frame_markers,
                 base_distance: panel_distance,
             }));
@@ -339,10 +339,11 @@ pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Textur
 /// Extract the head's world-space pose `(position, rotation)` from the render camera's world
 /// transform, or `None` if the camera is not available.
 ///
-/// The camera's world transform stores its basis vectors in rows (pyxis docs): `data[0..2]` = right
-/// (+X), `data[4..6]` = up (+Y), `data[8..10]` = +Z basis (back), `data[12..14]` = translation. We
-/// build a `Mat3` from the basis columns and convert to a quaternion that maps camera-local to world
-/// space, so `quat * Vec3::NEG_Z` yields the forward direction.
+/// The camera's world transform stores its basis vectors in rows (pyxis docs): right (+X), up (+Y),
+/// the +Z basis (back), then the translation. A row-major, row-vector matrix's flat array is the
+/// column-major array of the equivalent glam matrix, so those rows arrive as `Mat4`'s `x_axis`,
+/// `y_axis`, `z_axis`, and `w_axis`. The rotation converts to a quaternion that maps camera-local to
+/// world space, so `quat * Vec3::NEG_Z` yields the forward direction.
 pub(crate) fn render_camera_pose() -> Option<(Vec3, Quat)> {
     // Prefer the center (un-offset) transform snapshotted in `SetupRenderCamera` before the per-eye
     // parallax offset is applied. By the time `draw_quad` runs on eye 0, `m_TransformF` already
@@ -355,15 +356,14 @@ pub(crate) fn render_camera_pose() -> Option<(Vec3, Quat)> {
         .or_else(|| unsafe {
             let cm = CameraManager::get()?;
             let cam = cm.m_RenderCamera.as_ref()?;
-            Some(cam.m_TransformF.data)
+            Some(cam.m_TransformF)
         })?;
 
-    let right = Vec3::new(transform[0], transform[1], transform[2]);
-    let up = Vec3::new(transform[4], transform[5], transform[6]);
-    let back = Vec3::new(transform[8], transform[9], transform[10]);
-    let pos = Vec3::new(transform[12], transform[13], transform[14]);
-
-    Some((pos, Quat::from_mat3(&Mat3::from_cols(right, up, back))))
+    let transform = Mat4::from(transform);
+    Some((
+        transform.w_axis.truncate(),
+        Quat::from_mat3(&Mat3::from_mat4(transform)),
+    ))
 }
 
 /// Compute the view-projection and camera matrices for the floating panel's orientation, so that

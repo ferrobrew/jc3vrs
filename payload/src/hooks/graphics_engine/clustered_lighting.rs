@@ -25,9 +25,12 @@
 use std::{cell::Cell, ffi::c_void};
 
 use detours_macro::detour;
-use jc3gi::graphics_engine::{
-    graphics_engine::{HContext_t, HTexture_t, RenderContext},
-    render_block::RenderBlockDeferredLighting,
+use jc3gi::{
+    graphics_engine::{
+        graphics_engine::{HContext_t, HTexture_t, RenderContext},
+        render_block::RenderBlockDeferredLighting,
+    },
+    types::math::Matrix4,
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -153,7 +156,7 @@ fn set_fragment_program_constants(
 /// The reverse-Z remap (applied by `SetupRenderCamera` to `m_ProjectionF`) only changes column 2
 /// (indices 2, 6, 10, 14), so m[0], m[5], m[8], m[9] are unaffected and the bounds can be extracted
 /// from either the standard-depth or reverse-Z'd matrix.
-fn compute_off_axis_tile_bounds(projection: &[f32; 16], rc: &RenderContext) -> [f32; 8] {
+fn compute_off_axis_tile_bounds(projection: &Matrix4, rc: &RenderContext) -> [f32; 8] {
     let tile_count_x = rc.m_DisplayWidth as f32 * 0.015625; // / 64
     let tile_count_y = rc.m_DisplayHeight as f32 * 0.015625;
     tile_bounds_from_projection(projection, tile_count_x, tile_count_y)
@@ -162,14 +165,15 @@ fn compute_off_axis_tile_bounds(projection: &[f32; 16], rc: &RenderContext) -> [
 /// The pure-math core of [`compute_off_axis_tile_bounds`], factored out for unit testing without a
 /// live `RenderContext`.
 fn tile_bounds_from_projection(
-    projection: &[f32; 16],
+    projection: &Matrix4,
     tile_count_x: f32,
     tile_count_y: f32,
 ) -> [f32; 8] {
-    let right = (1.0 + projection[8]) / projection[0];
-    let left = (projection[8] - 1.0) / projection[0];
-    let top = (1.0 + projection[9]) / projection[5];
-    let bottom = (projection[9] - 1.0) / projection[5];
+    let d = &projection.data;
+    let right = (1.0 + d[8]) / d[0];
+    let left = (d[8] - 1.0) / d[0];
+    let top = (1.0 + d[9]) / d[5];
+    let bottom = (d[9] - 1.0) / d[5];
 
     let h_extent = right - left;
     let v_extent = top - bottom;
@@ -195,11 +199,12 @@ mod tests {
     use crate::vr::projection::{Fov, OffAxisProjection};
 
     /// Extract the frustum bounds (right, left, top, bottom) from a row-major projection matrix.
-    fn frustum_bounds(projection: &[f32; 16]) -> (f32, f32, f32, f32) {
-        let right = (1.0 + projection[8]) / projection[0];
-        let left = (projection[8] - 1.0) / projection[0];
-        let top = (1.0 + projection[9]) / projection[5];
-        let bottom = (projection[9] - 1.0) / projection[5];
+    fn frustum_bounds(projection: &Matrix4) -> (f32, f32, f32, f32) {
+        let d = &projection.data;
+        let right = (1.0 + d[8]) / d[0];
+        let left = (d[8] - 1.0) / d[0];
+        let top = (1.0 + d[9]) / d[5];
+        let bottom = (d[9] - 1.0) / d[5];
         (right, left, top, bottom)
     }
 

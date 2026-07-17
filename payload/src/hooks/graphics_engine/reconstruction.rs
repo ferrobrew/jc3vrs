@@ -43,7 +43,7 @@ fn perspective_fov_inverse(
     if let Some(inverse) = offaxis_inverse(near, far)
         && let Some(target) = unsafe { out.as_mut() }
     {
-        target.data = inverse;
+        *target = inverse;
         return out;
     }
     PERSPECTIVE_FOV_INVERSE
@@ -57,7 +57,7 @@ fn perspective_fov_inverse(
 /// (flatscreen frames carry no render params), or the requested near/far do not match the *live*
 /// main-camera planes (an auxiliary camera -- e.g. a reflection -- whose own symmetric rebuild is
 /// already correct).
-fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
+fn offaxis_inverse(near: f32, far: f32) -> Option<Matrix4> {
     let (enabled, near_fallback, far_fallback) = Config::lock_query(|c| {
         (
             c.stereo.reconstruct_offaxis_inverse,
@@ -78,7 +78,7 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
     let far_ok = (far - far_ref).abs() <= far_ref.abs() * 0.01;
 
     let applies = enabled && near_ok && far_ok;
-    // The `Matrix4` <-> glam bridge transposes each way, so `Mat4::from(engine).inverse().to_cols_array()`
+    // The `Matrix4` <-> glam bridge transposes each way, so `Matrix4::from(Mat4::from(engine).inverse())`
     // yields the inverse back in engine row-major format -- the same pattern the camera hook uses to
     // write `m_View`. The engine's `PerspectiveFovInverse` (0x1400390E0) produces a REVERSE-Z clip->view
     // inverse (its depth entries `m23 = (far-near)/(far*near)`, `m33 = 1/far`, `m32 = -1` reconstruct
@@ -91,13 +91,7 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
     // rotated (issue #31).
     let result = applies
         .then(|| {
-            params.map(|vr| {
-                glam::Mat4::from(Matrix4 {
-                    data: vr.projection_reverse_z,
-                })
-                .inverse()
-                .to_cols_array()
-            })
+            params.map(|vr| Matrix4::from(glam::Mat4::from(vr.projection_reverse_z).inverse()))
         })
         .flatten();
 
@@ -105,7 +99,7 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<[f32; 16]> {
     // reconstructed positions the sun shadow samples over) wobbles frame to frame. Only for VR-eye
     // dispatches, where `params` is populated; `record_eye` is a no-op outside an active trace.
     if let Some(vr) = params {
-        let d = vr.projection_reverse_z;
+        let d = &vr.projection_reverse_z.data;
         TraceState::record_eye(TraceEvent::ReconstructionState {
             req_near: near,
             req_far: far,

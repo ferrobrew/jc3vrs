@@ -6,6 +6,12 @@
 //! way the engine's `Camera::m_Projection` is: **row-major, row-vector** (`clip = p · M`), the D3D
 //! convention documented in `docs/engine/rendering.md` §2.6.
 //!
+//! The math is built with `glam`, which is column-major, column-vector (`clip = M * p`). A row-major
+//! row-vector matrix's flat 16-float array is bit-identical to `to_cols_array()` of the
+//! mathematically-equivalent glam column-vector matrix -- engine row `i` is glam column `i` -- so the
+//! [`jc3gi::types::math::Matrix4`] this module returns (whose `From<glam::Mat4>` impl calls
+//! `to_cols_array()`) carries exactly the engine's layout, with no transpose needed.
+//!
 //! The `standard_depth` matrix is built element-for-element the way the engine's
 //! `CMatrix4f::PerspectiveOffCenter` builds `Camera::m_Projection` (verified against the release
 //! build, `docs/engine/rendering.md` §2.9): the engine passes near-plane extents (`near·tan θ`),
@@ -32,6 +38,9 @@
 //! The math is deliberately free of any OpenXR type so it is unit-testable on the Linux host: the
 //! caller in [`crate::vr`] converts `xr::Fovf` into [`Fov`].
 
+use glam::{Mat4, Vec4};
+use jc3gi::types::math::Matrix4;
+
 /// A symmetric-or-asymmetric field of view, as four half-angles in radians measured from the view
 /// axis. Matches the sign convention of `XrFovf`: `left` and `down` are negative, `right` and `up`
 /// are positive, for a forward-facing view.
@@ -50,11 +59,11 @@ pub struct OffAxisProjection {
     /// Standard depth (NDC z in `[0, 1]`, near → 0, far → 1). Write this into `m_Projection`
     /// *before* `SetupRenderCamera` so the engine reverse-Z's and jitters it once (the preferred
     /// path, `docs/engine/rendering.md` §2.7).
-    pub standard_depth: [f32; 16],
+    pub standard_depth: Matrix4,
     /// Reverse-Z depth (near → 1, far → 0), the engine's `z' = w - z` remap already applied. Write
     /// this *after* `SetupRenderCamera` (the §2.7 alternative path); you then own jitter and the
     /// VP rebuild.
-    pub reverse_z: [f32; 16],
+    pub reverse_z: Matrix4,
 }
 
 impl OffAxisProjection {
@@ -64,17 +73,17 @@ impl OffAxisProjection {
     pub fn new(fov: Fov, near: f32, far: f32) -> Self {
         let standard_depth = perspective_off_center_rh(fov, near, far);
         Self {
-            standard_depth,
-            reverse_z: apply_reverse_z(standard_depth),
+            standard_depth: Matrix4::from(standard_depth),
+            reverse_z: Matrix4::from(apply_reverse_z(standard_depth)),
         }
     }
 }
 
-/// A standard right-handed off-centre perspective in the engine's row-major, row-vector layout, with
-/// NDC z in `[0, 1]` (`DirectXMath`'s `PerspectiveOffCenterRH` convention). The horizontal/vertical
-/// extents come from the FOV tangents at unit depth, so `near` cancels out of every term except the
-/// depth column.
-fn perspective_off_center_rh(fov: Fov, near: f32, far: f32) -> [f32; 16] {
+/// A standard right-handed off-centre perspective in the engine's row-major, row-vector layout (as a
+/// glam column-vector matrix -- see the module docs for the equivalence), with NDC z in `[0, 1]`
+/// (`DirectXMath`'s `PerspectiveOffCenterRH` convention). The horizontal/vertical extents come from
+/// the FOV tangents at unit depth, so `near` cancels out of every term except the depth column.
+fn perspective_off_center_rh(fov: Fov, near: f32, far: f32) -> Mat4 {
     let tl = fov.left.tan();
     let tr = fov.right.tan();
     let tu = fov.up.tan();
@@ -84,58 +93,56 @@ fn perspective_off_center_rh(fov: Fov, near: f32, far: f32) -> [f32; 16] {
     let inv_h = 1.0 / (tu - td);
     let depth = far / (near - far);
 
-    // Row-major (`clip = p · M`); `m[row * 4 + col]`.
-    [
-        2.0 * inv_w,
-        0.0,
-        0.0,
-        0.0,
-        //
-        0.0,
-        2.0 * inv_h,
-        0.0,
-        0.0,
-        //
-        (tl + tr) * inv_w,
-        (td + tu) * inv_h,
-        depth,
-        -1.0,
-        //
-        0.0,
-        0.0,
-        near * depth,
-        0.0,
-    ]
+    // Engine row `i` is glam column `i` (see the module docs), so each `Vec4` below is one engine row.
+    Mat4::from_cols(
+        Vec4::new(2.0 * inv_w, 0.0, 0.0, 0.0),
+        Vec4::new(0.0, 2.0 * inv_h, 0.0, 0.0),
+        Vec4::new((tl + tr) * inv_w, (td + tu) * inv_h, depth, -1.0),
+        Vec4::new(0.0, 0.0, near * depth, 0.0),
+    )
 }
 
 /// Apply the engine's reverse-Z remap (`z' = w - z`) to a standard-depth projection: for each row,
 /// column 2 becomes column 3 minus column 2. This is exactly what `SetupRenderCamera` /
 /// `RecalcProjection` do to `m_Projection` on a render camera (`docs/engine/rendering.md` §2.3, §2.7).
-fn apply_reverse_z(mut m: [f32; 16]) -> [f32; 16] {
-    for row in 0..4 {
-        m[row * 4 + 2] = m[row * 4 + 3] - m[row * 4 + 2];
-    }
-    m
+///
+/// In glam terms (engine row `i` == glam column `i`, engine column `j` == glam component `j`), the
+/// remap becomes: each column's `.z` component becomes that column's `.w` minus its `.z`.
+fn apply_reverse_z(m: Mat4) -> Mat4 {
+    Mat4::from_cols(
+        remap_col_z(m.x_axis),
+        remap_col_z(m.y_axis),
+        remap_col_z(m.z_axis),
+        remap_col_z(m.w_axis),
+    )
+}
+
+/// `col.z = col.w - col.z`, the per-column half of [`apply_reverse_z`].
+fn remap_col_z(col: Vec4) -> Vec4 {
+    Vec4::new(col.x, col.y, col.w - col.z, col.w)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::Mat4;
+    use glam::Mat4 as GlamMat4;
 
-    /// `m[row * 4 + col]` for the row-major matrices this module produces.
-    fn at(m: &[f32; 16], row: usize, col: usize) -> f32 {
-        m[row * 4 + col]
+    /// `m[row * 4 + col]` for the row-major matrices this module produces, reading through the
+    /// engine-row == glam-column equivalence.
+    fn at(m: &Matrix4, row: usize, col: usize) -> f32 {
+        m.data[row * 4 + col]
     }
 
     /// Project a view-space point through a row-major, row-vector projection (`clip = p · M`) and
-    /// return the resulting NDC point (perspective divide applied).
-    fn project(m: &[f32; 16], p: [f32; 4]) -> [f32; 3] {
-        let mut clip = [0.0f32; 4];
-        for col in 0..4 {
-            clip[col] = p[0] * m[col] + p[1] * m[4 + col] + p[2] * m[8 + col] + p[3] * m[12 + col];
-        }
-        [clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3]]
+    /// return the resulting NDC point (perspective divide applied). Implemented as glam
+    /// `mat_glam * vec4`, which is equivalent because `mat_glam` (built via `from_cols_array` on the
+    /// engine's flat array) is the transpose-equivalent column-vector matrix: `M_glam * p == p · M`
+    /// when `M_glam`'s columns are `M`'s rows, which is exactly what `from_cols_array` on the row-major
+    /// flat array gives.
+    fn project(m: &Matrix4, p: [f32; 4]) -> [f32; 3] {
+        let mat_glam = GlamMat4::from(*m);
+        let clip = mat_glam * Vec4::from(p);
+        [clip.x / clip.w, clip.y / clip.w, clip.z / clip.w]
     }
 
     /// A symmetric FOV must reproduce the reference D3D perspective. glam's `perspective_rh` is a
@@ -160,9 +167,9 @@ mod tests {
         // fov_y is the full vertical angle; aspect = tan(half_x) / tan(half_y).
         let fov_y = 2.0 * half_y;
         let aspect = half_x.tan() / half_y.tan();
-        let reference = Mat4::perspective_rh(fov_y, aspect, near, far).to_cols_array();
+        let reference = GlamMat4::perspective_rh(fov_y, aspect, near, far).to_cols_array();
 
-        for (a, b) in proj.iter().zip(reference.iter()) {
+        for (a, b) in proj.data.iter().zip(reference.iter()) {
             assert!((a - b).abs() < 1e-5, "got {a}, expected {b}");
         }
 
@@ -232,7 +239,7 @@ mod tests {
         engine[14] = (near * far) / (near - far);
 
         let proj = OffAxisProjection::new(fov, near, far).standard_depth;
-        for (i, (a, b)) in proj.iter().zip(engine.iter()).enumerate() {
+        for (i, (a, b)) in proj.data.iter().zip(engine.iter()).enumerate() {
             assert!((a - b).abs() < 1e-6, "element {i}: mod {a}, engine {b}");
         }
     }
@@ -253,11 +260,11 @@ mod tests {
         let p = OffAxisProjection::new(fov, near, far);
 
         // Engine remap applied by hand to the standard matrix: e[row*4+2] = e[row*4+3] - e[row*4+2].
-        let mut expected = p.standard_depth;
+        let mut expected = p.standard_depth.data;
         for row in 0..4 {
             expected[row * 4 + 2] = expected[row * 4 + 3] - expected[row * 4 + 2];
         }
-        for (i, (a, b)) in p.reverse_z.iter().zip(expected.iter()).enumerate() {
+        for (i, (a, b)) in p.reverse_z.data.iter().zip(expected.iter()).enumerate() {
             assert!((a - b).abs() < 1e-6, "element {i}: {a} vs {b}");
         }
 

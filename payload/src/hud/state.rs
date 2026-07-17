@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use glam::{Quat, Vec3};
+use glam::{Quat, Vec3, Vec4};
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{
@@ -22,7 +22,7 @@ use super::{
 /// The per-frame inputs for the panel warp, chosen on eye 0.
 pub struct WarpFrame {
     /// The panel anchor (head position) the corners were built around.
-    pub anchor: [f32; 3],
+    pub anchor: Vec3,
     /// The frame's recorded on-screen markers (plus, in single-panel mode, the center bubble as
     /// the first entry).
     pub markers: Vec<MarkerDepth>,
@@ -73,15 +73,15 @@ pub struct HudState {
     layer_targets: [Option<HudTarget>; split::LAYER_COUNT - 1],
     /// World-space panel corners, computed once per frame on eye 0 and reused for eye 1 so both
     /// eyes project the same world position through their own per-eye VP (correct stereo depth).
-    cached_corners: Option<[[f32; 4]; 4]>,
+    cached_corners: Option<[Vec4; 4]>,
     /// The virtual mouse cursor's world-space corners, computed once per frame on eye 0 alongside
     /// the panel corners; `None` while the cursor is hidden (see [`super::cursor`]).
-    cursor_corners: Option<[[f32; 4]; 4]>,
+    cursor_corners: Option<[Vec4; 4]>,
     /// While split: per-layer world-space corners and their distances, chosen on eye 0. Index
     /// matches [`split::LAYERS`]. The static and center entries are recomputed every frame
     /// (head-locked); the marker entry is frozen at each marker-texture refresh so the stale
     /// texture stays glued to the world pose it was rendered for.
-    cached_layer_corners: [Option<([[f32; 4]; 4], f32)>; split::LAYER_COUNT],
+    cached_layer_corners: [Option<([Vec4; 4], f32)>; split::LAYER_COUNT],
     /// Whether the split composite is live this frame (chosen on eye 0; also gates the clear).
     split_composite: bool,
 }
@@ -312,7 +312,7 @@ impl HudState {
             ) {
                 (true, Some(corners), Some((pos, _)), Some(srv)) => {
                     Some(super::depth::MaskInputs {
-                        camera_pos: pos.to_array(),
+                        camera_pos: pos,
                         corners,
                         hud_srv: srv,
                     })
@@ -378,7 +378,7 @@ impl HudState {
     }
 
     /// Set (or clear) the frame's cursor corners. Chosen on eye 0 alongside the panel corners.
-    pub fn set_cursor_corners(&mut self, corners: Option<[[f32; 4]; 4]>) {
+    pub fn set_cursor_corners(&mut self, corners: Option<[Vec4; 4]>) {
         self.cursor_corners = corners;
     }
 

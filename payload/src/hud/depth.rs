@@ -66,8 +66,8 @@ const WEIGHT_ONE: u32 = 256;
 /// The panel-mask inputs for one dispatch: the ray origin, the panel's world corners (top-left,
 /// top-right, bottom-left as the HUD texture maps), and the HUD texture to weight by.
 pub struct MaskInputs<'a> {
-    pub camera_pos: [f32; 3],
-    pub corners: [[f32; 4]; 4],
+    pub camera_pos: glam::Vec3,
+    pub corners: [glam::Vec4; 4],
     pub hud_srv: &'a windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
 }
 
@@ -273,7 +273,7 @@ impl DepthShift {
             // products yield UVs directly, and the inverse view-projection for the pixel rays.
             let (mask_by_hud, camera_pos, origin, right, up) = match &mask {
                 Some(inputs) => {
-                    let c = |i: usize| glam::Vec3::from_slice(&inputs.corners[i][..3]);
+                    let c = |i: usize| inputs.corners[i].truncate();
                     let (tl, tr, bl) = (c(0), c(1), c(2));
                     let (u_span, v_span) = (tr - tl, bl - tl);
                     let pack = |v: glam::Vec3| {
@@ -282,12 +282,7 @@ impl DepthShift {
                     };
                     (
                         1u32,
-                        [
-                            inputs.camera_pos[0],
-                            inputs.camera_pos[1],
-                            inputs.camera_pos[2],
-                            0.0,
-                        ],
+                        inputs.camera_pos.extend(0.0).to_array(),
                         [tl.x, tl.y, tl.z, 0.0],
                         pack(u_span),
                         pack(v_span),
@@ -299,8 +294,7 @@ impl DepthShift {
                 Some(vp) if mask_by_hud != 0 => {
                     // Invert in f64: the view-projection carries world-scale translations that
                     // lose precision in f32 (see the stereo reprojection).
-                    let engine = jc3gi::types::math::Matrix4 { data: vp };
-                    let inv = glam::Mat4::from(engine).as_dmat4().inverse().as_mat4();
+                    let inv = glam::Mat4::from(vp).as_dmat4().inverse().as_mat4();
                     jc3gi::types::math::Matrix4::from(inv).data
                 }
                 _ => [0.0; 16],

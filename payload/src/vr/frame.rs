@@ -9,6 +9,7 @@
 //! is published through the [`crate::headpose::xr`] source.
 
 use glam::{Quat, Vec3};
+use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
 use crate::headpose;
@@ -20,10 +21,10 @@ use super::{Fov, FrameContext, OffAxisProjection, VrConfig, config::ProjectionCo
 pub struct EyeRenderParams {
     /// The standard-depth off-axis projection, to write into `m_Projection` *before*
     /// `SetupRenderCamera` under [`ProjectionConvention::EnginePreReverseZ`].
-    pub projection_standard: [f32; 16],
+    pub projection_standard: Matrix4,
     /// The reverse-Z off-axis projection, to write *after* `SetupRenderCamera` under
     /// [`ProjectionConvention::ManualReverseZ`].
-    pub projection_reverse_z: [f32; 16],
+    pub projection_reverse_z: Matrix4,
     /// The world-space offset of this eye from the center head pose (the true per-eye delta from
     /// `locate_views`, transformed through the cockpit→body→world chain), to add to the render
     /// camera's `m_TransformF` translation.
@@ -47,7 +48,7 @@ static RENDER_PARAMS: Mutex<Option<[EyeRenderParams; 2]>> = Mutex::new(None);
 /// The standard-depth, symmetric, union-FOV projection that bounds *both* eyes' off-axis frusta, for
 /// widening the scene cull frustum (see [`cull_projection_standard`]). `None` when no VR frame is
 /// rendering.
-static CULL_PROJECTION: Mutex<Option<[f32; 16]>> = Mutex::new(None);
+static CULL_PROJECTION: Mutex<Option<Matrix4>> = Mutex::new(None);
 
 /// The captured pose reused every frame while [`VrConfig::freeze_pose`] is on: the two eye views plus
 /// the sim-driven body frame and head anchor, so the *full* composed render camera is bit-identical
@@ -65,7 +66,7 @@ pub fn render_params(eye: usize) -> Option<EyeRenderParams> {
 /// hook writes this into the shared cull camera's `m_ProjectionF` so the visibility cull -- which the
 /// engine runs once per frame against the narrower center camera -- covers everything either eye can
 /// see, removing the black voids and pop-in at the outer edges.
-pub fn cull_projection_standard() -> Option<[f32; 16]> {
+pub fn cull_projection_standard() -> Option<Matrix4> {
     *CULL_PROJECTION.lock()
 }
 

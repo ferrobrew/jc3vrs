@@ -85,14 +85,14 @@ fn get_bfbc_frustum_params(
     // original (which builds the BFBC frustum from it), then restore the full projection so the per-eye
     // render projections are untouched. No `m_FOVT1` relaxation or occlusion drop -- those are
     // cull-camera-specific.
-    let saved_proj: Option<[f32; 16]> =
-        if !main && Config::lock_query(|c| c.stereo.widen_spawn_cull) {
-            is_active_camera(camera)
-                .then(|| stamp_union_projection(camera))
-                .flatten()
-        } else {
-            None
-        };
+    let saved_proj: Option<Matrix4> = if !main && Config::lock_query(|c| c.stereo.widen_spawn_cull)
+    {
+        is_active_camera(camera)
+            .then(|| stamp_union_projection(camera))
+            .flatten()
+    } else {
+        None
+    };
 
     GET_BFBC_FRUSTUM_PARAMS
         .get()
@@ -104,7 +104,7 @@ fn get_bfbc_frustum_params(
         // original returned.
         unsafe {
             if let Some(cam) = (camera as *mut Camera).as_mut() {
-                cam.m_ProjectionF.data = saved;
+                cam.m_ProjectionF = saved;
             }
         }
     }
@@ -139,13 +139,13 @@ fn is_active_camera(camera: *const Camera) -> bool {
 /// Overwrite `camera.m_ProjectionF.data` with the union-FOV projection and return the saved value.
 /// Returns `None` on flatscreen (no cull projection published) or if the camera is null. The caller is
 /// responsible for restoring the saved value when a temporary widen is needed.
-fn stamp_union_projection(camera: *const Camera) -> Option<[f32; 16]> {
+fn stamp_union_projection(camera: *const Camera) -> Option<Matrix4> {
     let cull = crate::vr::cull_projection_standard()?;
     // SAFETY: `camera` is the live active camera the engine passes by const reference; the projection
     // field is written and the previous value returned for restoration.
     let cam = unsafe { (camera as *mut Camera).as_mut()? };
-    let saved = cam.m_ProjectionF.data;
-    cam.m_ProjectionF.data = cull;
+    let saved = cam.m_ProjectionF;
+    cam.m_ProjectionF = cull;
     Some(saved)
 }
 
@@ -208,18 +208,13 @@ fn terrain_patch_system_update(handle: *mut STerrainPatchSystem, ctx: *mut c_voi
 /// [`crate::vr::cull_projection_standard`], synthesised from both eyes' FOVs plus the lateral IPD
 /// margin. `UpdateFrustum` reads the standard-depth `m_ViewProjection`, so rebuild it from the union
 /// first (`m_ViewProjection = m_View * union`).
-fn make_union_camera(camera: &mut Camera, union: [f32; 16]) {
-    camera.m_ProjectionF.data = union;
-    let union_mat = Matrix4 { data: union };
+fn make_union_camera(camera: &mut Camera, union: Matrix4) {
+    camera.m_ProjectionF = union;
     // Copy the transform out so the `&mut self` `UpdateFrustum` call does not alias a borrow into the
     // camera.
     let transform = camera.m_TransformF;
+    camera.m_ViewProjection = camera.m_View * union;
     unsafe {
-        Matrix4::Multiply4x4(
-            &raw const camera.m_View,
-            &raw const union_mat,
-            &raw mut camera.m_ViewProjection,
-        );
         camera.UpdateFrustum(&raw const transform);
     }
 }
@@ -251,14 +246,13 @@ fn camera_update_frustum(this: *mut Camera, transform: *const Matrix4) {
     if this.is_null() || this != active {
         return;
     }
-    let union_mat = Matrix4 { data: union };
     // SAFETY: `this` is the live active camera on the game thread; the widen saves `m_ViewProjection`,
     // rebuilds the planes from the union, and restores it, all through raw pointers (no aliasing `&mut`
     // across the trampoline call).
     unsafe {
         let vp = &raw mut (*this).m_ViewProjection;
         let saved_vp = *vp;
-        Matrix4::Multiply4x4(&raw const (*this).m_View, &raw const union_mat, vp);
+        *vp = (*this).m_View * union;
         original.call(this, transform);
         *vp = saved_vp;
     }

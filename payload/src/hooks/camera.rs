@@ -45,7 +45,7 @@ pub fn last_dtf() -> f32 {
 /// [`crate::config::StereoConfig::freeze_render_camera`] is on, reused every Draw so the camera holds
 /// still (issue #31 isolation, Test C). `None` when the toggle is off, so re-enabling recaptures the
 /// then-current pose.
-static FROZEN_RENDER_CAMERA: Mutex<Option<([f32; 16], [f32; 16])>> = Mutex::new(None);
+static FROZEN_RENDER_CAMERA: Mutex<Option<(Matrix4, Matrix4)>> = Mutex::new(None);
 
 /// The scene render camera is the engine-owned copy (`GraphicsEngine::m_RenderCamera`), rebuilt
 /// each Draw by `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF`
@@ -61,7 +61,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         let mut stereo = STEREO_STATE.lock();
         // Clear the shadow-anchor delta; the parallax block below sets it when disparity is on, so a
         // stale value can't leak into the sun-shadow cascade correction when disparity is off.
-        stereo.shadow_anchor_delta = [0.0; 3];
+        stereo.shadow_anchor_delta = glam::Vec3::ZERO;
         // Eye 0 opens a new real frame: last frame's view-projection snapshots become "previous".
         if stereo.draw_index == 0 {
             stereo.vp_history.rotate();
@@ -98,10 +98,9 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         let mut frozen = FROZEN_RENDER_CAMERA.lock();
         if freeze {
             if let Some(camera) = unsafe { camera.as_mut() } {
-                let (transform, view) =
-                    frozen.get_or_insert((camera.m_TransformF.data, camera.m_View.data));
-                camera.m_TransformF.data = *transform;
-                camera.m_View.data = *view;
+                let (transform, view) = frozen.get_or_insert((camera.m_TransformF, camera.m_View));
+                camera.m_TransformF = *transform;
+                camera.m_View = *view;
             }
         } else {
             *frozen = None;
@@ -119,7 +118,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         && vr.convention == crate::vr::ProjectionConvention::EnginePreReverseZ
         && let Some(camera) = unsafe { camera.as_mut() }
     {
-        camera.m_Projection.data = vr.projection_standard;
+        camera.m_Projection = vr.projection_standard;
     }
 
     // Outside gameplay (loading screens, fast-travel teleports) the engine parks its own camera at the
@@ -150,7 +149,7 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
             Some(glam::Mat4::from(camera.m_ViewProjectionF));
 
         // Snapshot the un-offset world transform for the HUD panel pose (see `StereoState::center_transform`).
-        STEREO_STATE.lock().center_transform = Some(camera.m_TransformF.data);
+        STEREO_STATE.lock().center_transform = Some(camera.m_TransformF);
     }
 
     // FSR is a temporal reconstructor: it needs the camera jittered by its sequence, with the same
@@ -171,11 +170,8 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 let jitter_uv = crate::fsr::current_camera_jitter_ndc(w, h)
                     .map_or((0.0, 0.0), |(x, y)| (0.5 * x, -0.5 * y));
                 STEREO_STATE.lock().vp_history.cur_jitter_uv = jitter_uv;
-                let view = &camera.m_View as *const Matrix4;
-                let proj = &camera.m_Projection as *const Matrix4;
-                let proj_f = &camera.m_ProjectionF as *const Matrix4;
-                Matrix4::Multiply4x4(view, proj, &mut camera.m_ViewProjection);
-                Matrix4::Multiply4x4(view, proj_f, &mut camera.m_ViewProjectionF);
+                camera.m_ViewProjection = camera.m_View * camera.m_Projection;
+                camera.m_ViewProjectionF = camera.m_View * camera.m_ProjectionF;
             }
         }
     }
@@ -184,9 +180,8 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // the CameraPosition the camera-relative scene render subtracts) per eye. In VR the offset is the
     // TRUE per-eye delta from `locate_views` (a full 3D vector); on flatscreen stereo it is the
     // synthetic +/- half-IPD along the camera right axis. Either way, re-derive m_View from the moved
-    // m_TransformF and rebuild the view-projections with the engine's own Multiply4x4, so the offset
-    // reaches the full-m_ViewProjection shaders (transparents/sky/water), not just the
-    // camera-relative opaque path.
+    // m_TransformF and rebuild the view-projections, so the offset reaches the full-m_ViewProjection
+    // shaders (transparents/sky/water), not just the camera-relative opaque path.
     if is_render_camera && stereo_active {
         if let Some(vr) = vr_eye {
             unsafe {
@@ -195,35 +190,30 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                     // (after SetupRenderCamera, so the engine does not re-reverse it); the VP rebuild
                     // below picks it up. TAA jitter is not applied on this path.
                     if vr.convention == crate::vr::ProjectionConvention::ManualReverseZ {
-                        camera.m_Projection.data = vr.projection_reverse_z;
-                        camera.m_ProjectionF.data = vr.projection_reverse_z;
+                        camera.m_Projection = vr.projection_reverse_z;
+                        camera.m_ProjectionF = vr.projection_reverse_z;
                     }
                     let delta = vr.world_offset;
-                    camera.m_TransformF.data[12] += delta.x;
-                    camera.m_TransformF.data[13] += delta.y;
-                    camera.m_TransformF.data[14] += delta.z;
+                    let mut transform = glam::Mat4::from(camera.m_TransformF);
+                    transform.w_axis += delta.extend(0.0);
                     // Rotate the camera basis to this eye's orientation (display canting) about the
                     // now-offset eye position. m_TransformF is a column-vector world transform (its
                     // columns are the basis vectors), so a head-local rotation composes on the right
                     // and leaves the translation column -- the eye position just written -- intact.
                     // Identity for parallel-panel HMDs; corrects the Valve Index's ~5°/eye cant,
                     // without which the two eyes are rotationally mismatched and will not fuse.
-                    let transform = glam::Mat4::from(camera.m_TransformF)
-                        * glam::Mat4::from_quat(vr.orientation_delta);
-                    camera.m_TransformF.data = transform.to_cols_array();
+                    let transform = transform * glam::Mat4::from_quat(vr.orientation_delta);
+                    camera.m_TransformF = Matrix4::from(transform);
                     // Re-derive m_View = inverse(m_TransformF); the engine's data reads straight into
                     // glam's column-major matrix (see the Matrix4 glam bridge), so the inverse is
                     // written straight back.
                     let view = transform.inverse();
-                    camera.m_View.data = view.to_cols_array();
-                    let view = &camera.m_View as *const Matrix4;
-                    let proj = &camera.m_Projection as *const Matrix4;
-                    let proj_f = &camera.m_ProjectionF as *const Matrix4;
-                    Matrix4::Multiply4x4(view, proj, &mut camera.m_ViewProjection);
-                    Matrix4::Multiply4x4(view, proj_f, &mut camera.m_ViewProjectionF);
+                    camera.m_View = Matrix4::from(view);
+                    camera.m_ViewProjection = camera.m_View * camera.m_Projection;
+                    camera.m_ViewProjectionF = camera.m_View * camera.m_ProjectionF;
                     // Publish this eye's world offset for the sun-shadow cascade correction (see
                     // SetGlobalShaderConstants hook / stereo::StereoState::shadow_anchor_delta).
-                    STEREO_STATE.lock().shadow_anchor_delta = [delta.x, delta.y, delta.z];
+                    STEREO_STATE.lock().shadow_anchor_delta = delta;
                 }
             }
         } else if stereo_cameras {
@@ -235,14 +225,10 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                     // == left (OpenXR convention). Previously reversed, which made the debug pair
                     // fuse cross-eyed when the "parallel" toggle was off.
                     let offset = if eye1 { half_ipd } else { -half_ipd };
-                    let delta = [
-                        offset * camera.m_TransformF.data[0],
-                        offset * camera.m_TransformF.data[1],
-                        offset * camera.m_TransformF.data[2],
-                    ];
-                    camera.m_TransformF.data[12] += delta[0];
-                    camera.m_TransformF.data[13] += delta[1];
-                    camera.m_TransformF.data[14] += delta[2];
+                    let mut transform = glam::Mat4::from(camera.m_TransformF);
+                    let delta = offset * transform.x_axis.truncate();
+                    transform.w_axis += delta.extend(0.0);
+                    camera.m_TransformF = Matrix4::from(transform);
                     // Publish this eye's world offset for the sun-shadow cascade correction (see
                     // SetGlobalShaderConstants hook / stereo::StereoState::shadow_anchor_delta).
                     STEREO_STATE.lock().shadow_anchor_delta = delta;
@@ -250,15 +236,12 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                     // m_View == inverse(m_TransformF), so the +offset*right shift of the camera world
                     // position is a -offset shift of the view translation-X (data[12]).
                     // SetupRenderCamera has already applied reverse-Z + jitter to the projections, so
-                    // rebuild m_ViewProjection / m_ViewProjectionF from them with the engine's own
-                    // Multiply4x4 (the same call it uses), sidestepping any matrix-convention
-                    // guesswork.
+                    // rebuild m_ViewProjection / m_ViewProjectionF from them. `Matrix4`'s `*` is the
+                    // engine's row-major `Multiply4x4` convention, so the operand order is the same
+                    // one the engine uses.
                     camera.m_View.data[12] -= offset;
-                    let view = &camera.m_View as *const Matrix4;
-                    let proj = &camera.m_Projection as *const Matrix4;
-                    let proj_f = &camera.m_ProjectionF as *const Matrix4;
-                    Matrix4::Multiply4x4(view, proj, &mut camera.m_ViewProjection);
-                    Matrix4::Multiply4x4(view, proj_f, &mut camera.m_ViewProjectionF);
+                    camera.m_ViewProjection = camera.m_View * camera.m_Projection;
+                    camera.m_ViewProjectionF = camera.m_View * camera.m_ProjectionF;
                 }
             }
         }
@@ -344,7 +327,7 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
                 );
                 // Republish the transform for the sim-phase readers (see the GetCameraMatrix
                 // hook below).
-                *LAST_CAMERA_WORLD.lock() = Some(camera.m_TransformT1.data);
+                *LAST_CAMERA_WORLD.lock() = Some(camera.m_TransformT1);
 
                 if camera_settings.always_use_t1 {
                     camera.m_TransformT0 = camera.m_TransformT1;
@@ -478,8 +461,8 @@ fn head_track_render_camera(camera: &mut Camera) {
     let base = glam::Mat4::from_rotation_translation(base_rotation, base_position);
     let world_scale = Config::lock_query(|c| c.vr.world_scale);
     let world = compose_relative(base, &cockpit, world_scale);
-    camera.m_TransformF.data = world.to_cols_array();
-    camera.m_View.data = world.inverse().to_cols_array();
+    camera.m_TransformF = Matrix4::from(world);
+    camera.m_View = Matrix4::from(world.inverse());
 }
 
 /// Compose a cockpit-frame HMD pose onto a base camera transform: rotate the head relative to the base
@@ -543,7 +526,7 @@ fn game_camera_manager_get_camera_matrix(manager: *const GameCameraManager, matr
     if let Some(data) = *LAST_CAMERA_WORLD.lock()
         && let Some(matrix) = unsafe { matrix.as_mut() }
     {
-        matrix.data = data;
+        *matrix = data;
     }
 }
 
@@ -553,7 +536,7 @@ static LAST_DTF: AtomicU32 = AtomicU32::new(0);
 /// The camera world transform last written to the active camera's `m_TransformT1` with the
 /// headpose active, republished by [`game_camera_manager_get_camera_matrix`] so sim-phase readers
 /// see the headpose camera. `None` until the camera hook first runs with the headpose active.
-static LAST_CAMERA_WORLD: Mutex<Option<[f32; 16]>> = Mutex::new(None);
+static LAST_CAMERA_WORLD: Mutex<Option<Matrix4>> = Mutex::new(None);
 
 /// The active (main) camera's near/far clip planes (`m_Near`/`m_Far`), captured each frame from the
 /// engine. The reconstruction override ([`crate::hooks::graphics_engine::reconstruction`]) keys on

@@ -7,6 +7,7 @@
 //! quad. See [`super::markers`] for where the marker data comes from.
 
 use anyhow::Context as _;
+use glam::{Vec3, Vec4};
 use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use windows::Win32::Graphics::{
     Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
@@ -50,9 +51,9 @@ struct LayerConstants {
 
 /// The world-space inputs for one warped-layer draw, shared by both eyes.
 pub(super) struct WarpInputs {
-    pub corners: [[f32; 4]; 4],
+    pub corners: [Vec4; 4],
     /// The panel anchor the corners were built around (the head position).
-    pub anchor: [f32; 3],
+    pub anchor: Vec3,
     /// The layer's flat distance (the corners' distance from the anchor).
     pub base_distance: f32,
     /// The frame's recorded markers, each with its own falloff radius.
@@ -191,14 +192,9 @@ impl HudWarp {
         };
 
         let mut constants = LayerConstants {
-            view_projection,
-            corners: inputs.corners,
-            anchor_base: [
-                inputs.anchor[0],
-                inputs.anchor[1],
-                inputs.anchor[2],
-                inputs.base_distance,
-            ],
+            view_projection: view_projection.data,
+            corners: inputs.corners.map(|c| c.to_array()),
+            anchor_base: inputs.anchor.extend(inputs.base_distance).to_array(),
             grid_size: [GRID_COLS, GRID_ROWS, inputs.markers.len() as u32, 0],
             markers: [[0.0; 4]; MARKER_CAPACITY],
         };
