@@ -18,6 +18,10 @@ pub struct EguiState {
     /// into the panel render target. Set from the game thread each frame before [`run`]; `None` is
     /// the flat back-buffer overlay (the default, unchanged) behavior.
     panel: Option<(u32, u32)>,
+    /// The window-client-pixel to layout-point scale for flat-overlay mouse events, computed each
+    /// [`run`] alongside the layout size (see the scaling comment there). `(1, 1)` when the back
+    /// buffer and window agree (or in panel mode, whose pointer has its own mapping).
+    flat_pointer_scale: (f32, f32),
 }
 struct GameInputState {
     input_was_enabled: bool,
@@ -43,6 +47,7 @@ impl EguiState {
             game_input_state: None,
             events: Vec::new(),
             panel: None,
+            flat_pointer_scale: (1.0, 1.0),
         })
     }
 
@@ -79,14 +84,31 @@ impl EguiState {
     }
 
     pub fn run(&mut self, mut callback: impl FnMut(&egui::Context, &mut egui_directx11::Renderer)) {
-        let screen_size = match self.panel {
-            Some((width, height)) => (width as f32, height as f32),
+        // The layout space and scale. The overlay renders into the engine back buffer, which under a
+        // VR native-resolution resize is larger than the desktop window it is presented into --
+        // laying out at 1 point per back-buffer pixel then shrinks the whole UI with the present.
+        // Instead the vertical window-to-buffer ratio becomes egui's pixels_per_point (the layout
+        // stays back-buffer aligned, just with physically larger UI), and the mouse mapping from
+        // window-client pixels into that point space is published for `wndproc`. The panel keeps a
+        // 1:1 layout: its pointer events are already in panel-texture space.
+        let (screen_size, pixels_per_point) = match self.panel {
+            Some((width, height)) => {
+                self.flat_pointer_scale = (1.0, 1.0);
+                ((width as f32, height as f32), 1.0)
+            }
             None => {
                 let params = unsafe { get_graphics_params() };
-                (params.m_Width as f32, params.m_Height as f32)
+                let buffer = (params.m_Width as f32, params.m_Height as f32);
+                let client = crate::hud::cursor::client_size()
+                    .map(|(w, h)| (w as f32, h as f32))
+                    .unwrap_or(buffer);
+                let ppp = (buffer.1 / client.1).max(0.25);
+                let layout = (buffer.0 / ppp, buffer.1 / ppp);
+                self.flat_pointer_scale = (layout.0 / client.0, layout.1 / client.1);
+                (layout, ppp)
             }
         };
-        let input = egui::RawInput {
+        let mut input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_max(
                 Default::default(),
                 egui::Pos2::new(screen_size.0, screen_size.1),
@@ -96,6 +118,11 @@ impl EguiState {
             events: std::mem::take(&mut self.events),
             ..Default::default()
         };
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .native_pixels_per_point = Some(pixels_per_point);
         let egui_output = self
             .egui_context
             .run_ui(input, |ctx| callback(ctx, &mut self.egui_renderer));
@@ -215,7 +242,25 @@ impl EguiState {
         if self.panel.is_some() && is_mouse_message(msg) {
             return;
         }
+        let start = self.events.len();
         wndproc(&mut self.events, msg, wparam, lparam);
+        // Map the window-client pixel coordinates into the flat layout's point space (see `run`).
+        let (sx, sy) = self.flat_pointer_scale;
+        if (sx, sy) != (1.0, 1.0) {
+            for event in &mut self.events[start..] {
+                match event {
+                    egui::Event::PointerMoved(pos) => {
+                        pos.x *= sx;
+                        pos.y *= sy;
+                    }
+                    egui::Event::PointerButton { pos, .. } => {
+                        pos.x *= sx;
+                        pos.y *= sy;
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 

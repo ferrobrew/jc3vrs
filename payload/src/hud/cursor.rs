@@ -120,6 +120,11 @@ pub fn set_client_size(size: (u32, u32)) {
     STATE.lock().client = Some(size);
 }
 
+/// The game window's live client size, when a `WM_MOUSEMOVE` has published one.
+pub fn client_size() -> Option<(u32, u32)> {
+    STATE.lock().client.filter(|&(w, h)| w > 0 && h > 0)
+}
+
 /// The frame's mapping geometry `(window size, movie size)`, or `None` while the redirect is not
 /// applied or a dimension is degenerate. The window size is the live client rect when one has
 /// been seen, else the back-buffer size.
