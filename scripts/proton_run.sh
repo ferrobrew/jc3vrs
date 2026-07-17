@@ -21,7 +21,8 @@
 # On NixOS the launch-client runs under `steam-run` for the FHS env it needs.
 #
 # Overridable via env: STEAM_ROOT, PROTON_DIR, JC3_BUS_NAME.
-# Any args passed to this script are forwarded to the injector.
+# `--release` builds and injects the release profile (e.g. for representative
+# profiler captures); any other args are forwarded to the injector.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,15 +30,27 @@ STEAM="${STEAM_ROOT:-$HOME/.steam/steam}"
 PROTON="${PROTON_DIR:-$STEAM/steamapps/common/Proton - Experimental}"
 BUS="${JC3_BUS_NAME:-com.jc3vrs.JustCause3}"
 LAUNCH_CLIENT="$STEAM/steamapps/common/SteamLinuxRuntime_sniper/pressure-vessel/bin/steam-runtime-launch-client"
-INJECTOR="$DIR/target/x86_64-pc-windows-msvc/debug/jc3vrs_injector.exe"
+
+PROFILE=debug
+CARGO_PROFILE_FLAG=""
+ARGS=()
+for arg in "$@"; do
+  if [ "$arg" = "--release" ]; then
+    PROFILE=release
+    CARGO_PROFILE_FLAG="--release"
+  else
+    ARGS+=("$arg")
+  fi
+done
+INJECTOR="$DIR/target/x86_64-pc-windows-msvc/$PROFILE/jc3vrs_injector.exe"
 
 # Build with the cross toolchain (cargo-xwin lives in the nix shell, not under
 # steam-run/Proton — keep the two invocations separate).
 nix-shell "$DIR/shell.nix" --run \
-  "cd '$DIR' && cargo xwin build --xwin-cache-dir .xwin --target x86_64-pc-windows-msvc -p jc3vrs_payload -p jc3vrs_injector"
+  "cd '$DIR' && cargo xwin build --xwin-cache-dir .xwin --target x86_64-pc-windows-msvc -p jc3vrs_payload -p jc3vrs_injector $CARGO_PROFILE_FLAG"
 
 # Send the injector into the game's container. The command inherits the
 # container's environment (STEAM_COMPAT_DATA_PATH etc.), so `proton runinprefix`
 # targets the right prefix and connects to the running game's wineserver.
 exec steam-run "$LAUNCH_CLIENT" --bus-name="$BUS" -- \
-  "$PROTON/proton" runinprefix "$INJECTOR" "$@"
+  "$PROTON/proton" runinprefix "$INJECTOR" ${ARGS[@]+"${ARGS[@]}"}
