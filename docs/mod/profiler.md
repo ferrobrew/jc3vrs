@@ -45,7 +45,11 @@ under a per-dispatch outer scope ("GPU eye 0" / "GPU eye 1" / "GPU far field"). 
 mapped onto the CPU timeline via a CPU reference taken at the dispatch's start, with consecutive
 dispatches serialized on the lane (the GPU executes them in order), so the lane aligns with — and
 visibly trails — the CPU work that submitted it. Disjoint intervals are dropped rather than
-reported. One known cosmetic effect: because a dispatch's GPU results land in the puffin frame
+reported. The lane also carries measured "GPU idle" scopes — the true starvation gap between one
+dispatch's last timestamp and the next one's first — so the cost of the serialized dispatch
+pipeline shows up as a number (the analyzer folds them into a GPU-utilization figure) rather than
+an inference. Comparing ticks across disjoint brackets is out of contract for D3D11 but sound
+under DXVK's monotonic timestamp clock; implausible gaps are discarded. One known cosmetic effect: because a dispatch's GPU results land in the puffin frame
 current at read-back time (~2-3 frames later), the live view's frame bars read wider than the true
 frame time; the Chrome trace, being absolute-time, is unaffected. Trust the lane's durations, not
 the frame bars.

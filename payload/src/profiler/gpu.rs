@@ -19,6 +19,15 @@
 //! frame bars read wider than the true frame time; treat the GPU lane's *durations*, not the frame
 //! bars, as the signal.
 //!
+//! The lane also carries explicit **"GPU idle"** scopes: the measured gap between one dispatch's
+//! last timestamp and the next one's first. The GPU executes dispatches serially, so these gaps
+//! are true starvation bubbles (the GPU waiting while the CPU builds the next dispatch), and
+//! their share of the frame is the direct measure of how much the serialized dispatch pipeline
+//! costs. Comparing ticks across disjoint brackets is formally out of contract for D3D11, but
+//! under DXVK timestamps are one monotonic Vulkan clock at a constant frequency, which the
+//! frequency-match guard on the comparison also verifies; an implausible gap (negative, or over
+//! [`MAX_CREDIBLE_IDLE_NS`]) is discarded rather than reported.
+//!
 //! All query use is serialized under the [`STATE`] mutex, and begin/end/seam/read-back all run on
 //! whichever thread executes `HandleDrawThreadTask` — a CPU-fragment worker normally, or the main
 //! thread inline on single-core setups; the two roles never run concurrently. The raw handles are
@@ -185,6 +194,10 @@ unsafe impl<T> Send for SendPtr<T> {}
 /// (about three frames' worth at two to three dispatches per frame).
 const MAX_PENDING: usize = 8;
 
+/// The largest inter-dispatch gap reported as a "GPU idle" scope. Anything longer is a pause
+/// (collection toggled, a load, a hitch), not a pipeline bubble worth charting.
+const MAX_CREDIBLE_IDLE_NS: i64 = 50_000_000;
+
 struct Interval {
     seam: GpuSeam,
     begin: *mut HTimeStampQuery_t,
@@ -196,6 +209,11 @@ struct Dispatch {
     disjoint: *mut HTimeStampDisjointQuery_t,
     cpu_ref_ns: i64,
     intervals: Vec<Interval>,
+}
+
+struct PrevDispatchEnd {
+    ticks: u64,
+    frequency: u64,
 }
 
 /// Which workload a dispatch renders, naming its outer scope on the GPU lane.
@@ -220,10 +238,15 @@ struct GpuProfiler {
     /// shifted to follow it; without this, GPU-bound frames produce overlapping spans on the one
     /// lane, which the Chrome viewer renders as a garbled track.
     lane_cursor_ns: i64,
+    /// The previous resolved dispatch's final GPU timestamp and its tick frequency, for the
+    /// inter-dispatch idle measurement (see the module docs on cross-disjoint comparability).
+    prev_end: Option<PrevDispatchEnd>,
     /// Cached puffin scope ids for the per-lane outer scopes (indexed by [`DispatchLane`]) and the
     /// per-seam inner scopes.
     lane_scopes: Vec<ScopeId>,
     seam_scopes: Vec<ScopeId>,
+    /// The "GPU idle" scope, registered alongside the lane scopes.
+    idle_scope: Option<ScopeId>,
 }
 
 // Sound for the same reason as [`SendPtr`]: all query use is serialized under [`STATE`], and every
@@ -239,8 +262,10 @@ impl GpuProfiler {
             ts_pool: Vec::new(),
             disjoint_pool: Vec::new(),
             lane_cursor_ns: 0,
+            prev_end: None,
             lane_scopes: Vec::new(),
             seam_scopes: Vec::new(),
+            idle_scope: None,
         }
     }
 
@@ -342,8 +367,11 @@ impl GpuProfiler {
         let tick_to_ns =
             |ticks: u64| -> i64 { (ticks as i128 * 1_000_000_000 / frequency as i128) as i64 };
 
-        // Resolve each interval to CPU-timeline nanoseconds relative to the first timestamp.
+        // Resolve each interval to CPU-timeline nanoseconds relative to the first timestamp. The
+        // seams are issued and executed in order, so the first interval's begin is the dispatch's
+        // earliest tick; track the latest end tick for the idle measurement.
         let mut base_ticks: Option<u64> = None;
+        let mut last_ticks: u64 = 0;
         let mut resolved: Vec<(GpuSeam, i64, i64)> = Vec::with_capacity(dispatch.intervals.len());
         for interval in &dispatch.intervals {
             let begin = unsafe { graphics_engine::QueryTimeStamp(ctx, interval.begin) };
@@ -352,17 +380,32 @@ impl GpuProfiler {
                 continue;
             }
             let base = *base_ticks.get_or_insert(begin);
+            last_ticks = last_ticks.max(end);
             let start_ns = dispatch.cpu_ref_ns + tick_to_ns(begin.saturating_sub(base));
             let stop_ns = dispatch.cpu_ref_ns + tick_to_ns(end.saturating_sub(base));
             resolved.push((interval.seam, start_ns, stop_ns));
         }
 
-        if !resolved.is_empty() {
-            // The GPU executes dispatches serially: if the CPU-anchored mapping starts before the
-            // previously reported span ended, shift the whole dispatch to follow it (see
-            // `lane_cursor_ns`).
+        if let Some(first_ticks) = base_ticks {
+            // The gap since the previous dispatch's last timestamp is true GPU starvation (the GPU
+            // runs dispatches serially). Only comparable while the tick frequency is unchanged,
+            // and only credible below the pause threshold.
+            let idle_ns = self
+                .prev_end
+                .as_ref()
+                .filter(|prev| prev.frequency == frequency && first_ticks > prev.ticks)
+                .map(|prev| tick_to_ns(first_ticks - prev.ticks))
+                .filter(|&gap| gap > 0 && gap < MAX_CREDIBLE_IDLE_NS);
+            self.prev_end = Some(PrevDispatchEnd {
+                ticks: last_ticks,
+                frequency,
+            });
+
+            // The GPU executes dispatches serially: place this dispatch no earlier than the
+            // previous span's end plus the measured idle gap, so the lane reconstructs the true
+            // busy/idle alternation (and never overlaps; see `lane_cursor_ns`).
             let outer_start = resolved.iter().map(|&(_, s, _)| s).min().unwrap();
-            let shift = (self.lane_cursor_ns - outer_start).max(0);
+            let shift = (self.lane_cursor_ns + idle_ns.unwrap_or(0) - outer_start).max(0);
             for (_, start_ns, stop_ns) in &mut resolved {
                 *start_ns += shift;
                 *stop_ns += shift;
@@ -371,7 +414,9 @@ impl GpuProfiler {
 
             self.ensure_scopes();
             let lane_scope = self.lane_scopes[dispatch.lane as usize];
-            report_gpu_frame(lane_scope, &self.seam_scopes, &resolved);
+            let idle =
+                idle_ns.map(|gap| (self.idle_scope.expect("registered with the lanes"), gap));
+            report_gpu_frame(lane_scope, &self.seam_scopes, idle, &resolved);
         }
 
         self.recycle_dispatch(dispatch);
@@ -417,6 +462,10 @@ impl GpuProfiler {
             ScopeDetails::from_scope_name("GPU eye 1"),
             ScopeDetails::from_scope_name("GPU far field"),
         ]);
+        self.idle_scope = profiler
+            .register_user_scopes(&[ScopeDetails::from_scope_name("GPU idle")])
+            .first()
+            .copied();
         let seams = [
             GpuSeam::PreDraw,
             GpuSeam::GBuffer,
@@ -443,18 +492,24 @@ fn seam_index(seam: GpuSeam) -> usize {
     }
 }
 
-/// Builds a single-thread puffin stream for the "GPU" lane: an outer per-lane scope spanning the
-/// dispatch, with one inner scope per resolved seam, and reports it into the current puffin frame.
+/// Builds a single-thread puffin stream for the "GPU" lane: an optional "GPU idle" scope covering
+/// the measured starvation gap since the previous dispatch, then an outer per-lane scope spanning
+/// the dispatch, with one inner scope per resolved seam; reports it into the current puffin frame.
 /// `resolved` must be non-empty.
 fn report_gpu_frame(
     lane_scope: ScopeId,
     seam_scopes: &[ScopeId],
+    idle: Option<(ScopeId, i64)>,
     resolved: &[(GpuSeam, i64, i64)],
 ) {
     let outer_start = resolved.iter().map(|&(_, s, _)| s).min().unwrap();
     let outer_stop = resolved.iter().map(|&(_, _, e)| e).max().unwrap();
 
     let mut stream = puffin::Stream::default();
+    if let Some((idle_scope, gap_ns)) = idle {
+        let (off, _) = stream.begin_scope(|| outer_start - gap_ns, idle_scope, "");
+        stream.end_scope(off, outer_start);
+    }
     let (outer_off, _) = stream.begin_scope(|| outer_start, lane_scope, "");
     for &(seam, start_ns, stop_ns) in resolved {
         let scope_id = seam_scopes[seam_index(seam)];

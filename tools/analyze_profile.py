@@ -203,6 +203,15 @@ def main() -> None:
             print(f"  {lane_name:16} {stats_line(ds)}")
         print(f"  total GPU/frame ≈ {gpu_frame_total:.2f} ms (budget {1000 / 90:.1f} @90Hz, {1000 / 45:.1f} @45Hz)")
 
+        # The measured starvation bubbles between dispatches ("GPU idle" scopes; only present in
+        # captures taken after the bubble measurement landed).
+        idle = [e["dur"] / 1000 for e in gpu if e["name"] == "GPU idle"]
+        if idle:
+            idle_frame = sum(idle) / n
+            util = gpu_frame_total / max(gpu_frame_total + idle_frame, 1e-6)
+            print(f"  measured inter-dispatch idle ≈ {idle_frame:.2f} ms/frame -> GPU utilization {util * 100:.0f}% while rendering")
+            print(f"  {'GPU idle':16} {stats_line(idle)}")
+
         print("\n== GPU seams within each dispatch kind (mean ms per dispatch)")
         seam_sum: dict[tuple[str, str], float] = defaultdict(float)
         seam_n: dict[str, int] = defaultdict(int)
