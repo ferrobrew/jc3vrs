@@ -88,7 +88,7 @@ fn initialize_startup() {
     }));
 
     logging::install();
-    tracing::info!("JC3VRS startup");
+    tracing::info!(build = BUILD_STAMP, "JC3VRS startup");
     crash::install();
     hooks::install();
 }
@@ -152,6 +152,12 @@ pub(crate) fn is_shutting_down() -> bool {
 
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
+/// When this payload was compiled, embedded by `build.rs`. Announced at startup (log, in-headset
+/// banner, and the debug window): an uninject can leave the module resident (a hung shutdown
+/// thread keeps the DLL mapped), and a failed re-inject then silently reactivates the stale code —
+/// the stamp is how a stale payload is caught at a glance.
+pub const BUILD_STAMP: &str = env!("JC3VRS_BUILD_STAMP");
+
 /// Request that we shut down and exit
 fn shutdown() {
     if SHUTTING_DOWN.swap(true, Ordering::SeqCst) {
@@ -197,6 +203,7 @@ fn update() {
             }
 
             egui_state.run(|ctx, renderer| {
+                ui::startup_banner(ctx);
                 egui::Window::new("Debug")
                     .default_pos(egui::pos2(0.0, 0.0))
                     .show(ctx, |ui| ui::egui_debug_window(ui, renderer));
