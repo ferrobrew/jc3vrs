@@ -16,7 +16,8 @@ rather than a decompiled release function, it is flagged **[UNVERIFIED]**.
 
 | Machinery | Status in retail | What it gives you |
 |---|---|---|
-| `CpuProfiler` (`g_CpuProfiler`, 15 fixed frame phases) | **Live**, updated every frame, feeds crash telemetry | Per-frame CPU ms for the `CpuScopeId` phases (frame/draw/update/physics/waits) |
+| `CpuProfiler` (`g_CpuProfiler`, 15 fixed frame phases) | **Dead** — `Update` compiled to a nullsub, no phase brackets write the counters; consumers read zeros (§1.1) | — |
+| `Graphics::BeginScopeMarker` / `EndScopeMarker` | **Compiled out, but ~72 call sites and their name strings survive** (§1.5) | Named begin/end scope pairs across the whole draw thread, restorable by detouring two nullsubs |
 | `SProfiler` scope primitives (`ProfilerThreadEnter`/`Leave`/`Add`/`AddBudget`) | **Live**, callable | Hierarchical per-thread scope timing with named entries and budgets |
 | `Graphics::*TimeStamp*` / `*Disjoint*` query wrappers | **Live**, thin D3D11 wrappers | Raw GPU timestamp + frequency queries |
 | `CGPUBufferedQuery` (ring-buffered GPU queries) | **Live** | N-frame-latency timestamp / occlusion / frequency read-back |
@@ -26,22 +27,40 @@ rather than a decompiled release function, it is flagged **[UNVERIFIED]**.
 | Dev console / cvar commands (`debug_DumpProfilerTrace`, `debug_fprof`, `frame_profiler`) and the `Dev\|Performance\|*` debug menu | **Dead** — strings and handlers stripped | — |
 | `CSteeringFrameProfiler` (AI-steering frame graph) | **Live but niche** | Steering-solver timing, unrelated to the render pipeline |
 
-**Recommendation.** For **CPU**, read `g_CpuProfiler` directly — the 15-phase frame breakdown
-is already computed every frame at zero added cost, and the phase you care about for VR
-(`CPU_SCOPE_ID_DRAW` / `RENDER_*` / the `WAIT_*` stalls) is right there. For **per-pass GPU**,
-the engine's own per-pass timer only covers particles, so build a **small mod-side
-GPU-timestamp layer** that brackets the existing Draw seams (`DrawGBuffer` / `Draw` /
-`DrawPosteffects`, `rendering.md` §1.4) with the engine's *already-shipped*
-`Graphics::SetTimeStampQuery` + disjoint wrappers on the immediate context. That reuses the
-engine's D3D11 query plumbing (no new device setup), attributes GPU time to the coarse pass
-groups already named in `rendering.md`, and is far cheaper and more robust than trying to
-revive the stripped `CFrameProfiler`/`CProfilerUtil` display path. Detail below.
+**Recommendation (revised after the follow-up dig).** For **CPU**, there is nothing to read —
+`g_CpuProfiler` is dead (§1.1) — so bracket the phase functions mod-side: `CGame::Update` /
+`UpdateGame` / `UpdateRender` / `Draw` and `WaitForCPUDrawToFinish` on the main thread, and the
+draw seams on the draw thread. For **named engine scopes**, detour the two scope-marker nullsubs
+(§1.5): ~72 surviving call sites plus the per-render-block-type runs light up at once. For
+**per-pass GPU**, the engine's own per-pass timer only covers particles and the `CGPUProfiler`
+read-back is stripped (§2.2), so build a **small mod-side GPU-timestamp layer** that brackets
+the existing Draw seams (`PreDraw` / `DrawGBuffer` / `Draw` / `DrawPosteffects` / `PostDraw`,
+`rendering.md` §1.4) with the engine's *already-shipped* `Graphics::SetTimeStampQuery` +
+disjoint wrappers on the immediate context. That reuses the engine's D3D11 query plumbing (no
+new device setup), attributes GPU time to the coarse pass groups already named in
+`rendering.md`, and is far cheaper and more robust than trying to revive the stripped
+`CFrameProfiler` / `CProfilerUtil` / `CGPUProfiler` display paths. Detail below.
 
 ---
 
 ## 1. CPU side
 
-### 1.1 `CpuProfiler` — the fixed 15-phase frame breakdown (live)
+### 1.1 `CpuProfiler` — the fixed 15-phase frame breakdown (dead in retail)
+
+> **Correction (follow-up dig).** The earlier assessment below overstated liveness. In retail,
+> `g_CpuProfiler` sits at **`0x142E5ADF0`** (pinned via the `this` pointer passed to
+> `GetScopeName` in `CBorkReport::WriteMetrics`, and the direct `m_Time` reads in
+> `CBorkReport::UpdateMetricsData`), but the machinery is **dead**: `CpuProfiler::Update` is
+> compiled to an empty function (`0x140062490`, still called at the top of `CGame::Update`,
+> `0x14096051b`), and no surviving code writes `m_Counters` — the phase brackets that
+> `CGame::UpdateCPUProfiler` and the game states placed in the dump build are compiled out. The
+> only interior reference is `CGraphicsEngine::DispatchDraw` (`0x1400f3a30`) forwarding the
+> never-incremented `m_Index` to the draw task. `CBorkReport` still serialises the per-phase
+> values into telemetry, but they are all zero. **There is nothing to read**; per-phase CPU
+> timing has to be rebuilt mod-side by bracketing the phase functions
+> (`CGame::Update` / `UpdateGame` (`0x1409521f0`) / `UpdateRender` / `Draw`,
+> `CGraphicsEngine::WaitForCPUDrawToFinish`, and the draw-thread seams). The struct layout and
+> addresses below remain correct and are captured in `cpu_profiler.pyxis`.
 
 The engine keeps a single global `CpuProfiler` (`g_CpuProfiler` in the dump) that accumulates
 wall-clock time for a fixed set of frame phases, the `CpuScopeId` enum:
@@ -160,7 +179,26 @@ the release binary** — it is fully stripped. The developer console / cvar comm
 toggle it are likewise gone (the command-name strings above are absent). Treat the on-screen
 frame graph as unavailable; there is nothing to flip.
 
-### 1.5 `CSteeringFrameProfiler` — live but off-topic
+### 1.5 `Graphics::BeginScopeMarker` / `EndScopeMarker` — compiled out, call sites intact
+
+The renderer is instrumented throughout with named scope markers:
+`Graphics::BeginScopeMarker(HContext_t*, const char*)` opens a named scope on a graphics context
+and `Graphics::EndScopeMarker(HContext_t*)` closes the innermost one, with an RAII wrapper
+`Graphics::CScopeMarker` (ctor `0x140099990`, dtor `0x1400999C0`) calling the pair. In retail
+both entry points are compiled to empty functions — **`0x141954D10`** (begin) and
+**`0x141954D20`** (end) — but, unlike the `CFrameProfiler` display path, the *call sites and
+their name strings survive*: ~72 sites covering the frame stages in
+`CGraphicsEngine::HandleDrawThreadTask` ("Frame setup", "CopyEffectTextures", "Debug UI"), the
+whole post-effect stack (SMAA/FXAA, depth of field, motion blur, lens flare, glare, tone-mapping
+histogram), deferred lighting, SSAO, SSR, environment reflections, water, terrain restores, UI
+and video off-screen rendering — and, most usefully, the per-render-block-type runs inside every
+pass: `CRenderPass::ChangeRenderBlockType` (`0x140187310`) closes the previous type's scope and
+opens the next named by the type's `GetTypeName()`, with `CRenderPass::DoDraw` closing the last
+run. Detouring the two nullsubs therefore restores engine-wide named scope instrumentation on
+the draw thread wholesale. Both markers and the timestamp wrappers are captured in
+`graphics_engine.pyxis`.
+
+### 1.6 `CSteeringFrameProfiler` — live but off-topic
 
 One frame profiler *does* survive with live code: `CSteeringFrameProfiler`, the AI vehicle-steering
 profiler. `LoadActionMap` (`0x140e847f0`) binds a `"frameprofiler"` input action map (the sole
@@ -189,7 +227,7 @@ builds a `D3D11_QUERY_DESC` with `Query = 2` (`D3D11_QUERY_TIMESTAMP`) and calls
 | `Graphics::CreateTimeStampDisjointQuery` | `0x1419559c0` |
 | `Graphics::DestroyTimeStampDisjointQuery` | `0x141955a10` |
 | `Graphics::BeginTimeStampDisjointQuery` | `0x141955a20` |
-| `Graphics::EndTimeStampDisjointQuery` | `0x141954000` (3-byte ICF fold/thunk — resolve before calling) |
+| `Graphics::EndTimeStampDisjointQuery` | `0x1419558B0` — ICF-folded with `SetTimeStampQuery` (both bodies are `ID3D11DeviceContext::End` under the context mutex); the symbol table's placement at `0x141954000` is an unrelated 3-byte stub, do not call it |
 | `Graphics::QueryTimeStampFrequency` (reads freq + `Disjoint` flag) | `0x141955b00` |
 
 These are the exact primitives a mod-side GPU timer wants: create timestamp/disjoint queries
@@ -218,9 +256,22 @@ It holds `m_Timestamps[]` and `m_Frequency[]` arrays sized `m_NumBuffers * m_Num
 so a caller can record many timestamps per frame and read them back `m_NumBuffers` frames
 later without a GPU stall. `rendering.md` §1.5 already notes a live "GPU-profiler frame-query
 ring" at `engine + 5824`, advanced once per real frame in the `GraphicsEngine::Draw` prologue —
-that is a `CGPUBufferedQuery` instance the engine already runs. **[UNVERIFIED]** exactly which
-timestamps the engine records into that ring per frame (worth a follow-up: if it already brackets
-the coarse pass groups, the mod could read its results instead of issuing its own).
+that is a `CGPUBufferedQuery` instance the engine already runs.
+
+**Resolved (follow-up dig): the ring belongs to `NGraphicsEngine::CGPUProfiler`** — the engine's
+full developer GPU profiler (per-scope GPU + CPU time, occlusion, draw-call counts; scope types
+frame/render-pass/render-block/user; a rolling 10-frame capture mode; per-category results over
+the 30 `ERenderPassCategory` groups). Its singleton sits at `0x142E5B668`. What survives in
+retail: the constructor (`0x1400f3e60`), `Init` (`0x1401a1e20`, called from
+`CGraphicsEngine::InitializeSystem`), `GetScopeResultCount` (`0x1400b7ef0`), and a frame-level
+disjoint-query begin/end in `HandleDrawThreadTask`. What is stripped: the per-scope
+`BeginScope`/`EndScope` call sites (the scope-marker nullsubs of §1.5 are their entry points),
+the results processing, and the read-back — `GetScopeResult` (`0x1400a0f90`) is compiled to
+`xor eax, eax; ret`, so `CBorkReport`'s per-category GPU metrics loop exits immediately. The
+class cannot be revived by flipping state; treat it as a struct-layout reference only. (Several
+release symbols in this area are ICF-misplaced — a body at `0x141954850` labelled `BeginScope`
+is an unrelated vtable-dispatch wrapper, and one at `0x1401566d0` labelled `EndScope` is
+vertex-buffer garbage collection; do not trust those names.)
 
 ### 2.3 `CRenderPassGpuTimingQuery` — live, but a single-pass adaptive-quality timer
 
@@ -271,14 +322,14 @@ mod-side timestamp on both the CPU and GPU sides.
 
 ## 4. Recommendation for the VR mod
 
-**CPU: read `g_CpuProfiler` directly (zero cost).** The 15-phase breakdown is computed every
-frame regardless. Record `g_CpuProfiler`'s address (follow the QPC accumulator out of
-`CGame::Update`, or the `off_142D3A150` consumers) as a pyxis singleton, expose
-`m_Time[CpuScopeId]`, and the mod gets `DRAW`, `RENDER_ALL`, `WAIT_FLIP`, `WAIT_UI`, and the
-sim phases for free — enough to see whether a frame is CPU-draw-bound, sim-bound, or stalling
-on a wait. If finer CPU attribution is needed later, bracket the four Draw seams (§3) with a
-QPC read (simplest) or with `ProfilerThreadEnter/Leave` (`0x1404ccbe0` / `0x1403031f0`) to
-ride the engine's own scope table.
+**CPU: bracket the phase functions mod-side — `g_CpuProfiler` is dead (§1.1).** The singleton
+is pinned (`0x142E5ADF0`, captured in `cpu_profiler.pyxis`), but nothing writes it in retail,
+so per-phase CPU timing has to be rebuilt by hooking the phase functions themselves:
+`CGame::Update` (frame) / `UpdateGame` (sim tick) / `UpdateRender` / `Draw` and
+`WaitForCPUDrawToFinish` on the main thread, `HandleDrawThreadTask` and the Draw seams (§3) on
+the draw thread, and the scope-marker nullsubs (§1.5) for named engine scopes everywhere else.
+`ProfilerThreadEnter/Leave` (`0x1404ccbe0` / `0x1403031f0`) remain live and callable, but with
+the read-back side stripped a mod-side clock is simpler.
 
 **GPU: build a small mod-side timestamp layer around the Draw seams — do not revive the
 engine UI.** The engine's per-pass GPU timer covers only particles, and the `CFrameProfiler`/
@@ -290,7 +341,8 @@ engine UI.** The engine's per-pass GPU timer covers only particles, and the `CFr
 2. On the **immediate context** (`Context::m_Context`, under `Context::m_Mutex` per
    `rendering.md` §"VR implications"), `BeginTimeStampDisjointQuery` at frame start,
    `SetTimeStampQuery` before/after each of `DrawGBuffer` / `Draw` / `DrawPosteffects` /
-   `PostDraw`, and `EndTimeStampDisjointQuery` at frame end.
+   `PostDraw`, and `EndTimeStampDisjointQuery` at frame end (its live body is the
+   `SetTimeStampQuery` address, `0x1419558B0` — see §2.1's fold note).
 3. Read back `QueryTimeStamp` + `QueryTimeStampFrequency` two–three frames later (or wrap the
    whole thing in a `CGPUBufferedQuery` from §2.2 to get the ring buffering for free).
 
@@ -300,7 +352,7 @@ stripped debug UI), attributes GPU time to the coarse pass groups already revers
 `STEREO_STATE.draw_index`. It is strictly less work and less risk than reconstructing the
 `CRenderPassGpuTimingQuery` pattern for every pass or trying to bring back the dead frame graph.
 
-**Before writing new GPU queries, check the existing ring.** The `engine + 5824`
-`CGPUBufferedQuery` frame ring (`rendering.md` §1.5, §2.2) is already recording *something* per
-frame; if it already brackets these pass groups, reading its results is cheaper still. Confirm
-what it records before duplicating it — the one remaining **[UNVERIFIED]** worth chasing.
+**The existing ring is not a shortcut.** The `engine + 5824` `CGPUBufferedQuery` frame ring
+(`rendering.md` §1.5, §2.2) belongs to the stripped `CGPUProfiler` (§2.2): retail only begins
+and ends a frame-level disjoint query with it, the per-scope recording never runs, and the
+read-back is stubbed. Issue mod-side queries instead.

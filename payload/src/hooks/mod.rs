@@ -12,6 +12,8 @@ pub mod draw_count;
 pub mod game;
 pub mod graphics_engine;
 pub mod input;
+#[cfg(feature = "profiler")]
+pub mod profiler;
 pub mod ui;
 pub mod wndproc;
 
@@ -35,7 +37,7 @@ unsafe impl Sync for HookState {}
 pub(super) fn install() {
     let mut patcher = re_utilities::Patcher::new();
     let hook_library = ThreadSuspender::for_block(|| {
-        Ok(HookLibrary::new()
+        let library = HookLibrary::new()
             .with_hook_library(game::hook_library())
             .with_hook_library(clock::hook_library())
             .with_hook_library(graphics_engine::hook_library())
@@ -45,8 +47,10 @@ pub(super) fn install() {
             .with_hook_library(character::hook_library())
             .with_hook_library(animation::hook_library())
             .with_hook_library(input::hook_library())
-            .with_hook_library(ui::hook_library())
-            .enable(&mut patcher)?)
+            .with_hook_library(ui::hook_library());
+        #[cfg(feature = "profiler")]
+        let library = library.with_hook_library(profiler::hook_library());
+        Ok(library.enable(&mut patcher)?)
     });
     let hook_library = match hook_library {
         Ok(hook_library) => hook_library,

@@ -104,6 +104,7 @@ pub mod camera;
 pub mod character;
 pub mod clock;
 pub mod cpu_fragment;
+pub mod cpu_profiler;
 pub mod environment;
 pub mod equipment;
 pub mod event;

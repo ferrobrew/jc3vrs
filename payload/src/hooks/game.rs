@@ -42,12 +42,18 @@ pub(super) fn hook_library() -> HookLibrary {
 fn game_update(game: *const Game) -> bool {
     // Start of a real frame: re-arm the once-per-frame CClock::Update gate.
     super::clock::UPDATED_THIS_FRAME.store(false, Ordering::Relaxed);
+    // `crate::update` advances the puffin frame (closing the previous one); the frame scope opens
+    // after it so it belongs to the new frame and spans the whole original update.
     crate::update();
+    #[cfg(feature = "profiler")]
+    puffin::profile_scope!("CGame::Update");
     GAME_UPDATE.get().unwrap().call(game)
 }
 
 #[detour(address = jc3gi::game::Game::UpdateRender_ADDRESS)]
 fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
+    #[cfg(feature = "profiler")]
+    puffin::profile_scope!("CGame::UpdateRender");
     unsafe {
         crate::crash::mark(Phase::UpdateRenderEnter);
         let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
@@ -82,7 +88,11 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // pose while a session is live. `frame_begin` holds the OpenXR runtime lock for the frame,
         // so nothing on the game thread may re-enter the runtime until the frame is submitted --
         // the per-eye render parameters flow through a separate slot (`vr::render_params`).
+        #[cfg(feature = "profiler")]
+        let vr_update_scope = puffin::profile_scope_custom!("vr::update");
         let vr_running = crate::vr::update();
+        #[cfg(feature = "profiler")]
+        drop(vr_update_scope);
         crate::headpose::set_source(if vr_running {
             crate::headpose::Source::Vr
         } else {
@@ -101,7 +111,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // boundary `ApplyResize` needs). Must sit before the first `game.Draw`.
         crate::vr::apply_native_resolution();
 
+        // Separately scoped from the real work: `frame_begin` contains `xrWaitFrame`, the
+        // compositor pacing block — time here is (mostly) intentional waiting, not cost.
+        #[cfg(feature = "profiler")]
+        let frame_begin_scope = puffin::profile_scope_custom!("vr::frame_begin (xrWaitFrame)");
         let mut vr_frame = vr_running.then(crate::vr::frame_begin).flatten();
+        #[cfg(feature = "profiler")]
+        drop(frame_begin_scope);
 
         // Publish the VR head pose and per-eye camera parameters *before* the original UpdateRender.
         // `CGame::Update` runs the sim tick (`UpdateGame`) -- which finalizes this frame's animation,
@@ -123,11 +139,15 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         }
 
         crate::crash::mark(Phase::OriginalUpdateRender);
+        #[cfg(feature = "profiler")]
+        let engine_scope = puffin::profile_scope_custom!("UpdateRender (engine)");
         GAME_UPDATE_RENDER
             .get()
             .unwrap()
             .call(game, update_contexts);
         GameState::PostUpdateRender(update_contexts);
+        #[cfg(feature = "profiler")]
+        drop(engine_scope);
 
         let game = game.as_mut().unwrap();
 
@@ -159,6 +179,8 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         STEREO_STATE.lock().active = stereo;
 
         if stereo {
+            #[cfg(feature = "profiler")]
+            let snapshot_scope = puffin::profile_scope_custom!("Stereo snapshots");
             crate::crash::mark(Phase::Eye0Snapshot);
             // Snapshot the reflection-proxy depth-history before the first dispatch and restore it
             // before each later one, so every dispatch makes the same per-slot decisions -- the
@@ -198,6 +220,8 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             // now runs on every dispatch, so the overflow list is processed and the external
             // render camera is updated on all of them too.
             let saved_add_buffer = *get_current_add_buffer();
+            #[cfg(feature = "profiler")]
+            drop(snapshot_scope);
 
             // The per-eye camera offset is injected on the render camera in the SetupRenderCamera
             // hook (see hooks::camera and docs/engine/rendering.md section 2); here we just drive
@@ -223,6 +247,8 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             };
             for (ordinal, &(eye, far_phase)) in dispatches.iter().enumerate() {
                 if ordinal > 0 {
+                    #[cfg(feature = "profiler")]
+                    puffin::profile_scope!("Between-eye restore");
                     crate::crash::mark(Phase::BetweenEyesRestore);
                     if let Some(state) = &effect_info {
                         restore_effect_info(state);
@@ -282,6 +308,8 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 } else {
                     Phase::Eye1Draw
                 });
+                #[cfg(feature = "profiler")]
+                puffin::profile_scope!("Dispatch", format!("eye {eye}, ordinal {ordinal}"));
                 game.Draw(spf);
                 crate::crash::mark(if eye == 0 {
                     Phase::Eye0Drain
@@ -289,6 +317,8 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                     Phase::Eye1Drain
                 });
                 if let Some(ge) = GraphicsEngine::get() {
+                    #[cfg(feature = "profiler")]
+                    puffin::profile_scope!("WaitForCPUDraw + drain");
                     ge.WaitForCPUDrawToFinish();
                     drain_draw_thread_fragment(ge);
                 }
@@ -318,7 +348,11 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             reset_dispatch_state();
             graphics_engine::post_effects::reset_post_block_gate();
             crate::crash::mark(Phase::NonStereoDraw);
-            game.Draw(spf);
+            {
+                #[cfg(feature = "profiler")]
+                puffin::profile_scope!("Dispatch", "mono");
+                game.Draw(spf);
+            }
             crate::debug::camera::capture_render_camera(0);
             TraceState::end_frame();
         }
@@ -327,6 +361,8 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // (world layer when rendered, empty otherwise). Consumes the frame context, releasing the
         // OpenXR runtime lock so the next `vr::update` can proceed.
         if let Some(frame) = vr_frame.take() {
+            #[cfg(feature = "profiler")]
+            puffin::profile_scope!("VR present + submit");
             let should_render = frame.should_render();
             crate::vr::present_and_submit(frame, &vr_cfg);
             log_vr_frame_health(should_render);
@@ -347,6 +383,8 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // `crate::vr::mirror::present_mirror`). When no session runs the engine presents normally, so
         // the mirror is skipped and flatscreen behaviour (including present_eye_0) is unchanged.
         if vr_running && vr_cfg.mirror {
+            #[cfg(feature = "profiler")]
+            puffin::profile_scope!("Desktop mirror");
             crate::vr::present_mirror(usize::from(vr_cfg.mirror_eye));
         }
         crate::crash::mark(Phase::FrameEnd);

@@ -114,6 +114,20 @@ impl std::convert::AsMut<EffectInfo> for EffectInfo {
         self
     }
 }
+#[repr(i32)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
+/// The result status of [`QueryTimeStampFrequency`].
+pub enum FrequencyStatus {
+    Ok = 0isize as _,
+    Disjoint = 1isize as _,
+    Pending = 2isize as _,
+}
+fn _FrequencyStatus_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x4], FrequencyStatus>([0u8; 0x4]);
+    }
+    unreachable!()
+}
 #[repr(C, align(8))]
 pub struct GraphicsEngine {
     _field_0: [u8; 8],
@@ -571,6 +585,36 @@ impl std::convert::AsMut<HTexture_t> for HTexture_t {
         self
     }
 }
+#[repr(C, align(8))]
+/// A GPU timestamp-disjoint query handle (an `ID3D11Query` of `D3D11_QUERY_TIMESTAMP_DISJOINT`):
+/// brackets an interval and yields the GPU tick frequency plus whether the interval's timestamps
+/// are reliable.
+pub struct HTimeStampDisjointQuery_t {}
+impl HTimeStampDisjointQuery_t {}
+impl std::convert::AsRef<HTimeStampDisjointQuery_t> for HTimeStampDisjointQuery_t {
+    fn as_ref(&self) -> &HTimeStampDisjointQuery_t {
+        self
+    }
+}
+impl std::convert::AsMut<HTimeStampDisjointQuery_t> for HTimeStampDisjointQuery_t {
+    fn as_mut(&mut self) -> &mut HTimeStampDisjointQuery_t {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// A GPU timestamp query handle (an `ID3D11Query` of `D3D11_QUERY_TIMESTAMP`).
+pub struct HTimeStampQuery_t {}
+impl HTimeStampQuery_t {}
+impl std::convert::AsRef<HTimeStampQuery_t> for HTimeStampQuery_t {
+    fn as_ref(&self) -> &HTimeStampQuery_t {
+        self
+    }
+}
+impl std::convert::AsMut<HTimeStampQuery_t> for HTimeStampQuery_t {
+    fn as_mut(&mut self) -> &mut HTimeStampQuery_t {
+        self
+    }
+}
 pub use windows::Win32::Foundation::HWND as HWND;
 #[repr(C, align(8))]
 /// The scene occluder / beam-frustum-based-culling manager. Its cull frustum is built (and cached
@@ -658,7 +702,10 @@ pub struct RenderContext {
     pub m_DisplayHeight: i32,
     /// The display aspect ratio (`m_DisplayWidth / m_DisplayHeight`).
     pub m_DisplayRatio: f32,
-    _field_318: [u8; 288],
+    /// The graphics context this dispatch draws through. The render blocks' draw paths and the
+    /// scope markers ([`BeginScopeMarker`] / [`EndScopeMarker`]) read it off the render context.
+    pub m_Context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    _field_320: [u8; 280],
     /// The id (`ERenderPass`, see `render_engine::RenderPassId`) of the pass currently drawing
     /// through this context, written by `SetupRenderContext` from the pass's index. `RP_NONE` (0)
     /// outside a pass body.
@@ -838,6 +885,182 @@ pub unsafe fn SetRenderSetup(
             force: bool,
         ) = ::std::mem::transmute(SetRenderSetup_ADDRESS);
         f(context, setup, force)
+    }
+}
+pub const CreateTimeStampQuery_ADDRESS: usize = 0x141955850;
+/// Creates a `D3D11_QUERY_TIMESTAMP` query on the device (device vtable `CreateQuery`); raises the
+/// graphics critical-error path on failure.
+pub unsafe fn CreateTimeStampQuery(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+) -> *mut crate::graphics_engine::graphics_engine::HTimeStampQuery_t {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+        ) -> *mut crate::graphics_engine::graphics_engine::HTimeStampQuery_t = ::std::mem::transmute(
+            CreateTimeStampQuery_ADDRESS,
+        );
+        f(device)
+    }
+}
+pub const DestroyTimeStampQuery_ADDRESS: usize = 0x1419558A0;
+/// Releases a timestamp query.
+pub unsafe fn DestroyTimeStampQuery(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    query: *mut crate::graphics_engine::graphics_engine::HTimeStampQuery_t,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+            query: *mut crate::graphics_engine::graphics_engine::HTimeStampQuery_t,
+        ) = ::std::mem::transmute(DestroyTimeStampQuery_ADDRESS);
+        f(device, query)
+    }
+}
+pub const SetTimeStampQuery_ADDRESS: usize = 0x1419558B0;
+/// Records a timestamp on the context (`ID3D11DeviceContext::End` on the query), under the context
+/// mutex when present.
+pub unsafe fn SetTimeStampQuery(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    query: *mut crate::graphics_engine::graphics_engine::HTimeStampQuery_t,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            query: *mut crate::graphics_engine::graphics_engine::HTimeStampQuery_t,
+        ) = ::std::mem::transmute(SetTimeStampQuery_ADDRESS);
+        f(context, query)
+    }
+}
+pub const QueryTimeStamp_ADDRESS: usize = 0x141955920;
+/// Reads a timestamp query's tick value (`GetData`, non-blocking). Returns `0` while the result is
+/// still pending.
+pub unsafe fn QueryTimeStamp(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    query: *mut crate::graphics_engine::graphics_engine::HTimeStampQuery_t,
+) -> u64 {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            query: *mut crate::graphics_engine::graphics_engine::HTimeStampQuery_t,
+        ) -> u64 = ::std::mem::transmute(QueryTimeStamp_ADDRESS);
+        f(context, query)
+    }
+}
+pub const CreateTimeStampDisjointQuery_ADDRESS: usize = 0x1419559C0;
+/// Creates a `D3D11_QUERY_TIMESTAMP_DISJOINT` query on the device; raises the graphics
+/// critical-error path on failure.
+pub unsafe fn CreateTimeStampDisjointQuery(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+) -> *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+        ) -> *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t = ::std::mem::transmute(
+            CreateTimeStampDisjointQuery_ADDRESS,
+        );
+        f(device)
+    }
+}
+pub const DestroyTimeStampDisjointQuery_ADDRESS: usize = 0x141955A10;
+/// Releases a timestamp-disjoint query.
+pub unsafe fn DestroyTimeStampDisjointQuery(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    query: *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+            query: *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t,
+        ) = ::std::mem::transmute(DestroyTimeStampDisjointQuery_ADDRESS);
+        f(device, query)
+    }
+}
+pub const BeginTimeStampDisjointQuery_ADDRESS: usize = 0x141955A20;
+/// Begins the disjoint interval (`ID3D11DeviceContext::Begin`), under the context mutex when
+/// present.
+pub unsafe fn BeginTimeStampDisjointQuery(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    query: *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            query: *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t,
+        ) = ::std::mem::transmute(BeginTimeStampDisjointQuery_ADDRESS);
+        f(context, query)
+    }
+}
+pub const EndTimeStampDisjointQuery_ADDRESS: usize = 0x1419558B0;
+/// Ends the disjoint interval (`ID3D11DeviceContext::End`). In the release build the body is
+/// identical-code-folded with [`SetTimeStampQuery`] (both call `End` under the context mutex), so
+/// this shares its address; the release symbol table's placement at `0x141954000` is an unrelated
+/// two-instruction stub.
+pub unsafe fn EndTimeStampDisjointQuery(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    query: *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            query: *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t,
+        ) = ::std::mem::transmute(EndTimeStampDisjointQuery_ADDRESS);
+        f(context, query)
+    }
+}
+pub const QueryTimeStampFrequency_ADDRESS: usize = 0x141955B00;
+/// Reads a disjoint query's result (`GetData`, non-blocking): writes the GPU tick frequency to
+/// `out_frequency` (`0` while pending) and returns the interval's status.
+pub unsafe fn QueryTimeStampFrequency(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    query: *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t,
+    out_frequency: *mut u64,
+) -> crate::graphics_engine::graphics_engine::FrequencyStatus {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            query: *mut crate::graphics_engine::graphics_engine::HTimeStampDisjointQuery_t,
+            out_frequency: *mut u64,
+        ) -> crate::graphics_engine::graphics_engine::FrequencyStatus = ::std::mem::transmute(
+            QueryTimeStampFrequency_ADDRESS,
+        );
+        f(context, query, out_frequency)
+    }
+}
+pub const BeginScopeMarker_ADDRESS: usize = 0x141954D10;
+/// The developer scope-marker begin: opens a named instrumentation scope on the context. Compiled
+/// to an empty function in the release build, but its call sites and name strings survive
+/// throughout the renderer -- the frame stages in `CGraphicsEngine::HandleDrawThreadTask`
+/// (`"Frame setup"`, `"CopyEffectTextures"`, `"Debug UI"`), the post-effect stack (SMAA, FXAA,
+/// depth of field, motion blur, lens flare, glare, tone mapping), deferred lighting, SSAO, SSR,
+/// environment reflections, water, terrain restores, and the per-render-block-type runs opened by
+/// [`RenderPass::ChangeRenderBlockType`](graphics_engine::render_pass::RenderPass::ChangeRenderBlockType)
+/// (named by each type's
+/// [`GetTypeName`](graphics_engine::render_engine::RenderBlockTypeBase::GetTypeName)). Scopes nest
+/// per context and are closed by [`EndScopeMarker`]; the RAII wrapper `Graphics::CScopeMarker`
+/// calls the pair from its constructor and destructor.
+pub unsafe fn BeginScopeMarker(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    name: *const u8,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            name: *const u8,
+        ) = ::std::mem::transmute(BeginScopeMarker_ADDRESS);
+        f(context, name)
+    }
+}
+pub const EndScopeMarker_ADDRESS: usize = 0x141954D20;
+/// Closes the innermost scope opened by [`BeginScopeMarker`] on the context. Compiled to an empty
+/// function in the release build; the call sites survive.
+pub unsafe fn EndScopeMarker(
+    context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            context: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        ) = ::std::mem::transmute(EndScopeMarker_ADDRESS);
+        f(context)
     }
 }
 pub const graphics_flip_ADDRESS: usize = 0x14195A820;

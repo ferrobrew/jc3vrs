@@ -68,6 +68,22 @@ impl Game {
             f(self as *mut Self as _, update_contexts)
         }
     }
+    pub const UpdateGame_ADDRESS: usize = 0x1409521F0;
+    /// One sim tick: advances the game clock, updates the FPS counter, and dispatches to the
+    /// active game state's update (install, init, frontend, load, or run). Called zero or more
+    /// times per [`Update`](Game::Update) according to the frame-pacing mode.
+    pub unsafe fn UpdateGame(
+        &mut self,
+        update_contexts: *mut crate::game::UpdateContexts,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                update_contexts: *mut crate::game::UpdateContexts,
+            ) = ::std::mem::transmute(Self::UpdateGame_ADDRESS);
+            f(self as *mut Self as _, update_contexts)
+        }
+    }
 }
 impl std::convert::AsRef<Game> for Game {
     fn as_ref(&self) -> &Game {

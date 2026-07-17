@@ -75,10 +75,18 @@ fn hand_back_buffers(this: *mut c_void) {
 // range, or nothing to skip) is the stock path.
 #[detour(address = jc3gi::graphics_engine::render_pass::RenderPass::DoDraw_ADDRESS)]
 fn do_draw(this: *mut RenderPass, ctx: *mut RenderContext, color_mask: u32) -> bool {
+    // A CPU scope named for the pass being drawn; the per-render-block-type runs opened inside it
+    // by `profiler::change_render_block_type` nest within this scope.
+    #[cfg(feature = "profiler")]
+    // SAFETY: `this` is the live render pass being drawn.
+    let _pass = unsafe { crate::profiler::pass_scope(this) };
     // SAFETY: `this` and `ctx` are the live pass and render context of this draw call.
     let window = unsafe { crate::far_field::before_do_draw(this, ctx) };
     let result = DO_DRAW.get().unwrap().call(this, ctx, color_mask);
     drop(window);
+    // Close the final render-block-type run's scope before the pass scope closes.
+    #[cfg(feature = "profiler")]
+    crate::profiler::type_scope::clear();
     result
 }
 
@@ -101,6 +109,8 @@ fn draw_render_pass_range(
     first: i32,
     last: i32,
 ) {
+    #[cfg(feature = "profiler")]
+    puffin::profile_scope!("DrawRenderPassRange", format!("{first}..{last}"));
     let original = DRAW_RENDER_PASS_RANGE.get().unwrap();
     let (skip_ssr, skip_gi, skip_ao_volumes, skip_range) = Config::lock_query(|c| {
         (
@@ -281,11 +291,19 @@ fn run_foveation_pass(
 // its kept neighbours in the finished MainColor. Runs for both eyes; a no-op when foveation is off.
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::DrawPosteffects_ADDRESS)]
 fn draw_posteffects(this: *mut c_void, ctx: *mut c_void, setup: *mut c_void) {
+    #[cfg(feature = "profiler")]
+    puffin::profile_scope!("RenderEngine::DrawPosteffects");
     // The share frame's far dispatch produces only the captured G-buffer; its post chain is
-    // skipped outright (the pass range beyond the G-buffer is already suppressed).
+    // skipped outright (the pass range beyond the G-buffer is already suppressed), so it records
+    // no post-effects seam either.
     if crate::stereo::far_phase() {
         return;
     }
+    #[cfg(feature = "profiler")]
+    // SAFETY: `ctx` is the live immediate-context handle for this dispatch.
+    let _gpu = unsafe {
+        crate::profiler::gpu::seam(ctx.cast(), crate::profiler::gpu::GpuSeam::PostEffects)
+    };
     if let Some(cfg) = Config::lock_query(|c| c.foveation.enabled.then(|| c.foveation.clone())) {
         let eye = usize::from(is_second_eye());
         if let Some(center_uv) = foveal_center_uv(eye) {
@@ -330,6 +348,8 @@ fn setup_render_states(context: *mut HContext_t, a2: *mut c_void) {
     address = jc3gi::graphics_engine::shadow_manager::ShadowManager::UpdateRender_ADDRESS
 )]
 fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
+    #[cfg(feature = "profiler")]
+    puffin::profile_scope!("ShadowManager::UpdateRender");
     let original = SHADOW_MANAGER_UPDATE_RENDER.get().unwrap();
     let (widen, stabilize, update_every_frame) = Config::lock_query(|c| {
         (
@@ -401,6 +421,8 @@ fn shadow_manager_update_render(this: *mut c_void, dt: f32, dtf: f32) -> u64 {
     address = jc3gi::graphics_engine::shadow_manager::ShadowManager::CommitRenderPassSettings_ADDRESS
 )]
 fn commit_render_pass_settings(this: *mut ShadowManager, ctx: *mut c_void) {
+    #[cfg(feature = "profiler")]
+    puffin::profile_scope!("ShadowManager::CommitRenderPassSettings");
     COMMIT_RENDER_PASS_SETTINGS.get().unwrap().call(this, ctx);
     if !Config::lock_query(|c| c.stereo.freeze_shadow_maps) {
         return;
@@ -435,6 +457,22 @@ fn commit_render_pass_settings(this: *mut ShadowManager, ctx: *mut c_void) {
 // advances parity and would sample the other, unrendered slot).
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PreDraw_ADDRESS)]
 fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
+    // The first seam of a dispatch: label this thread's puffin lane (a no-op on single-core,
+    // where the dispatch runs inline on the already-labelled main thread), open the GPU dispatch
+    // (disjoint query + CPU reference), and bracket PreDraw on both the CPU and GPU timelines.
+    // The GPU dispatch is closed in `graphics_engine::render_engine_post_draw` (the last seam).
+    #[cfg(feature = "profiler")]
+    crate::profiler::label_thread("draw");
+    #[cfg(feature = "profiler")]
+    puffin::profile_scope!("RenderEngine::PreDraw");
+    #[cfg(feature = "profiler")]
+    // SAFETY: `ctx` is the live immediate context for this dispatch.
+    unsafe {
+        crate::profiler::gpu::begin_dispatch(ctx)
+    };
+    #[cfg(feature = "profiler")]
+    // SAFETY: `ctx` is the live immediate context for this dispatch.
+    let _gpu = unsafe { crate::profiler::gpu::seam(ctx, crate::profiler::gpu::GpuSeam::PreDraw) };
     let original = PRE_DRAW.get().unwrap();
     let share_cfg =
         Config::lock_query(|c| c.stereo.share_prepasses && c.stereo.restore_frame_counters);

@@ -11,6 +11,9 @@ use windows::Win32::{
     },
 };
 
+#[cfg(feature = "profiler")]
+use windows::Win32::UI::Input::KeyboardAndMouse::VK_F9;
+
 use crate::hud::cursor;
 
 pub(super) fn hook_library() -> HookLibrary {
@@ -45,6 +48,21 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 egui_state.toggle_game_input_capture();
             }
             crate::capture::toggle();
+        }
+        return LRESULT(0);
+    }
+
+    // F9 starts a profiler trace capture (issue #34): records a few seconds of CPU and GPU frames
+    // and dumps them next to the log as Chrome trace-event JSON, so a capture can be taken
+    // in-headset without the overlay. Edge-detected; consumed. A no-op while one is already
+    // recording.
+    #[cfg(feature = "profiler")]
+    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F9.0 as usize {
+        let previous_down = (lparam.0 & 0x4000_0000) != 0;
+        if !previous_down
+            && crate::profiler::capture::start(crate::profiler::capture::DEFAULT_CAPTURE_SECS)
+        {
+            tracing::info!("F9: profiler trace capture started");
         }
         return LRESULT(0);
     }

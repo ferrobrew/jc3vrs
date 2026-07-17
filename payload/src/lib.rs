@@ -33,6 +33,8 @@ mod hooks;
 mod hud;
 mod lifecycle;
 mod logging;
+#[cfg(feature = "profiler")]
+mod profiler;
 mod stereo;
 
 #[unsafe(no_mangle)]
@@ -184,6 +186,11 @@ fn update() {
     }
 
     let panic = std::panic::catch_unwind(|| {
+        // Close the previous real frame's puffin scopes and open the next; the frame scope itself
+        // is opened by `game_update` right after this returns. Once per real frame, main thread.
+        #[cfg(feature = "profiler")]
+        profiler::new_frame();
+
         if util::is_pressed(VK_F5) {
             shutdown();
             return;

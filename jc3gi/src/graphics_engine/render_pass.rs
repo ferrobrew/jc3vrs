@@ -541,7 +541,10 @@ impl RenderPass {
     pub const DoDraw_ADDRESS: usize = 0x1401AC7A0;
     /// Draws the current draw list, walking `min(m_ListSize, m_NumElements)` blocks and
     /// vtable-dispatching each. Non-destructive -- never writes `m_NumElements`. Calls
-    /// [`SortList`](RenderPass::SortList) lazily before drawing.
+    /// [`SortList`](RenderPass::SortList) lazily before drawing. Consecutive blocks of one type
+    /// form a type run: [`ChangeRenderBlockType`](RenderPass::ChangeRenderBlockType) switches
+    /// between runs, and the tail closes the final run (its type-level restore and its scope
+    /// marker).
     pub unsafe fn DoDraw(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -554,6 +557,33 @@ impl RenderPass {
                 color_mask: u32,
             ) -> bool = ::std::mem::transmute(Self::DoDraw_ADDRESS);
             f(self as *mut Self as _, ctx, color_mask)
+        }
+    }
+    pub const ChangeRenderBlockType_ADDRESS: usize = 0x140187310;
+    /// Switches the active render-block type between type runs in [`DoDraw`](RenderPass::DoDraw):
+    /// restores `prev` (dispatching the Z, colour, or glint restore variant selected by the pass
+    /// id) and closes its scope marker (`Graphics::EndScopeMarker`), then re-applies the
+    /// pass render states, sets up `next`, and opens a scope marker (`Graphics::BeginScopeMarker`)
+    /// named by its
+    /// [`GetTypeName`](graphics_engine::render_engine::RenderBlockTypeBase::GetTypeName). Either
+    /// pointer may be null at a run boundary. `inout_count` is the pass's running drawn-block
+    /// counter, zeroed on a type switch.
+    pub unsafe fn ChangeRenderBlockType(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        prev: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+        next: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+        inout_count: *mut u32,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                prev: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+                next: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
+                inout_count: *mut u32,
+            ) = ::std::mem::transmute(Self::ChangeRenderBlockType_ADDRESS);
+            f(self as *mut Self as _, ctx, prev, next, inout_count)
         }
     }
     pub const SortList_ADDRESS: usize = 0x1401A87C0;

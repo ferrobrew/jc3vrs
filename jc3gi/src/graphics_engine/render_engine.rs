@@ -800,6 +800,30 @@ pub unsafe fn GetRenderPassName(
         f(pass)
     }
 }
+pub const GetRenderPassCategory_ADDRESS: usize = 0x1401750B0;
+/// Maps a render-pass id to its coarse category (`ERenderPassCategory`, 30 values: terrain,
+/// shadows, GBuffer, lighting, water, particles, post effects, UI, ...). The crash-telemetry
+/// metrics aggregate per-pass GPU times by this grouping.
+pub unsafe fn GetRenderPassCategory(
+    pass: crate::graphics_engine::render_engine::RenderPassId,
+) -> i32 {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            pass: crate::graphics_engine::render_engine::RenderPassId,
+        ) -> i32 = ::std::mem::transmute(GetRenderPassCategory_ADDRESS);
+        f(pass)
+    }
+}
+pub const GetRenderPassCategoryName_ADDRESS: usize = 0x1401750E0;
+/// The display name for a render-pass category, or null for out-of-range values.
+pub unsafe fn GetRenderPassCategoryName(category: i32) -> *const u8 {
+    unsafe {
+        let f: unsafe extern "system" fn(category: i32) -> *const u8 = ::std::mem::transmute(
+            GetRenderPassCategoryName_ADDRESS,
+        );
+        f(category)
+    }
+}
 pub const TerrainPatchSystemUpdate_ADDRESS: usize = 0x14032F780;
 /// The once-per-frame terrain patch system update (called from `CLandscapeManager::UpdateRender` in the
 /// sim phase). When [`STerrainPatchSystem::m_UpdateCamera`] is set it copies the LOD camera

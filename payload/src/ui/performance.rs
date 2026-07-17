@@ -34,6 +34,11 @@ pub fn egui_debug_performance(ui: &mut egui::Ui) {
     }
 
     far_field_summary(ui);
+
+    // The profiler (issue #34): a collapsible with the live flame graph and trace capture, below
+    // the frame-rate readout.
+    #[cfg(feature = "profiler")]
+    crate::profiler::ui::egui_profiler(ui);
 }
 
 /// The far-field split totals (issue #32), mirrored here so they can be watched alongside the

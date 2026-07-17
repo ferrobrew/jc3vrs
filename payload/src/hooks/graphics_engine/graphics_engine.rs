@@ -71,10 +71,27 @@ fn graphics_flip(device: *mut Device) -> u64 {
 
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PostDraw_ADDRESS)]
 fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Context) -> u64 {
-    let result = RENDER_ENGINE_POST_DRAW
-        .get()
-        .unwrap()
-        .call(render_engine, context);
+    // The last render seam of the dispatch: bracket PostDraw on both timelines, then close the GPU
+    // dispatch opened in `render_pass::pre_draw` (ending the disjoint query and reading back the
+    // dispatches the GPU has since finished). `Context` and `HContext_t` are the same handle.
+    #[cfg(feature = "profiler")]
+    puffin::profile_scope!("RenderEngine::PostDraw");
+    let result = {
+        #[cfg(feature = "profiler")]
+        // SAFETY: `context` is the live immediate-context handle for this dispatch.
+        let _gpu = unsafe {
+            crate::profiler::gpu::seam(context.cast(), crate::profiler::gpu::GpuSeam::PostDraw)
+        };
+        RENDER_ENGINE_POST_DRAW
+            .get()
+            .unwrap()
+            .call(render_engine, context)
+    };
+    #[cfg(feature = "profiler")]
+    // SAFETY: `context` is the live immediate-context handle for this dispatch.
+    unsafe {
+        crate::profiler::gpu::end_dispatch(context.cast())
+    };
     TraceState::record_eye(TraceEvent::PostDraw);
 
     unsafe {

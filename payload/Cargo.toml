@@ -6,6 +6,13 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = ["profiler"]
+# The in-game profiler (issue #34): puffin scopes across the mod's hooks and the engine's frame
+# phases, a flame-graph panel in the Performance tab, and on-demand trace capture to disk.
+# Compile-time so the extra hooks and per-scope overhead vanish entirely when disabled.
+profiler = ["dep:puffin", "dep:puffin_egui"]
+
 [dependencies]
 windows = { workspace = true }
 re-utilities = { workspace = true }
@@ -26,6 +33,11 @@ tracing-appender = "0.2"
 egui-directx11 = "0.13"
 # egui-directx11 = { path = "../../egui-directx11" }
 egui = "0.35"
+# Git rather than crates.io: the released puffin_egui 0.30 pins egui 0.33, while upstream main has
+# moved to egui 0.35 (unreleased at the time of writing). Both crates ride the same rev so they
+# agree on the puffin data model.
+puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "d06bed0fcb8c8e4c78643d4ead7cf1de9b76fd3b", optional = true }
+puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "d06bed0fcb8c8e4c78643d4ead7cf1de9b76fd3b", optional = true }
 anyhow.workspace = true
 parking_lot = "0.12.5"
 clipboard-win = "5.4.1"

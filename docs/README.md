@@ -30,6 +30,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [foveation.md](mod/foveation.md) — static foveated rendering (issue #29): the stencil radial-density-masking design, the depth-stencil-state seam, and the build plan.
 - [controllers-and-roomscale.md](mod/controllers-and-roomscale.md) — the motion-controller and roomscale scope: phases, seams, risks, and per-mode input tables.
 - [environment.md](mod/environment.md) — debug-UI control of time of day and weather.
+- [profiler.md](mod/profiler.md) — the in-game profiler (issue #34): puffin CPU scopes across the frame phases and render passes, the GPU timestamp lane, the flame graph, and the F9 trace capture.
 - [lighting-shadow-vr-interactions.md](mod/lighting-shadow-vr-interactions.md) — every default-on mod modification touching camera, frame counters, lighting, or shadows, how each interacts with the stereo double-draw, and the candidate per-frame globals behind the terrain-wide sun-shadow flicker.
 
 ## issues/
