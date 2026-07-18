@@ -146,7 +146,10 @@ fn create_fragment_program(
     let mut saved: Option<(*const u8, Vec<u8>)> = None;
     let (patch_pcf, patch_dissolve) =
         Config::lock_query(|c| (c.stereo.patch_shadow_pcf_hash, c.stereo.patch_lod_dissolve));
-    if (patch_pcf || patch_dissolve)
+    // Skip patching once eject begins, so the shader restore's bounce re-creates pristine fragment
+    // shaders (matching the vertex side) and the clean game keeps none of the mod's edits.
+    if !crate::is_shutting_down()
+        && (patch_pcf || patch_dissolve)
         && let Some(p) = unsafe { params.as_mut() }
     {
         let size = p.m_Size as usize;
@@ -253,9 +256,32 @@ pub fn process_reload_request() {
     if !RELOAD_REQUESTED.swap(false, Ordering::Relaxed) {
         return;
     }
-    // SAFETY: runs on the game thread at frame start; the engine singleton is live and its
-    // `m_CurrentBundleName` is a stable `std::string`. `LoadShaderBundle` is what the settings path
-    // calls; we drain the draw first so no GPU work references the shaders being replaced.
+    bounce_shader_bundle();
+}
+
+/// On eject: if the mod patched any shaders that the game still holds -- single-pass's substituted
+/// (`cb13`-reading) vertex shaders, or the fragment-side PCF/dissolve edits -- re-create the
+/// originals. `LoadShaderBundle` re-runs the create hooks, and with `crate::is_shutting_down()` set
+/// both the vertex substitution and the fragment patches are inert, so the game returns to fully
+/// pristine shaders instead of keeping the mod's edits after it is gone. Game thread, during
+/// shutdown, before the hooks are uninstalled.
+pub fn restore_original_shaders_on_eject() {
+    let patched_anything = crate::stereo::single_pass::has_patched_shaders()
+        || patched_count() > 0
+        || dissolve_patched_count() > 0;
+    if !patched_anything {
+        return;
+    }
+    tracing::info!("shader restore: re-creating the pristine shaders on eject");
+    bounce_shader_bundle();
+}
+
+/// Re-create every shader by bouncing the active bundle to its other quality variant and back, so all
+/// shader holders re-run through the create hooks. Game thread only, no draw in flight (drains first).
+fn bounce_shader_bundle() {
+    // SAFETY: runs on the game thread; the engine singleton is live and its `m_CurrentBundleName` is a
+    // stable `std::string`. `LoadShaderBundle` is what the settings path calls; we drain the draw
+    // first so no GPU work references the shaders being replaced.
     unsafe {
         let Some(ge) = GraphicsEngine::get() else {
             return;

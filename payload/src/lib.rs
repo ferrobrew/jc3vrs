@@ -144,6 +144,12 @@ fn initialize_from_game() -> anyhow::Result<()> {
 
 /// Called to undo `initialize_from_game`; called once shutdown is triggered
 fn shutdown_from_game() {
+    // Re-create the original vertex shaders before anything is torn down: single-pass substitutes
+    // patched (cb13-reading) shaders that the game holds, so without this the clean game would keep
+    // rendering with them after eject. `SHUTTING_DOWN` is already set, so the reload's create hooks
+    // are inert and produce the unpatched originals. A no-op unless single-pass patched any shaders.
+    hooks::graphics_engine::shader::restore_original_shaders_on_eject();
+
     // Revert the far-field type gates and release the share pipeline's COM objects before the
     // hooks (and their patches) are torn down: the gated IsEnabled slots and the composite
     // pipeline must never outlive the payload code they point into.

@@ -163,6 +163,12 @@ pub fn reset_census() {
 /// census-only dry-run is off, and the device supports viewport routing. The VS-substitution and
 /// cb13 paths gate on this; when it is false the double-draw path is left untouched.
 pub fn active() -> bool {
+    // Go inert the instant eject begins: the render thread keeps running through the whole teardown,
+    // so an ungated single-pass path would race the hook uninstall and the D3D-resource release (the
+    // same crash-on-uninject class already fixed for `vr::update` -- see `crate::is_shutting_down`).
+    if crate::is_shutting_down() {
+        return false;
+    }
     let (single_pass, dry_run) =
         Config::lock_query(|c| (c.stereo.single_pass, c.stereo.single_pass_patch_dryrun));
     single_pass && !dry_run && capability() == Capability::Supported
@@ -171,14 +177,7 @@ pub fn active() -> bool {
 /// Whether the Milestone B "make the eyes diverge" step is on (in addition to [`active`]): distinct
 /// per-eye `cb13`, left/right-half viewport routing, and instance doubling of the G-buffer geometry.
 pub fn dual_eye_active() -> bool {
-    let (single_pass, dry_run, dual_eye) = Config::lock_query(|c| {
-        (
-            c.stereo.single_pass,
-            c.stereo.single_pass_patch_dryrun,
-            c.stereo.single_pass_dual_eye,
-        )
-    });
-    single_pass && !dry_run && dual_eye && capability() == Capability::Supported
+    active() && Config::lock_query(|c| c.stereo.single_pass_dual_eye)
 }
 
 /// Marks whether the render thread is currently inside the G-buffer geometry pass range
@@ -580,6 +579,13 @@ pub fn reset_patched_vs() {
     PATCHED_VS.lock().clear();
 }
 
+/// Whether single-pass has substituted any patched vertex shaders this session (they are still held
+/// by the game). If so, eject must re-create the originals, else the game keeps rendering with the
+/// mod's `cb13`-reading shaders after the mod is gone.
+pub fn has_patched_shaders() -> bool {
+    !PATCHED_VS.lock().is_empty()
+}
+
 /// Log and reset the per-window patched/unpatched G-buffer draw counts -- called once per frame so
 /// the bring-up log shows how the draw gating is splitting the geometry.
 pub fn log_draw_split() {
@@ -596,13 +602,49 @@ pub fn log_draw_split() {
     }
 }
 
+/// Disable all the single-pass COM-vtable detours, restoring the original D3D functions. Must run on
+/// eject **before** the payload unloads: the detours inline-patch the DXVK functions to jump into
+/// payload code, so leaving them enabled while the DLL unmaps dangles those jumps and the next D3D
+/// call crashes. Runs under a thread suspender, like install.
+pub fn uninstall_com_detours() {
+    if RS_SET_VIEWPORTS.get().is_none() {
+        return; // never installed (single-pass never activated this session)
+    }
+    let _ = ThreadSuspender::for_block(|| {
+        // A detour left enabled here is a relay still pointing into the about-to-be-freed payload
+        // image, so a swallowed failure would be an undiagnosable crash -- log it instead.
+        macro_rules! disable_detour {
+            ($lock:expr, $name:literal) => {
+                if let Some(detour) = $lock.get() {
+                    // SAFETY: patching the function back runs with all other threads suspended.
+                    match unsafe { detour.disable() } {
+                        Err(e) => tracing::error!("single-pass: {} disable failed: {e}", $name),
+                        Ok(()) if detour.is_enabled() => tracing::error!(
+                            "single-pass: {} still enabled after disable (dangling into freed payload)",
+                            $name
+                        ),
+                        Ok(()) => {}
+                    }
+                }
+            };
+        }
+        disable_detour!(RS_SET_VIEWPORTS, "RSSetViewports");
+        disable_detour!(RS_SET_SCISSOR_RECTS, "RSSetScissorRects");
+        disable_detour!(DRAW_INDEXED, "DrawIndexed");
+        disable_detour!(VS_SET_SHADER, "VSSetShader");
+        disable_detour!(CREATE_VERTEX_SHADER, "CreateVertexShader");
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    });
+    tracing::info!("single-pass: COM detours uninstalled");
+}
+
 /// Install the `RSSetViewports`/`RSSetScissorRects` duplication detours on the immediate-context
 /// vtable, once. Patching runs under a thread suspender (all other threads paused) so none can be
 /// executing the target's prologue while it is rewritten. Called only from the active render path, so
 /// a normal (single-pass-off) session never installs it.
 fn ensure_viewport_detours() {
-    if RS_SET_VIEWPORTS.get().is_some() {
-        return;
+    if RS_SET_VIEWPORTS.get().is_some() || crate::is_shutting_down() {
+        return; // already installed, or tearing down -- never (re)install during eject
     }
     // SAFETY: reads the live immediate-context vtable; the two slots are the standard D3D11 layout,
     // and the detour targets are enabled under a thread suspender.
