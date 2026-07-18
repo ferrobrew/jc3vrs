@@ -244,6 +244,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             // types into the G-buffer, which the render-pass-range hook captures for the two near
             // dispatches to composite.
             let share_frame = crate::far_field::share_configured();
+            let collapsed = crate::stereo::single_pass::collapse_active();
             let present_eye = usize::from(!present_eye_0);
             TraceState::record(TraceEvent::FrameBegin {
                 stereo: true,
@@ -252,7 +253,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             });
 
             // (eye index, far phase) per dispatch, in order.
-            let dispatches: &[(usize, bool)] = if share_frame {
+            let dispatches: &[(usize, bool)] = if collapsed {
+                // Single-pass collapse: one walk produces both eyes (cb13 + viewport routing +
+                // instance doubling), so there is no per-eye second dispatch and no far-field share
+                // prepend -- the between-eye snapshot/restore below is skipped for free (it is gated
+                // on `ordinal > 0`). The capture then splits the one back buffer into both eyes.
+                &[(0, false)]
+            } else if share_frame {
                 &[(0, true), (0, false), (1, false)]
             } else {
                 &[(0, false), (1, false)]
@@ -307,8 +314,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 // While a VR session runs there is no desktop present at all (the compositor
                 // presents), so block the flip for every dispatch; otherwise `present_eye_0` picks
                 // which eye reaches the game window. The far dispatch never presents.
+                //
+                // The eye-parity block must not apply under the collapse: the one dispatch is tagged
+                // eye 0 but carries *both* eyes, so blocking it whenever `present_eye_0` is off (the
+                // default) would block every flip there is, and the game window would keep showing
+                // whatever it last presented while the engine ran on at full rate.
                 BLOCK_FLIP.store(
-                    vr_running || far_phase || present_eye != eye,
+                    vr_running || far_phase || (!collapsed && present_eye != eye),
                     Ordering::Relaxed,
                 );
                 tracing::trace!(

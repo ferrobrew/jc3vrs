@@ -186,7 +186,13 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // m_TransformF and rebuild the view-projections, so the offset reaches the full-m_ViewProjection
     // shaders (transparents/sky/water), not just the camera-relative opaque path.
     if is_render_camera && stereo_active {
-        if let Some(vr) = vr_eye {
+        if crate::stereo::single_pass::collapse_active() {
+            // Collapsed single-pass keeps the render camera centered: both eyes are produced from the
+            // per-eye `cb13` in the patched vertex shaders, so applying a per-eye world offset here
+            // would double the parallax. Zero the shadow-anchor delta to match the centered camera
+            // (the sun-cascade correction expects whatever offset this path would otherwise add).
+            STEREO_STATE.lock().shadow_anchor_delta = glam::Vec3::ZERO;
+        } else if let Some(vr) = vr_eye {
             unsafe {
                 if let Some(camera) = camera.as_mut() {
                     // Fallback convention: write the already-reverse-Z'd off-axis projection now

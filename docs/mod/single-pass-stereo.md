@@ -209,8 +209,9 @@ the pointer), and viewport routing for odd-`SV_InstanceID` primitives (fixed by 
 COM-vtable detour that mirrors the bound viewport into slot 1, catching the shadow cascades' raw
 viewport sets that `SetRenderSetup` misses).
 
-**Milestone B — render machinery BUILT (compile-clean, off by default), frame-structure change
-pending.** Gated behind `stereo.single_pass_dual_eye`, applied only in the G-buffer geometry range:
+**Milestone B — dual-eye machinery + collapse BUILT (compile-clean, off by default); double-wide RT
+resize pending.** Gated behind `stereo.single_pass_dual_eye`, applied only in the G-buffer geometry
+range:
 - `cb13` filled with **distinct** per-eye view-projections, computed in mod code from the pristine
   center transform + per-eye `EyeRenderParams` (replicating the double-draw camera math);
 - the `RSSetViewports` detour splits the bound viewport into **left/right halves** for the eye
@@ -218,25 +219,52 @@ pending.** Gated behind `stereo.single_pass_dual_eye`, applied only in the G-buf
 - a `DrawIndexed` COM-vtable detour **promotes non-instanced draws to 2 instances** so
   `SV_InstanceID & 1` selects the eye.
 
-Testable now as a **diagnostic** (no collapse/double-wide): enabling `single_pass_dual_eye` makes
+Testable as a **diagnostic** (no collapse/double-wide): enabling `single_pass_dual_eye` makes
 each eye show a squished side-by-side of *both* eye viewpoints — if the two halves show visibly
 different viewpoints and nothing crashes, the dual-eye `cb13` + instancing + eye-half routing all
-work. It is not a clean image until the two remaining, tightly-coupled pieces land:
-- **Double-wide render target + capture split (`single_pass_double_wide`).** Re-create the scene RTs
-  at 2× per-eye width (extend the per-eye `CreateRenderSetups` re-init in `vr::resolution`), so each
-  eye-half is full-res; then split the capture (`hooks/graphics_engine/graphics_engine.rs`
-  `render_engine_post_draw`) to copy the left half → eye-0 texture, right half → eye-1. The fiddly
-  part is the back-buffer-tied setups (`docs/engine/render-setups-reinit.md` §4).
-- **Collapse to a single walk (`single_pass_collapse`).** In `hooks/game.rs` `game_update_render`,
-  run one `game.Draw` (dispatch list `&[(0, false)]`) instead of the per-eye loop and drop the
-  between-eye snapshot/restore; and stop `hooks/camera.rs` `setup_render_camera` from applying the
-  per-eye offset to the render camera (the center stays center; both eyes come from `cb13`). This is
-  the actual draw-submission win and the riskiest change — best done with in-game iteration, like
-  Milestone A.
+work.
+
+- **Collapse to a single walk (`single_pass_collapse`) — BUILT.** When `collapse_active()`,
+  `hooks/game.rs` `game_update_render` runs one `game.Draw` (dispatch list `&[(0, false)]`) instead of
+  the per-eye loop, so the between-eye snapshot/restore (gated on `ordinal > 0`) is skipped for free;
+  `hooks/camera.rs` `setup_render_camera` keeps the render camera centered (no per-eye world offset —
+  both eyes come from `cb13`, and the shadow-anchor delta is zeroed to match); and
+  `hooks/graphics_engine/graphics_engine.rs` `render_engine_post_draw` splits the one back buffer into
+  the two eye textures (`CopySubresourceRegion` of each eye-half). This is the actual draw-submission
+  win and the riskiest change (in-game iteration, like Milestone A). It requires only
+  `single_pass_dual_eye`, not double-wide: without double-wide each eye-half is squished and fills only
+  the left portion of its eye texture, and the HUD reaches the left eye only — a bring-up state, not
+  the finished look.
+
+  **Eye routing spans the whole camera scene, and the viewport split moves to draw time.** The
+  double-draw ran the *entire* frame per eye, so the mod only had to route the G-buffer geometry range
+  (`RP_Z_OCCLUDERS..RP_FIRST_SCENE`) — everything after (deferred lighting, water, sky, transparents,
+  post) got a second full dispatch. One walk has no second dispatch, so the later *geometry* passes
+  (water planes at `RP_REFLECTIVE_WATER_PLANES`, sky `RP_STARS..RP_FOG_GRADIENT`, transparents) must
+  route to the eyes too, while the *fullscreen* deferred-lighting/post passes interleaved with them
+  must keep the full width (they light/resolve the whole double-wide target in one pass). A single
+  contiguous pass range cannot separate the two, so under collapse: (a) `render_pass.rs` marks the
+  whole camera scene as routed (`first >= RP_Z_OCCLUDERS`, which excludes the shadow/reflection
+  prepasses at `<= RP_LAST_PREPASS` that reuse the same shaders under the sun/reflection view); and
+  (b) the viewport split moves from pass-level (`rs_set_viewports_detour`, which now only records the
+  full viewport under collapse) to **draw-level** (`ensure_collapse_viewport`), re-binding only on a
+  transition: `draw_indexed_detour` splits into the L/R halves for a **patched** geometry draw (and
+  leaves unpatched `DrawIndexed` geometry on whatever viewport is bound), while `draw_detour` — the
+  non-indexed `Draw` (vtable slot 13), which is how the **fullscreen** deferred-lighting/post passes
+  render — resets to the **full** width. Without the `Draw` reset the lighting pass would inherit the
+  eye-half the previous geometry draw left bound and light only one eye, leaving the other eye's
+  opaque geometry black. (Particle `DrawInstanced` and already-instanced `DrawIndexedInstanced` scene
+  draws are not yet routed.)
+- **Double-wide render target (`single_pass_double_wide`) — PENDING.** Re-create the scene RTs at 2×
+  per-eye width (extend the per-eye `CreateRenderSetups` re-init in `vr::resolution`) so each eye-half
+  is full-res and the collapse's capture-split sub-region copy fills each eye texture exactly (with the
+  back buffer 2× wide, `half_w` == per-eye width == eye-texture width). The fiddly part is the
+  back-buffer-tied setups (`docs/engine/render-setups-reinit.md` §4).
 
 Bring-up order on wake: `single_pass` → Reload shaders (Milestone A, should look identical) →
-`single_pass_dual_eye` (diagnostic squished double-image) → `single_pass_double_wide` →
-`single_pass_collapse` (clean full-res single-pass stereo).
+`single_pass_dual_eye` (diagnostic squished double-image) → `single_pass_collapse` (single walk,
+squished but no double-vision, both eyes distinct) → `single_pass_double_wide` (clean full-res
+single-pass stereo).
 
 ## Risk ranking
 

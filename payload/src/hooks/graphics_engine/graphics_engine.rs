@@ -10,7 +10,10 @@ use jc3gi::{
     ui::ui_manager::GetIUIManager,
 };
 use re_utilities::hook_library::HookLibrary;
-use windows::Win32::System::Threading::{EnterCriticalSection, LeaveCriticalSection};
+use windows::Win32::{
+    Graphics::Direct3D11::D3D11_BOX,
+    System::Threading::{EnterCriticalSection, LeaveCriticalSection},
+};
 
 use crate::debug::trace::{TraceEvent, TraceState};
 
@@ -143,11 +146,41 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
 
         // Final back buffer for this eye. (The HDR scene / MainColor is captured earlier, at the
         // start of the post chain, before it gets read and recycled -- see capture_main_color.)
-        if let (Some(dst), Some(src)) = (
-            lock.texture(index),
-            graphics_engine.m_BackBufferLinear.as_ref(),
-        ) {
-            context.m_Context.CopyResource(dst, &src.m_Texture);
+        if let Some(src) = graphics_engine.m_BackBufferLinear.as_ref() {
+            if crate::stereo::single_pass::collapse_active() {
+                // The collapsed single walk rendered both eyes into this one (viewport-split) back
+                // buffer -- left half eye 0, right half eye 1 -- so copy each half into its eye
+                // texture. `half_w` is a per-eye-width region: with `single_pass_double_wide` the back
+                // buffer is 2x per-eye wide, so each half fills its full-res eye texture; without it
+                // each half is squished and fills only the left portion of the eye texture (a
+                // bring-up limitation, not the finished look).
+                let half_w = u32::from(src.m_Width) / 2;
+                let height = u32::from(src.m_Height);
+                for eye in 0..2u32 {
+                    if let Some(dst) = lock.texture(eye as usize) {
+                        let region = D3D11_BOX {
+                            left: eye * half_w,
+                            top: 0,
+                            front: 0,
+                            right: (eye + 1) * half_w,
+                            bottom: height,
+                            back: 1,
+                        };
+                        context.m_Context.CopySubresourceRegion(
+                            dst,
+                            0,
+                            0,
+                            0,
+                            0,
+                            &src.m_Texture,
+                            0,
+                            Some(&region),
+                        );
+                    }
+                }
+            } else if let Some(dst) = lock.texture(index) {
+                context.m_Context.CopyResource(dst, &src.m_Texture);
+            }
         }
 
         LeaveCriticalSection(context.m_Mutex);

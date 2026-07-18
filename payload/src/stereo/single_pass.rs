@@ -180,6 +180,15 @@ pub fn dual_eye_active() -> bool {
     active() && Config::lock_query(|c| c.stereo.single_pass_dual_eye)
 }
 
+/// Whether the per-eye double-draw has been collapsed to a single G-buffer walk: one `game.Draw`
+/// produces both eyes (via [`dual_eye_active`]'s `cb13` + viewport routing + instance doubling), the
+/// render camera stays centered (no per-eye offset -- both eyes come from `cb13`), and the capture
+/// splits the one back buffer into the two eye textures. Requires [`dual_eye_active`]; independent of
+/// `single_pass_double_wide`, which only upgrades each eye-half from squished to full resolution.
+pub fn collapse_active() -> bool {
+    dual_eye_active() && Config::lock_query(|c| c.stereo.single_pass_collapse)
+}
+
 /// Marks whether the render thread is currently inside the G-buffer geometry pass range
 /// (`RP_Z_OCCLUDERS..RP_FIRST_SCENE`), set around that `DrawRenderPassRange` call. The dual-eye
 /// viewport split and instance doubling apply only here -- so shadow/lighting/post passes, which
@@ -399,7 +408,8 @@ pub fn duplicate_current_viewport() {
 /// patched draw land in the same half. Called right after the range flag goes up (dual-eye only),
 /// this reads that bound viewport and re-sets it as left/right halves.
 pub fn apply_eye_split_viewport() {
-    if !(dual_eye_active() && in_gbuffer_range()) {
+    // Collapse routes per draw (`ensure_collapse_viewport`), so the pass-level pre-split is off there.
+    if collapse_active() || !(dual_eye_active() && in_gbuffer_range()) {
         return;
     }
     // SAFETY: runs on the render thread at the G-buffer range boundary; the device/context pointers
@@ -490,6 +500,17 @@ unsafe extern "system" fn rs_set_viewports_detour(
     let detour = RS_SET_VIEWPORTS.get().expect("set before enable");
     if active() && count == 1 && !viewports.is_null() {
         let vp = unsafe { *viewports };
+        if collapse_active() {
+            // Collapse: record the full viewport and bind both slots to it unsplit. The eye-split is
+            // applied per-draw in `draw_indexed_detour` via `ensure_collapse_viewport`, so the
+            // interleaved fullscreen lighting/post passes (which do not route to an eye) keep the full
+            // width while patched geometry gets the L/R halves. Binding both slots keeps a patched
+            // shader that writes `SV_ViewportArrayIndex` valid before the first split of a pass.
+            *COLLAPSE_FULL_VIEWPORT.lock() = Some(vp);
+            VIEWPORT_DUP.fetch_add(1, Ordering::Relaxed);
+            unsafe { detour.call(context, 2, [vp, vp].as_ptr()) };
+            return;
+        }
         let (slot0, slot1) = if dual_eye_active() && in_gbuffer_range() {
             // Route the two eyes to the left/right halves of the (double-wide) target.
             VIEWPORT_SPLIT.fetch_add(1, Ordering::Relaxed);
@@ -511,6 +532,38 @@ unsafe extern "system" fn rs_set_viewports_detour(
     }
 }
 
+/// In the collapsed single walk, bind the immediate-context viewport as the L/R eye halves (for a
+/// patched geometry draw) or the full width (for a fullscreen/unpatched draw), re-binding only on a
+/// transition. Derives the halves from the full viewport recorded by [`rs_set_viewports_detour`]; a
+/// no-op until the scene's first viewport bind records it.
+fn ensure_collapse_viewport(context: *mut c_void, split: bool) {
+    let Some(full) = *COLLAPSE_FULL_VIEWPORT.lock() else {
+        return;
+    };
+    let Some(detour) = RS_SET_VIEWPORTS.get() else {
+        return;
+    };
+    let viewports = if split {
+        VIEWPORT_SPLIT.fetch_add(1, Ordering::Relaxed);
+        let half = full.Width / 2.0;
+        let mut left = full;
+        left.Width = half;
+        let mut right = full;
+        right.Width = half;
+        right.TopLeftX = full.TopLeftX + half;
+        [left, right]
+    } else {
+        [full, full]
+    };
+    // SAFETY: `context` is the live immediate context; `detour.call` invokes the original
+    // RSSetViewports (the trampoline), so this does not re-enter the detour. Bound unconditionally
+    // (no split-state skip): the engine can change the viewport underneath us via a path we do not
+    // observe (a `count != 1` set), so a cached "already split" flag would go stale and let both
+    // instances land in one half -- the doubled/"same geometry twice" artifact. Re-binding per draw
+    // is cheap (a few hundred geometry draws per frame, far below the draw budget we are cutting).
+    unsafe { detour.call(context, 2, viewports.as_ptr()) };
+}
+
 unsafe extern "system" fn rs_set_scissor_rects_detour(
     context: *mut c_void,
     count: u32,
@@ -528,12 +581,15 @@ unsafe extern "system" fn rs_set_scissor_rects_detour(
 /// `ID3D11DeviceContext` vtable slots for the two indexed-draw entry points (verified against
 /// `windows`'s `ID3D11DeviceContext_Vtbl`: field 6 → slot 12, field 14 → slot 20).
 const DRAW_INDEXED_SLOT: usize = 12;
+const DRAW_SLOT: usize = 13;
 const DRAW_INDEXED_INSTANCED_SLOT: usize = 20;
 
 type DrawIndexedFn = unsafe extern "system" fn(*mut c_void, u32, u32, i32);
+type DrawFn = unsafe extern "system" fn(*mut c_void, u32, u32);
 type DrawIndexedInstancedFn = unsafe extern "system" fn(*mut c_void, u32, u32, u32, i32, u32);
 
 static DRAW_INDEXED: OnceLock<GenericDetour<DrawIndexedFn>> = OnceLock::new();
+static DRAW: OnceLock<GenericDetour<DrawFn>> = OnceLock::new();
 /// The raw `DrawIndexedInstanced` entry (not detoured), used to re-issue a promoted draw.
 static DRAW_INDEXED_INSTANCED_RAW: OnceLock<DrawIndexedInstancedFn> = OnceLock::new();
 
@@ -550,7 +606,16 @@ unsafe extern "system" fn draw_indexed_detour(
 ) {
     let detour = DRAW_INDEXED.get().expect("set before enable");
     if dual_eye_active() && in_gbuffer_range() {
-        if BOUND_VS_PATCHED.load(Ordering::Relaxed) {
+        let patched = BOUND_VS_PATCHED.load(Ordering::Relaxed);
+        // Collapse: split the viewport into L/R eye halves for a patched geometry draw, re-binding
+        // only on a transition (a pass boundary, not every draw). Unpatched `DrawIndexed` geometry is
+        // left on whatever viewport is bound -- the fullscreen reset-to-full lives in `draw_detour`
+        // (non-indexed `Draw`), so the deferred-lighting/post passes restore the full width without
+        // dragging unpatched *geometry* to full width and ghosting it across both eyes.
+        if collapse_active() && patched {
+            ensure_collapse_viewport(context, true);
+        }
+        if patched {
             PATCHED_DRAWS.fetch_add(1, Ordering::Relaxed);
             if let Some(instanced) = DRAW_INDEXED_INSTANCED_RAW.get() {
                 unsafe { instanced(context, index_count, 2, start_index, base_vertex, 0) };
@@ -561,6 +626,19 @@ unsafe extern "system" fn draw_indexed_detour(
         }
     }
     unsafe { detour.call(context, index_count, start_index, base_vertex) };
+}
+
+/// Handle a non-indexed `DrawIndexed` sibling -- `Draw` (vtable slot 13). The fullscreen passes
+/// (deferred lighting, screen-space effects, post) draw a fullscreen triangle this way, and under
+/// collapse they must cover the **full** target, not the eye-half the previous patched geometry draw
+/// left the viewport split to. Reset the viewport to full before the draw. Outside collapse (or the
+/// camera scene) this is a straight pass-through.
+unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, start_vertex: u32) {
+    if collapse_active() && in_gbuffer_range() {
+        ensure_collapse_viewport(context, false);
+    }
+    let detour = DRAW.get().expect("set before enable");
+    unsafe { detour.call(context, vertex_count, start_vertex) };
 }
 
 /// `ID3D11Device::CreateVertexShader` (device vtable slot 12) and `ID3D11DeviceContext::VSSetShader`
@@ -678,6 +756,7 @@ pub fn uninstall_com_detours() {
         disable_detour!(RS_SET_VIEWPORTS, "RSSetViewports");
         disable_detour!(RS_SET_SCISSOR_RECTS, "RSSetScissorRects");
         disable_detour!(DRAW_INDEXED, "DrawIndexed");
+        disable_detour!(DRAW, "Draw");
         disable_detour!(VS_SET_SHADER, "VSSetShader");
         disable_detour!(CREATE_VERTEX_SHADER, "CreateVertexShader");
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
@@ -713,6 +792,7 @@ fn ensure_viewport_detours() {
             std::mem::transmute(*vtable.add(RS_SET_SCISSOR_RECTS_SLOT));
         let draw_indexed_target: DrawIndexedFn =
             std::mem::transmute(*vtable.add(DRAW_INDEXED_SLOT));
+        let draw_target: DrawFn = std::mem::transmute(*vtable.add(DRAW_SLOT));
         let draw_indexed_instanced: DrawIndexedInstancedFn =
             std::mem::transmute(*vtable.add(DRAW_INDEXED_INSTANCED_SLOT));
         let vs_set_shader_target: VsSetShaderFn =
@@ -724,12 +804,14 @@ fn ensure_viewport_detours() {
             Ok(viewports_detour),
             Ok(scissors_detour),
             Ok(draw_indexed_detour_handle),
+            Ok(draw_detour_handle),
             Ok(vs_set_shader_detour_handle),
             Ok(create_vertex_shader_detour_handle),
         ) = (
             GenericDetour::new(viewports_target, rs_set_viewports_detour),
             GenericDetour::new(scissors_target, rs_set_scissor_rects_detour),
             GenericDetour::new(draw_indexed_target, draw_indexed_detour),
+            GenericDetour::new(draw_target, draw_detour),
             GenericDetour::new(vs_set_shader_target, vs_set_shader_detour),
             GenericDetour::new(create_vertex_shader_target, create_vertex_shader_detour),
         )
@@ -744,12 +826,14 @@ fn ensure_viewport_detours() {
         let _ = RS_SET_VIEWPORTS.set(viewports_detour);
         let _ = RS_SET_SCISSOR_RECTS.set(scissors_detour);
         let _ = DRAW_INDEXED.set(draw_indexed_detour_handle);
+        let _ = DRAW.set(draw_detour_handle);
         let _ = VS_SET_SHADER.set(vs_set_shader_detour_handle);
         let _ = CREATE_VERTEX_SHADER.set(create_vertex_shader_detour_handle);
         let _ = ThreadSuspender::for_block(|| {
             RS_SET_VIEWPORTS.get().expect("just set").enable().ok();
             RS_SET_SCISSOR_RECTS.get().expect("just set").enable().ok();
             DRAW_INDEXED.get().expect("just set").enable().ok();
+            DRAW.get().expect("just set").enable().ok();
             VS_SET_SHADER.get().expect("just set").enable().ok();
             CREATE_VERTEX_SHADER.get().expect("just set").enable().ok();
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
@@ -774,6 +858,11 @@ static UNPATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static DRAW_SPLIT_LOG: AtomicUsize = AtomicUsize::new(0);
 static VIEWPORT_SPLIT: AtomicUsize = AtomicUsize::new(0);
 static VIEWPORT_DUP: AtomicUsize = AtomicUsize::new(0);
+
+/// The last full (unsplit) viewport bound during a collapsed camera scene, recorded by
+/// [`rs_set_viewports_detour`] so [`ensure_collapse_viewport`] can derive the L/R eye halves at draw
+/// time. `None` until the scene's first viewport bind.
+static COLLAPSE_FULL_VIEWPORT: Mutex<Option<D3D11_VIEWPORT>> = Mutex::new(None);
 
 static CAPABILITY: AtomicU8 = AtomicU8::new(Capability::Unprobed as u8);
 static PATCHED: AtomicUsize = AtomicUsize::new(0);

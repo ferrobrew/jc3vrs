@@ -229,9 +229,13 @@ pub struct StereoConfig {
     /// per-eye `CreateRenderSetups` re-init at a doubled width, and reads each eye from its half of the
     /// double-wide target on capture. Experimental; the back-buffer-tied setups are the fiddly part.
     pub single_pass_double_wide: bool,
-    /// Milestone B step (requires the above): **collapse** the per-eye double-draw to a single
-    /// `game.Draw` walk -- the actual draw-submission win. Drops the between-eye snapshot/restore.
-    /// The riskiest step; last to enable during bring-up.
+    /// Milestone B step (requires [`single_pass_dual_eye`](Self::single_pass_dual_eye)): **collapse**
+    /// the per-eye double-draw to a single `game.Draw` walk -- the actual draw-submission win. One
+    /// walk produces both eyes (via the dual-eye `cb13` + viewport routing + instance doubling); the
+    /// render camera stays centered, the between-eye snapshot/restore is dropped, and the capture
+    /// splits the one back buffer into both eye textures. Works without
+    /// [`single_pass_double_wide`](Self::single_pass_double_wide) (each eye-half is then squished);
+    /// with it, each half is full resolution. The riskiest step; last to enable during bring-up.
     pub single_pass_collapse: bool,
     /// Census-only mode for [`single_pass`](Self::single_pass): run the vertex-shader stereo rewrite
     /// on every shader at creation and tally the outcomes (patched / no per-eye references / errored)

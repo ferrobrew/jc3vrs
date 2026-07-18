@@ -188,19 +188,25 @@ fn draw_render_pass_range(
         }
         return;
     }
-    // Single-pass stereo (Milestone B): mark the G-buffer geometry range so the dual-eye viewport
-    // split and instance doubling apply only here, not to the shadow/lighting/post passes that reuse
-    // the same patched shaders. A no-op unless dual-eye single-pass is active.
-    let gbuffer_geometry = crate::stereo::single_pass::dual_eye_active()
+    // Single-pass stereo (Milestone B): mark the camera-scene geometry range so the dual-eye cb13,
+    // viewport split, and instance doubling apply to it. `first >= RP_Z_OCCLUDERS` selects the main
+    // camera scene, excluding the shadow/reflection prepasses (<= RP_LAST_PREPASS) that reuse the same
+    // patched shaders under a different (sun/reflection) view. Without collapse the range is just the
+    // G-buffer (`..RP_FIRST_SCENE`), a diagnostic that renders each eye into a half; with collapse it
+    // extends to the whole camera scene so the later geometry passes (water, sky, transparents) route
+    // to the eyes too -- there the viewport split moves to draw time (patched geometry only), so the
+    // interleaved fullscreen lighting/post passes keep the full width. A no-op unless dual-eye is on.
+    let scene_geometry = crate::stereo::single_pass::dual_eye_active()
         && first >= RP_Z_OCCLUDERS
-        && last <= RP_FIRST_SCENE;
-    if gbuffer_geometry {
+        && (crate::stereo::single_pass::collapse_active() || last <= RP_FIRST_SCENE);
+    if scene_geometry {
         crate::stereo::single_pass::set_gbuffer_range(true);
         // The main G-buffer viewport was bound before this range flag went up, so re-split it now.
+        // (A no-op under collapse, which splits per-draw instead.)
         crate::stereo::single_pass::apply_eye_split_viewport();
     }
     run_scene_range(first, last, &draw);
-    if gbuffer_geometry {
+    if scene_geometry {
         crate::stereo::single_pass::set_gbuffer_range(false);
         crate::stereo::single_pass::log_draw_split();
     }

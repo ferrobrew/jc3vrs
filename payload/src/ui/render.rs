@@ -754,6 +754,11 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 ui.checkbox(
                     &mut cfg.stereo.single_pass_collapse,
                     "Collapse to a single game.Draw walk (the actual perf win; riskiest)",
+                )
+                .on_hover_text(
+                    "One walk renders both eyes: centered camera, no between-eye restore, the \
+                     back buffer split into the two eye textures. Without double-wide each eye is \
+                     squished/half-filled; unpatched geometry and the HUD reach the left eye only.",
                 );
             });
         });
