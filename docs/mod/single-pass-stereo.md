@@ -198,6 +198,46 @@ VS (they use `cb0`, `cb2`, `cb12`).
   CPU dual-upload + GPU-indirect compute pre-pass (Phase 3) — none are offline-verifiable, so they
   stay specified here rather than speculatively built.
 
+## Milestone status (in-game bring-up)
+
+**Milestone A — VALIDATED in-game.** Substitute the patched VS + mirror the current view into a
+mod-owned `cb13`, no double-wide/instancing/collapse yet: renders identically to the double-draw
+across the whole frame (scene + shadows). Proved the rewriter produces DXVK-accepted shaders, the
+`cb13` upload/layout, the shadow-safe view tracking, and the viewport-routing infra. Bugs shaken out
+along the way: the `m_Size` truncation (substituted blob is larger — must repoint length, not just
+the pointer), and viewport routing for odd-`SV_InstanceID` primitives (fixed by an `RSSetViewports`
+COM-vtable detour that mirrors the bound viewport into slot 1, catching the shadow cascades' raw
+viewport sets that `SetRenderSetup` misses).
+
+**Milestone B — render machinery BUILT (compile-clean, off by default), frame-structure change
+pending.** Gated behind `stereo.single_pass_dual_eye`, applied only in the G-buffer geometry range:
+- `cb13` filled with **distinct** per-eye view-projections, computed in mod code from the pristine
+  center transform + per-eye `EyeRenderParams` (replicating the double-draw camera math);
+- the `RSSetViewports` detour splits the bound viewport into **left/right halves** for the eye
+  routing (instead of two identical copies);
+- a `DrawIndexed` COM-vtable detour **promotes non-instanced draws to 2 instances** so
+  `SV_InstanceID & 1` selects the eye.
+
+Testable now as a **diagnostic** (no collapse/double-wide): enabling `single_pass_dual_eye` makes
+each eye show a squished side-by-side of *both* eye viewpoints — if the two halves show visibly
+different viewpoints and nothing crashes, the dual-eye `cb13` + instancing + eye-half routing all
+work. It is not a clean image until the two remaining, tightly-coupled pieces land:
+- **Double-wide render target + capture split (`single_pass_double_wide`).** Re-create the scene RTs
+  at 2× per-eye width (extend the per-eye `CreateRenderSetups` re-init in `vr::resolution`), so each
+  eye-half is full-res; then split the capture (`hooks/graphics_engine/graphics_engine.rs`
+  `render_engine_post_draw`) to copy the left half → eye-0 texture, right half → eye-1. The fiddly
+  part is the back-buffer-tied setups (`docs/engine/render-setups-reinit.md` §4).
+- **Collapse to a single walk (`single_pass_collapse`).** In `hooks/game.rs` `game_update_render`,
+  run one `game.Draw` (dispatch list `&[(0, false)]`) instead of the per-eye loop and drop the
+  between-eye snapshot/restore; and stop `hooks/camera.rs` `setup_render_camera` from applying the
+  per-eye offset to the render camera (the center stays center; both eyes come from `cb13`). This is
+  the actual draw-submission win and the riskiest change — best done with in-game iteration, like
+  Milestone A.
+
+Bring-up order on wake: `single_pass` → Reload shaders (Milestone A, should look identical) →
+`single_pass_dual_eye` (diagnostic squished double-image) → `single_pass_double_wide` →
+`single_pass_collapse` (clean full-res single-pass stereo).
+
 ## Risk ranking
 
 1. Baked-WVP per-type constant buffers (~105 VS; touches CPU code of ~12 render-block types).
