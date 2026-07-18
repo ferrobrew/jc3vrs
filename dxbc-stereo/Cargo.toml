@@ -1,0 +1,10 @@
+[package]
+name = "dxbc-stereo"
+version = "0.1.0"
+edition = "2024"
+
+# Pure, portable DXBC bytecode surgery for single-pass stereo (issue: draw-submission bottleneck).
+# No platform deps, so it unit-tests natively against the game's extracted vertex shaders even though
+# its consumer (the payload) is a Windows cdylib.
+
+[dependencies]
