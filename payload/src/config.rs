@@ -499,8 +499,8 @@ impl ExposureConfig {
 pub struct FarFieldConfig {
     /// Master toggle: register the depth-bucket boundary on the passes in range and compute the
     /// near/far split (and the UI counters) each draw. Off restores each pass's stock single
-    /// bucket. On by default in `Share` mode: the far field renders once per frame and is
-    /// composited under both eyes (a no-op outside stereo).
+    /// bucket. Off by default: `Share` mode currently produces severe compositing artifacts in
+    /// VR (issue pending) and is opt-in until that is resolved.
     pub enabled: bool,
     /// The near/far boundary in metres (instance-centre distance to the sort camera). Large
     /// objects whose centre sits beyond this but whose extent reaches nearer are classified far,
@@ -521,7 +521,7 @@ pub struct FarFieldConfig {
 impl FarFieldConfig {
     pub const fn new() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             threshold_m: 250.0,
             gated_types: String::new(),
             mode: FarFieldMode::Share,
