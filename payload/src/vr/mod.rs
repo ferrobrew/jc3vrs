@@ -56,6 +56,7 @@ pub mod foveation;
 mod frame;
 mod mirror;
 mod resolution;
+pub mod tail;
 
 pub use blit::present_and_submit;
 pub use mirror::present_mirror;

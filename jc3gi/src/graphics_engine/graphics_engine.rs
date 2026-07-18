@@ -134,9 +134,24 @@ pub struct GraphicsEngine {
     /// Whether the engine has finished its system initialisation. [`ResizeBuffers`](GraphicsEngine::ResizeBuffers)
     /// only applies a resize inline once this is set.
     pub m_HasBeenInitialized: bool,
-    _field_9: [u8; 15],
-    pub m_CPUFinishedDrawingEvent: u32,
-    _field_1c: [u8; 20],
+    _field_9: [u8; 11],
+    /// Set by the tail of [`HandleDrawThreadTask`](GraphicsEngine::HandleDrawThreadTask) once the
+    /// frame's CPU draw has completed (just before
+    /// [`m_CPUFinishedDrawingEvent`](GraphicsEngine::m_CPUFinishedDrawingEvent) is signalled).
+    /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) returns immediately when
+    /// set and otherwise waits on the event.
+    pub m_CPUDrawFinished: bool,
+    _field_15: [u8; 3],
+    /// The Win32 event `HandleDrawThreadTask` signals at its tail;
+    /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) waits on it (infinite)
+    /// while [`m_CPUDrawFinished`](GraphicsEngine::m_CPUDrawFinished) is clear.
+    pub m_CPUFinishedDrawingEvent: *mut ::std::ffi::c_void,
+    /// When a draw fragment is outstanding, points at its completion signal (a `u32` that the
+    /// fragment sets non-zero); null otherwise.
+    /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) drains it first, via the
+    /// work-stealing `cpu_fragment::CpuFragmentWaitUntilSignalIsNonZero`.
+    pub m_DrawFragmentSignal: *mut u32,
+    _field_28: [u8; 8],
     /// Completion signal for the async draw-dispatch CPU fragment that
     /// [`DispatchDraw`](GraphicsEngine::DispatchDraw) kicks to run the render passes. The fragment sets
     /// it non-zero on completion; the engine waits on it (via
@@ -239,6 +254,13 @@ impl GraphicsEngine {
 }
 impl GraphicsEngine {
     pub const WaitForCPUDrawToFinish_ADDRESS: usize = 0x1400C4690;
+    /// Blocks until the frame's CPU draw has completed: first drains an outstanding draw
+    /// fragment via [`m_DrawFragmentSignal`](GraphicsEngine::m_DrawFragmentSignal) (a
+    /// work-stealing wait -- see
+    /// `cpu_fragment::CpuFragmentWaitUntilSignalIsNonZero`),
+    /// then waits on [`m_CPUFinishedDrawingEvent`](GraphicsEngine::m_CPUFinishedDrawingEvent)
+    /// unless [`m_CPUDrawFinished`](GraphicsEngine::m_CPUDrawFinished) is already set. Because of
+    /// the work-stealing drain, only threads the fragment system knows may call it.
     pub unsafe fn WaitForCPUDrawToFinish(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(

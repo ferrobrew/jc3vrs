@@ -98,6 +98,11 @@ fn initialize_startup() {
 
 /// Called to undo `initialize_startup` and eject
 fn shutdown_startup() {
+    // Stop the frame-tail worker before anything is torn down: a thread still alive at
+    // `module::exit` would be running in an unmapped image. Any in-flight tail finishes first
+    // (the VR teardown in `shutdown_from_game` already synchronized on the runtime lock).
+    vr::tail::shutdown();
+
     // The cleanups cleared render-thread-driven config flags (e.g. the HUD redirect). Give the still-
     // live hooks a few frames to tick those changes through -- the per-frame restore runs on the
     // render thread -- before uninstalling.

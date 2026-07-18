@@ -132,6 +132,13 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             // The interactive egui debug panel (issue #24), an independent floating surface drawn
             // right after the gameplay HUD. A no-op unless a session is running and it is enabled.
             crate::hud::egui_panel::draw_quad(&context.m_Context, device, back_buffer, index);
+            // Redirect the flat mirror overlay into an offscreen texture on eye 0 (consuming this
+            // frame's egui output) so the desktop mirror can composite it from the deferred frame
+            // tail's thread. A no-op unless a session renders, the mirror is on, and the panel is
+            // off. See `crate::hud::mirror_overlay`.
+            if index == 0 {
+                crate::hud::mirror_overlay::render(&context.m_Context, device, back_buffer);
+            }
         }
 
         // Final back buffer for this eye. (The HDR scene / MainColor is captured earlier, at the

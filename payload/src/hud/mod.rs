@@ -37,6 +37,7 @@ pub mod cursor;
 pub mod depth;
 pub(crate) mod egui_panel;
 pub mod markers;
+pub(crate) mod mirror_overlay;
 pub(crate) mod pointer;
 mod quad;
 pub mod scaleform;

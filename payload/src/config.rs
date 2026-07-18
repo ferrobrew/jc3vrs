@@ -105,6 +105,16 @@ pub struct StereoConfig {
     /// deterministically rather than mask a latent fault. Toggle off to reproduce the original crash for
     /// an A/B.
     pub drain_draw_fragment: bool,
+    /// Defer the frame tail -- the final dispatch's draw-thread drain, the VR eye blit and submit,
+    /// and the desktop mirror -- onto a dedicated tail thread, so the next frame's sim tick runs on
+    /// the main thread while the draw thread finishes eye 1 and the GPU drains its tail (the
+    /// frame-boundary starvation bubble the profiler measures as "GPU idle"). Safe by
+    /// construction: the next frame's `vr::frame_begin` blocks on the VR runtime lock, which the
+    /// tail releases only after the blit is recorded, so nothing downstream can race the in-flight
+    /// draw or overwrite the capture textures early. Falls back to the inline tail while the F10
+    /// capture or a render trace is active (both need the eyes drained on the main thread). The
+    /// mirror moves before the XR submit in this mode, costing it ~0.4 ms of HMD submit latency.
+    pub defer_frame_tail: bool,
     /// Correct the sun-shadow cascade anchor per eye. The cascaded shadow map is fit to the shared
     /// center camera, but the material shaders anchor the cascade lookup at the *per-eye* camera
     /// position (`cb0[4]`), so each eye's shadow is shifted by `M * (eyePos - centerPos)` -- the visible
@@ -425,6 +435,7 @@ impl StereoConfig {
             gate_hand_back_buffers: false,
             gate_eye1_dt: true,
             drain_draw_fragment: true,
+            defer_frame_tail: false,
             fix_shadow_cascade_anchor: true,
             diagnose_rt_hashes: false,
             diagnose_rt_screenshots: true,

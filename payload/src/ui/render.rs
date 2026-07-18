@@ -589,6 +589,14 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             "Drain draw-dispatch fragment between eyes (open-world crash fix)",
         );
         ui.checkbox(
+            &mut cfg.stereo.defer_frame_tail,
+            "Defer the frame tail to a worker (overlap next sim with the GPU tail)",
+        )
+        .on_hover_text(
+            "Moves the final drain, VR blit/submit, and mirror onto a tail thread so the next \
+             frame's sim starts immediately. A/B with the profiler's 'GPU idle' number.",
+        );
+        ui.checkbox(
             &mut cfg.stereo.restore_frame_counters,
             "Restore frame counters between eyes (fixes jitter/parity flicker)",
         );

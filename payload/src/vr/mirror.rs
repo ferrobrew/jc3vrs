@@ -162,11 +162,11 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
         // the engine flip path, which `BLOCK_FLIP` suppresses in VR. Hidden while the F10 capture
         // window is up so recordings stay clean.
         //
-        // With the interactive floating panel (issue #24) the egui frame has already been tessellated
-        // into the panel texture on eye 0, so its single-use output is spent: composite that panel
-        // texture as a flat, letterboxed, alpha-blended overlay for a legible desktop copy instead of
-        // calling `render` (which would find no output, or on a race redraw a mis-sized flat frame).
-        // Off, the flat overlay renders exactly as before.
+        // The egui frame is tessellated once per frame on eye 0 into an offscreen texture -- the
+        // panel texture with the floating panel up (issue #24), else the flat mirror-overlay texture
+        // (`crate::hud::mirror_overlay`) -- so here we only composite that texture as an
+        // alpha-blended overlay. Never `EguiState::render` (a second egui pass that mutates shared
+        // state), so this is safe from the deferred frame tail's thread as well as inline.
         if !crate::capture::is_active() {
             let panel = crate::config::Config::lock_query(|c| c.hud.egui_panel);
             if panel.enabled {
@@ -185,8 +185,15 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
                     );
                     mirror.draw_overlay(&context.m_Context, &rtv, &srv, overlay);
                 }
-            } else if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {
-                egui_state.render();
+            } else if let Some(srv) = crate::hud::mirror_overlay::overlay_srv() {
+                // The flat overlay texture is back-buffer-sized, so it composites 1:1 over the mirror.
+                let full = Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: buffer_size.0 as f32,
+                    height: buffer_size.1 as f32,
+                };
+                mirror.draw_overlay(&context.m_Context, &rtv, &srv, full);
             }
         }
 

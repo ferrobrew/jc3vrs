@@ -6,6 +6,12 @@ pub const CpuFragmentWaitUntilSignalIsNonZero_ADDRESS: usize = 0x141DFA730;
 /// returns immediately when the signal is already non-zero, so it is only safe to call when the
 /// matching fragment was actually kicked: below two primary threads the work runs inline and the signal
 /// is never raised, so guard the call with [`CpuPrimaryCount`] to avoid spinning forever.
+///
+/// The wait is **work-stealing**: while the signal is zero, the underlying `CpuFragmentWait` loop
+/// pops queued fragments off the global sync queue and runs them (`CpuFragmentRun`) on the
+/// *calling* thread, so the caller must be a thread the fragment system knows (a registered
+/// worker or the primary thread) — fragments executed on a foreign thread fault on the fragment
+/// system's per-thread state.
 pub unsafe fn CpuFragmentWaitUntilSignalIsNonZero(signal: *const u32) {
     unsafe {
         let f: unsafe extern "system" fn(signal: *const u32) = ::std::mem::transmute(

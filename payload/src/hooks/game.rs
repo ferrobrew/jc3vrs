@@ -178,6 +178,16 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         let stereo = stereo || vr_running;
         STEREO_STATE.lock().active = stereo;
 
+        // Whether this frame's tail (final drain, blit, mirror, submit) runs on the tail worker
+        // instead of inline, overlapping the next frame's sim with the draw thread's last walk and
+        // the GPU tail (see `vr::tail`). Requires a VR frame to hand over, and falls back to the
+        // inline tail while the F10 capture or a render trace needs the eyes drained here.
+        let defer_tail = stereo
+            && vr_frame.is_some()
+            && crate::config::Config::lock_query(|c| c.stereo.defer_frame_tail)
+            && !crate::debug::trace::tracing_active()
+            && !crate::capture::is_active();
+
         if stereo {
             #[cfg(feature = "profiler")]
             let snapshot_scope = puffin::profile_scope_custom!("Stereo snapshots");
@@ -316,7 +326,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 } else {
                     Phase::Eye1Drain
                 });
-                if let Some(ge) = GraphicsEngine::get() {
+                // The between-eye drains are mandatory (the next dispatch's restores mutate state
+                // the in-flight fragment reads); the *last* dispatch's drain moves to the tail
+                // worker when the tail is deferred.
+                let last_dispatch = ordinal + 1 == dispatches.len();
+                if !(defer_tail && last_dispatch)
+                    && let Some(ge) = GraphicsEngine::get()
+                {
                     #[cfg(feature = "profiler")]
                     puffin::profile_scope!("WaitForCPUDraw + drain");
                     ge.WaitForCPUDrawToFinish();
@@ -338,7 +354,14 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             }
             TraceState::end_frame();
 
-            reset_dispatch_state();
+            // The draw thread reads the per-dispatch stereo state (draw_index, far_phase) for the
+            // final dispatch asynchronously. Resetting it here would race that read when the tail
+            // is deferred (the main thread no longer drained the last dispatch), so eye 1 would
+            // render as eye 0 -- wrong camera, and its capture copies into eye 0's texture, leaving
+            // the right eye frozen. When deferring, the tail resets it after draining instead.
+            if !defer_tail {
+                reset_dispatch_state();
+            }
         } else {
             TraceState::record(TraceEvent::FrameBegin {
                 stereo: false,
@@ -359,7 +382,28 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
         // Submit the VR frame: blit each captured eye into its swapchain slice and end the XR frame
         // (world layer when rendered, empty otherwise). Consumes the frame context, releasing the
-        // OpenXR runtime lock so the next `vr::update` can proceed.
+        // OpenXR runtime lock so the next `vr::update` can proceed. With the tail deferred, the
+        // whole sequence (including the skipped final drain and the mirror) runs on the tail
+        // worker instead, and this thread returns straight to the next frame's sim.
+        let mut vr_frame = vr_frame.take();
+        if defer_tail && let Some(frame) = vr_frame.take() {
+            let job = Box::new(crate::vr::tail::TailJob {
+                frame,
+                vr_cfg: vr_cfg.clone(),
+                mirror: vr_running && vr_cfg.mirror,
+            });
+            if let Err(job) = crate::vr::tail::submit(job) {
+                // The worker is shutting down: fall back to the inline tail (drain first -- the
+                // final dispatch's drain was skipped above).
+                if let Some(ge) = GraphicsEngine::get() {
+                    ge.WaitForCPUDrawToFinish();
+                    drain_draw_thread_fragment(ge);
+                }
+                vr_frame = Some(job.frame);
+            }
+        }
+        // Whether the tail worker took the frame (and with it the mirror below).
+        let tail_deferred = defer_tail && vr_frame.is_none();
         if let Some(frame) = vr_frame.take() {
             #[cfg(feature = "profiler")]
             puffin::profile_scope!("VR present + submit");
@@ -382,7 +426,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // mandate: a vsynced mirror on a 60 Hz monitor would throttle the 90 Hz HMD loop (see
         // `crate::vr::mirror::present_mirror`). When no session runs the engine presents normally, so
         // the mirror is skipped and flatscreen behaviour (including present_eye_0) is unchanged.
-        if vr_running && vr_cfg.mirror {
+        if !tail_deferred && vr_running && vr_cfg.mirror {
             #[cfg(feature = "profiler")]
             puffin::profile_scope!("Desktop mirror");
             crate::vr::present_mirror(usize::from(vr_cfg.mirror_eye));
@@ -395,8 +439,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 /// index). Advanced once per scene dispatch, so we restore it between the two stereo Draws.
 /// Reset the per-dispatch stereo state to the frame's baseline: eye 0, no far phase, no share
 /// frame, ordinal 0 — so state from a share frame's last dispatch never leaks into the next
-/// frame's first dispatch (or into a non-stereo frame).
-fn reset_dispatch_state() {
+/// frame's first dispatch (or into a non-stereo frame). Called on the main thread inline, or from
+/// the tail worker after it drains the final dispatch (see [`crate::vr::tail`]).
+pub(crate) fn reset_dispatch_state() {
     let mut state = STEREO_STATE.lock();
     state.draw_index = 0;
     state.far_phase = false;
@@ -442,7 +487,7 @@ fn restore_effect_info(state: &EffectInfoState) {
 /// between the eyes' Draws, so eye 0's fragment must be drained here first -- otherwise it reads a torn
 /// per-camera context and faults (the intermittent open-world crash). Mirrors the engine's own guard so
 /// it cannot spin on a build that draws inline.
-unsafe fn drain_draw_thread_fragment(ge: &mut GraphicsEngine) {
+pub(crate) unsafe fn drain_draw_thread_fragment(ge: &mut GraphicsEngine) {
     if !crate::config::Config::lock_query(|c| c.stereo.drain_draw_fragment) {
         return;
     }
@@ -537,7 +582,7 @@ fn apply_sun_shadow_override(disable: bool) {
 /// Emit a VR frame-loop health line about once every [`VR_HEALTH_INTERVAL`]: the mean submitted
 /// frame time over the window and the fraction of frames the runtime asked to render. Logs are the
 /// only diagnostics a headset playtest has, so this stays cheap and steady rather than per-frame.
-fn log_vr_frame_health(should_render: bool) {
+pub(crate) fn log_vr_frame_health(should_render: bool) {
     let mut health = VR_FRAME_HEALTH.lock();
     let now = Instant::now();
     health.frames += 1;
