@@ -114,6 +114,8 @@ pub struct StereoConfig {
     /// draw or overwrite the capture textures early. Falls back to the inline tail while the F10
     /// capture or a render trace is active (both need the eyes drained on the main thread). The
     /// mirror moves before the XR submit in this mode, costing it ~0.4 ms of HMD submit latency.
+    /// On by default: validated in VR (both eyes correct, mirror UI intact) with a measured mean
+    /// and p95 frame-time win.
     pub defer_frame_tail: bool,
     /// Correct the sun-shadow cascade anchor per eye. The cascaded shadow map is fit to the shared
     /// center camera, but the material shaders anchor the cascade lookup at the *per-eye* camera
@@ -435,7 +437,7 @@ impl StereoConfig {
             gate_hand_back_buffers: false,
             gate_eye1_dt: true,
             drain_draw_fragment: true,
-            defer_frame_tail: false,
+            defer_frame_tail: true,
             fix_shadow_cascade_anchor: true,
             diagnose_rt_hashes: false,
             diagnose_rt_screenshots: true,
