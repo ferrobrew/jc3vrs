@@ -188,7 +188,19 @@ fn draw_render_pass_range(
         }
         return;
     }
+    // Single-pass stereo (Milestone B): mark the G-buffer geometry range so the dual-eye viewport
+    // split and instance doubling apply only here, not to the shadow/lighting/post passes that reuse
+    // the same patched shaders. A no-op unless dual-eye single-pass is active.
+    let gbuffer_geometry = crate::stereo::single_pass::dual_eye_active()
+        && first >= RP_Z_OCCLUDERS
+        && last <= RP_FIRST_SCENE;
+    if gbuffer_geometry {
+        crate::stereo::single_pass::set_gbuffer_range(true);
+    }
     run_scene_range(first, last, &draw);
+    if gbuffer_geometry {
+        crate::stereo::single_pass::set_gbuffer_range(false);
+    }
 }
 
 /// The first pass of the scene (lighting/main) block; the far dispatch stops before it.

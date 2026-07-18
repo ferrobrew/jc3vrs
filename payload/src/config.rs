@@ -215,6 +215,24 @@ pub struct StereoConfig {
     /// viewport-routing capability (see [`crate::stereo::single_pass::capability`]); forced off if
     /// absent.
     pub single_pass: bool,
+    /// Milestone B step (requires [`single_pass`](Self::single_pass)): make the two eyes actually
+    /// diverge. Fills `cb13` with **distinct** per-eye view-projections (slot 0 = eye 0, slot 1 =
+    /// eye 1) instead of both = the current view, splits the bound viewport into left/right **halves**
+    /// for `SV_ViewportArrayIndex` routing instead of two identical copies, and **doubles** the
+    /// instance count of the G-buffer geometry draws (so `SV_InstanceID & 1` selects the eye). On its
+    /// own -- without [`single_pass_double_wide`](Self::single_pass_double_wide) and the collapse --
+    /// this renders each eye into half of a per-eye-sized target (squished), so it is a bring-up /
+    /// bisection step, not a finished look.
+    pub single_pass_dual_eye: bool,
+    /// Milestone B step (requires [`single_pass_dual_eye`](Self::single_pass_dual_eye)): re-create the
+    /// scene render targets at **2× per-eye width** so each eye's half is full resolution. Reuses the
+    /// per-eye `CreateRenderSetups` re-init at a doubled width, and reads each eye from its half of the
+    /// double-wide target on capture. Experimental; the back-buffer-tied setups are the fiddly part.
+    pub single_pass_double_wide: bool,
+    /// Milestone B step (requires the above): **collapse** the per-eye double-draw to a single
+    /// `game.Draw` walk -- the actual draw-submission win. Drops the between-eye snapshot/restore.
+    /// The riskiest step; last to enable during bring-up.
+    pub single_pass_collapse: bool,
     /// Census-only mode for [`single_pass`](Self::single_pass): run the vertex-shader stereo rewrite
     /// on every shader at creation and tally the outcomes (patched / no per-eye references / errored)
     /// **without** substituting the patched bytecode, so rendering is unchanged. Safe to inject: it
@@ -474,6 +492,9 @@ impl StereoConfig {
             patch_shadow_pcf_hash: true,
             patch_lod_dissolve: false,
             single_pass: false,
+            single_pass_dual_eye: false,
+            single_pass_double_wide: false,
+            single_pass_collapse: false,
             single_pass_patch_dryrun: false,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,

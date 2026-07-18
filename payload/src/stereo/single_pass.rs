@@ -17,14 +17,14 @@ use std::{
     ffi::c_void,
     sync::{
         OnceLock,
-        atomic::{AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     },
 };
 
 use dxbc_stereo::DxbcError;
 use jc3gi::{
     graphics_engine::{graphics_engine::GraphicsEngine, render_engine::RenderEngine},
-    types::math::Vector4,
+    types::math::{Matrix4, Vector4},
 };
 use parking_lot::Mutex;
 use re_utilities::ThreadSuspender;
@@ -168,6 +168,31 @@ pub fn active() -> bool {
     single_pass && !dry_run && capability() == Capability::Supported
 }
 
+/// Whether the Milestone B "make the eyes diverge" step is on (in addition to [`active`]): distinct
+/// per-eye `cb13`, left/right-half viewport routing, and instance doubling of the G-buffer geometry.
+pub fn dual_eye_active() -> bool {
+    let (single_pass, dry_run, dual_eye) = Config::lock_query(|c| {
+        (
+            c.stereo.single_pass,
+            c.stereo.single_pass_patch_dryrun,
+            c.stereo.single_pass_dual_eye,
+        )
+    });
+    single_pass && !dry_run && dual_eye && capability() == Capability::Supported
+}
+
+/// Marks whether the render thread is currently inside the G-buffer geometry pass range
+/// (`RP_Z_OCCLUDERS..RP_FIRST_SCENE`), set around that `DrawRenderPassRange` call. The dual-eye
+/// viewport split and instance doubling apply only here -- so shadow/lighting/post passes, which
+/// reuse the same patched shaders but are not double-wide, keep the identical-viewport behaviour.
+pub fn set_gbuffer_range(inside: bool) {
+    IN_GBUFFER_RANGE.store(inside, Ordering::Relaxed);
+}
+
+fn in_gbuffer_range() -> bool {
+    IN_GBUFFER_RANGE.load(Ordering::Relaxed)
+}
+
 /// The stereo constant buffer's register slot (`b13`, free across the game's vertex shaders) and its
 /// size in float4 rows (five per eye: four view-projection rows then the camera position, two eyes).
 const STEREO_CB_REGISTER: u32 = 13;
@@ -193,13 +218,15 @@ pub fn mirror_and_bind_cb13(engine: &RenderEngine) {
     // Ensure the viewport-duplication detours are installed (once, on the first active frame).
     ensure_viewport_detours();
 
-    let vp = &engine.m_VPGlobalConstData;
-    let mut rows = [Vector4::default(); STEREO_CB_ROWS];
-    for eye in 0..2 {
-        for (k, &src) in PER_EYE_SOURCE_ROWS.iter().enumerate() {
-            rows[eye * PER_EYE_SOURCE_ROWS.len() + k] = vp[src];
-        }
-    }
+    // Dual-eye (Milestone B): during the main-scene G-buffer range, fill the two eye slots with
+    // *distinct* per-eye view-projections so the eyes diverge. Everywhere else (shadow/reflection
+    // passes, and Milestone A) mirror the current view into both slots -- diverging those would be
+    // wrong (they render from the sun/reflection camera, not the eye camera).
+    let rows = if dual_eye_active() && in_gbuffer_range() {
+        compute_dual_eye_rows(engine).unwrap_or_else(|| mirror_rows(engine))
+    } else {
+        mirror_rows(engine)
+    };
 
     // SAFETY: `GraphicsEngine::get` returns the live singleton or `None`; the device/context pointers
     // are stable once the engine has initialised, and the ops run under the engine's context mutex.
@@ -222,6 +249,71 @@ pub fn mirror_and_bind_cb13(engine: &RenderEngine) {
             tracing::warn!("single-pass cb13: {e}");
         }
     }
+}
+
+/// Mirror the current view's per-eye `cb0` rows into both `cb13` eye slots (Milestone A / non-scene
+/// passes): a patched shader then renders exactly what it would from `cb0`.
+fn mirror_rows(engine: &RenderEngine) -> [Vector4; STEREO_CB_ROWS] {
+    let vp = &engine.m_VPGlobalConstData;
+    let mut rows = [Vector4::default(); STEREO_CB_ROWS];
+    for eye in 0..2 {
+        for (k, &src) in PER_EYE_SOURCE_ROWS.iter().enumerate() {
+            rows[eye * PER_EYE_SOURCE_ROWS.len() + k] = vp[src];
+        }
+    }
+    rows
+}
+
+/// Compute distinct per-eye `cb13` rows from the pristine center render-camera transform and the
+/// per-eye [`EyeRenderParams`](crate::vr::frame::EyeRenderParams), replicating the double-draw's
+/// per-eye camera math (`hooks/camera.rs`) purely in mod code -- so the single walk produces both
+/// eyes. Returns `None` (falling back to the mirror) if the center transform or per-eye params are
+/// not available this frame.
+///
+/// Per eye: offset the center world transform by the eye parallax + orientation delta, invert to a
+/// view, zero its translation for the camera-relative OffsetVP, multiply by the reverse-Z eye
+/// projection, and pair it with the eye's camera world position (`center campos + world_offset`).
+/// The engine `Matrix4` <-> `glam::Mat4` bridge is a transpose, so the math is done in glam
+/// column-vector form and converted back once (see the `Matrix4` doc-comment).
+fn compute_dual_eye_rows(engine: &RenderEngine) -> Option<[Vector4; STEREO_CB_ROWS]> {
+    let center_transform = crate::stereo::STEREO_STATE.lock().center_transform?;
+    let center_world = glam::Mat4::from(center_transform);
+    let center_campos = engine.m_VPGlobalConstData[4];
+
+    let mut rows = [Vector4::default(); STEREO_CB_ROWS];
+    for eye in 0..2 {
+        let params = crate::vr::render_params(eye)?;
+
+        let mut eye_world = center_world;
+        eye_world.w_axis += params.world_offset.extend(0.0);
+        let eye_world = eye_world * glam::Mat4::from_quat(params.orientation_delta);
+
+        let mut offset_view = eye_world.inverse();
+        offset_view.w_axis = glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
+
+        let offset_vp = glam::Mat4::from(params.projection_reverse_z) * offset_view;
+        let offset_vp = Matrix4::from(offset_vp);
+
+        for r in 0..4 {
+            rows[eye * 5 + r] = Vector4 {
+                data: [
+                    offset_vp.data[r * 4],
+                    offset_vp.data[r * 4 + 1],
+                    offset_vp.data[r * 4 + 2],
+                    offset_vp.data[r * 4 + 3],
+                ],
+            };
+        }
+        rows[eye * 5 + 4] = Vector4 {
+            data: [
+                center_campos.data[0] + params.world_offset.x,
+                center_campos.data[1] + params.world_offset.y,
+                center_campos.data[2] + params.world_offset.z,
+                center_campos.data[3],
+            ],
+        };
+    }
+    Some(rows)
 }
 
 /// The mod-owned `cb13` constant buffer, lazily created and updated per view.
@@ -356,7 +448,20 @@ unsafe extern "system" fn rs_set_viewports_detour(
     let detour = RS_SET_VIEWPORTS.get().expect("set before enable");
     if active() && count == 1 && !viewports.is_null() {
         let vp = unsafe { *viewports };
-        unsafe { detour.call(context, 2, [vp, vp].as_ptr()) };
+        let (slot0, slot1) = if dual_eye_active() && in_gbuffer_range() {
+            // Route the two eyes to the left/right halves of the (double-wide) target.
+            let half = vp.Width / 2.0;
+            let mut left = vp;
+            left.Width = half;
+            let mut right = vp;
+            right.Width = half;
+            right.TopLeftX = vp.TopLeftX + half;
+            (left, right)
+        } else {
+            // Milestone A: both slots identical, so a patched shader routes anywhere validly.
+            (vp, vp)
+        };
+        unsafe { detour.call(context, 2, [slot0, slot1].as_ptr()) };
     } else {
         unsafe { detour.call(context, count, viewports) };
     }
@@ -373,6 +478,40 @@ unsafe extern "system" fn rs_set_scissor_rects_detour(
         unsafe { detour.call(context, 2, [rect, rect].as_ptr()) };
     } else {
         unsafe { detour.call(context, count, rects) };
+    }
+}
+
+/// `ID3D11DeviceContext` vtable slots for the two indexed-draw entry points (verified against
+/// `windows`'s `ID3D11DeviceContext_Vtbl`: field 6 → slot 12, field 14 → slot 20).
+const DRAW_INDEXED_SLOT: usize = 12;
+const DRAW_INDEXED_INSTANCED_SLOT: usize = 20;
+
+type DrawIndexedFn = unsafe extern "system" fn(*mut c_void, u32, u32, i32);
+type DrawIndexedInstancedFn = unsafe extern "system" fn(*mut c_void, u32, u32, u32, i32, u32);
+
+static DRAW_INDEXED: OnceLock<GenericDetour<DrawIndexedFn>> = OnceLock::new();
+/// The raw `DrawIndexedInstanced` entry (not detoured), used to re-issue a promoted draw.
+static DRAW_INDEXED_INSTANCED_RAW: OnceLock<DrawIndexedInstancedFn> = OnceLock::new();
+
+/// Promote a non-instanced `DrawIndexed` into a 2-instance `DrawIndexedInstanced` while the dual-eye
+/// G-buffer geometry is drawing, so the patched shader's `SV_InstanceID & 1` selects the eye and
+/// `SV_ViewportArrayIndex` routes it to that eye's viewport half. Already-instanced draws
+/// (`DrawIndexedInstanced`) are left alone for now -- doubling those would need per-instance-buffer
+/// step handling, so their geometry stays single-eye until a later step.
+unsafe extern "system" fn draw_indexed_detour(
+    context: *mut c_void,
+    index_count: u32,
+    start_index: u32,
+    base_vertex: i32,
+) {
+    let detour = DRAW_INDEXED.get().expect("set before enable");
+    if dual_eye_active()
+        && in_gbuffer_range()
+        && let Some(instanced) = DRAW_INDEXED_INSTANCED_RAW.get()
+    {
+        unsafe { instanced(context, index_count, 2, start_index, base_vertex, 0) };
+    } else {
+        unsafe { detour.call(context, index_count, start_index, base_vertex) };
     }
 }
 
@@ -401,6 +540,10 @@ fn ensure_viewport_detours() {
             std::mem::transmute(*vtable.add(RS_SET_VIEWPORTS_SLOT));
         let scissors_target: RsSetScissorRectsFn =
             std::mem::transmute(*vtable.add(RS_SET_SCISSOR_RECTS_SLOT));
+        let draw_indexed_target: DrawIndexedFn =
+            std::mem::transmute(*vtable.add(DRAW_INDEXED_SLOT));
+        let draw_indexed_instanced: DrawIndexedInstancedFn =
+            std::mem::transmute(*vtable.add(DRAW_INDEXED_INSTANCED_SLOT));
 
         let Ok(viewports_detour) = GenericDetour::new(viewports_target, rs_set_viewports_detour)
         else {
@@ -412,21 +555,31 @@ fn ensure_viewport_detours() {
             tracing::warn!("single-pass: RSSetScissorRects detour construction failed");
             return;
         };
+        let Ok(draw_indexed_detour_handle) =
+            GenericDetour::new(draw_indexed_target, draw_indexed_detour)
+        else {
+            tracing::warn!("single-pass: DrawIndexed detour construction failed");
+            return;
+        };
 
         // Publish into the statics before enabling, so a detour that fires mid-enable finds its
         // trampoline. Enabling itself runs with other threads suspended.
+        let _ = DRAW_INDEXED_INSTANCED_RAW.set(draw_indexed_instanced);
         let _ = RS_SET_VIEWPORTS.set(viewports_detour);
         let _ = RS_SET_SCISSOR_RECTS.set(scissors_detour);
+        let _ = DRAW_INDEXED.set(draw_indexed_detour_handle);
         let _ = ThreadSuspender::for_block(|| {
             RS_SET_VIEWPORTS.get().expect("just set").enable().ok();
             RS_SET_SCISSOR_RECTS.get().expect("just set").enable().ok();
+            DRAW_INDEXED.get().expect("just set").enable().ok();
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         });
-        tracing::info!("single-pass: RSSetViewports/RSSetScissorRects duplication installed");
+        tracing::info!("single-pass: viewport + draw-doubling COM detours installed");
     }
 }
 
 static CB13: Mutex<Cb13Buffer> = Mutex::new(Cb13Buffer { buffer: None });
+static IN_GBUFFER_RANGE: AtomicBool = AtomicBool::new(false);
 
 static CAPABILITY: AtomicU8 = AtomicU8::new(Capability::Unprobed as u8);
 static PATCHED: AtomicUsize = AtomicUsize::new(0);

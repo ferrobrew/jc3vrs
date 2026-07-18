@@ -735,6 +735,28 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             "Runs the vertex-shader stereo rewrite on every shader at creation and counts the \
              outcomes, without changing rendering. Validates the rewriter against real shaders.",
         );
+        ui.separator();
+        ui.label("Milestone B (bring-up; enable top-to-bottom, all needed together for a clean image):");
+        ui.add_enabled_ui(cfg.stereo.single_pass, |ui| {
+            ui.checkbox(
+                &mut cfg.stereo.single_pass_dual_eye,
+                "Dual-eye: distinct per-eye cb13 + eye-half viewports + instance doubling",
+            )
+            .on_hover_text(
+                "Makes the eyes diverge. On its own (no double-wide, no collapse) each eye \
+                 renders into half of a per-eye target -- squished; a bisection step.",
+            );
+            ui.add_enabled_ui(cfg.stereo.single_pass_dual_eye, |ui| {
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_double_wide,
+                    "Double-wide render target (full per-eye resolution)",
+                );
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_collapse,
+                    "Collapse to a single game.Draw walk (the actual perf win; riskiest)",
+                );
+            });
+        });
 
         let capability = single_pass::probe_if_needed();
         ui.label(match capability {
