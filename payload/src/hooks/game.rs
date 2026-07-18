@@ -181,12 +181,14 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // Whether this frame's tail (final drain, blit, mirror, submit) runs on the tail worker
         // instead of inline, overlapping the next frame's sim with the draw thread's last walk and
         // the GPU tail (see `vr::tail`). Requires a VR frame to hand over, and falls back to the
-        // inline tail while the F10 capture or a render trace needs the eyes drained here.
+        // inline tail while the F10 capture, a render trace, or the stereo-diff probe needs the
+        // eyes drained on this thread before the frame ends.
         let defer_tail = stereo
             && vr_frame.is_some()
             && crate::config::Config::lock_query(|c| c.stereo.defer_frame_tail)
             && !crate::debug::trace::tracing_active()
-            && !crate::capture::is_active();
+            && !crate::capture::is_active()
+            && !crate::debug::stereo_diff::is_active();
 
         if stereo {
             #[cfg(feature = "profiler")]
@@ -353,6 +355,10 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 });
             }
             TraceState::end_frame();
+
+            // Both eyes are drained inline here (the probe forces the inline tail), so their
+            // recorded draw sequences are complete: diff and log.
+            crate::debug::stereo_diff::report_and_clear();
 
             // The draw thread reads the per-dispatch stereo state (draw_index, far_phase) for the
             // final dispatch asynchronously. Resetting it here would race that read when the tail

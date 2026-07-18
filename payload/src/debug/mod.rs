@@ -4,4 +4,5 @@
 pub mod camera;
 pub mod coord_frame;
 pub mod rt_hash;
+pub mod stereo_diff;
 pub mod trace;

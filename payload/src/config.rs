@@ -128,6 +128,11 @@ pub struct StereoConfig {
     /// per-eye hashes into the active render trace. Run with `cameras` off (both eyes share one
     /// camera) so any RT whose two eyes' hashes differ is being accumulated across the two Draws --
     /// the "stronger in one eye" bug. See [`crate::debug::rt_hash`].
+    /// Diagnostic: during a stereo frame, record each eye's per-pass GPU-op count and log a diff --
+    /// which passes draw identically between eyes (replayable from one walk) and which diverge (the
+    /// per-eye special-casing burden). The feasibility probe for single-pass stereo; see
+    /// [`crate::debug::stereo_diff`]. Logs on target `"stereo_diff"`.
+    pub diagnose_stereo_draw_diff: bool,
     pub diagnose_rt_hashes: bool,
     /// Diagnostic: while a render trace collects, encode eye 0's final `BackBufferLinear` to a PNG each
     /// frame into the trace's `traces/<stamp>/` folder (alongside `trace.ndjson`), named by frame index
@@ -439,6 +444,7 @@ impl StereoConfig {
             drain_draw_fragment: true,
             defer_frame_tail: true,
             fix_shadow_cascade_anchor: true,
+            diagnose_stereo_draw_diff: false,
             diagnose_rt_hashes: false,
             diagnose_rt_screenshots: true,
             disable_ssao: false,

@@ -73,6 +73,14 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
         &mut cfg.stereo.diagnose_rt_screenshots,
         "Dump per-eye frames into the trace (BackBufferLinear PNG per eye per frame)",
     );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_stereo_draw_diff,
+        "Diff the two eyes' per-pass draw counts (single-pass-stereo feasibility)",
+    )
+    .on_hover_text(
+        "Logs (target \"stereo_diff\") which passes draw identically between eyes vs diverge, and \
+         what fraction of draws are replayable from one walk. Forces the inline frame tail while on.",
+    );
     ui.separator();
 
     // The #31 flicker-isolation A/B levers -- all default off; enable one at a time to localize the
