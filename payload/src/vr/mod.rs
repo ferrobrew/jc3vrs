@@ -298,7 +298,16 @@ pub fn uninstall() {
 /// predicted display time; call [`FrameContext::should_render`] to decide whether to render or submit
 /// an empty frame. Called from `hooks::game::game_update_render`.
 pub fn frame_begin() -> Option<FrameContext> {
+    // Acquiring the runtime lock blocks on the deferred frame tail (which holds it until it
+    // submits the previous frame), so this scope measures how much of the previous frame's tail /
+    // GPU work the main thread's prologue failed to overlap -- the pipelining slack still on the
+    // table. (`vr::update` earlier takes the same lock, so the block usually lands there first; it
+    // is scoped too.)
+    #[cfg(feature = "profiler")]
+    let lock_scope = puffin::profile_scope_custom!("VR runtime lock (tail block)");
     let mut guard = VR_STATE.lock();
+    #[cfg(feature = "profiler")]
+    drop(lock_scope);
 
     if !guard.is_running() {
         return None;
@@ -745,7 +754,14 @@ impl VrState {
             .as_mut()
             .context("vr: no session for frame begin")?;
 
-        let frame_state = session.frame_wait.wait().context("vr: wait_frame failed")?;
+        // The real compositor pacing wait, isolated from the lock block above and the pose location
+        // below: at a frame rate under the compositor's, this should return near-instantly (we are
+        // the slow one), so a large value here is genuine reclaimable slack, not our own cost.
+        let frame_state = {
+            #[cfg(feature = "profiler")]
+            puffin::profile_scope!("xrWaitFrame");
+            session.frame_wait.wait().context("vr: wait_frame failed")?
+        };
         session
             .frame_stream
             .begin()

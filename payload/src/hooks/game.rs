@@ -111,10 +111,10 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // boundary `ApplyResize` needs). Must sit before the first `game.Draw`.
         crate::vr::apply_native_resolution();
 
-        // Separately scoped from the real work: `frame_begin` contains `xrWaitFrame`, the
-        // compositor pacing block — time here is (mostly) intentional waiting, not cost.
+        // The sum of the VR-lock tail block, xrWaitFrame, and view location -- each scoped inside
+        // `vr::frame_begin` -- so the front-load breakdown shows which dominates.
         #[cfg(feature = "profiler")]
-        let frame_begin_scope = puffin::profile_scope_custom!("vr::frame_begin (xrWaitFrame)");
+        let frame_begin_scope = puffin::profile_scope_custom!("vr::frame_begin");
         let mut vr_frame = vr_running.then(crate::vr::frame_begin).flatten();
         #[cfg(feature = "profiler")]
         drop(frame_begin_scope);
