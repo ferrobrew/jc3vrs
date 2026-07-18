@@ -185,6 +185,10 @@ fn set_render_setup(ctx: *mut c_void, setup: *mut c_void, restore: bool) {
         dispatch: PASS_DISPATCH.with(|c| c.replace(0)),
     });
     SET_RENDER_SETUP.get().unwrap().call(ctx, setup, restore);
+    // Single-pass stereo: the bind just (re)set the viewport for this target -- including per-cascade
+    // in the shadow passes -- so mirror it into viewport slot 1 for the patched shaders' viewport
+    // routing. A no-op unless single-pass is active.
+    crate::stereo::single_pass::duplicate_current_viewport();
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::Clear_ADDRESS)]

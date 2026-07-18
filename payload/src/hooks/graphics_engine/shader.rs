@@ -77,32 +77,56 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&CREATE_VERTEX_PROGRAM_BINDER)
 }
 
-/// Detour on `Graphics::CreateVertexProgram` to census the single-pass stereo vertex-shader rewrite.
+/// Detour on `Graphics::CreateVertexProgram` for single-pass stereo: census the vertex-shader rewrite
+/// and, when single-pass is active, substitute the patched bytecode.
 ///
-/// When single-pass stereo (or its census-only dry-run) is enabled, run
-/// [`dxbc_stereo::patch_vertex_shader`] on the incoming DXBC and tally the outcome
-/// ([`crate::stereo::single_pass::record_patch_outcome`]), so the debug UI can report how the
-/// rewriter fares against the game's real shader set. This is observation only -- the patched
-/// bytecode is **not** substituted here; substitution lands with the rest of the single-pass pipeline
-/// (cb13 upload, double-wide target, draw-doubling), so on its own this changes nothing about
-/// rendering and is safe to leave enabled. Like the fragment hook, it only sees shaders created after
-/// it installs; use the shader-reload button for shaders loaded before injection.
+/// When single-pass (or its census-only dry-run) is enabled, run [`dxbc_stereo::patch_vertex_shader`]
+/// on the incoming DXBC and tally the outcome ([`crate::stereo::single_pass::record_patch_outcome`]),
+/// so the debug UI reports how the rewriter fares against the game's real shader set. When single-pass
+/// is *active* (master on, dry-run off, capability present), also point the params at the patched copy
+/// for the (bytecode-copying) `CreateVertexShader` call -- the copy is kept alive in `saved` and the
+/// caller's pointer restored afterwards, exactly as the fragment hook does. The patched shader reads
+/// its position from `cb13` (see [`crate::hooks::graphics_engine::single_pass`]); in dry-run the copy
+/// is discarded and rendering is unchanged. Only sees shaders created after it installs; use the
+/// shader-reload button for shaders loaded before injection.
 #[detour(address = jc3gi::graphics_engine::draw::CreateVertexProgram_ADDRESS)]
 fn create_vertex_program(
     device: *mut c_void,
-    params: *const CreateVertexProgramParams,
+    params: *mut CreateVertexProgramParams,
 ) -> *mut c_void {
+    // The patched blob is *larger* than the original (added SFI0 chunk, cb13 declaration, prologue,
+    // signature entries), so unlike the in-place fragment patch this must repoint `m_Size` as well as
+    // `m_Code` -- otherwise the engine hands the D3D stack a truncated container whose chunk table
+    // runs past the declared length. Both are restored after the (bytecode-copying) call.
+    let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
     let census = Config::lock_query(|c| c.stereo.single_pass || c.stereo.single_pass_patch_dryrun);
     if census
-        && let Some(p) = unsafe { params.as_ref() }
+        && let Some(p) = unsafe { params.as_mut() }
         && !p.m_Code.is_null()
         && p.m_Size >= 4
     {
         let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
         let outcome = dxbc_stereo::patch_vertex_shader(code);
         crate::stereo::single_pass::record_patch_outcome(&outcome);
+        if crate::stereo::single_pass::active()
+            && let Ok(patched) = outcome
+        {
+            let patched_len = patched.len() as u64;
+            saved = Some((p.m_Code, p.m_Size, patched));
+            p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
+            p.m_Size = patched_len;
+        }
     }
-    CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params)
+
+    let result = CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params);
+
+    if let Some((original_code, original_size, _copy)) = saved
+        && let Some(p) = unsafe { params.as_mut() }
+    {
+        p.m_Code = original_code;
+        p.m_Size = original_size;
+    }
+    result
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::CreateFragmentProgram_ADDRESS)]

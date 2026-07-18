@@ -13,13 +13,37 @@
 //! draw-doubling) is built out under [`crate::config::StereoConfig::single_pass`]; until it lands,
 //! [`crate::config::StereoConfig::single_pass_patch_dryrun`] runs the census with no rendering change.
 
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::{
+    ffi::c_void,
+    sync::{
+        OnceLock,
+        atomic::{AtomicU8, AtomicUsize, Ordering},
+    },
+};
 
 use dxbc_stereo::DxbcError;
-use jc3gi::graphics_engine::graphics_engine::GraphicsEngine;
-use windows::Win32::Graphics::Direct3D11::{
-    D3D11_FEATURE_D3D11_OPTIONS3, D3D11_FEATURE_DATA_D3D11_OPTIONS3, ID3D11Device,
+use jc3gi::{
+    graphics_engine::{graphics_engine::GraphicsEngine, render_engine::RenderEngine},
+    types::math::Vector4,
 };
+use parking_lot::Mutex;
+use re_utilities::ThreadSuspender;
+use retour::GenericDetour;
+use windows::{
+    Win32::{
+        Foundation::RECT,
+        Graphics::Direct3D11::{
+            D3D11_BIND_CONSTANT_BUFFER, D3D11_BUFFER_DESC, D3D11_CPU_ACCESS_WRITE,
+            D3D11_FEATURE_D3D11_OPTIONS3, D3D11_FEATURE_DATA_D3D11_OPTIONS3,
+            D3D11_MAP_WRITE_DISCARD, D3D11_MAPPED_SUBRESOURCE, D3D11_SUBRESOURCE_DATA,
+            D3D11_USAGE_DYNAMIC, D3D11_VIEWPORT, ID3D11Buffer, ID3D11Device, ID3D11DeviceContext,
+        },
+        System::Threading::{EnterCriticalSection, LeaveCriticalSection},
+    },
+    core::Interface,
+};
+
+use crate::config::Config;
 
 /// The result of the DXVK viewport-routing capability probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +158,275 @@ pub fn reset_census() {
     DEFERRED.store(0, Ordering::Relaxed);
     ERRORED.store(0, Ordering::Relaxed);
 }
+
+/// Whether single-pass rendering should actually run this frame: the master switch is on, the
+/// census-only dry-run is off, and the device supports viewport routing. The VS-substitution and
+/// cb13 paths gate on this; when it is false the double-draw path is left untouched.
+pub fn active() -> bool {
+    let (single_pass, dry_run) =
+        Config::lock_query(|c| (c.stereo.single_pass, c.stereo.single_pass_patch_dryrun));
+    single_pass && !dry_run && capability() == Capability::Supported
+}
+
+/// The stereo constant buffer's register slot (`b13`, free across the game's vertex shaders) and its
+/// size in float4 rows (five per eye: four view-projection rows then the camera position, two eyes).
+const STEREO_CB_REGISTER: u32 = 13;
+const STEREO_CB_ROWS: usize = 10;
+
+/// The `cb0` (`m_VPGlobalConstData`) rows the patched shaders read per eye, in the order the rewrite
+/// lays them out in `cb13`: the four translation-free view-projection rows (`cb0[29..32]`), then the
+/// camera world position (`cb0[4]`). See `dxbc_stereo::PER_EYE_CB0_ROWS`.
+const PER_EYE_SOURCE_ROWS: [usize; 5] = [29, 30, 31, 32, 4];
+
+/// Mirror the current view's per-eye `cb0` rows into the mod-owned `cb13` and bind it at `b13`.
+///
+/// Milestone A of the single-pass build: both eye slots get the **same** (current-view) rows, so a
+/// patched vertex shader -- which reads its position from `cb13` instead of `cb0` -- renders exactly
+/// what it would have from `cb0`, in *every* pass (the G-buffer, but also the shadow and reflection
+/// passes that reuse the same model shaders under a different view). That shadow-safety is why `cb13`
+/// tracks whatever view is current rather than being written once. Later milestones diverge the two
+/// slots (eye 0 / eye 1) for the doubled G-buffer draw.
+///
+/// Called from the `SetAllGlobalShaderProgramConstants` detour, after the engine has refreshed
+/// `m_VPGlobalConstData` and uploaded `cb0`, on the render thread.
+pub fn mirror_and_bind_cb13(engine: &RenderEngine) {
+    // Ensure the viewport-duplication detours are installed (once, on the first active frame).
+    ensure_viewport_detours();
+
+    let vp = &engine.m_VPGlobalConstData;
+    let mut rows = [Vector4::default(); STEREO_CB_ROWS];
+    for eye in 0..2 {
+        for (k, &src) in PER_EYE_SOURCE_ROWS.iter().enumerate() {
+            rows[eye * PER_EYE_SOURCE_ROWS.len() + k] = vp[src];
+        }
+    }
+
+    // SAFETY: `GraphicsEngine::get` returns the live singleton or `None`; the device/context pointers
+    // are stable once the engine has initialised, and the ops run under the engine's context mutex.
+    unsafe {
+        let Some(ge) = GraphicsEngine::get() else {
+            return;
+        };
+        let Some(device) = ge.m_Device.as_ref() else {
+            return;
+        };
+        let Some(context) = device.m_Context.as_ref() else {
+            return;
+        };
+        EnterCriticalSection(context.m_Mutex);
+        let result = CB13
+            .lock()
+            .upload_and_bind(&device.m_Device, &context.m_Context, &rows);
+        LeaveCriticalSection(context.m_Mutex);
+        if let Err(e) = result {
+            tracing::warn!("single-pass cb13: {e}");
+        }
+    }
+}
+
+/// The mod-owned `cb13` constant buffer, lazily created and updated per view.
+struct Cb13Buffer {
+    buffer: Option<ID3D11Buffer>,
+}
+
+impl Cb13Buffer {
+    /// Ensure the dynamic `cb13` buffer exists, write `rows` into it, and bind it at `b13`.
+    unsafe fn upload_and_bind(
+        &mut self,
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        rows: &[Vector4; STEREO_CB_ROWS],
+    ) -> Result<(), windows::core::Error> {
+        let byte_width = std::mem::size_of_val(rows) as u32;
+        let buffer = match &self.buffer {
+            Some(buffer) => buffer,
+            None => {
+                let mut created = None;
+                unsafe {
+                    device.CreateBuffer(
+                        &D3D11_BUFFER_DESC {
+                            ByteWidth: byte_width,
+                            Usage: D3D11_USAGE_DYNAMIC,
+                            BindFlags: D3D11_BIND_CONSTANT_BUFFER.0 as u32,
+                            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE.0 as u32,
+                            ..Default::default()
+                        },
+                        Some(&D3D11_SUBRESOURCE_DATA {
+                            pSysMem: rows.as_ptr().cast(),
+                            ..Default::default()
+                        }),
+                        Some(&mut created),
+                    )?;
+                }
+                self.buffer
+                    .insert(created.expect("CreateBuffer returned Ok with no buffer"))
+            }
+        };
+
+        unsafe {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+            std::ptr::copy_nonoverlapping(rows.as_ptr(), mapped.pData.cast(), STEREO_CB_ROWS);
+            context.Unmap(buffer, 0);
+            context.VSSetConstantBuffers(STEREO_CB_REGISTER, Some(&[Some(buffer.clone())]));
+        }
+        Ok(())
+    }
+}
+
+/// If single-pass is active, duplicate the immediate context's current viewport (and scissor) into
+/// slot 1. Called right after the engine binds a render setup ([`SetRenderSetup`]), which is where
+/// the viewport is (re)set -- including per-cascade in the shadow passes, so slot 1 tracks whatever
+/// region is currently bound rather than going stale between binds.
+pub fn duplicate_current_viewport() {
+    if !active() {
+        return;
+    }
+    // SAFETY: runs on the render thread after a render-setup bind; the device/context pointers are
+    // stable and the ops run under the engine's context mutex.
+    unsafe {
+        let Some(ge) = GraphicsEngine::get() else {
+            return;
+        };
+        let Some(device) = ge.m_Device.as_ref() else {
+            return;
+        };
+        let Some(context) = device.m_Context.as_ref() else {
+            return;
+        };
+        EnterCriticalSection(context.m_Mutex);
+        duplicate_viewport(&context.m_Context);
+        LeaveCriticalSection(context.m_Mutex);
+    }
+}
+
+/// Duplicate the current (single) viewport into viewport slots 0 **and** 1, both covering the same
+/// region.
+///
+/// A patched shader writes `SV_ViewportArrayIndex = SV_InstanceID & 1`. Milestone A does not double
+/// instances or set up per-eye viewports, so an instanced draw's odd-`SV_InstanceID` primitives would
+/// route to viewport 1 -- which the engine never bound -- and be discarded, dropping half of every
+/// instanced object (the flicker, since VR head-motion re-sorts which instance ids are odd). Binding
+/// a second, identical viewport makes index 1 valid and render the same as index 0. (Milestone B
+/// replaces the two identical viewports with the left/right halves of the double-wide target.)
+unsafe fn duplicate_viewport(context: &ID3D11DeviceContext) {
+    unsafe {
+        let mut count = 1u32;
+        let mut viewports = [D3D11_VIEWPORT::default(); 1];
+        context.RSGetViewports(&mut count, Some(viewports.as_mut_ptr()));
+        // Only duplicate a real viewport; a zero-width one (no viewport bound yet) would clip
+        // everything to nothing.
+        if viewports[0].Width > 0.0 {
+            context.RSSetViewports(Some(&[viewports[0], viewports[0]]));
+        }
+
+        // If scissor testing is on, viewport 1 pairs with scissor rect 1; duplicate the engine's
+        // rect into slot 1 too, else index-1 primitives clip to an empty (unset) rect.
+        let mut scissor_count = 1u32;
+        let mut scissors = [RECT::default(); 1];
+        context.RSGetScissorRects(&mut scissor_count, Some(scissors.as_mut_ptr()));
+        if scissors[0].right > scissors[0].left && scissors[0].bottom > scissors[0].top {
+            context.RSSetScissorRects(Some(&[scissors[0], scissors[0]]));
+        }
+    }
+}
+
+// The mirror at `SetRenderSetup` (above) covers the scene passes, but the shadow cascades set their
+// viewport through a raw `RSSetViewports` between binds, which that hook does not see -- so slot 1
+// goes stale there and odd-instance shadow casters route to the wrong region (flickering shadows).
+// Detouring `RSSetViewports`/`RSSetScissorRects` on the immediate-context vtable catches *every*
+// viewport set, wherever it comes from, and mirrors a single-viewport set into two identical slots.
+
+/// `ID3D11DeviceContext` vtable slots (7 base `IUnknown`/`ID3D11DeviceChild` slots + the method's
+/// index), verified against `windows`'s `ID3D11DeviceContext_Vtbl`.
+const RS_SET_VIEWPORTS_SLOT: usize = 44;
+const RS_SET_SCISSOR_RECTS_SLOT: usize = 45;
+
+type RsSetViewportsFn = unsafe extern "system" fn(*mut c_void, u32, *const D3D11_VIEWPORT);
+type RsSetScissorRectsFn = unsafe extern "system" fn(*mut c_void, u32, *const RECT);
+
+static RS_SET_VIEWPORTS: OnceLock<GenericDetour<RsSetViewportsFn>> = OnceLock::new();
+static RS_SET_SCISSOR_RECTS: OnceLock<GenericDetour<RsSetScissorRectsFn>> = OnceLock::new();
+
+unsafe extern "system" fn rs_set_viewports_detour(
+    context: *mut c_void,
+    count: u32,
+    viewports: *const D3D11_VIEWPORT,
+) {
+    let detour = RS_SET_VIEWPORTS.get().expect("set before enable");
+    if active() && count == 1 && !viewports.is_null() {
+        let vp = unsafe { *viewports };
+        unsafe { detour.call(context, 2, [vp, vp].as_ptr()) };
+    } else {
+        unsafe { detour.call(context, count, viewports) };
+    }
+}
+
+unsafe extern "system" fn rs_set_scissor_rects_detour(
+    context: *mut c_void,
+    count: u32,
+    rects: *const RECT,
+) {
+    let detour = RS_SET_SCISSOR_RECTS.get().expect("set before enable");
+    if active() && count == 1 && !rects.is_null() {
+        let rect = unsafe { *rects };
+        unsafe { detour.call(context, 2, [rect, rect].as_ptr()) };
+    } else {
+        unsafe { detour.call(context, count, rects) };
+    }
+}
+
+/// Install the `RSSetViewports`/`RSSetScissorRects` duplication detours on the immediate-context
+/// vtable, once. Patching runs under a thread suspender (all other threads paused) so none can be
+/// executing the target's prologue while it is rewritten. Called only from the active render path, so
+/// a normal (single-pass-off) session never installs it.
+fn ensure_viewport_detours() {
+    if RS_SET_VIEWPORTS.get().is_some() {
+        return;
+    }
+    // SAFETY: reads the live immediate-context vtable; the two slots are the standard D3D11 layout,
+    // and the detour targets are enabled under a thread suspender.
+    unsafe {
+        let Some(ge) = GraphicsEngine::get() else {
+            return;
+        };
+        let Some(device) = ge.m_Device.as_ref() else {
+            return;
+        };
+        let Some(context) = device.m_Context.as_ref() else {
+            return;
+        };
+        let vtable = *(context.m_Context.as_raw() as *const *const usize);
+        let viewports_target: RsSetViewportsFn =
+            std::mem::transmute(*vtable.add(RS_SET_VIEWPORTS_SLOT));
+        let scissors_target: RsSetScissorRectsFn =
+            std::mem::transmute(*vtable.add(RS_SET_SCISSOR_RECTS_SLOT));
+
+        let Ok(viewports_detour) = GenericDetour::new(viewports_target, rs_set_viewports_detour)
+        else {
+            tracing::warn!("single-pass: RSSetViewports detour construction failed");
+            return;
+        };
+        let Ok(scissors_detour) = GenericDetour::new(scissors_target, rs_set_scissor_rects_detour)
+        else {
+            tracing::warn!("single-pass: RSSetScissorRects detour construction failed");
+            return;
+        };
+
+        // Publish into the statics before enabling, so a detour that fires mid-enable finds its
+        // trampoline. Enabling itself runs with other threads suspended.
+        let _ = RS_SET_VIEWPORTS.set(viewports_detour);
+        let _ = RS_SET_SCISSOR_RECTS.set(scissors_detour);
+        let _ = ThreadSuspender::for_block(|| {
+            RS_SET_VIEWPORTS.get().expect("just set").enable().ok();
+            RS_SET_SCISSOR_RECTS.get().expect("just set").enable().ok();
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        });
+        tracing::info!("single-pass: RSSetViewports/RSSetScissorRects duplication installed");
+    }
+}
+
+static CB13: Mutex<Cb13Buffer> = Mutex::new(Cb13Buffer { buffer: None });
 
 static CAPABILITY: AtomicU8 = AtomicU8::new(Capability::Unprobed as u8);
 static PATCHED: AtomicUsize = AtomicUsize::new(0);

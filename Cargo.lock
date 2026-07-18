@@ -969,6 +969,7 @@ dependencies = [
  "puffin",
  "puffin_egui",
  "re-utilities",
+ "retour",
  "serde",
  "serde_json",
  "tracing",

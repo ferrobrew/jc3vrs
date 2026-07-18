@@ -17,6 +17,10 @@ profiler = ["dep:puffin", "dep:puffin_egui"]
 windows = { workspace = true }
 re-utilities = { workspace = true }
 detours-macro = { workspace = true }
+# Runtime (address-resolved) detours for the single-pass D3D11 viewport hook, where the target is a
+# COM vtable slot only known at runtime. Same git source re-utilities already pins, so Cargo unifies
+# on one copy.
+retour = { git = "https://github.com/Hpmason/retour-rs.git" }
 glam = { workspace = true }
 
 jc3gi = { path = "../jc3gi" }
