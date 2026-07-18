@@ -200,6 +200,7 @@ fn draw_render_pass_range(
     run_scene_range(first, last, &draw);
     if gbuffer_geometry {
         crate::stereo::single_pass::set_gbuffer_range(false);
+        crate::stereo::single_pass::log_draw_split();
     }
 }
 

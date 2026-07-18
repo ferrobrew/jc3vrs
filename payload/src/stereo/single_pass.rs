@@ -493,11 +493,11 @@ static DRAW_INDEXED: OnceLock<GenericDetour<DrawIndexedFn>> = OnceLock::new();
 /// The raw `DrawIndexedInstanced` entry (not detoured), used to re-issue a promoted draw.
 static DRAW_INDEXED_INSTANCED_RAW: OnceLock<DrawIndexedInstancedFn> = OnceLock::new();
 
-/// Promote a non-instanced `DrawIndexed` into a 2-instance `DrawIndexedInstanced` while the dual-eye
-/// G-buffer geometry is drawing, so the patched shader's `SV_InstanceID & 1` selects the eye and
-/// `SV_ViewportArrayIndex` routes it to that eye's viewport half. Already-instanced draws
-/// (`DrawIndexedInstanced`) are left alone for now -- doubling those would need per-instance-buffer
-/// step handling, so their geometry stays single-eye until a later step.
+/// Handle a `DrawIndexed` while the dual-eye G-buffer geometry is drawing. A **patched** shader is
+/// promoted to a 2-instance `DrawIndexedInstanced` -- its `SV_InstanceID & 1` selects the eye and
+/// `SV_ViewportArrayIndex` routes it to that eye's viewport half (one draw, both eyes). An
+/// **unpatched** shader is left single (routed to viewport 0 only for now -- its own per-eye
+/// double-draw is the next step). The patched/unpatched split is counted for the diagnostic log.
 unsafe extern "system" fn draw_indexed_detour(
     context: *mut c_void,
     index_count: u32,
@@ -505,13 +505,94 @@ unsafe extern "system" fn draw_indexed_detour(
     base_vertex: i32,
 ) {
     let detour = DRAW_INDEXED.get().expect("set before enable");
-    if dual_eye_active()
-        && in_gbuffer_range()
-        && let Some(instanced) = DRAW_INDEXED_INSTANCED_RAW.get()
+    if dual_eye_active() && in_gbuffer_range() {
+        if BOUND_VS_PATCHED.load(Ordering::Relaxed) {
+            PATCHED_DRAWS.fetch_add(1, Ordering::Relaxed);
+            if let Some(instanced) = DRAW_INDEXED_INSTANCED_RAW.get() {
+                unsafe { instanced(context, index_count, 2, start_index, base_vertex, 0) };
+                return;
+            }
+        } else {
+            UNPATCHED_DRAWS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    unsafe { detour.call(context, index_count, start_index, base_vertex) };
+}
+
+/// `ID3D11Device::CreateVertexShader` (device vtable slot 12) and `ID3D11DeviceContext::VSSetShader`
+/// (context vtable slot 11), verified against the `windows` vtable structs.
+const CREATE_VERTEX_SHADER_SLOT: usize = 12;
+const VS_SET_SHADER_SLOT: usize = 11;
+
+type CreateVertexShaderFn = unsafe extern "system" fn(
+    *mut c_void,
+    *const c_void,
+    usize,
+    *mut c_void,
+    *mut *mut c_void,
+) -> i32;
+type VsSetShaderFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *const *mut c_void, u32);
+
+static CREATE_VERTEX_SHADER: OnceLock<GenericDetour<CreateVertexShaderFn>> = OnceLock::new();
+static VS_SET_SHADER: OnceLock<GenericDetour<VsSetShaderFn>> = OnceLock::new();
+
+/// Record the `ID3D11VertexShader` that results from a stereo-patched blob. The
+/// `CreateVertexProgram` hook sets [`PATCH_PENDING`] right before the engine calls
+/// `CreateVertexShader` with the substituted bytecode, so the shader created under that flag is the
+/// patched one; its pointer goes into [`PATCHED_VS`] for the draw-time gating.
+unsafe extern "system" fn create_vertex_shader_detour(
+    device: *mut c_void,
+    bytecode: *const c_void,
+    length: usize,
+    linkage: *mut c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    let detour = CREATE_VERTEX_SHADER.get().expect("set before enable");
+    let hr = unsafe { detour.call(device, bytecode, length, linkage, out) };
+    if PATCH_PENDING.swap(false, Ordering::Relaxed)
+        && hr == 0
+        && !out.is_null()
+        && let shader = unsafe { *out }
+        && !shader.is_null()
     {
-        unsafe { instanced(context, index_count, 2, start_index, base_vertex, 0) };
-    } else {
-        unsafe { detour.call(context, index_count, start_index, base_vertex) };
+        PATCHED_VS.lock().push(shader as usize);
+    }
+    hr
+}
+
+/// Cache whether the vertex shader now bound is a patched one, so [`draw_indexed_detour`] can gate
+/// without a per-draw set lookup.
+unsafe extern "system" fn vs_set_shader_detour(
+    context: *mut c_void,
+    shader: *mut c_void,
+    instances: *const *mut c_void,
+    num_instances: u32,
+) {
+    let patched = !shader.is_null() && PATCHED_VS.lock().contains(&(shader as usize));
+    BOUND_VS_PATCHED.store(patched, Ordering::Relaxed);
+    let detour = VS_SET_SHADER.get().expect("set before enable");
+    unsafe { detour.call(context, shader, instances, num_instances) };
+}
+
+/// Reset the patched-shader set (on a shader reload, since the old `ID3D11VertexShader` pointers are
+/// released and could be reused by later allocations).
+pub fn reset_patched_vs() {
+    PATCHED_VS.lock().clear();
+}
+
+/// Log and reset the per-window patched/unpatched G-buffer draw counts -- called once per frame so
+/// the bring-up log shows how the draw gating is splitting the geometry.
+pub fn log_draw_split() {
+    let patched = PATCHED_DRAWS.swap(0, Ordering::Relaxed);
+    let unpatched = UNPATCHED_DRAWS.swap(0, Ordering::Relaxed);
+    if patched + unpatched > 0 {
+        let n = DRAW_SPLIT_LOG.fetch_add(1, Ordering::Relaxed);
+        if n.is_multiple_of(120) {
+            tracing::info!(
+                target: "single_pass",
+                "gbuffer draws this frame: {patched} patched (instance-doubled), {unpatched} unpatched (single)"
+            );
+        }
     }
 }
 
@@ -536,6 +617,7 @@ fn ensure_viewport_detours() {
             return;
         };
         let vtable = *(context.m_Context.as_raw() as *const *const usize);
+        let device_vtable = *(device.m_Device.as_raw() as *const *const usize);
         let viewports_target: RsSetViewportsFn =
             std::mem::transmute(*vtable.add(RS_SET_VIEWPORTS_SLOT));
         let scissors_target: RsSetScissorRectsFn =
@@ -544,21 +626,26 @@ fn ensure_viewport_detours() {
             std::mem::transmute(*vtable.add(DRAW_INDEXED_SLOT));
         let draw_indexed_instanced: DrawIndexedInstancedFn =
             std::mem::transmute(*vtable.add(DRAW_INDEXED_INSTANCED_SLOT));
+        let vs_set_shader_target: VsSetShaderFn =
+            std::mem::transmute(*vtable.add(VS_SET_SHADER_SLOT));
+        let create_vertex_shader_target: CreateVertexShaderFn =
+            std::mem::transmute(*device_vtable.add(CREATE_VERTEX_SHADER_SLOT));
 
-        let Ok(viewports_detour) = GenericDetour::new(viewports_target, rs_set_viewports_detour)
+        let (
+            Ok(viewports_detour),
+            Ok(scissors_detour),
+            Ok(draw_indexed_detour_handle),
+            Ok(vs_set_shader_detour_handle),
+            Ok(create_vertex_shader_detour_handle),
+        ) = (
+            GenericDetour::new(viewports_target, rs_set_viewports_detour),
+            GenericDetour::new(scissors_target, rs_set_scissor_rects_detour),
+            GenericDetour::new(draw_indexed_target, draw_indexed_detour),
+            GenericDetour::new(vs_set_shader_target, vs_set_shader_detour),
+            GenericDetour::new(create_vertex_shader_target, create_vertex_shader_detour),
+        )
         else {
-            tracing::warn!("single-pass: RSSetViewports detour construction failed");
-            return;
-        };
-        let Ok(scissors_detour) = GenericDetour::new(scissors_target, rs_set_scissor_rects_detour)
-        else {
-            tracing::warn!("single-pass: RSSetScissorRects detour construction failed");
-            return;
-        };
-        let Ok(draw_indexed_detour_handle) =
-            GenericDetour::new(draw_indexed_target, draw_indexed_detour)
-        else {
-            tracing::warn!("single-pass: DrawIndexed detour construction failed");
+            tracing::warn!("single-pass: COM detour construction failed");
             return;
         };
 
@@ -568,18 +655,34 @@ fn ensure_viewport_detours() {
         let _ = RS_SET_VIEWPORTS.set(viewports_detour);
         let _ = RS_SET_SCISSOR_RECTS.set(scissors_detour);
         let _ = DRAW_INDEXED.set(draw_indexed_detour_handle);
+        let _ = VS_SET_SHADER.set(vs_set_shader_detour_handle);
+        let _ = CREATE_VERTEX_SHADER.set(create_vertex_shader_detour_handle);
         let _ = ThreadSuspender::for_block(|| {
             RS_SET_VIEWPORTS.get().expect("just set").enable().ok();
             RS_SET_SCISSOR_RECTS.get().expect("just set").enable().ok();
             DRAW_INDEXED.get().expect("just set").enable().ok();
+            VS_SET_SHADER.get().expect("just set").enable().ok();
+            CREATE_VERTEX_SHADER.get().expect("just set").enable().ok();
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         });
-        tracing::info!("single-pass: viewport + draw-doubling COM detours installed");
+        tracing::info!("single-pass: viewport + draw + shader-tracking COM detours installed");
     }
 }
 
 static CB13: Mutex<Cb13Buffer> = Mutex::new(Cb13Buffer { buffer: None });
 static IN_GBUFFER_RANGE: AtomicBool = AtomicBool::new(false);
+
+/// Set by the `CreateVertexProgram` hook right before the engine creates the D3D shader from a
+/// substituted (patched) blob, so [`create_vertex_shader_detour`] knows the next shader is patched.
+pub static PATCH_PENDING: AtomicBool = AtomicBool::new(false);
+/// The `ID3D11VertexShader` pointers created from patched blobs (as `usize`). Written at creation,
+/// read when a shader is bound.
+static PATCHED_VS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// Whether the currently-bound vertex shader is a patched one (updated on `VSSetShader`).
+static BOUND_VS_PATCHED: AtomicBool = AtomicBool::new(false);
+static PATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
+static UNPATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
+static DRAW_SPLIT_LOG: AtomicUsize = AtomicUsize::new(0);
 
 static CAPABILITY: AtomicU8 = AtomicU8::new(Capability::Unprobed as u8);
 static PATCHED: AtomicUsize = AtomicUsize::new(0);

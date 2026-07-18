@@ -118,7 +118,13 @@ fn create_vertex_program(
         }
     }
 
+    // Flag the patched creation so the CreateVertexShader detour records the resulting shader for the
+    // draw-time patched/unpatched gating; cleared after the call in case that detour is not installed.
+    if saved.is_some() {
+        crate::stereo::single_pass::PATCH_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let result = CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params);
+    crate::stereo::single_pass::PATCH_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
 
     if let Some((original_code, original_size, _copy)) = saved
         && let Some(p) = unsafe { params.as_mut() }
@@ -275,8 +281,10 @@ pub fn process_reload_request() {
         ge.LoadShaderBundle(away.as_ptr());
         // A reload bounces the bundle (away, then back), re-creating every shader through the hooks
         // twice. Reset the single-pass census after the throwaway `away` pass so the reported numbers
-        // reflect exactly one clean pass over the real (`back`) shader set.
+        // reflect exactly one clean pass over the real (`back`) shader set; also clear the patched-VS
+        // set so it repopulates with the `back` set's live shader pointers.
         crate::stereo::single_pass::reset_census();
+        crate::stereo::single_pass::reset_patched_vs();
         ge.LoadShaderBundle(back.as_ptr());
         tracing::info!(
             "shader reload: '{current_name}' (bounced via '{other}'); {} PCF sites patched total",
