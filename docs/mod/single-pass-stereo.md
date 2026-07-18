@@ -123,7 +123,18 @@ vertex shaders and structurally validates every success. Result:
 
 So 196 of 455 VS patch cleanly today, and every patch is structurally sound (re-parses, `SFI0`
 viewport bit set, no residual per-eye operand). The rewriter is validated corpus-wide *before* any of
-it reaches the game.
+it reaches the game, at four levels:
+
+1. the single-shader unit test (`patch.rs`) checks the exact injected encodings against fxc;
+2. `corpus_patch` structurally validates all 196 successes (0 invalid);
+3. all **196/196** patched blobs are accepted by real Microsoft `D3DDisassemble` under wine (via
+   `scripts/dxbc.sh disasm`) — a valid-container proof from the actual D3D tooling, the closest
+   offline proxy to DXVK's `CreateVertexShader` accepting them;
+4. spot-checking a patched game shader's disassembly (`sh_0067`) shows the exact expected idiom —
+   `dcl_constantbuffer CB13[10], dynamicIndexed`, `dcl_input_sgv instance_id`,
+   `dcl_output_siv viewport_array_index`, the `eye = id & 1` / `rBase = eye*5` prologue, and every
+   `cb0[{4,29..32}]` remapped to `cb13[rBase + k]` while the camera-relative base (`cb12[3]`) is left
+   untouched.
 
 ### Hook points (all in `jc3gi`, addresses bound)
 
