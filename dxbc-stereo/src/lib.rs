@@ -6,15 +6,19 @@
 //! (`[eye0: 0..4][eye1: 5..9]`) and rewrites the shader to index it per eye by `SV_InstanceID & 1`,
 //! emitting `SV_ViewportArrayIndex`. See `docs/mod/single-pass-stereo.md`.
 //!
-//! This module is the *analysis* foundation: parse the DXBC container and the SM5 token stream, and
-//! locate the operands the rewrite must remap. The rewrite itself builds on it. Kept pure and
-//! portable so it unit-tests natively against the game's shaders; the payload runs it in-flight in
-//! the `CreateVertexProgram` hook.
+//! Two layers: the *analysis* foundation (parse the DXBC container and the SM5 token stream, and
+//! locate the operands the rewrite must remap -- [`per_eye_refs`]) and the *rewrite* built on it
+//! ([`patch_vertex_shader`]). Kept pure and portable so it unit-tests natively against the game's
+//! shaders; the payload runs it in-flight in the `CreateVertexProgram` hook.
 
+mod checksum;
 mod container;
+mod rewrite;
 mod tokens;
 
+pub use checksum::refresh_checksum;
 pub use container::{Chunk, Dxbc, DxbcError};
+pub use rewrite::{STEREO_CB_REGISTER, STEREO_CB_ROWS, patch_vertex_shader};
 pub use tokens::{Operand, OperandKind, ShaderStage, TokenStream};
 
 /// The `cb0` rows that carry per-eye data in the vertex position path: `cb0[4]` (camera world

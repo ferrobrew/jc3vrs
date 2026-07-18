@@ -86,6 +86,31 @@ pub enum DxbcError {
     ZeroLengthInstruction,
     /// The token stream ended inside an instruction or operand.
     UnexpectedEndOfTokens,
+    /// The shader is not a vertex shader, so the stereo rewrite does not apply.
+    NotVertexShader,
+    /// The shader is SM4 (`SHDR`); the rewrite emits SM5-era structures (`SFI0`, the viewport
+    /// output) and only supports `SHEX` shaders.
+    UnsupportedShaderModel,
+    /// The container has no `ISGN` input-signature chunk to extend.
+    MissingInputSignature,
+    /// The container has no `OSGN` output-signature chunk to extend.
+    MissingOutputSignature,
+    /// A signature chunk's header or element table does not match the expected `ISGN`/`OSGN`
+    /// 24-byte-element layout.
+    MalformedSignature,
+    /// The shader has no `cb0` per-eye operands, so there is nothing to rewrite; the caller should
+    /// leave it double-drawn.
+    NoPerEyeReferences,
+    /// The shader already declares `cb13`, the slot the stereo constants need.
+    Cb13AlreadyDeclared,
+    /// The shader already declares an `SV_InstanceID` input; rewriting its consumers is not
+    /// supported yet.
+    InstanceIdAlreadyDeclared,
+    /// A per-eye operand uses an index encoding the rewrite does not support (for instance a 64-bit
+    /// or already-relative element index).
+    UnsupportedOperandEncoding,
+    /// Rewriting an instruction would push its length past the 7-bit instruction-length field.
+    InstructionTooLong,
 }
 
 impl fmt::Display for DxbcError {
@@ -96,6 +121,22 @@ impl fmt::Display for DxbcError {
             DxbcError::NoShaderChunk => "dxbc: no SHEX/SHDR shader chunk",
             DxbcError::ZeroLengthInstruction => "dxbc: zero-length instruction token",
             DxbcError::UnexpectedEndOfTokens => "dxbc: token stream ended mid-instruction",
+            DxbcError::NotVertexShader => "dxbc: not a vertex shader",
+            DxbcError::UnsupportedShaderModel => "dxbc: SM4 (SHDR) shader; the rewrite needs SHEX",
+            DxbcError::MissingInputSignature => "dxbc: no ISGN input-signature chunk",
+            DxbcError::MissingOutputSignature => "dxbc: no OSGN output-signature chunk",
+            DxbcError::MalformedSignature => "dxbc: signature chunk has an unexpected layout",
+            DxbcError::NoPerEyeReferences => "dxbc: no per-eye cb0 operands to rewrite",
+            DxbcError::Cb13AlreadyDeclared => "dxbc: the shader already declares cb13",
+            DxbcError::InstanceIdAlreadyDeclared => {
+                "dxbc: the shader already declares an SV_InstanceID input"
+            }
+            DxbcError::UnsupportedOperandEncoding => {
+                "dxbc: a per-eye operand uses an unsupported index encoding"
+            }
+            DxbcError::InstructionTooLong => {
+                "dxbc: a rewritten instruction exceeds the instruction-length field"
+            }
         };
         f.write_str(msg)
     }

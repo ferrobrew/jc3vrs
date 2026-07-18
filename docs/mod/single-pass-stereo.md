@@ -59,7 +59,8 @@ shader to index it per eye:
    the model idiom.
 6. Rewrite `SV_InstanceID` consumers (if any) to `>> 1`.
 7. Fix the SHEX instruction/token counts, the ISGN/OSGN chunks, the container total size, and the
-   DXBC checksum (`refresh_dxbc_checksum` in `hooks/graphics_engine/shader.rs` already exists).
+   DXBC checksum (`dxbc_stereo::refresh_checksum`, shared with the fragment-program patching in
+   `hooks/graphics_engine/shader.rs`).
 
 The patch is applied in-flight in a `CreateVertexProgram` hook (release `0x141953320`), symmetric to
 the existing `CreateFragmentProgram` patching, before the underlying `CreateVertexShader` copies the

@@ -21,6 +21,7 @@ glam = { workspace = true }
 
 jc3gi = { path = "../jc3gi" }
 fsr-sys = { path = "../fsr-sys" }
+dxbc-stereo = { path = "../dxbc-stereo" }
 # Runtime-loaded (`loaded` default feature): the OpenXR loader is opened at runtime via
 # `xr::Entry::load_from`, not linked. The `static` loader (build the loader through cmake against the
 # xwin/clang-cl cross toolchain) does not build here -- cmake requires Ninja, which the cross

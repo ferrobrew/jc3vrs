@@ -63,6 +63,12 @@ impl TokenStream {
             pos: 2, // skip version + length
         }
     }
+
+    /// The raw dword tokens, including the version and length header. The rewrite reads these to
+    /// re-serialize instructions it edits.
+    pub(crate) fn tokens(&self) -> &[u32] {
+        &self.tokens
+    }
 }
 
 /// The opcode field of an opcode token (`[10:0]`).
@@ -157,6 +163,12 @@ impl<'a> Instruction<'a> {
             end: self.end,
         }
     }
+
+    /// The token index of the first operand (past the opcode and any extended opcode tokens). The
+    /// rewrite copies `start..operands_start` verbatim when re-serializing an instruction.
+    pub(crate) fn operands_start(&self) -> usize {
+        self.operands_start
+    }
 }
 
 /// An iterator over an instruction's operands.
@@ -221,12 +233,12 @@ const OPERAND_TYPE_IMMEDIATE64: u32 = 5;
 const IDX_IMM32: u32 = 0;
 const IDX_IMM64: u32 = 1;
 const IDX_RELATIVE: u32 = 2;
-const IDX_IMM32_PLUS_RELATIVE: u32 = 3;
+pub(crate) const IDX_IMM32_PLUS_RELATIVE: u32 = 3;
 const IDX_IMM64_PLUS_RELATIVE: u32 = 4;
 
 /// Parses one operand starting at `tokens[pos]`; returns the decoded operand and the token index
 /// just past it. Recurses into relative-index operands.
-fn parse_operand(tokens: &[u32], pos: usize) -> Result<(Operand, usize), DxbcError> {
+pub(crate) fn parse_operand(tokens: &[u32], pos: usize) -> Result<(Operand, usize), DxbcError> {
     let tok = *tokens.get(pos).ok_or(DxbcError::UnexpectedEndOfTokens)?;
     let token_offset = pos;
     let mut p = pos + 1;

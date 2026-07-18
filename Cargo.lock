@@ -948,6 +948,7 @@ dependencies = [
  "anyhow",
  "clipboard-win",
  "detours-macro",
+ "dxbc-stereo",
  "egui",
  "egui-directx11",
  "egui_dock",
