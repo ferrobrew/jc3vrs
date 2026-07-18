@@ -1,5 +1,2 @@
-# Build/run artifacts (rebuilt by disasm.sh).
-disasm.exe
-compile.exe
-d3dcompiler_47.dll
+# Extracted shader dirs (carved out of a bundle by extract_dxbc.py).
 *.shaders/

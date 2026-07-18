@@ -1,5 +1,5 @@
 [workspace]
-members = ["injector", "jc3gi", "payload", "fsr-sys", "shadergen", "dxbc-stereo", "tools/scaleform-gfx-examine"]
+members = ["injector", "jc3gi", "payload", "fsr-sys", "shadergen", "dxbc-stereo", "tools/dxbc-tool", "tools/scaleform-gfx-examine"]
 resolver = "3"
 default-members = ["injector"]
 

@@ -38,19 +38,20 @@ left untouched.
 
 ## Disassembling a blob
 
-`disasm.sh` builds a tiny `D3DDisassemble` harness (`disasm.c`) with clang + the repo's xwin sysroot
-and runs it under wine against the `d3dcompiler_47.dll` that `shadergen` provisions:
+`dxbc.sh disasm` cross-builds the `dxbc-tool` crate (a `D3DDisassemble` wrapper over the `windows`
+crate) with cargo-xwin and runs it under wine against the `d3dcompiler_47.dll` that `shadergen`
+provisions:
 
 ```sh
-./tools/shaders/disasm.sh Shaders_F.shaders/sh_0467_0016b270.dxbc | less
+./scripts/dxbc.sh disasm Shaders_F.shaders/sh_0467_0016b270.dxbc | less
 ```
 
 See [`tools/shaders/README.md`](../../tools/shaders/README.md) for the one-time prerequisites. The output
 is standard FXC-style SM5 assembly: a commented reflection header (cbuffers, resource bindings, the
 input/output signatures) followed by the instruction stream.
 
-Caveat: the harness writes **CRLF** line endings (it runs under wine), so `grep`/`awk` on the saved
-output want `grep -a` or a `sed 's/\r$//'` first — `disasm.sh` already strips them on stdout.
+Caveat: the tool runs under wine, so the disassembly text carries **CRLF** line endings; `grep`/`awk`
+on the saved output want `grep -a` or a `sed 's/\r$//'` first.
 
 ## Reading the disassembly
 

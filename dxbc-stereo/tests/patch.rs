@@ -3,7 +3,7 @@
 //!
 //! The game shader is git-ignored local extract, so those tests skip when it is absent; the fxc
 //! reference (`tests/data/ref_vs50.dxbc`, compiled from `tests/data/ref_vs.hlsl` with
-//! a `D3DCompile` harness) is our own output and rides with the crate, so the encoding
+//! `scripts/dxbc.sh compile`) is our own output and rides with the crate, so the encoding
 //! byte-match tests always run.
 
 use std::path::PathBuf;

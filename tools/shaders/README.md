@@ -10,15 +10,19 @@ python3 extract_dxbc.py "$HOME/.steam/steam/steamapps/common/Just Cause 3/Shader
 #    -> ./Shaders_F.shaders/sh_0000_xxxxxxxx.dxbc ...
 
 # 2. Disassemble one to SM5 assembly.
-./disasm.sh Shaders_F.shaders/sh_0467_0016b270.dxbc | less
+../../scripts/dxbc.sh disasm Shaders_F.shaders/sh_0467_0016b270.dxbc | less
+
+# 3. Or compile an HLSL reference shader to DXBC (e.g. to learn what fxc emits for a transform).
+../../scripts/dxbc.sh compile ref.hlsl main vs_5_0 > ref.dxbc
 ```
 
-Prerequisites for `disasm.sh` (all already used elsewhere in this repo):
+`scripts/dxbc.sh` wraps the `dxbc-tool` crate (`tools/dxbc-tool`), which calls `D3DCompile` /
+`D3DDisassemble` through the `windows` crate. It cross-builds the tool with cargo-xwin and runs it
+under wine. Prerequisites (all already used elsewhere in this repo):
 
 - the xwin sysroot at `.xwin/xwin` — run `scripts/xwin_build.sh` once if absent;
 - the `d3dcompiler_47.dll` + wine prefix under `target/fsr-shader-build/` — run
   `cargo run -p shadergen --target x86_64-unknown-linux-gnu` once to provision them;
-- `wine` and an unwrapped `clang` on `PATH`.
+- `wine` on `PATH`.
 
-`disasm.exe`, the copied `d3dcompiler_47.dll`, and any extracted `*.shaders/` dirs are gitignored
-(rebuilt on demand).
+Any extracted `*.shaders/` dirs are gitignored (rebuilt on demand).
