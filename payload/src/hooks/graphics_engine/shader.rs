@@ -223,9 +223,6 @@ pub fn process_reload_request() {
     if !RELOAD_REQUESTED.swap(false, Ordering::Relaxed) {
         return;
     }
-    // A reload re-creates every shader through the hooks below, so restart the single-pass census to
-    // count this reload's pass rather than accumulating across reloads.
-    crate::stereo::single_pass::reset_census();
     // SAFETY: runs on the game thread at frame start; the engine singleton is live and its
     // `m_CurrentBundleName` is a stable `std::string`. `LoadShaderBundle` is what the settings path
     // calls; we drain the draw first so no GPU work references the shaders being replaced.
@@ -252,6 +249,10 @@ pub fn process_reload_request() {
 
         ge.WaitForCPUDrawToFinish();
         ge.LoadShaderBundle(away.as_ptr());
+        // A reload bounces the bundle (away, then back), re-creating every shader through the hooks
+        // twice. Reset the single-pass census after the throwaway `away` pass so the reported numbers
+        // reflect exactly one clean pass over the real (`back`) shader set.
+        crate::stereo::single_pass::reset_census();
         ge.LoadShaderBundle(back.as_ptr());
         tracing::info!(
             "shader reload: '{current_name}' (bounced via '{other}'); {} PCF sites patched total",

@@ -88,13 +88,16 @@ pub fn capability() -> Capability {
 }
 
 /// Record the outcome of running [`dxbc_stereo::patch_vertex_shader`] on one vertex shader, for the
-/// census the debug UI reports. Classifies into: successfully patched, no per-eye references (the
-/// baked-WVP / no-position families that are left double-drawn -- expected, not a failure), and
-/// genuinely errored (an unexpected shape the rewriter could not handle -- worth investigating).
+/// census the debug UI reports. Classifies into four buckets: successfully patched; no per-eye
+/// references (the baked-WVP / no-position families left double-drawn -- expected); the
+/// `SV_InstanceID`-already-declared deferral (shaders that instance themselves, whose `>> 1` consumer
+/// rewrite is a later phase -- also expected, left double-drawn); and genuinely errored (an
+/// unexpected shape the rewriter could not handle -- worth investigating, should be zero).
 pub fn record_patch_outcome(outcome: &Result<Vec<u8>, DxbcError>) {
     match outcome {
         Ok(_) => &PATCHED,
         Err(DxbcError::NoPerEyeReferences) => &NO_REFS,
+        Err(DxbcError::InstanceIdAlreadyDeclared) => &DEFERRED,
         Err(_) => &ERRORED,
     }
     .fetch_add(1, Ordering::Relaxed);
@@ -111,8 +114,14 @@ pub fn no_refs_count() -> usize {
     NO_REFS.load(Ordering::Relaxed)
 }
 
+/// Vertex shaders left double-drawn because they already declare an `SV_InstanceID` input; their
+/// `>> 1` consumer rewrite is a later phase. Expected, not a failure.
+pub fn deferred_count() -> usize {
+    DEFERRED.load(Ordering::Relaxed)
+}
+
 /// Vertex shaders the rewriter could not handle for an unexpected reason (a shape it does not yet
-/// support). A non-zero count flags shaders to investigate.
+/// support). A non-zero count flags shaders to investigate -- the offline corpus reports zero.
 pub fn errored_count() -> usize {
     ERRORED.load(Ordering::Relaxed)
 }
@@ -122,10 +131,12 @@ pub fn errored_count() -> usize {
 pub fn reset_census() {
     PATCHED.store(0, Ordering::Relaxed);
     NO_REFS.store(0, Ordering::Relaxed);
+    DEFERRED.store(0, Ordering::Relaxed);
     ERRORED.store(0, Ordering::Relaxed);
 }
 
 static CAPABILITY: AtomicU8 = AtomicU8::new(Capability::Unprobed as u8);
 static PATCHED: AtomicUsize = AtomicUsize::new(0);
 static NO_REFS: AtomicUsize = AtomicUsize::new(0);
+static DEFERRED: AtomicUsize = AtomicUsize::new(0);
 static ERRORED: AtomicUsize = AtomicUsize::new(0);

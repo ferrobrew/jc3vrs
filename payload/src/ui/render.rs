@@ -743,17 +743,24 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             Capability::Unprobed => "Viewport routing: not yet probed (no device seen)",
         });
 
-        let (patched, no_refs, errored) = (
+        let (patched, no_refs, deferred, errored) = (
             single_pass::patched_count(),
             single_pass::no_refs_count(),
+            single_pass::deferred_count(),
             single_pass::errored_count(),
         );
-        if patched + no_refs + errored == 0 {
+        if patched + no_refs + deferred + errored == 0 {
             ui.label("Census: 0 shaders seen -- enable a mode above, then click Reload shaders.");
         } else {
             ui.label(format!(
-                "Census: {patched} patched, {no_refs} no per-eye refs (double-drawn), {errored} errored"
+                "Census: {patched} patched, {no_refs} no per-eye refs, {deferred} instance-id deferred, {errored} errored"
             ));
+            if errored > 0 {
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    "errored > 0: a shader the offline corpus did not cover -- check the log",
+                );
+            }
         }
         ui.horizontal(|ui| {
             if ui.button("Reload shaders").clicked() {
