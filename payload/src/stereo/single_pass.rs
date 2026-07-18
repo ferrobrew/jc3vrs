@@ -391,6 +391,49 @@ pub fn duplicate_current_viewport() {
     }
 }
 
+/// Re-apply the eye-half split to the currently-bound viewport at the start of the G-buffer range.
+///
+/// The main G-buffer render setup is bound (setting its viewport) *before* `DrawRenderPassRange`
+/// raises [`in_gbuffer_range`], so the [`rs_set_viewports_detour`] identical-dups it instead of
+/// splitting -- and that dup'd viewport covers the bulk of the geometry, so both instances of a
+/// patched draw land in the same half. Called right after the range flag goes up (dual-eye only),
+/// this reads that bound viewport and re-sets it as left/right halves.
+pub fn apply_eye_split_viewport() {
+    if !(dual_eye_active() && in_gbuffer_range()) {
+        return;
+    }
+    // SAFETY: runs on the render thread at the G-buffer range boundary; the device/context pointers
+    // are stable and the ops run under the engine's context mutex.
+    unsafe {
+        let Some(ge) = GraphicsEngine::get() else {
+            return;
+        };
+        let Some(device) = ge.m_Device.as_ref() else {
+            return;
+        };
+        let Some(context) = device.m_Context.as_ref() else {
+            return;
+        };
+        let ctx = &context.m_Context;
+        EnterCriticalSection(context.m_Mutex);
+        let mut count = 1u32;
+        let mut viewports = [D3D11_VIEWPORT::default(); 1];
+        ctx.RSGetViewports(&mut count, Some(viewports.as_mut_ptr()));
+        let vp = viewports[0];
+        if vp.Width > 0.0 {
+            let half = vp.Width / 2.0;
+            let mut left = vp;
+            left.Width = half;
+            let mut right = vp;
+            right.Width = half;
+            right.TopLeftX = vp.TopLeftX + half;
+            // count == 2 passes straight through the detour to the raw RSSetViewports.
+            ctx.RSSetViewports(Some(&[left, right]));
+        }
+        LeaveCriticalSection(context.m_Mutex);
+    }
+}
+
 /// Duplicate the current (single) viewport into viewport slots 0 **and** 1, both covering the same
 /// region.
 ///
@@ -449,6 +492,7 @@ unsafe extern "system" fn rs_set_viewports_detour(
         let vp = unsafe { *viewports };
         let (slot0, slot1) = if dual_eye_active() && in_gbuffer_range() {
             // Route the two eyes to the left/right halves of the (double-wide) target.
+            VIEWPORT_SPLIT.fetch_add(1, Ordering::Relaxed);
             let half = vp.Width / 2.0;
             let mut left = vp;
             left.Width = half;
@@ -458,6 +502,7 @@ unsafe extern "system" fn rs_set_viewports_detour(
             (left, right)
         } else {
             // Milestone A: both slots identical, so a patched shader routes anywhere validly.
+            VIEWPORT_DUP.fetch_add(1, Ordering::Relaxed);
             (vp, vp)
         };
         unsafe { detour.call(context, 2, [slot0, slot1].as_ptr()) };
@@ -591,12 +636,14 @@ pub fn has_patched_shaders() -> bool {
 pub fn log_draw_split() {
     let patched = PATCHED_DRAWS.swap(0, Ordering::Relaxed);
     let unpatched = UNPATCHED_DRAWS.swap(0, Ordering::Relaxed);
+    let split = VIEWPORT_SPLIT.swap(0, Ordering::Relaxed);
+    let dup = VIEWPORT_DUP.swap(0, Ordering::Relaxed);
     if patched + unpatched > 0 {
         let n = DRAW_SPLIT_LOG.fetch_add(1, Ordering::Relaxed);
         if n.is_multiple_of(120) {
             tracing::info!(
                 target: "single_pass",
-                "gbuffer draws this frame: {patched} patched (instance-doubled), {unpatched} unpatched (single)"
+                "gbuffer draws: {patched} patched, {unpatched} unpatched | viewports: {split} split, {dup} identical-dup"
             );
         }
     }
@@ -725,6 +772,8 @@ static BOUND_VS_PATCHED: AtomicBool = AtomicBool::new(false);
 static PATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static UNPATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static DRAW_SPLIT_LOG: AtomicUsize = AtomicUsize::new(0);
+static VIEWPORT_SPLIT: AtomicUsize = AtomicUsize::new(0);
+static VIEWPORT_DUP: AtomicUsize = AtomicUsize::new(0);
 
 static CAPABILITY: AtomicU8 = AtomicU8::new(Capability::Unprobed as u8);
 static PATCHED: AtomicUsize = AtomicUsize::new(0);

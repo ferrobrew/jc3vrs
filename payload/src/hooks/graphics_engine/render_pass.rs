@@ -196,6 +196,8 @@ fn draw_render_pass_range(
         && last <= RP_FIRST_SCENE;
     if gbuffer_geometry {
         crate::stereo::single_pass::set_gbuffer_range(true);
+        // The main G-buffer viewport was bound before this range flag went up, so re-split it now.
+        crate::stereo::single_pass::apply_eye_split_viewport();
     }
     run_scene_range(first, last, &draw);
     if gbuffer_geometry {
