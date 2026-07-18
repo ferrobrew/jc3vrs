@@ -65,6 +65,26 @@ The patch is applied in-flight in a `CreateVertexProgram` hook (release `0x14195
 the existing `CreateFragmentProgram` patching, before the underlying `CreateVertexShader` copies the
 bytecode.
 
+## Reference structures (what fxc emits, so the transform can reproduce them)
+
+Compiling a reference VS that writes `SV_ViewportArrayIndex` (through a `D3DCompile` harness under
+wine) settles the encodings the transform must produce. Key findings:
+
+- **A vs_5_0 writing `SV_ViewportArrayIndex` compiles** — no need for vs_5_1. But fxc adds an
+  **`SFI0` (shader-feature-info) chunk**, an 8-byte body with **bit 13 (`0x2000`)** set:
+  `D3D_SHADER_REQUIRES_VIEWPORT_AND_RT_ARRAY_INDEX_FROM_ANY_SHADER_FEEDING_RASTERIZER`. The transform
+  must add this chunk (or OR the bit into an existing `SFI0`), else the viewport output is invalid.
+  Chunk order is `RDEF, ISGN, OSGN, SHEX, SFI0, STAT`.
+- **ISGN** gains `SV_InstanceID` (`sysvalue = 8` INSTANCE_ID, a `uint` component type, at the next
+  free input register, mask `.x`). **OSGN** gains `SV_ViewportArrayIndex` (`sysvalue = 5`, `uint`, at
+  the next free output register, mask `.x`, never-read-mask `.yzw`).
+- **`cb13`** is declared **dynamically indexed** (`dcl_constantbuffer CB13[10], dynamicIndexed`),
+  because it is indexed by a register (`rBase.x + k`) rather than an immediate — unlike the game's
+  `cb0` (`immediateIndexed`).
+- Reflection (`RDEF`) need not be updated: DXVK binds and compiles from the `SHEX` declarations, not
+  `RDEF`; and the `STAT` chunk is ignored, so instruction-count bookkeeping is unnecessary — only the
+  `SHEX` length dword is fixed.
+
 ## Phased build
 
 - **Phase 0 (the spike)**: build the DXBC-assembler skeleton; patch only the ~10-shader `RBIInfo`

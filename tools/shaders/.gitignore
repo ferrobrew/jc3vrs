@@ -1,4 +1,5 @@
 # Build/run artifacts (rebuilt by disasm.sh).
 disasm.exe
+compile.exe
 d3dcompiler_47.dll
 *.shaders/
