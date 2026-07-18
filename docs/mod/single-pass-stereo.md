@@ -102,6 +102,91 @@ wine) settles the encodings the transform must produce. Key findings:
   buffer, so doubling needs a compute pre-pass) and the baked-WVP straggler shaders, or accept those
   as permanently double-drawn.
 
+## Payload integration — architecture, hook points, and status
+
+This section is the concrete build spec for the in-game side, synthesised from the engine RE in
+`docs/engine/rendering.md` (frame pipeline §1–13) and `docs/engine/render-setups-reinit.md`
+(double-wide target). Release addresses are this build's RVAs; the layouts are byte-stable.
+
+### The uniform-position path, confirmed against the corpus
+
+The whole premise — JC3 has one scene view-projection in a byte-uniform `cb0` location — now has an
+offline proof. `dxbc-stereo`'s `corpus_patch` test runs `patch_vertex_shader` over all 455 extracted
+vertex shaders and structurally validates every success. Result:
+
+| Outcome | Count | Disposition |
+|---|---|---|
+| Patched (per-eye `cb0[{4,29..32}]` remapped to `cb13`) | **196** | single-pass |
+| No per-eye references (baked-WVP / no-position / cb2-terrain) | 245 | double-drawn |
+| Already declares `SV_InstanceID` (needs the `>> 1` consumer rewrite) | 14 | double-drawn (deferred) |
+| Errored / structurally invalid | **0** | — |
+
+So 196 of 455 VS patch cleanly today, and every patch is structurally sound (re-parses, `SFI0`
+viewport bit set, no residual per-eye operand). The rewriter is validated corpus-wide *before* any of
+it reaches the game.
+
+### Hook points (all in `jc3gi`, addresses bound)
+
+| Purpose | Function | Release addr |
+|---|---|---|
+| Patch VS bytecode in-flight | `Graphics::CreateVertexProgram(device, *const CreateVertexProgramParams)` | `0x141953320` |
+| VS global constants staging (`cb0` rows) | `RenderEngine::SetGlobalShaderProgramCameraConstants` | `0x140186370` |
+| VS global constants GPU upload | `RenderEngine::SetAllGlobalShaderProgramConstants` | `0x140173850` |
+| Rebuild scene RTs at a new size | `GraphicsEngine::CreateRenderSetups(this, *const DeviceInfo)` | `0x1400CE930` |
+| Runtime resize driver (reuse, swapchain-neutralised) | `GraphicsEngine::ApplyResize(this, w, h)` | `0x1400CFA90` |
+| Per-pass viewport bind (viewport follows RT size) | `Graphics::SetRenderSetup` | `0x141966D20` |
+
+`CreateVertexProgramParams` = `{ m_Code: *const u8 @0, m_Size: u64 @8, m_Name: *const u8 @0x10 }`.
+The `cb0` VS staging block is `RenderEngine::m_VPGlobalConstData: [Vector4; 49]` (row 4 = camera
+world pos, rows 29–32 = the translation-free OffsetViewProjection). `cb13` is free across the game's
+VS (they use `cb0`, `cb2`, `cb12`).
+
+### The pipeline (behind `config.stereo.single_pass`, off by default)
+
+1. **VS patch** — a `CreateVertexProgram` detour (`hooks/graphics_engine/shader.rs`, mirrors the
+   fragment hook) runs `patch_vertex_shader` and substitutes the patched bytecode. *(Built:
+   census/observation only. Substitution + the patched-VS set is the next step.)*
+2. **Bound-VS gating for the draw** — to double instances only for patched draws, the draw layer
+   must know whether the currently-bound VS is one we patched. Cleanest seam: COM vtable detours on
+   the immediate context (`VSSetShader` to cache the bound VS; `DrawIndexed`/`DrawIndexedInstanced`
+   to promote to 2 instances) plus recording the patched `ID3D11VertexShader*`. re-utilities supports
+   runtime-address detours (`with_detour<F: retour::Function>` / `with_runtime_binder`), so the DXVK
+   method pointers (read from a live context's vtable) are hookable. *(Unbuilt.)*
+3. **cb13 dual-eye upload** — compute both eyes' five rows (OffsetVP + camera pos) and upload to a
+   mod-owned `cb13`, laid out `[eye0: 0..4][eye1: 5..9]`, bound via `VSSetConstantBuffers(13, …)` at
+   the start of the G-buffer pass range. The per-eye matrices already exist
+   (`vr::frame::EyeRenderParams`, one set per eye). *(Unbuilt.)*
+4. **Double-wide render setups** — extend the mod's existing per-eye `CreateRenderSetups` re-init to
+   2× per-eye width. The whole scene RT set goes double-wide; viewports follow RT size automatically
+   (`SetRenderSetup`), so no per-pass viewport patching. *(Unbuilt.)*
+5. **Two-viewport routing** — after the G-buffer RT bind, set two viewports (left/right halves) so
+   `SV_ViewportArrayIndex` routes each eye. *(Unbuilt.)*
+6. **Capability gate** — `stereo::single_pass::probe` checks
+   `VPAndRTArrayIndexFromAnyShaderFeedingRasterizer`; single-pass stays inert without it. *(Built.)*
+
+### Wake-up test checklist (ranked, safest first)
+
+1. **Census (safe, no rendering change).** Inject; open Render tab → "Single-pass stereo"; enable
+   "Census only"; click "Reload shaders". Expect roughly **196 patched / 259 double-drawn**
+   (245 no-refs + 14 instance-id) and the viewport-routing capability = supported. Non-zero "errored"
+   would flag a shader the offline corpus didn't cover (bundle mismatch) — capture its name.
+2. **Capability probe.** Confirm the reported capability matches the headset/runtime in use this
+   session (Monado/DXVK on the Index expected to support it; confirm, don't assume).
+3. *(Once the pipeline lands)* **Single-pass A/B.** Enable the master switch; compare against the
+   double-draw oracle (toggle off) for the model-family geometry. Likely first failure modes, in
+   order: right-eye half empty (viewport routing / instance doubling not firing), geometry in wrong
+   half (viewport index inverted), stale/garbage positions (cb13 layout or upload), unpatched
+   geometry missing from one eye (draw-doubling gate).
+
+### Deferred (documented, deliberately not built blind)
+
+- The `SV_InstanceID >> 1` consumer rewrite for the 14 already-instanced shaders (Phase 1+): the
+  DXBC transform is offline-testable, but the per-instance *semantics* are not, so it waits until
+  Phase 0 validates the core.
+- Terrain's `cb2` OffsetVP remap (Phase 1), the SSAO/SSR seam clamps (Phase 2), and the baked-WVP
+  CPU dual-upload + GPU-indirect compute pre-pass (Phase 3) — none are offline-verifiable, so they
+  stay specified here rather than speculatively built.
+
 ## Risk ranking
 
 1. Baked-WVP per-type constant buffers (~105 VS; touches CPU code of ~12 render-block types).
