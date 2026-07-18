@@ -538,6 +538,25 @@ impl RenderPass {
             f(self as *mut Self as _, parity)
         }
     }
+    pub const Draw_ADDRESS: usize = 0x140194540;
+    /// The virtual per-pass draw entry (vtable slot 0): when the pass has work, it runs
+    /// `SetupRenderContext`, selects the pass camera (the pass's external camera if set, else the
+    /// render camera) into the context via
+    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera), refreshes and uploads the
+    /// global constant buffers
+    /// ([`SetGlobalShaderProgramCameraConstants`](graphics_engine::render_engine::RenderEngine::SetGlobalShaderProgramCameraConstants)
+    /// then
+    /// [`SetAllGlobalShaderProgramConstants`](graphics_engine::render_engine::RenderEngine::SetAllGlobalShaderProgramConstants),
+    /// under the `"SetGlobals"` marker), binds the pass's render setup and the global textures,
+    /// and vtable-dispatches the pass body (slots 1 and 2).
+    pub unsafe fn Draw(&mut self) {
+        unsafe {
+            let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
+                Self::Draw_ADDRESS,
+            );
+            f(self as *mut Self as _)
+        }
+    }
     pub const DoDraw_ADDRESS: usize = 0x1401AC7A0;
     /// Draws the current draw list, walking `min(m_ListSize, m_NumElements)` blocks and
     /// vtable-dispatching each. Non-destructive -- never writes `m_NumElements`. Calls

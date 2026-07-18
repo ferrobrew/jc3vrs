@@ -24,6 +24,31 @@ impl std::convert::AsMut<CreateFragmentProgramParams> for CreateFragmentProgramP
         self
     }
 }
+#[repr(C, align(8))]
+/// Parameters to [`CreateVertexProgram`]: the compiled DXBC bytecode, its byte length, and a debug
+/// name (attached to the D3D object and used to size the retained bytecode copy).
+pub struct CreateVertexProgramParams {
+    pub m_Code: *const u8,
+    pub m_Size: u64,
+    pub m_Name: *const u8,
+}
+fn _CreateVertexProgramParams_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x18], CreateVertexProgramParams>([0u8; 0x18]);
+    }
+    unreachable!()
+}
+impl CreateVertexProgramParams {}
+impl std::convert::AsRef<CreateVertexProgramParams> for CreateVertexProgramParams {
+    fn as_ref(&self) -> &CreateVertexProgramParams {
+        self
+    }
+}
+impl std::convert::AsMut<CreateVertexProgramParams> for CreateVertexProgramParams {
+    fn as_mut(&mut self) -> &mut CreateVertexProgramParams {
+        self
+    }
+}
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
 /// The primitive topology passed to the draw wrappers. The patchlist variants are tessellation
@@ -324,6 +349,26 @@ pub unsafe fn CreateFragmentProgram(
             params: *mut crate::graphics_engine::draw::CreateFragmentProgramParams,
         ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(
             CreateFragmentProgram_ADDRESS,
+        );
+        f(device, params)
+    }
+}
+pub const CreateVertexProgram_ADDRESS: usize = 0x141953320;
+/// The leaf vertex-program creator: it wraps `ID3D11Device::CreateVertexShader` over
+/// `params.m_Code`/`params.m_Size`. Unlike [`CreateFragmentProgram`], the returned holder also
+/// retains a heap copy of the bytecode (used later for input-layout creation), so both the D3D
+/// object and the retained copy reflect whatever bytecode was passed in. Static (no `this`); the
+/// first argument is the graphics device.
+pub unsafe fn CreateVertexProgram(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    params: *const crate::graphics_engine::draw::CreateVertexProgramParams,
+) -> *mut ::std::ffi::c_void {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+            params: *const crate::graphics_engine::draw::CreateVertexProgramParams,
+        ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(
+            CreateVertexProgram_ADDRESS,
         );
         f(device, params)
     }

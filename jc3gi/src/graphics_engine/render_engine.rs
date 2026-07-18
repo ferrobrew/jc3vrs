@@ -285,7 +285,28 @@ pub struct RenderEngine {
     /// pointer to this field to every type's [`Recreate`](RenderBlockTypeBase::Recreate), and each
     /// type's `RegisterType` passes it to [`Create`](RenderBlockTypeBase::Create) at startup.
     pub m_ResourceContext: crate::graphics_engine::render_engine::ResourceContext,
-    _field_18f0: [u8; 2352],
+    _field_18f0: [u8; 44],
+    /// The CPU staging copy of the global vertex-program constant buffer (the shaders'
+    /// `GlobalConstants` cbuffer at vertex slot 0, `VP_GLOBAL_SIZE` = 49 float4 rows).
+    /// [`SetGlobalShaderProgramCameraConstants`](RenderEngine::SetGlobalShaderProgramCameraConstants)
+    /// fills the per-view rows from a [`RenderContext`], the fog and atmosphere setters fill rows
+    /// 14--24, and [`SetAllGlobalShaderProgramConstants`](RenderEngine::SetAllGlobalShaderProgramConstants)
+    /// uploads the whole block to the GPU. Row layout (row = float4 index): 0--3 the full
+    /// (translation-bearing) view-projection, 4 the camera world position, 5 the camera forward
+    /// axis, 9 the camera world position with `w = 1`, 14--24 fog and atmospheric scattering,
+    /// 29--32 the translation-free
+    /// [`m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
+    /// (the matrix camera-relative opaque geometry multiplies by), 33--36 the previous
+    /// view-projection, 37 frame time and dt, 38--43 the frustum planes, 44--47 the previous
+    /// offset view-projection, and 48 the previous camera position.
+    pub m_VPGlobalConstData: [crate::types::math::Vector4; 49],
+    /// The CPU staging copy of the global fragment-program constant buffer (the shaders'
+    /// `GlobalConstants` cbuffer at fragment slot 0, `FP_GLOBAL_SIZE` = 95 float4 rows): lighting,
+    /// wetness, shadow, and per-view camera rows filled by
+    /// [`SetGlobalShaderConstants`](RenderEngine::SetGlobalShaderConstants), uploaded by
+    /// [`SetAllGlobalShaderProgramConstants`](RenderEngine::SetAllGlobalShaderProgramConstants).
+    pub m_FPGlobalConstData: [crate::types::math::Vector4; 95],
+    _field_221c: [u8; 4],
 }
 fn _RenderEngine_size_check() {
     unsafe {
@@ -424,6 +445,69 @@ impl RenderEngine {
                 ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
             ) = ::std::mem::transmute(Self::SetGlobalShaderConstants_ADDRESS);
             f(self as *mut Self as _, ctx)
+        }
+    }
+    pub const SetGlobalShaderProgramCameraConstants_ADDRESS: usize = 0x140186370;
+    /// Refreshes the per-view rows of [`m_VPGlobalConstData`](RenderEngine::m_VPGlobalConstData)
+    /// from a [`RenderContext`]: the full view-projection (rows 0--3), the camera world position
+    /// and forward axis (rows 4, 5, 9), the offset view-projection (rows 29--32), the previous
+    /// view-projection (rows 33--36), the frustum planes (rows 38--43), the previous offset
+    /// view-projection (rows 44--47), and the previous camera position (row 48), then falls
+    /// through to `SetFog`. Called by [`RenderPass::Draw`](graphics_engine::render_pass::RenderPass::Draw)
+    /// after `SetRenderContextCamera`, so every pass re-derives the global rows from its own
+    /// context before drawing.
+    pub unsafe fn SetGlobalShaderProgramCameraConstants(
+        &mut self,
+        ctx: *const crate::graphics_engine::graphics_engine::RenderContext,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *const crate::graphics_engine::graphics_engine::RenderContext,
+            ) = ::std::mem::transmute(
+                Self::SetGlobalShaderProgramCameraConstants_ADDRESS,
+            );
+            f(self as *mut Self as _, ctx)
+        }
+    }
+    pub const SetAllGlobalShaderProgramConstants_ADDRESS: usize = 0x140173850;
+    /// Uploads both global constant-buffer staging blocks
+    /// ([`m_VPGlobalConstData`](RenderEngine::m_VPGlobalConstData) and
+    /// [`m_FPGlobalConstData`](RenderEngine::m_FPGlobalConstData)) into the context's global
+    /// constant buffers via lock/memcpy/unlock. Called per pass by
+    /// [`RenderPass::Draw`](graphics_engine::render_pass::RenderPass::Draw) and once per dispatch
+    /// from `HandleDrawThreadTask`.
+    pub unsafe fn SetAllGlobalShaderProgramConstants(
+        &mut self,
+        ctx: *const crate::graphics_engine::graphics_engine::RenderContext,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *const crate::graphics_engine::graphics_engine::RenderContext,
+            ) = ::std::mem::transmute(Self::SetAllGlobalShaderProgramConstants_ADDRESS);
+            f(self as *mut Self as _, ctx)
+        }
+    }
+    pub const SetGlobalVertexProgramConstants_ADDRESS: usize = 0x1401738F0;
+    /// Writes `count` float4 rows into [`m_VPGlobalConstData`](RenderEngine::m_VPGlobalConstData)
+    /// starting at row `index` (bounds-asserted against `VP_GLOBAL_SIZE` = 49). The staging copy
+    /// only; the GPU upload happens in
+    /// [`SetAllGlobalShaderProgramConstants`](RenderEngine::SetAllGlobalShaderProgramConstants).
+    pub unsafe fn SetGlobalVertexProgramConstants(
+        &mut self,
+        index: u32,
+        data: *const f32,
+        count: u32,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                index: u32,
+                data: *const f32,
+                count: u32,
+            ) = ::std::mem::transmute(Self::SetGlobalVertexProgramConstants_ADDRESS);
+            f(self as *mut Self as _, index, data, count)
         }
     }
     pub const ApplyJitterTransform_ADDRESS: usize = 0x140173AA0;
