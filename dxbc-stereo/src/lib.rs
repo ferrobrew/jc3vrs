@@ -46,6 +46,11 @@ pub fn per_eye_refs(blob: &[u8]) -> Result<Vec<PerEyeRef>, DxbcError> {
     let mut refs = Vec::new();
     for insn in stream.instructions() {
         let insn = insn?;
+        // A declaration's cb operand encodes the buffer size, not a row access -- skip it so a buffer
+        // declared at a per-eye size (`dcl_constantbuffer cb0[29]`) is not counted as a reference.
+        if insn.is_declaration() {
+            continue;
+        }
         for operand in insn.operands() {
             let operand = operand?;
             if let OperandKind::ConstantBuffer {

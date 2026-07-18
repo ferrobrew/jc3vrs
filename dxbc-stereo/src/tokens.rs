@@ -169,6 +169,15 @@ impl<'a> Instruction<'a> {
     pub(crate) fn operands_start(&self) -> usize {
         self.operands_start
     }
+
+    /// Whether this is a declaration (`dcl_*`) or the custom-data block that rides among them, rather
+    /// than an executable instruction. A declaration's constant-buffer operand encodes the buffer
+    /// *size* (`dcl_constantbuffer cb0[29]`), not a row access, so per-eye analysis and the operand
+    /// rewrite both skip declarations -- otherwise a buffer sized to a per-eye row (e.g. `cb0[29]`)
+    /// reads as a phantom per-eye reference.
+    pub fn is_declaration(&self) -> bool {
+        matches!(self.opcode, OPCODE_CUSTOMDATA | 0x58..=0x6A)
+    }
 }
 
 /// An iterator over an instruction's operands.
@@ -254,23 +263,21 @@ pub(crate) fn parse_operand(tokens: &[u32], pos: usize) -> Result<(Operand, usiz
     // Immediate operands carry their values inline instead of indices.
     if operand_type == OPERAND_TYPE_IMMEDIATE32 {
         let count = immediate_component_count(num_components_enum);
-        return Ok((
-            Operand {
-                kind: OperandKind::Immediate,
-                token_offset,
-            },
+        return end_operand(
+            OperandKind::Immediate,
+            token_offset,
             p + count,
-        ));
+            tokens.len(),
+        );
     }
     if operand_type == OPERAND_TYPE_IMMEDIATE64 {
         let count = immediate_component_count(num_components_enum);
-        return Ok((
-            Operand {
-                kind: OperandKind::Immediate,
-                token_offset,
-            },
+        return end_operand(
+            OperandKind::Immediate,
+            token_offset,
             p + count * 2,
-        ));
+            tokens.len(),
+        );
     }
 
     let mut register: Option<u32> = None;
@@ -321,13 +328,32 @@ pub(crate) fn parse_operand(tokens: &[u32], pos: usize) -> Result<(Operand, usiz
         OperandKind::Other
     };
 
-    Ok((Operand { kind, token_offset }, p))
+    end_operand(kind, token_offset, p, tokens.len())
 }
 
-/// Dword count of an inline immediate operand's values, from its component-count enum.
+/// Finalize a parsed operand, rejecting one whose span runs past the end of the token slice. Keeps
+/// `parse_operand` total: it never returns a `next` index a caller could slice out of bounds (an
+/// unusual or truncated operand encoding becomes an error rather than a panic downstream).
+fn end_operand(
+    kind: OperandKind,
+    token_offset: usize,
+    next: usize,
+    len: usize,
+) -> Result<(Operand, usize), DxbcError> {
+    if next > len {
+        return Err(DxbcError::UnexpectedEndOfTokens);
+    }
+    Ok((Operand { kind, token_offset }, next))
+}
+
+/// Dword count of an inline immediate operand's values, from its `D3D10_SB_OPERAND_NUM_COMPONENTS`
+/// enum: `0` = zero-component (no values), `1` = one-component (the scalar `l(x)` form), `2` =
+/// four-component (the common `l(x, y, z, w)` form). `fxc` does not emit the N-component form (`3`)
+/// for immediates.
 fn immediate_component_count(num_components_enum: u32) -> usize {
     match num_components_enum {
-        0 => 1, // 1 component
-        _ => 4, // 4 components (the common `l(a,b,c,d)` form)
+        0 => 0, // zero-component: no inline values
+        1 => 1, // one-component: l(x)
+        _ => 4, // four-component: l(x, y, z, w)
     }
 }

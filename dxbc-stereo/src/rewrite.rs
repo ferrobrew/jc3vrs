@@ -130,7 +130,6 @@ struct RewritePlan {
 const OPCODE_AND: u32 = 0x01;
 const OPCODE_IMUL: u32 = 0x26;
 const OPCODE_MOV: u32 = 0x36;
-const OPCODE_CUSTOMDATA: u32 = 0x35;
 const OPCODE_DCL_CONSTANT_BUFFER: u32 = 0x59;
 const OPCODE_DCL_INPUT: u32 = 0x5F;
 const OPCODE_DCL_INPUT_SGV: u32 = 0x60;
@@ -189,7 +188,7 @@ fn plan_rewrite(stream: &TokenStream) -> Result<RewritePlan, DxbcError> {
 
     for insn in stream.instructions() {
         let insn = insn?;
-        if is_declaration(insn.opcode) {
+        if insn.is_declaration() {
             match insn.opcode {
                 OPCODE_DCL_INPUT | OPCODE_DCL_INPUT_SGV | OPCODE_DCL_INPUT_SIV => {
                     let register = declared_register(tokens, &insn)?;
@@ -261,7 +260,7 @@ fn rewrite_shader(stream: &TokenStream, plan: &RewritePlan) -> Result<Vec<u8>, D
             out.push(plan.temp_register + 1);
             continue;
         }
-        if is_declaration(insn.opcode) {
+        if insn.is_declaration() {
             out.extend_from_slice(&tokens[insn.start..insn.end]);
             continue;
         }
@@ -394,12 +393,6 @@ fn is_per_eye_operand(kind: &OperandKind) -> bool {
             element,
         } if PER_EYE_CB0_ROWS.contains(element)
     )
-}
-
-/// Whether an opcode is a declaration (or the custom-data block that rides among them). All
-/// declarations precede the first real instruction, which is where the injection lands.
-fn is_declaration(opcode: u32) -> bool {
-    matches!(opcode, OPCODE_CUSTOMDATA | 0x58..=0x6A)
 }
 
 /// Reads the register index of a declaration's operand (`dcl_input v2`, `dcl_constantbuffer
