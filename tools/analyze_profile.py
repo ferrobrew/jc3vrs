@@ -154,6 +154,12 @@ def main() -> None:
         f"{len(xs)} scopes · draw lanes: {n_draw_lanes}"
     )
 
+    if not frame_ms:
+        sys.exit(
+            "analyze_profile: no 'CGame::Update' frame scopes found — the capture is missing its "
+            "scope names (see docs/mod/profiler.md); lane data exists but cannot be attributed"
+        )
+
     print("\n== frame time")
     print(f"  {stats_line(frame_ms)}")
     for line in histogram(frame_ms):

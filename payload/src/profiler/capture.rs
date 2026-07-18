@@ -141,7 +141,7 @@ pub fn is_writing() -> bool {
 
 fn write_capture(frames: &[Arc<FrameData>]) -> anyhow::Result<PathBuf> {
     let path = capture_path()?;
-    super::chrome_trace::write_chrome_trace(&path, frames)?;
+    super::chrome_trace::write_chrome_trace(&path, frames, super::scope_details())?;
     Ok(path)
 }
 

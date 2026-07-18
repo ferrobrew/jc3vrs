@@ -60,6 +60,7 @@ pub(crate) fn apply_scopes_on() {
 /// and advances the capture state machine.
 pub fn new_frame() {
     label_thread("game");
+    install_details_sink();
     // Advance the frame even while collection is off: a stream flushed just as collection was
     // toggled off would otherwise sit parked in the profiler and be glued onto the front of the
     // next enabled frame, minutes later, ruining its range (and a capture's timestamp base).
@@ -96,6 +97,39 @@ fn labelled_reporter(
         info.name = THREAD_LABEL.with(std::cell::Cell::get).to_owned();
     }
     puffin::internal_profile_reporter(info, scope_details, stream_scope_times);
+}
+
+/// Every scope's details, harvested continuously by a permanent puffin sink. Captures resolve
+/// names from this rather than from their own frames' deltas alone: puffin's scope-snapshot
+/// re-emit is discarded if the next frame happens to be empty (e.g. collection enabled by F9
+/// between frames), which otherwise strips a capture's names entirely.
+static SCOPE_DETAILS: Mutex<Option<puffin::ScopeCollection>> = Mutex::new(None);
+
+/// A snapshot of every scope's details seen so far.
+pub fn scope_details() -> puffin::ScopeCollection {
+    SCOPE_DETAILS.lock().clone().unwrap_or_default()
+}
+
+/// Installs the details-harvesting sink once. The sink runs under the profiler's lock each
+/// `new_frame`; it takes only the `SCOPE_DETAILS` lock, which nothing holds while locking the
+/// profiler, so the order is acyclic.
+fn install_details_sink() {
+    use std::sync::Once;
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        let mut profiler = GlobalProfiler::lock();
+        profiler.add_sink(Box::new(|frame| {
+            if frame.scope_delta.is_empty() {
+                return;
+            }
+            let mut details = SCOPE_DETAILS.lock();
+            let details = details.get_or_insert_with(Default::default);
+            for d in &frame.scope_delta {
+                details.insert(d.clone());
+            }
+        }));
+        profiler.emit_scope_snapshot();
+    });
 }
 
 /// A registry of puffin scope ids for engine-supplied names that only exist at runtime (render

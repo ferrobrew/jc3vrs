@@ -16,11 +16,14 @@ use puffin::{FrameData, Reader, Scope, ScopeCollection, Stream};
 
 /// Writes `frames` as a Chrome trace-event JSON array to `path`.
 ///
-/// Scope names resolve through the frames' own `scope_delta` records; the capture sink asks the
-/// profiler to re-emit a full scope snapshot when it attaches, so the deltas cover every scope the
-/// capture can reference.
-pub fn write_chrome_trace(path: &Path, frames: &[Arc<FrameData>]) -> anyhow::Result<()> {
-    let mut scopes = ScopeCollection::default();
+/// Scope names resolve through `base_scopes` (the profiler's continuously harvested collection)
+/// plus the frames' own `scope_delta` records for anything registered mid-capture.
+pub fn write_chrome_trace(
+    path: &Path,
+    frames: &[Arc<FrameData>],
+    base_scopes: ScopeCollection,
+) -> anyhow::Result<()> {
+    let mut scopes = base_scopes;
     for frame in frames {
         for details in &frame.scope_delta {
             scopes.insert(details.clone());
