@@ -8,6 +8,8 @@
 use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
+pub mod single_pass;
+
 /// The live stereo render state for the frame in flight.
 pub struct StereoState {
     /// Whether the current frame is being rendered in stereo (the Draw driver double-Draws).

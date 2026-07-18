@@ -207,6 +207,20 @@ pub struct StereoConfig {
     /// transitions pop instead of dissolving); same reload caveat as
     /// [`patch_shadow_pcf_hash`](Self::patch_shadow_pcf_hash).
     pub patch_lod_dissolve: bool,
+    /// Master switch for single-pass stereo (experimental; see `docs/mod/single-pass-stereo.md`).
+    /// Instead of the double-draw (two full `game.Draw` walks, one per eye), render the G-buffer
+    /// geometry once with the vertex shaders patched to emit both eyes via instancing +
+    /// `SV_ViewportArrayIndex` routing into a double-wide render target. Off by default: the whole
+    /// pipeline is under construction and validated against the double-draw oracle. Requires the DXVK
+    /// viewport-routing capability (see [`crate::stereo::single_pass::capability`]); forced off if
+    /// absent.
+    pub single_pass: bool,
+    /// Census-only mode for [`single_pass`](Self::single_pass): run the vertex-shader stereo rewrite
+    /// on every shader at creation and tally the outcomes (patched / no per-eye references / errored)
+    /// **without** substituting the patched bytecode, so rendering is unchanged. Safe to inject: it
+    /// validates the DXBC rewriter against the game's real shader set and reports the true census in
+    /// the debug UI, before the rest of the single-pass pipeline is wired up.
+    pub single_pass_patch_dryrun: bool,
     /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
     /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
@@ -459,6 +473,8 @@ impl StereoConfig {
             restore_gi_cascade: true,
             patch_shadow_pcf_hash: true,
             patch_lod_dissolve: false,
+            single_pass: false,
+            single_pass_patch_dryrun: false,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,

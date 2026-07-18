@@ -713,6 +713,56 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
         });
     });
 
+    // Single-pass stereo (experimental, off by default): render the G-buffer geometry once, emitting
+    // both eyes via instancing + SV_ViewportArrayIndex routing, instead of the double-draw. The
+    // pipeline is under construction; the census dry-run below is safe (no rendering change) and
+    // reports how the vertex-shader rewriter fares against the game's real shader set.
+    ui.collapsing("Single-pass stereo (experimental)", |ui| {
+        use crate::stereo::single_pass::{self, Capability};
+        ui.checkbox(
+            &mut cfg.stereo.single_pass,
+            "Enable single-pass stereo (WIP -- pipeline not yet complete)",
+        )
+        .on_hover_text(
+            "Master switch. Renders the G-buffer once with stereo-rewritten vertex shaders. \
+             Forced inert without the DXVK viewport-routing capability (below).",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.single_pass_patch_dryrun,
+            "Census only (dry-run: patch + tally, do not substitute -- safe)",
+        )
+        .on_hover_text(
+            "Runs the vertex-shader stereo rewrite on every shader at creation and counts the \
+             outcomes, without changing rendering. Validates the rewriter against real shaders.",
+        );
+
+        let capability = single_pass::probe_if_needed();
+        ui.label(match capability {
+            Capability::Supported => "Viewport routing: supported ✓",
+            Capability::Unsupported => "Viewport routing: UNSUPPORTED (single-pass will stay inert)",
+            Capability::Unprobed => "Viewport routing: not yet probed (no device seen)",
+        });
+
+        let (patched, no_refs, errored) = (
+            single_pass::patched_count(),
+            single_pass::no_refs_count(),
+            single_pass::errored_count(),
+        );
+        if patched + no_refs + errored == 0 {
+            ui.label("Census: 0 shaders seen -- enable a mode above, then click Reload shaders.");
+        } else {
+            ui.label(format!(
+                "Census: {patched} patched, {no_refs} no per-eye refs (double-drawn), {errored} errored"
+            ));
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Reload shaders").clicked() {
+                crate::hooks::graphics_engine::shader::request_reload();
+            }
+            ui.label("re-runs the census over a fresh shader-creation pass");
+        });
+    });
+
     // Resolution levers for issue #8's pixelation/large-tile artifact around lights and explosions:
     // the engine's reduced-resolution fog/particle/spotlight passes, whose coarse grids VR's wide
     // FOV magnifies. All default off (not headset-verifiable; particles can hide content).

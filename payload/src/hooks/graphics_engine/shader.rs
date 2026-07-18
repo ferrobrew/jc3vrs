@@ -28,7 +28,10 @@ use std::{
 
 use detours_macro::detour;
 use dxbc_stereo::refresh_checksum;
-use jc3gi::graphics_engine::{draw::CreateFragmentProgramParams, graphics_engine::GraphicsEngine};
+use jc3gi::graphics_engine::{
+    draw::{CreateFragmentProgramParams, CreateVertexProgramParams},
+    graphics_engine::GraphicsEngine,
+};
 use re_utilities::hook_library::HookLibrary;
 
 use crate::config::Config;
@@ -69,7 +72,37 @@ static DISSOLVE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn hook_library() -> HookLibrary {
-    HookLibrary::new().with_static_binder(&CREATE_FRAGMENT_PROGRAM_BINDER)
+    HookLibrary::new()
+        .with_static_binder(&CREATE_FRAGMENT_PROGRAM_BINDER)
+        .with_static_binder(&CREATE_VERTEX_PROGRAM_BINDER)
+}
+
+/// Detour on `Graphics::CreateVertexProgram` to census the single-pass stereo vertex-shader rewrite.
+///
+/// When single-pass stereo (or its census-only dry-run) is enabled, run
+/// [`dxbc_stereo::patch_vertex_shader`] on the incoming DXBC and tally the outcome
+/// ([`crate::stereo::single_pass::record_patch_outcome`]), so the debug UI can report how the
+/// rewriter fares against the game's real shader set. This is observation only -- the patched
+/// bytecode is **not** substituted here; substitution lands with the rest of the single-pass pipeline
+/// (cb13 upload, double-wide target, draw-doubling), so on its own this changes nothing about
+/// rendering and is safe to leave enabled. Like the fragment hook, it only sees shaders created after
+/// it installs; use the shader-reload button for shaders loaded before injection.
+#[detour(address = jc3gi::graphics_engine::draw::CreateVertexProgram_ADDRESS)]
+fn create_vertex_program(
+    device: *mut c_void,
+    params: *const CreateVertexProgramParams,
+) -> *mut c_void {
+    let census = Config::lock_query(|c| c.stereo.single_pass || c.stereo.single_pass_patch_dryrun);
+    if census
+        && let Some(p) = unsafe { params.as_ref() }
+        && !p.m_Code.is_null()
+        && p.m_Size >= 4
+    {
+        let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
+        let outcome = dxbc_stereo::patch_vertex_shader(code);
+        crate::stereo::single_pass::record_patch_outcome(&outcome);
+    }
+    CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params)
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::CreateFragmentProgram_ADDRESS)]
@@ -190,6 +223,9 @@ pub fn process_reload_request() {
     if !RELOAD_REQUESTED.swap(false, Ordering::Relaxed) {
         return;
     }
+    // A reload re-creates every shader through the hooks below, so restart the single-pass census to
+    // count this reload's pass rather than accumulating across reloads.
+    crate::stereo::single_pass::reset_census();
     // SAFETY: runs on the game thread at frame start; the engine singleton is live and its
     // `m_CurrentBundleName` is a stable `std::string`. `LoadShaderBundle` is what the settings path
     // calls; we drain the draw first so no GPU work references the shaders being replaced.
