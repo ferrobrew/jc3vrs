@@ -278,3 +278,104 @@ single-pass stereo).
 3. GPU-indirect draws (can stay double-drawn initially).
 4. Seam safety of screen-space passes on a double-wide target (clampable).
 5. Occlusion queries / exposure histograms over a double-wide target (conservative, acceptable).
+
+## Stragglers: the non-`cb0` families
+
+The `cb0→cb13` remap and the collapse handle the ~196 model shaders. Five parallel RE passes (corpus
+disassembly plus the release IDB) mapped what's left and how to single-pass it properly instead of
+double-drawing it.
+
+First, a distinction the census makes but the in-headset image blurs: **a shader being patched is not
+the same as that geometry working per-eye.** The rewriter patches every shader that reads
+`cb0[29..32]`, so the per-eye math is there — but the draw still has to reach the collapse's
+instance-doubling and viewport split. Buildings clear both bars. NPCs clear the first and fail the
+second (see below).
+
+### Shader-ready, and confirmed working
+
+- **Buildings, general, and masked models** read `cb0[29..32]` and draw through the plain
+  `DrawIndexed` path, so they're doubled and routed — correct in both eyes today. (The 2016 debug
+  decomp shows them baking a WVP, but the shipped release build doesn't call
+  `CalculateOffsetWorldViewProjectionMatrix` for them — verified by xrefs.)
+- **Scene depth and velocity** (passes 48–50) use the models' depth-only permutations, same remap.
+  This is the depth the lighting, SSAO, SSR, and FSR read per eye, so it has to be right, and it is.
+- **Z-occluders** (pass 47) prime depth for culling; the real Z pass overwrites them, so per-eye
+  correctness doesn't matter. Leave them.
+
+### Shader-ready, but not routed yet
+
+- **Skinned characters and creatures** (`RenderBlockCharacter`/`CharacterSkin`, `RP_CREATURES`) read
+  `cb0[29..32]` too — the bone palette (`cb2`) and `ModelWorldMatrix` (`cb6`) are the same in both
+  eyes — so the shader side is done. But NPCs still render mono in-headset, and the shader isn't the
+  cause. The character render blocks carry the head-hide `SetMatrixPalette`/`Draw` detours
+  (`render_block.rs`, `docs/mod/head-and-body.md`); the likely culprit is that path re-issuing the
+  character draw in a way that skips the collapse's `DrawIndexed` doubling/routing. This is a
+  draw-path fix, separate from and smaller than the reprojection work below.
+
+### Needs a new mechanism
+
+| Family | How position is computed | Plan |
+|---|---|---|
+| **Baked-WVP** (~105 VS; visually Prop, Bark/tree-trunks, Window, RoadJunction, MaterialTune) | `o0 = pos·cb1[0..2] + cb1[3]` — the full WVP baked into `cb1` by `CRenderBlock::CalculateOffsetWorldViewProjectionMatrix` (release `0x140136070`, uploaded to `cb1`, 4 rows) | reproject |
+| **Tessellated base terrain** (`CRenderBlockTerrain`; hulls `sh_1492`+, domains `sh_1513`+) | clip built in the domain shader from `cb1`'s `m_OffsetViewProjection` (byte-identical to `cb0`'s) | reproject in the DS; plumb the eye VS→HS→DS |
+| **GPU-indirect detail terrain, vegetation, trees** (`sh_0224`, `sh_0253`, `sh_0177`, …; 36 VS) | `SV_VertexID` + structured buffers; baked patch-local→clip in a small per-pass cb; drawn via `Draw*InstancedIndirect` (count in a GPU buffer from `m_GenDrawIndirectParamsPerPassCS`) | reproject VS + a compute pre-pass that doubles `InstanceCount` |
+| Effects, decals, water-mask, GI-probe (baked `cb1`, low visual weight) | baked WVP | leave double-drawn |
+| Sky, atmosphere, UI, screen-space (write `o0` in NDC) | not a scene VP | exclude |
+
+### Reprojection
+
+One identity handles the whole "needs a new mechanism" group. Every scene shader writes clip position
+as `clip_center = VP_center · world`, whatever buffer the VP came from. So:
+
+    clip_eye = VP_eye · world = (VP_eye · VP_center⁻¹) · clip_center = M_eye · clip_center
+
+Post-multiply the shader's own `SV_Position` by a per-eye `M_eye` and it lands exactly in each eye.
+The camera-relative idiom (`OffsetVP·(P − campos)` equals `FullVP·P`) folds in when `M_eye` is built
+from the full, translation-carrying per-eye VPs — the IPD parallax rides along in `M_eye`, so the eye
+offset never reaches the shader. Skinned characters are just the baked-WVP case: skinning is
+local→world, which reprojection never sees.
+
+What to exclude: shaders that write `o0` straight to NDC (sky, UI, screen-space). The bytecode can't
+tell those from scene meshes, so the existing pass-range ∩ patched-VS ∩ `DrawIndexed` gate stays the
+authority for "this is scene geometry."
+
+Two things to verify before trusting reprojection on the baked family:
+
+- Whether JC3 bakes a TAA projection jitter into `m_OffsetViewProjection`. If it does, the baked-WVP's
+  `VP_center` still matches — JC3 has one scene VP.
+- `M_eye` is near-identity (a few-cm IPD, a few-degree cant), so error is ~1–2 ULP and reverse-Z depth
+  survives. Invert `VP_center` and build `M_eye` in f64 on the CPU, store f32, and assert
+  `‖M_eye − I‖` stays small — the reverse-Z `VP_center` is near-singular, so f64 earns its keep here.
+
+### The DXBC recipe
+
+Keep the `cb0` remap for the 196 models; it's exact and in-game-proven. Add reprojection as the
+fallback `patch_vertex_shader` takes on `NoPerEyeReferences`. It reuses everything the remap already
+builds — the `SV_InstanceID` input, `SV_ViewportArrayIndex` output, `SFI0` bit 13, signature append,
+checksum, the eye/base prologue — and swaps only the core:
+
+1. Find the `SV_Position` output register from `OSGN`/`dcl_output_siv position` (normally `o0`).
+2. Rename every write to it to a fresh temp `rClip`, bumping `dcl_temps`. `SV_Position` is written on
+   every path, so `rClip` ends fully defined, and the rename absorbs masked or multi-instruction
+   writes (like a separate `o0.z` clip-Z bias). SM5 output registers are write-only, so you can't read
+   `o0` back — redirecting the writes is the only move.
+3. Before each `ret`, emit `o0 = M_eye · rClip` as four `dp4`s (the `M_eye` rows from `cb13`,
+   eye-indexed by the existing `rBase`), then `mov oViewport.x, rEye.x`.
+4. Grow `cb13` by an `M_eye` block (4 rows/eye) after the 5 remap rows/eye, same `b13` binding;
+   `compute_dual_eye_rows` emits it.
+
+It's offline-testable like the remap: patch, re-parse, `D3DDisassemble` accepts, then structural
+asserts — `o0` no longer written before the reprojection, `rClip` fully defined, the `M_eye` `dp4`
+chain and viewport write present, `SFI0` bit set — plus a pure exactness test,
+`VP_eye·world == M_eye·(VP_center·world)`.
+
+### Order
+
+1. **Baked-WVP** — biggest bucket, lowest risk. It reuses the draw-doubling; only the reprojection
+   recipe and the `M_eye` upload are new. (This also covers skinned characters at the shader level,
+   though the NPC draw-routing fix above is independent of it.)
+2. **Tessellated terrain** — reproject in the domain shader and plumb the eye index VS→HS→DS. The hull
+   control-point phase is a passthrough, so that's one extra `mov`. Confirm the terrain top draw isn't
+   GPU-indirect first; a DS-stage `SV_ViewportArrayIndex` write is legal under the capability.
+3. **GPU-indirect detail terrain and vegetation** — reprojection VS plus a compute pre-pass that
+   doubles each indirect draw's `InstanceCount`. Last and hardest; fine double-drawn until then.
