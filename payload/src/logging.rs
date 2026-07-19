@@ -1,4 +1,5 @@
-//! Logging: stdout + a `jc3vrs.log` beside the payload DLL, filtered by `RUST_LOG` from the game
+//! Logging: stdout + a `jc3vrs.log` in the session's `log/` directory (see [`crate::session`]),
+//! filtered by `RUST_LOG` from the game
 //! process's environment (fixed at game launch), with a live reload path so the filter can be
 //! changed from the debug UI without relaunching the game.
 
@@ -46,10 +47,8 @@ pub(super) fn install() {
                 .with_filter(stdout_filter),
         )
         .with(
-            crate::module::get_path()
-                .as_ref()
-                .and_then(|path| path.parent())
-                .map(|parent| parent.join("jc3vrs.log"))
+            crate::session::dir()
+                .map(|dir| dir.join("jc3vrs.log"))
                 .and_then(|path| std::fs::File::create(&path).ok())
                 .map(|file| {
                     tracing_subscriber::fmt::layer()

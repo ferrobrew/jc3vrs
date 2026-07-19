@@ -1,11 +1,14 @@
-//! On-demand back-buffer screenshots to a DLL-adjacent `screenshots/` folder (F12), for in-headset
+//! On-demand back-buffer screenshots to the session's `screenshots/` folder (F12), for in-headset
 //! diagnosis when the F10 stereo capture is inconvenient (it toggles a fullscreen mode). Captures the
 //! linear back buffer -- under single-pass collapse that is the full side-by-side render, both
 //! eye-halves as the GPU produced them, so a single PNG shows both eyes at once.
 
 use std::{
     path::PathBuf,
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
 };
 
 use anyhow::{Context as _, bail};
@@ -51,6 +54,9 @@ pub fn capture_if_requested(
 
 static REQUESTED: AtomicBool = AtomicBool::new(false);
 static COUNTER: AtomicU32 = AtomicU32::new(0);
+/// The stamp for this run's `screenshots/<stamp>/` subfolder, taken on the first capture so every
+/// screenshot of the run shares one folder.
+static SCREENSHOT_STAMP: OnceLock<String> = OnceLock::new();
 
 fn capture(
     device: &ID3D11Device,
@@ -121,9 +127,12 @@ fn capture(
         }
         context.Unmap(&staging, 0);
 
-        let dir = crate::module::get_path()
-            .and_then(|path| path.parent().map(|parent| parent.join("screenshots")))
-            .context("could not resolve the DLL-adjacent screenshots directory")?;
+        // All of a run's screenshots share one stamped subfolder (`screenshots/<stamp>/`), mirroring
+        // the render-trace layout; the stamp is taken once, on the first capture.
+        let stamp = SCREENSHOT_STAMP.get_or_init(crate::session::stamp);
+        let dir = crate::session::subdir("screenshots")
+            .map(|base| base.join(stamp))
+            .context("could not resolve the session screenshots directory")?;
         std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let path = dir.join(format!("jc3vrs-{n:04}.png"));

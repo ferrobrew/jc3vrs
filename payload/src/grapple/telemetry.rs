@@ -143,13 +143,10 @@ fn write_row(kind: &str, fields: &str) {
 /// Create a fresh timestamped capture file with its header, or `None` (with a warning logged) when
 /// the path cannot be resolved or created.
 fn open_capture() -> Option<TelemetryWriter> {
-    let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string();
-    let Some(path) = crate::module::get_path()
-        .as_ref()
-        .and_then(|path| path.parent())
-        .map(|parent| parent.join(format!("jc3vrs-grapple-{stamp}.csv")))
+    let Some(path) = crate::session::subdir("grapple")
+        .map(|dir| dir.join(format!("jc3vrs-grapple-{}.csv", crate::session::stamp())))
     else {
-        tracing::warn!("grapple telemetry: could not resolve the payload module path");
+        tracing::warn!("grapple telemetry: could not resolve the session grapple directory");
         return None;
     };
     match std::fs::File::create(&path) {

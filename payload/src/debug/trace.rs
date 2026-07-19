@@ -289,10 +289,11 @@ pub fn active_frames() -> i32 {
     TRACE_FRAMES.load(Ordering::Relaxed)
 }
 
-/// The per-trace output directory `<dll dir>/traces/<stamp>`, collecting one capture's NDJSON and its
-/// per-frame screenshots together. `None` when the module path is unavailable.
+/// The per-trace output directory `traces/<stamp>` in the session directory (see [`crate::session`]),
+/// collecting one capture's NDJSON and its per-frame screenshots together. `None` when the session
+/// directory is unavailable.
 fn trace_dir(stamp: &str) -> Option<std::path::PathBuf> {
-    let base = crate::module::get_path()?.parent()?.join("traces");
+    let base = crate::session::subdir("traces")?;
     Some(base.join(if stamp.is_empty() { "latest" } else { stamp }))
 }
 
@@ -393,7 +394,7 @@ impl TraceState {
     /// written as the first record while the counter is still 0 (lock held), then the counter is
     /// armed -- so render-thread hooks that observe it can never race ahead of the manifest.
     pub fn start(frames: i32) {
-        let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string();
+        let stamp = crate::session::stamp();
         {
             let mut state = TRACE_STATE.lock();
             let last_path = state.last_path.take();

@@ -36,6 +36,7 @@ mod logging;
 #[cfg(feature = "profiler")]
 mod profiler;
 mod screenshot;
+mod session;
 mod stereo;
 
 #[unsafe(no_mangle)]
@@ -58,6 +59,10 @@ pub extern "system" fn run(_: *mut c_void) {
 
 /// Called when the DLL is loaded
 fn initialize_startup() {
+    // Resolve this run's output directory first, so the log, crash dumps, and every other artifact
+    // land under the same timestamped session folder.
+    session::init();
+
     std::panic::set_hook(Box::new(|info| {
         // Log the location before touching the payload: for formatted panics, `payload()` runs the
         // format arguments' Display impls, and one reading dead game memory faults — which

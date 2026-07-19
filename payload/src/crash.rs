@@ -4,10 +4,11 @@
 //! backtrace of the faulting thread, and a backtrace of every other thread the moment a fatal
 //! exception is *raised* -- before any handler unwinds. This covers the case where the game catches a
 //! fault itself and turns it into a clean exit: Wine prints no backtrace and the window just
-//! vanishes, but the record still lands in the session's crash log (`jc3vrs-crash-<UTC>.log`, one
-//! per session) -- a dedicated file that, unlike the per-run-truncated `jc3vrs.log`, survives the
-//! run and is self-contained per session (each record head carries a UTC timestamp matching the
-//! tracing log's). A panic hook does the same for Rust panics,
+//! vanishes, but the record still lands in the session's crash log (`jc3vrs-crash.log`) -- a
+//! dedicated file, separate from `jc3vrs.log` because the handler writes it through a raw file handle
+//! with no allocation and no dependence on the tracing subscriber (see below), so a record survives a
+//! fault that has already broken the normal logging path; each record head carries a UTC timestamp
+//! matching the tracing log's, for cross-correlation. A panic hook does the same for Rust panics,
 //! which don't raise an SEH exception and so are invisible to the VEH handler. Each address is
 //! resolved to its containing module + offset (`module+0xoff`) via `VirtualQuery`, which works under
 //! Wine where `std::backtrace` usually can't symbolize.
@@ -244,23 +245,12 @@ fn log_breadcrumbs() {
 }
 
 pub fn install() {
-    // Open the crash log with a raw handle. This is a *separate* file from `jc3vrs.log`: the
-    // tracing subscriber truncates that one every run, which silently discarded every past crash
-    // record. Each session gets its own timestamped file (`jc3vrs-crash-<UTC>.log`), opened
-    // append-only, so a session's records are self-contained and easy to hand around; each record
-    // is timestamped to line up with the (UTC-stamped) tracing log of the run that produced it.
-    let session_name = {
-        let time = unsafe { GetSystemTime() };
-        format!(
-            "jc3vrs-crash-{:04}{:02}{:02}-{:02}{:02}{:02}.log",
-            time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond
-        )
-    };
-    if let Some(path) = crate::module::get_path()
-        .as_ref()
-        .and_then(|path| path.parent())
-        .map(|parent| parent.join(&session_name))
-    {
+    // Open the crash log with a raw handle. It is a *separate* file from `jc3vrs.log` because the
+    // vectored handler writes it directly (raw `WriteFile`, no allocation, no tracing subscriber), so
+    // a record survives a fault that has already broken the normal logging path. It lives in the
+    // session directory (see [`crate::session`]), opened append-only; each record is timestamped to
+    // line up with the (UTC-stamped) tracing log of the run that produced it.
+    if let Some(path) = crate::session::dir().map(|dir| dir.join("jc3vrs-crash.log")) {
         let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
         wide.push(0);
         // SAFETY: `wide` is a null-terminated UTF-16 path; all other arguments are plain flags.

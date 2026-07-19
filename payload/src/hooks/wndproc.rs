@@ -53,8 +53,8 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     }
 
     // F9 starts a profiler trace capture (issue #34): records a few seconds of CPU and GPU frames
-    // and dumps them next to the log as Chrome trace-event JSON, so a capture can be taken
-    // in-headset without the overlay. Edge-detected; consumed. A no-op while one is already
+    // and dumps them to the session's profile/ folder as Chrome trace-event JSON, so a capture can be
+    // taken in-headset without the overlay. Edge-detected; consumed. A no-op while one is already
     // recording.
     #[cfg(feature = "profiler")]
     if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F9.0 as usize {
@@ -112,7 +112,7 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         return LRESULT(0);
     }
 
-    // F12 writes a PNG of the linear back buffer to a DLL-adjacent `screenshots/` folder -- under
+    // F12 writes a PNG of the linear back buffer to the session's `screenshots/` folder -- under
     // single-pass collapse that is the full side-by-side render (both eyes). A robust alternative to
     // the F10 fullscreen capture for in-headset diagnosis. Edge-detected; consumed.
     if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F12.0 as usize {
