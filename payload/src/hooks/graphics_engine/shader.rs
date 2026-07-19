@@ -113,7 +113,7 @@ fn create_vertex_program(
                 .to_string_lossy()
                 .into_owned()
         });
-        crate::stereo::single_pass::record_patch_outcome(&outcome);
+        crate::stereo::single_pass::record_patch_outcome(&outcome, name.as_deref());
         // Substitute the rewritten bytecode when single-pass is active. The `cb0` remap is the primary
         // path; a shader with no per-eye `cb0` operand instead takes the reprojection rewrite, but only
         // for the scene-geometry families on the allowlist -- reprojecting an NDC writer (sky, UI,
@@ -342,6 +342,9 @@ fn bounce_shader_bundle() {
             "shader reload: '{current_name}' (bounced via '{other}'); {} PCF sites patched total",
             patched_count(),
         );
+        // A no-op unless the const census switch is on; then the `back` pass has re-created every
+        // shader through the census hook, so the name census is complete -- dump it.
+        crate::stereo::single_pass::dump_vs_name_census();
     }
 }
 

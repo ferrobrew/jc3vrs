@@ -14,6 +14,7 @@
 //! [`crate::config::StereoConfig::single_pass_patch_dryrun`] runs the census with no rendering change.
 
 use std::{
+    collections::BTreeMap,
     ffi::c_void,
     sync::{
         OnceLock,
@@ -156,14 +157,80 @@ pub fn should_reproject(name: Option<&str>) -> bool {
 /// `SV_InstanceID`-already-declared deferral (shaders that instance themselves, whose `>> 1` consumer
 /// rewrite is a later phase -- also expected, left double-drawn); and genuinely errored (an
 /// unexpected shape the rewriter could not handle -- worth investigating, should be zero).
-pub fn record_patch_outcome(outcome: &Result<Vec<u8>, DxbcError>) {
-    match outcome {
-        Ok(_) => &PATCHED,
-        Err(DxbcError::NoPerEyeReferences) => &NO_REFS,
-        Err(DxbcError::InstanceIdAlreadyDeclared) => &DEFERRED,
-        Err(_) => &ERRORED,
+pub fn record_patch_outcome(outcome: &Result<Vec<u8>, DxbcError>, name: Option<&str>) {
+    let (counter, class) = match outcome {
+        Ok(_) => (&PATCHED, PatchClass::Patched),
+        Err(DxbcError::NoPerEyeReferences) => (&NO_REFS, PatchClass::NoRefs),
+        Err(DxbcError::InstanceIdAlreadyDeclared) => (&DEFERRED, PatchClass::Deferred),
+        Err(_) => (&ERRORED, PatchClass::Errored),
+    };
+    counter.fetch_add(1, Ordering::Relaxed);
+    if DUMP_VS_NAME_CENSUS && let Some(name) = name {
+        VS_NAME_CENSUS.lock().insert(name.to_string(), class);
     }
-    .fetch_add(1, Ordering::Relaxed);
+}
+
+/// Whether to record every vertex shader's name against its rewrite class and dump the result to the
+/// session directory on a shader reload (see [`dump_vs_name_census`]). Off: the reprojection allowlist
+/// ([`REPROJECT_NAME_PREFIXES`]) is baked in and the census file lives in `docs/mod/single-pass-stereo.md`.
+/// Flip to `true` and rebuild to re-census -- e.g. to catch scene shaders an area didn't load the first
+/// time (the census only sees shaders created while it runs).
+const DUMP_VS_NAME_CENSUS: bool = false;
+
+/// The rewrite outcome class of a vertex shader, tracked per shader name in [`VS_NAME_CENSUS`] so the
+/// name census can group the reprojection candidates (no-per-eye-refs) apart from the `cb0`-remap set.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PatchClass {
+    Patched,
+    NoRefs,
+    Deferred,
+    Errored,
+}
+
+/// Every censused vertex shader's name and its rewrite class (populated only while
+/// [`DUMP_VS_NAME_CENSUS`] is on), dumped to `vs-name-census.txt` on a shader reload to build the
+/// reprojection allowlist from real data.
+static VS_NAME_CENSUS: Mutex<BTreeMap<String, PatchClass>> = Mutex::new(BTreeMap::new());
+
+/// Write the vertex-shader name census (see [`VS_NAME_CENSUS`]) to the session directory, grouped by
+/// rewrite class with the reprojection candidates first. A no-op unless [`DUMP_VS_NAME_CENSUS`] is on
+/// (the census is empty otherwise). Called after a shader reload, once the bounce has re-created every
+/// shader through the census hook.
+pub fn dump_vs_name_census() {
+    let census = VS_NAME_CENSUS.lock();
+    if census.is_empty() {
+        return;
+    }
+    let Some(dir) = crate::session::dir() else {
+        return;
+    };
+    let mut out = String::new();
+    for (label, class) in [
+        (
+            "no-per-eye-refs (reprojection candidates)",
+            PatchClass::NoRefs,
+        ),
+        ("patched (cb0 remap)", PatchClass::Patched),
+        ("instance-id deferred", PatchClass::Deferred),
+        ("errored", PatchClass::Errored),
+    ] {
+        let names: Vec<&str> = census
+            .iter()
+            .filter(|(_, c)| **c == class)
+            .map(|(n, _)| n.as_str())
+            .collect();
+        out.push_str(&format!("## {label} -- {}\n", names.len()));
+        for name in names {
+            out.push_str(name);
+            out.push('\n');
+        }
+        out.push('\n');
+    }
+    let path = dir.join("vs-name-census.txt");
+    match std::fs::write(&path, out) {
+        Ok(()) => tracing::info!("vs name census -> {}", path.display()),
+        Err(e) => tracing::warn!("vs name census: failed to write {}: {e}", path.display()),
+    }
 }
 
 /// Vertex shaders successfully rewritten for single-pass since injection.
@@ -196,6 +263,7 @@ pub fn reset_census() {
     NO_REFS.store(0, Ordering::Relaxed);
     DEFERRED.store(0, Ordering::Relaxed);
     ERRORED.store(0, Ordering::Relaxed);
+    VS_NAME_CENSUS.lock().clear();
 }
 
 /// Whether single-pass rendering should actually run this frame: the master switch is on, the

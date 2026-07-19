@@ -382,3 +382,54 @@ reprojection to a **positive allowlist of scene-geometry families** (keyed on th
 3. **GPU-indirect vegetation and detail terrain** — the same reprojection VS plus an in-place compute
    pre-pass that doubles each indirect draw's `InstanceCount` (dword +1 of the 5-dword args, in the
    GPU-only `veg_draw_indirect` buffer). Last and hardest; fine double-drawn until then.
+
+### The no-`cb0` shader census (reprojection allowlist)
+
+The 245 no-`cb0` vertex shaders, from a census of the shipped set (`m_Name` against the rewrite
+outcome — the payload can re-dump it by flipping `DUMP_VS_NAME_CENSUS`). **The census only sees
+shaders an area actually loads, so this list may miss families from biomes/weather not visited; treat
+it as a floor, not a complete set.** They sort by disposition:
+
+**Reproject now — the scene-geometry allowlist** (`REPROJECT_NAME_PREFIXES` in `single_pass.rs`,
+matched by name prefix): `character*`, `creature` (skinned + rigid NPCs, ~34 permutations incl.
+`characterskin*`, `characterdepth*`, `characteroutline`, `charactersphdecal*`, `charactervelocity*`);
+`general*` (`general`, `generalglint`, `generalmaskedjc3`, `generaloutline`, `generalprez`,
+`generalprezvelocity`, `generalrsm`, `generalshadow` — the static/dynamic models); `prop`, `propdecal`;
+`buildingjc3`, `buildingrsm`; `window`; `materialtune`; `open`; `flag`, `flagdepthonly`; `snow`;
+`skidmarks`, `skidmarks_normal`; roads `junctionroad*`, `splineroad*`, `dirtroad`.
+
+**Candidate scene models not yet on the allowlist** (unclear family, held back pending a look):
+`box`, `notex`, `lrpc`.
+
+**Terrain — Phase 2 (domain-shader reprojection, not the VS):** the VS writes no `SV_Position`, so
+these auto-skip the VS reproject. `volumetricterrain*` (~30 permutations: `*4`, `*blend`, `*instanced`,
+`*notessellation*`, `*offset*`, `*shadow*`), `terraindetailrt*`, `terrainscroller`,
+`terrainshaderforest*`, `controlpoint`.
+
+**Vegetation — Phase 3 (GPU-indirect):** `vegetationbark*`, `vegetationfoliage*`, `leaves`, `grass`,
+`treeimpostor*`, `veginteractionvolume`, `vegintrecenter`, `vegintrecovery`.
+
+**Excluded — NDC / non-scene** (`M_eye` would corrupt these; kept double-drawn):
+- Sky/atmosphere: `skybox`, `skygradientshader`, `skymodelshader`, `atmosphereprecompute`,
+  `atmosphericscattering`, `starsshader`, `softclouds`, `cirruscloudsshadow`, `foggradientshader`,
+  `underwaterfoggradientshader`, `addfogvolume`, `fogvolumeapplyfs`, `fogvolumeblur`.
+- Post / screen-space: `fxaa`, `temporalaafilter`, `testnoaa`, `motionblur`, `depthoffield`,
+  `depthoffieldwithvpi`, `edgedetectionfilter`, `screenspace`, `screenspacetex*`,
+  `screenspacesubsurfaceskinseparableblur`, `patternrecognitionfilter*`, `pixelreconstructionfilter`,
+  `recreatepositionfromscreenspacedepth`, `ssao_sao`, `ssao_temporalfilter`,
+  `deferred_clusteredlighting`, `lightassignmentfill`, `scenevisinit`, `gionly`,
+  `skindiffuselightingcapture`.
+- UI: `gui`, `quickui`, `2dtex1`, `2dtex2`, `3dtext`, `line3d`, `video`.
+- Particles / effects / lights: `particleeffect*`, `beam`, `contrails`, `trail`, `billboard`,
+  `meshparticle`, `distortionparticle`, `fxmeshfire`, `bulletsmoke`, `bullet`, `halo`, `halomask`,
+  `lensflare`, `sunbeam`, `lightglow`, `lightsource`, `lightsource_fakelight`, `lightningshader`,
+  `bavariumshield`, `spotlightcone`, `pointlightreflection`, `alphamask`, `aobox`.
+- Water: `nvwater*`, `water*` (`waterboxclear`, `waterbumpcomposite`, `waterdisplacementoverride`,
+  `waterfoamsub`, `watergodraysshader`, `watermask`, `waterpaintfoam`, `watersurface`, `waterwake`),
+  `waves`, `mirror`.
+- Decals (held back — surface-projected, want a look first): `decal`, `decaldeformable`, `decalsimple`,
+  `decalskinned`, `decalskinnedgeneralmkiii`, `decalskinnedgeneralmkiiidestructible`, `ssdecal`,
+  `ssdefault`.
+- Occluders / probes / prez / shadow-only: `rainoccluder`, `rainoccluderblur`, `sphericalharmonicprobe`,
+  `renderprez*`, `renderpreznotex`, `rendershadow`, `layeredrsm`, `depthwrite`, `tex0shadow`,
+  `tex0shadownoalpha`.
