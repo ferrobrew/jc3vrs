@@ -117,6 +117,9 @@ pub enum DxbcError {
     /// The reprojection rewrite hit a control-flow shape it does not support -- a conditional early
     /// return (`retc`) would need the per-eye epilogue on that path too.
     UnsupportedControlFlow,
+    /// The terrain eye-lane rewrite found no free `TEXCOORD3.z` output lane to carry the eye index
+    /// through the VS -> HS -> DS pipeline (the `TEXCOORD3` output is missing, or its `.z` is used).
+    NoEyeLane,
 }
 
 impl fmt::Display for DxbcError {
@@ -147,6 +150,7 @@ impl fmt::Display for DxbcError {
             DxbcError::UnsupportedControlFlow => {
                 "dxbc: reprojection does not support a conditional early return (retc)"
             }
+            DxbcError::NoEyeLane => "dxbc: no free TEXCOORD3.z lane to carry the eye index",
         };
         f.write_str(msg)
     }

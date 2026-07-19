@@ -96,7 +96,7 @@ pub fn patch_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
         },
     )?;
 
-    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex))
+    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true))
 }
 
 /// Reassembles a container with the rewritten `ISGN`/`OSGN`/`SHEX` chunks swapped in, the `SFI0`
@@ -109,6 +109,7 @@ fn reassemble(
     new_isgn: Vec<u8>,
     new_osgn: Vec<u8>,
     new_shex: Vec<u8>,
+    add_viewport_sfi0: bool,
 ) -> Vec<u8> {
     let mut chunks: Vec<([u8; 4], Vec<u8>)> = Vec::with_capacity(dxbc.chunks().len() + 1);
     let has_sfi0 = dxbc.chunk(b"SFI0").is_some();
@@ -117,11 +118,11 @@ fn reassemble(
             b"ISGN" => new_isgn.clone(),
             b"OSGN" => new_osgn.clone(),
             b"SHEX" => new_shex.clone(),
-            b"SFI0" => with_viewport_feature_bit(chunk.body(blob)),
+            b"SFI0" if add_viewport_sfi0 => with_viewport_feature_bit(chunk.body(blob)),
             _ => chunk.body(blob).to_vec(),
         };
         chunks.push((chunk.tag, body));
-        if &chunk.tag == b"SHEX" && !has_sfi0 {
+        if &chunk.tag == b"SHEX" && add_viewport_sfi0 && !has_sfi0 {
             chunks.push((*b"SFI0", with_viewport_feature_bit(&[])));
         }
     }
@@ -187,7 +188,182 @@ pub fn reproject_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
         },
     )?;
 
-    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex))
+    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true))
+}
+
+/// The output semantic that carries the single-pass eye index through the terrain tessellation
+/// pipeline: `TEXCOORD3`'s free `.z` component (the VS uses only `.xy`). The VS writes the eye there,
+/// the hull shader forwards it, and the domain shader reads it to reproject and route.
+const EYE_LANE_SEMANTIC: &str = "TEXCOORD";
+const EYE_LANE_SEMANTIC_INDEX: u32 = 3;
+/// The `.z` write-mask bit in an operand token's mask nibble (bit 6 of the low byte). ORing it into a
+/// `dcl_output`/`mov` operand widens `.xy` to `.xyz`.
+const MASK_BIT_Z: u32 = 0x40;
+
+/// Rewrites the terrain tessellation **vertex** shader to originate the single-pass eye index: adds an
+/// `SV_InstanceID` input and writes `eye = id & 1` into the free `.z` of its `TEXCOORD3` output lane,
+/// widening that output to `.xyz`. No reprojection and no viewport output -- a tessellation VS has no
+/// `SV_Position` (the domain shader builds clip), and only the last pre-rasterization stage may write
+/// `SV_ViewportArrayIndex`. The eye rides `TEXCOORD3.z` through the hull shader
+/// ([`forward_eye_hull_shader`]) to the domain shader ([`reproject_domain_shader`]).
+pub fn inject_eye_forward_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
+    let dxbc = Dxbc::parse(blob)?;
+    if dxbc.chunk(b"SHEX").is_none() && dxbc.chunk(b"SHDR").is_some() {
+        return Err(DxbcError::UnsupportedShaderModel);
+    }
+    let shex = dxbc.chunk(b"SHEX").ok_or(DxbcError::NoShaderChunk)?;
+    let isgn = dxbc
+        .chunk(b"ISGN")
+        .ok_or(DxbcError::MissingInputSignature)?;
+    let osgn = dxbc
+        .chunk(b"OSGN")
+        .ok_or(DxbcError::MissingOutputSignature)?;
+
+    let stream = TokenStream::new(shex.body(blob))?;
+    if stream.stage() != ShaderStage::Vertex {
+        return Err(DxbcError::NotVertexShader);
+    }
+
+    // The eye rides TEXCOORD3.z: confirm the output exists and its .z is free (mask is exactly .xy).
+    let (lane_register, lane_mask) =
+        signature_register(osgn.body(blob), EYE_LANE_SEMANTIC, EYE_LANE_SEMANTIC_INDEX)
+            .ok_or(DxbcError::NoEyeLane)?;
+    if lane_mask & 0x4 != 0 {
+        return Err(DxbcError::NoEyeLane);
+    }
+
+    let plan = plan_eye_inject(&stream, lane_register)?;
+    let new_shex = rewrite_eye_inject(&stream, &plan)?;
+
+    let new_isgn = append_signature_element(
+        isgn.body(blob),
+        &SignatureElement {
+            name: "SV_InstanceID",
+            semantic_index: 0,
+            system_value: SIGNATURE_SYSVALUE_INSTANCE_ID,
+            component_type: SIGNATURE_COMPONENT_UINT32,
+            register: plan.input_register,
+            mask: 0x01,
+            rw_mask: 0x01,
+        },
+    )?;
+    // Widen the lane output to .xyz (the .z now carries the eye). The rw-mask is the never-written
+    // mask: .xyz are written, so only .w is never written.
+    let new_osgn = widen_signature_mask(
+        osgn.body(blob),
+        EYE_LANE_SEMANTIC,
+        EYE_LANE_SEMANTIC_INDEX,
+        lane_mask | 0x4,
+        0x8,
+    )?;
+
+    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, false))
+}
+
+/// What the terrain-VS eye-inject scan learned.
+struct EyeInjectPlan {
+    /// The `TEXCOORD3` output register the eye rides in (`.z`).
+    lane_register: u32,
+    /// The `v` register for the new `SV_InstanceID` input.
+    input_register: u32,
+    /// The token index of the lane's `dcl_output`, whose mask is widened to `.xyz`.
+    dcl_output_lane_start: usize,
+    /// The token index of the first non-declaration instruction -- where the new declaration and the
+    /// eye write are injected.
+    inject_before: usize,
+}
+
+/// Scans the terrain VS declarations for the eye-inject: the free input register, the lane's
+/// `dcl_output`, the injection point, and the precondition that `SV_InstanceID` is unclaimed.
+fn plan_eye_inject(stream: &TokenStream, lane_register: u32) -> Result<EyeInjectPlan, DxbcError> {
+    let tokens = stream.tokens();
+    let mut max_input: Option<u32> = None;
+    let mut dcl_output_lane_start = None;
+    let mut inject_before = None;
+
+    for insn in stream.instructions() {
+        let insn = insn?;
+        if insn.is_declaration() {
+            match insn.opcode {
+                OPCODE_DCL_INPUT | OPCODE_DCL_INPUT_SGV | OPCODE_DCL_INPUT_SIV => {
+                    let register = declared_register(tokens, &insn)?;
+                    max_input = Some(max_input.unwrap_or(0).max(register));
+                    if insn.opcode == OPCODE_DCL_INPUT_SGV
+                        && tokens[insn.end - 1] == SB_NAME_INSTANCE_ID
+                    {
+                        return Err(DxbcError::InstanceIdAlreadyDeclared);
+                    }
+                }
+                OPCODE_DCL_OUTPUT | OPCODE_DCL_OUTPUT_SGV | OPCODE_DCL_OUTPUT_SIV
+                    if declared_register(tokens, &insn)? == lane_register =>
+                {
+                    dcl_output_lane_start = Some(insn.start);
+                }
+                _ => {}
+            }
+        } else if inject_before.is_none() {
+            inject_before = Some(insn.start);
+        }
+    }
+
+    Ok(EyeInjectPlan {
+        lane_register,
+        input_register: max_input.map_or(0, |r| r + 1),
+        dcl_output_lane_start: dcl_output_lane_start.ok_or(DxbcError::NoEyeLane)?,
+        inject_before: inject_before.unwrap_or(tokens.len()),
+    })
+}
+
+/// Rebuilds the terrain VS chunk: widens the lane `dcl_output` to `.xyz`, and injects the
+/// `SV_InstanceID` declaration plus `and o<lane>.z, vN.x, l(1)` at the declaration boundary.
+fn rewrite_eye_inject(stream: &TokenStream, plan: &EyeInjectPlan) -> Result<Vec<u8>, DxbcError> {
+    let tokens = stream.tokens();
+    let mut out: Vec<u32> = Vec::with_capacity(tokens.len() + 16);
+    out.extend_from_slice(&tokens[..2]);
+
+    let mut injected = false;
+    for insn in stream.instructions() {
+        let insn = insn?;
+        if insn.start == plan.inject_before {
+            emit_eye_inject(&mut out, plan.input_register, plan.lane_register);
+            injected = true;
+        }
+        if insn.start == plan.dcl_output_lane_start {
+            // Widen the lane output declaration `.xy` -> `.xyz` by setting the .z mask bit on its
+            // operand token (the token right after the opcode).
+            out.push(tokens[insn.start]);
+            out.push(tokens[insn.start + 1] | MASK_BIT_Z);
+            out.extend_from_slice(&tokens[insn.start + 2..insn.end]);
+            continue;
+        }
+        out.extend_from_slice(&tokens[insn.start..insn.end]);
+    }
+    if !injected {
+        emit_eye_inject(&mut out, plan.input_register, plan.lane_register);
+    }
+
+    let length = out.len() as u32;
+    out[1] = length;
+    Ok(out.iter().flat_map(|t| t.to_le_bytes()).collect())
+}
+
+/// Emits the `SV_InstanceID` declaration and the eye write `and o<lane>.z, vN.x, l(1)`.
+fn emit_eye_inject(out: &mut Vec<u32>, input_register: u32, lane_register: u32) {
+    out.extend_from_slice(&[
+        (4 << 24) | OPCODE_DCL_INPUT_SGV,
+        OPERAND_INPUT_MASK_X,
+        input_register,
+        SB_NAME_INSTANCE_ID,
+    ]);
+    out.extend_from_slice(&[
+        (7 << 24) | OPCODE_AND,
+        OPERAND_OUTPUT_MASK_Z,
+        lane_register,
+        OPERAND_INPUT_SELECT_X,
+        input_register,
+        OPERAND_IMM32_SCALAR,
+        1,
+    ]);
 }
 
 /// What the declaration scan learned: where to inject, and which registers are free.
@@ -829,6 +1005,64 @@ fn append_signature_element(
         out.push(0xAB);
     }
     Ok(out)
+}
+
+/// The register and component mask of the `ISGN`/`OSGN` element with the given semantic name and
+/// index, or `None` if absent. Used by the terrain eye-lane rewrites to locate the `TEXCOORD3` lane.
+fn signature_register(body: &[u8], name: &str, semantic_index: u32) -> Option<(u32, u8)> {
+    if body.len() < 8 {
+        return None;
+    }
+    let count = u32::from_le_bytes(body[0..4].try_into().ok()?) as usize;
+    let table = u32::from_le_bytes(body[4..8].try_into().ok()?) as usize;
+    for i in 0..count {
+        let rec = table.checked_add(i.checked_mul(SIGNATURE_ELEMENT_LEN)?)?;
+        let record = body.get(rec..rec + SIGNATURE_ELEMENT_LEN)?;
+        let name_off = u32::from_le_bytes(record[0..4].try_into().ok()?) as usize;
+        let sem_idx = u32::from_le_bytes(record[4..8].try_into().ok()?);
+        let reg = u32::from_le_bytes(record[16..20].try_into().ok()?);
+        let elem_name = body.get(name_off..)?.split(|&b| b == 0).next()?;
+        if elem_name == name.as_bytes() && sem_idx == semantic_index {
+            return Some((reg, record[20]));
+        }
+    }
+    None
+}
+
+/// Sets the component mask and rw-mask of the `ISGN`/`OSGN` element with the given semantic name and
+/// index, in place. The record size is unchanged, so no name offset shifts -- unlike
+/// [`append_signature_element`]. Used to widen the `TEXCOORD3` lane's mask to `.xyz`.
+fn widen_signature_mask(
+    body: &[u8],
+    name: &str,
+    semantic_index: u32,
+    mask: u8,
+    rw_mask: u8,
+) -> Result<Vec<u8>, DxbcError> {
+    if body.len() < 8 {
+        return Err(DxbcError::MalformedSignature);
+    }
+    let count = u32::from_le_bytes(body[0..4].try_into().expect("4 bytes")) as usize;
+    let table = u32::from_le_bytes(body[4..8].try_into().expect("4 bytes")) as usize;
+    let mut out = body.to_vec();
+    for i in 0..count {
+        let rec = table + i * SIGNATURE_ELEMENT_LEN;
+        if rec + SIGNATURE_ELEMENT_LEN > body.len() {
+            return Err(DxbcError::MalformedSignature);
+        }
+        let name_off = u32::from_le_bytes(body[rec..rec + 4].try_into().expect("4 bytes")) as usize;
+        let sem_idx = u32::from_le_bytes(body[rec + 4..rec + 8].try_into().expect("4 bytes"));
+        let elem_name = body
+            .get(name_off..)
+            .and_then(|s| s.split(|&b| b == 0).next())
+            .unwrap_or(&[]);
+        if elem_name == name.as_bytes() && sem_idx == semantic_index {
+            out[rec + 20] = mask;
+            out[rec + 21] = rw_mask;
+            return Ok(out);
+        }
+    }
+    Err(DxbcError::MalformedSignature)
 }
 
 /// An `SFI0` body with the viewport-from-any-stage feature bit ORed in (created from scratch when
