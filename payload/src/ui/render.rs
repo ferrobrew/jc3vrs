@@ -749,6 +749,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             cfg.stereo.single_pass_dual_eye = on;
             cfg.stereo.single_pass_collapse = on;
             cfg.stereo.single_pass_double_wide = on;
+            cfg.stereo.single_pass_reproject = on;
             cfg.stereo.single_pass_patch_dryrun = false;
             cfg.vr.native_resolution = on;
             crate::hooks::graphics_engine::shader::request_reload();
@@ -799,6 +800,20 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      back buffer split into the two eye textures. Without double-wide each eye is \
                      squished/half-filled; unpatched geometry and the HUD reach the left eye only.",
                 );
+                if ui
+                    .checkbox(
+                        &mut cfg.stereo.single_pass_reproject,
+                        "Reproject the no-cb0 scene families (NPCs, props, buildings, roads)",
+                    )
+                    .on_hover_text(
+                        "Rewrites the baked-WVP scene shaders (characters, props, buildings, roads) \
+                         to post-multiply their clip by the per-eye M_eye, instead of leaving them \
+                         double-drawn. Reloads shaders to apply. Sky/UI/post are excluded.",
+                    )
+                    .changed()
+                {
+                    crate::hooks::graphics_engine::shader::request_reload();
+                }
             });
         });
 

@@ -246,6 +246,13 @@ pub struct StereoConfig {
     /// validates the DXBC rewriter against the game's real shader set and reports the true census in
     /// the debug UI, before the rest of the single-pass pipeline is wired up.
     pub single_pass_patch_dryrun: bool,
+    /// Reproject the no-`cb0` scene-geometry families (skinned characters/NPCs, props, buildings,
+    /// roads, ...) for single-pass, instead of leaving them double-drawn. When on, a vertex shader
+    /// with no per-eye `cb0` operand whose name is on the reprojection allowlist is rewritten to
+    /// post-multiply its own clip position by the per-eye `M_eye` (see
+    /// [`crate::stereo::single_pass`]); NDC writers (sky, UI, post) are excluded by the allowlist.
+    /// Requires [`single_pass`](Self::single_pass); independent of the others so it can be A/B'd.
+    pub single_pass_reproject: bool,
     /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
     /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
@@ -503,6 +510,7 @@ impl StereoConfig {
             single_pass_double_wide: false,
             single_pass_collapse: false,
             single_pass_patch_dryrun: false,
+            single_pass_reproject: false,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,

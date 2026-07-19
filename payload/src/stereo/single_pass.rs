@@ -111,6 +111,45 @@ pub fn capability() -> Capability {
     }
 }
 
+/// Vertex-shader name prefixes whose no-`cb0` shaders are reprojected for single-pass: the scene
+/// geometry that writes clip as `scene-VP · world` (skinned characters/NPCs, static and dynamic
+/// models, roads). NDC writers -- sky, UI, post, particles, water -- are deliberately absent, so they
+/// stay double-drawn; `M_eye` would corrupt them and the bytecode can't tell them apart. Terrain and
+/// vegetation are absent too: the terrain VS writes no position (its clip is built in the domain
+/// shader) and vegetation is GPU-indirect, both separate phases. Names come from
+/// `CreateVertexProgramParams.m_Name`; matched by prefix to cover each family's permutations.
+const REPROJECT_NAME_PREFIXES: &[&str] = &[
+    // Skinned and rigid characters, creatures (the NPCs).
+    "character",
+    "creature",
+    // Static and dynamic scene models.
+    "prop",
+    "general",
+    "buildingjc3",
+    "buildingrsm",
+    "window",
+    "materialtune",
+    "open",
+    "flag",
+    "snow",
+    "skidmarks",
+    // Roads.
+    "junctionroad",
+    "splineroad",
+    "dirtroad",
+];
+
+/// Whether a no-`cb0` vertex shader named `name` should be reprojected for single-pass: the
+/// `single_pass_reproject` config flag is on and the name is on [`REPROJECT_NAME_PREFIXES`]. Called
+/// from the `CreateVertexProgram` hook when `patch_vertex_shader` reports no per-eye `cb0` operands.
+pub fn should_reproject(name: Option<&str>) -> bool {
+    let Some(name) = name else {
+        return false;
+    };
+    Config::lock_query(|c| c.stereo.single_pass_reproject)
+        && REPROJECT_NAME_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
 /// Record the outcome of running [`dxbc_stereo::patch_vertex_shader`] on one vertex shader, for the
 /// census the debug UI reports. Classifies into four buckets: successfully patched; no per-eye
 /// references (the baked-WVP / no-position families left double-drawn -- expected); the

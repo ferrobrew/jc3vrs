@@ -107,14 +107,36 @@ fn create_vertex_program(
     {
         let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
         let outcome = dxbc_stereo::patch_vertex_shader(code);
+        // The shader's engine name (a null-terminated C string) drives the reprojection allowlist.
+        let name = (!p.m_Name.is_null()).then(|| {
+            unsafe { std::ffi::CStr::from_ptr(p.m_Name.cast::<std::ffi::c_char>()) }
+                .to_string_lossy()
+                .into_owned()
+        });
         crate::stereo::single_pass::record_patch_outcome(&outcome);
-        if crate::stereo::single_pass::active()
-            && let Ok(patched) = outcome
-        {
-            let patched_len = patched.len() as u64;
-            saved = Some((p.m_Code, p.m_Size, patched));
+        // Substitute the rewritten bytecode when single-pass is active. The `cb0` remap is the primary
+        // path; a shader with no per-eye `cb0` operand instead takes the reprojection rewrite, but only
+        // for the scene-geometry families on the allowlist -- reprojecting an NDC writer (sky, UI,
+        // post) would corrupt it. The reprojection rewrite can still bow out (e.g. a terrain VS with no
+        // position output), in which case the shader is left double-drawn.
+        let substitute = if crate::stereo::single_pass::active() {
+            match outcome {
+                Ok(patched) => Some(patched),
+                Err(dxbc_stereo::DxbcError::NoPerEyeReferences)
+                    if crate::stereo::single_pass::should_reproject(name.as_deref()) =>
+                {
+                    dxbc_stereo::reproject_vertex_shader(code).ok()
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        if let Some(blob) = substitute {
+            let len = blob.len() as u64;
+            saved = Some((p.m_Code, p.m_Size, blob));
             p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
-            p.m_Size = patched_len;
+            p.m_Size = len;
         }
     }
 
