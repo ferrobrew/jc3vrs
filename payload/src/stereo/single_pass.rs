@@ -198,6 +198,60 @@ pub fn double_wide_active() -> bool {
     collapse_active() && Config::lock_query(|c| c.stereo.single_pass_double_wide)
 }
 
+/// The eye whose viewport + view-projection the collapse UI overlays (HUD panel, egui panel) should
+/// currently draw with, so a head/world-locked quad lands at the correct 3D spot in each eye instead
+/// of being drawn once, stretched, across the double-wide target. Set around each eye's overlay draw
+/// by `render_engine_post_draw`; [`NO_UI_EYE`] means "not drawing a collapse overlay".
+static COLLAPSE_UI_EYE: AtomicUsize = AtomicUsize::new(NO_UI_EYE);
+const NO_UI_EYE: usize = usize::MAX;
+
+/// Select the eye for the collapse UI overlay draws (`Some(0)`/`Some(1)`), or clear it (`None`).
+pub fn set_collapse_ui_eye(eye: Option<usize>) {
+    COLLAPSE_UI_EYE.store(eye.unwrap_or(NO_UI_EYE), Ordering::Relaxed);
+}
+
+/// The eye-half viewport and per-eye **full** view-projection for the current collapse UI overlay
+/// draw, or `None` when not drawing one (or not collapsed). The HUD/egui-panel quad renderer uses
+/// this to draw each overlay into one eye's half with that eye's own VP.
+pub fn collapse_ui_eye_override() -> Option<(D3D11_VIEWPORT, Matrix4)> {
+    let eye = COLLAPSE_UI_EYE.load(Ordering::Relaxed);
+    if eye == NO_UI_EYE || !collapse_active() {
+        return None;
+    }
+    let full = (*COLLAPSE_FULL_VIEWPORT.lock())?;
+    let half = full.Width / 2.0;
+    let viewport = D3D11_VIEWPORT {
+        TopLeftX: full.TopLeftX + eye as f32 * half,
+        Width: half,
+        ..full
+    };
+    Some((viewport, full_eye_view_projection(eye)?))
+}
+
+/// Set the immediate-context viewport via the original (un-detoured) `RSSetViewports`, so a mod
+/// overlay can bind one eye's half of the double-wide target without the collapse viewport detour
+/// dup'ing it to full width. `context` is the raw `ID3D11DeviceContext` pointer.
+pub fn set_ui_viewport_raw(context: *mut c_void, viewport: &D3D11_VIEWPORT) {
+    if let Some(detour) = RS_SET_VIEWPORTS.get() {
+        // SAFETY: `context` is the live immediate context; the trampoline is the original function.
+        unsafe { detour.call(context, 1, std::slice::from_ref(viewport).as_ptr()) };
+    }
+}
+
+/// The per-eye **full** (translation-carrying) world→clip view-projection, matching the render
+/// camera's `m_ViewProjectionF` for that eye -- for projecting the mod's world-space overlay quads
+/// per eye in the collapse, where the render camera stays centered. `None` if the centre transform or
+/// per-eye params are unavailable.
+fn full_eye_view_projection(eye: usize) -> Option<Matrix4> {
+    let center_transform = crate::stereo::STEREO_STATE.lock().center_transform?;
+    let params = crate::vr::render_params(eye)?;
+    let mut eye_world = glam::Mat4::from(center_transform);
+    eye_world.w_axis += params.world_offset.extend(0.0);
+    let eye_world = eye_world * glam::Mat4::from_quat(params.orientation_delta);
+    let vp = glam::Mat4::from(params.projection_reverse_z) * eye_world.inverse();
+    Some(Matrix4::from(vp))
+}
+
 /// Marks whether the render thread is currently inside the G-buffer geometry pass range
 /// (`RP_Z_OCCLUDERS..RP_FIRST_SCENE`), set around that `DrawRenderPassRange` call. The dual-eye
 /// viewport split and instance doubling apply only here -- so shadow/lighting/post passes, which

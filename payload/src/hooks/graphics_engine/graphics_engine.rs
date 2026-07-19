@@ -131,10 +131,22 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             graphics_engine.m_Device.as_ref(),
             graphics_engine.m_BackBufferLinear.as_ref(),
         ) {
-            crate::hud::draw_quad(&context.m_Context, device, back_buffer, index);
-            // The interactive egui debug panel (issue #24), an independent floating surface drawn
-            // right after the gameplay HUD. A no-op unless a session is running and it is enabled.
-            crate::hud::egui_panel::draw_quad(&context.m_Context, device, back_buffer, index);
+            // The interactive egui debug panel (issue #24) is an independent floating surface drawn
+            // right after the gameplay HUD. Under collapse the render camera is centered and the
+            // target is double-wide, so draw both world-locked overlays once per eye into each half
+            // with that eye's own VP (see `single_pass::collapse_ui_eye_override`); otherwise the
+            // per-dispatch single draw carries the eye implicitly.
+            if crate::stereo::single_pass::collapse_active() {
+                for eye in 0..2 {
+                    crate::stereo::single_pass::set_collapse_ui_eye(Some(eye));
+                    crate::hud::draw_quad(&context.m_Context, device, back_buffer, eye);
+                    crate::hud::egui_panel::draw_quad(&context.m_Context, device, back_buffer, eye);
+                }
+                crate::stereo::single_pass::set_collapse_ui_eye(None);
+            } else {
+                crate::hud::draw_quad(&context.m_Context, device, back_buffer, index);
+                crate::hud::egui_panel::draw_quad(&context.m_Context, device, back_buffer, index);
+            }
             // Redirect the flat mirror overlay into an offscreen texture on eye 0 (consuming this
             // frame's egui output) so the desktop mirror can composite it from the deferred frame
             // tail's thread. A no-op unless a session renders, the mirror is on, and the panel is

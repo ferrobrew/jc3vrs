@@ -40,10 +40,17 @@ pub(crate) fn render(context: &ID3D11DeviceContext, device: &Device, target: &Te
         *OVERLAY.lock() = None;
         return;
     }
-    let (width, height) = (
-        u32::from(target.m_Width).max(1),
-        u32::from(target.m_Height).max(1),
-    );
+    // Match the egui layout width: under single-pass double-wide the back buffer is 2x per-eye wide,
+    // but egui lays the flat overlay out at the per-eye width, so the overlay texture is per-eye wide
+    // too. The mirror composite then stretches it across the full double-wide buffer, which the
+    // window's 2x horizontal squish cancels back to the correct size.
+    let full_width = u32::from(target.m_Width).max(1);
+    let width = if crate::stereo::single_pass::double_wide_active() {
+        (full_width / 2).max(1)
+    } else {
+        full_width
+    };
+    let height = u32::from(target.m_Height).max(1);
     let mut overlay = OVERLAY.lock();
     if overlay.as_ref().map(HudTarget::size) != Some((width, height)) {
         match HudTarget::new(device, width, height) {

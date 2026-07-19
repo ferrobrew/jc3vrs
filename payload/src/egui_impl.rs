@@ -98,7 +98,15 @@ impl EguiState {
             }
             None => {
                 let params = unsafe { get_graphics_params() };
-                let buffer = (params.m_Width as f32, params.m_Height as f32);
+                // Under single-pass double-wide the back buffer is 2x per-eye wide, but the flat
+                // overlay is composited into a single eye-half of the desktop mirror -- lay it out at
+                // the per-eye width, else the whole UI comes out half-relative-width.
+                let buffer_width = if crate::stereo::single_pass::double_wide_active() {
+                    params.m_Width as f32 / 2.0
+                } else {
+                    params.m_Width as f32
+                };
+                let buffer = (buffer_width, params.m_Height as f32);
                 let client = crate::hud::cursor::client_size()
                     .map(|(w, h)| (w as f32, h as f32))
                     .unwrap_or(buffer);
