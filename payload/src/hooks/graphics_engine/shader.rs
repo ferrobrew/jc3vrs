@@ -119,8 +119,12 @@ fn create_vertex_program(
     }
 
     // Flag the patched creation so the CreateVertexShader detour records the resulting shader for the
-    // draw-time patched/unpatched gating; cleared after the call in case that detour is not installed.
+    // draw-time patched/unpatched gating. Install the COM detours *first*, before the trampoline
+    // creates the D3D shader: otherwise a shader created before the detours' lazy first-frame install
+    // (e.g. a character shader loaded at level start) is patched at the blob level but never recorded,
+    // so `BOUND_VS_PATCHED` stays false and its draw is never doubled -- it renders in one eye.
     if saved.is_some() {
+        crate::stereo::single_pass::ensure_viewport_detours();
         crate::stereo::single_pass::PATCH_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     let result = CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params);

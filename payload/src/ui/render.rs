@@ -828,6 +828,16 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 );
             }
         }
+        let s = single_pass::substitution_stats();
+        ui.label(format!(
+            "Recorded VS (doubled): {} | CreateVertexShader: pending {}, re-acquired [patched {}, already-cb13 {}, no-refs {}, err {}]",
+            s.recorded_vs,
+            s.cvs_pending,
+            s.cvs_reacq_patched,
+            s.cvs_reacq_cb13,
+            s.cvs_reacq_no_refs,
+            s.cvs_reacq_err,
+        ));
         ui.horizontal(|ui| {
             if ui.button("Reload shaders").clicked() {
                 crate::hooks::graphics_engine::shader::request_reload();

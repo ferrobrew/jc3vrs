@@ -434,6 +434,7 @@ fn compute_dual_eye_rows(engine: &RenderEngine) -> Option<[Vector4; STEREO_CB_RO
             center_transform: center_transform.data,
             center_camera_position: center_campos.data,
             forward_divergence_deg: diverge,
+            substitution: substitution_stats(),
             eyes: [eye_diag(&p0, 0), eye_diag(&p1, 1)],
         });
 
@@ -492,6 +493,8 @@ pub struct FrameDiagnostics {
     pub center_camera_position: [f32; 4],
     /// The angle between the two eyes' view forwards, in degrees (a stereo pair should be a few).
     pub forward_divergence_deg: f32,
+    /// The cumulative shader-substitution tallies at capture time. See [`SubstitutionStats`].
+    pub substitution: SubstitutionStats,
     pub eyes: [EyeDiagnostics; 2],
 }
 
@@ -837,10 +840,20 @@ type VsSetShaderFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *const 
 static CREATE_VERTEX_SHADER: OnceLock<GenericDetour<CreateVertexShaderFn>> = OnceLock::new();
 static VS_SET_SHADER: OnceLock<GenericDetour<VsSetShaderFn>> = OnceLock::new();
 
-/// Record the `ID3D11VertexShader` that results from a stereo-patched blob. The
-/// `CreateVertexProgram` hook sets [`PATCH_PENDING`] right before the engine calls
-/// `CreateVertexShader` with the substituted bytecode, so the shader created under that flag is the
-/// patched one; its pointer goes into [`PATCHED_VS`] for the draw-time gating.
+/// Substitute and record the `ID3D11VertexShader` for a stereo-patched blob, covering both the fresh
+/// and the re-created shader-creation paths.
+///
+/// The `CreateVertexProgram` hook substitutes the blob for a *fresh* shader create and sets
+/// [`PATCH_PENDING`] right before the engine calls `CreateVertexShader`, so the shader created under
+/// that flag is the patched one and goes straight into [`PATCHED_VS`]. But a bundle reload re-creates
+/// an already-loaded shader through `ResourceCacheReCreateResource`, which calls `CreateVertexShader`
+/// directly *without* re-running `CreateVertexProgram` -- so a shader first loaded before single-pass
+/// (e.g. a character shader from level start, whose resource still holds the original bytecode) would
+/// arrive here unsubstituted and render mono/skewed. Catch that path by running the rewrite on the
+/// incoming bytecode: an unpatched-but-patchable blob is substituted in place for the create call, and
+/// an already-patched blob (`Cb13AlreadyDeclared` -- a reload of a shader whose resource already holds
+/// the patched blob) is recorded as-is. `PATCH_PENDING` short-circuits the re-analysis for the fresh
+/// path, whose blob `CreateVertexProgram` already substituted.
 unsafe extern "system" fn create_vertex_shader_detour(
     device: *mut c_void,
     bytecode: *const c_void,
@@ -849,8 +862,37 @@ unsafe extern "system" fn create_vertex_shader_detour(
     out: *mut *mut c_void,
 ) -> i32 {
     let detour = CREATE_VERTEX_SHADER.get().expect("set before enable");
-    let hr = unsafe { detour.call(device, bytecode, length, linkage, out) };
-    if PATCH_PENDING.swap(false, Ordering::Relaxed)
+    let pending = PATCH_PENDING.swap(false, Ordering::Relaxed);
+    let reacquired = (!pending && active() && !bytecode.is_null() && length >= 4).then(|| {
+        let code = unsafe { std::slice::from_raw_parts(bytecode.cast::<u8>(), length) };
+        dxbc_stereo::patch_vertex_shader(code)
+    });
+    let (record, blob, len) = match &reacquired {
+        Some(Ok(patched)) => {
+            CVS_REACQ_PATCHED.fetch_add(1, Ordering::Relaxed);
+            (true, patched.as_ptr().cast::<c_void>(), patched.len())
+        }
+        Some(Err(DxbcError::Cb13AlreadyDeclared)) => {
+            CVS_REACQ_CB13.fetch_add(1, Ordering::Relaxed);
+            (true, bytecode, length)
+        }
+        Some(Err(DxbcError::NoPerEyeReferences)) => {
+            CVS_REACQ_NOREFS.fetch_add(1, Ordering::Relaxed);
+            (false, bytecode, length)
+        }
+        Some(Err(_)) => {
+            CVS_REACQ_ERR.fetch_add(1, Ordering::Relaxed);
+            (false, bytecode, length)
+        }
+        None => {
+            if pending {
+                CVS_PENDING.fetch_add(1, Ordering::Relaxed);
+            }
+            (pending, bytecode, length)
+        }
+    };
+    let hr = unsafe { detour.call(device, blob, len, linkage, out) };
+    if record
         && hr == 0
         && !out.is_null()
         && let shader = unsafe { *out }
@@ -876,9 +918,15 @@ unsafe extern "system" fn vs_set_shader_detour(
 }
 
 /// Reset the patched-shader set (on a shader reload, since the old `ID3D11VertexShader` pointers are
-/// released and could be reused by later allocations).
+/// released and could be reused by later allocations). Also zeroes the `CreateVertexShader`-path
+/// tallies so [`substitution_stats`] reflects one clean pass over the reloaded shader set.
 pub fn reset_patched_vs() {
     PATCHED_VS.lock().clear();
+    CVS_PENDING.store(0, Ordering::Relaxed);
+    CVS_REACQ_PATCHED.store(0, Ordering::Relaxed);
+    CVS_REACQ_CB13.store(0, Ordering::Relaxed);
+    CVS_REACQ_NOREFS.store(0, Ordering::Relaxed);
+    CVS_REACQ_ERR.store(0, Ordering::Relaxed);
 }
 
 /// Whether single-pass has substituted any patched vertex shaders this session (they are still held
@@ -886,6 +934,41 @@ pub fn reset_patched_vs() {
 /// mod's `cb13`-reading shaders after the mod is gone.
 pub fn has_patched_shaders() -> bool {
     !PATCHED_VS.lock().is_empty()
+}
+
+/// A snapshot of the shader-substitution tallies, for the bring-up log and the screenshot JSON sidecar.
+/// `recorded_vs` is the live size of [`PATCHED_VS`] (patched shaders the draw gating will double); the
+/// `cvs_*` fields are the [`create_vertex_shader_detour`] outcome buckets; the `census_*` fields are the
+/// [`record_patch_outcome`] buckets from the `CreateVertexProgram` hook. Comparing the two paths shows
+/// whether the re-create path (which skips `CreateVertexProgram`) is reaching the D3D-level substitution.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct SubstitutionStats {
+    pub recorded_vs: usize,
+    pub cvs_pending: usize,
+    pub cvs_reacq_patched: usize,
+    pub cvs_reacq_cb13: usize,
+    pub cvs_reacq_no_refs: usize,
+    pub cvs_reacq_err: usize,
+    pub census_patched: usize,
+    pub census_no_refs: usize,
+    pub census_deferred: usize,
+    pub census_errored: usize,
+}
+
+/// Snapshot the current shader-substitution tallies. See [`SubstitutionStats`].
+pub fn substitution_stats() -> SubstitutionStats {
+    SubstitutionStats {
+        recorded_vs: PATCHED_VS.lock().len(),
+        cvs_pending: CVS_PENDING.load(Ordering::Relaxed),
+        cvs_reacq_patched: CVS_REACQ_PATCHED.load(Ordering::Relaxed),
+        cvs_reacq_cb13: CVS_REACQ_CB13.load(Ordering::Relaxed),
+        cvs_reacq_no_refs: CVS_REACQ_NOREFS.load(Ordering::Relaxed),
+        cvs_reacq_err: CVS_REACQ_ERR.load(Ordering::Relaxed),
+        census_patched: patched_count(),
+        census_no_refs: no_refs_count(),
+        census_deferred: deferred_count(),
+        census_errored: errored_count(),
+    }
 }
 
 /// Log and reset the per-window patched/unpatched G-buffer draw counts -- called once per frame so
@@ -898,9 +981,22 @@ pub fn log_draw_split() {
     if patched + unpatched > 0 {
         let n = DRAW_SPLIT_LOG.fetch_add(1, Ordering::Relaxed);
         if n.is_multiple_of(120) {
+            let s = substitution_stats();
             tracing::info!(
                 target: "single_pass",
-                "gbuffer draws: {patched} patched, {unpatched} unpatched | viewports: {split} split, {dup} identical-dup"
+                "gbuffer draws: {patched} patched, {unpatched} unpatched | viewports: {split} split, {dup} identical-dup | \
+                 recorded VS={} | CreateVertexShader: pending={} reacq[patched={} cb13={} no-refs={} err={}] | \
+                 census[patched={} no-refs={} deferred={} errored={}]",
+                s.recorded_vs,
+                s.cvs_pending,
+                s.cvs_reacq_patched,
+                s.cvs_reacq_cb13,
+                s.cvs_reacq_no_refs,
+                s.cvs_reacq_err,
+                s.census_patched,
+                s.census_no_refs,
+                s.census_deferred,
+                s.census_errored,
             );
         }
     }
@@ -943,11 +1039,15 @@ pub fn uninstall_com_detours() {
     tracing::info!("single-pass: COM detours uninstalled");
 }
 
-/// Install the `RSSetViewports`/`RSSetScissorRects` duplication detours on the immediate-context
-/// vtable, once. Patching runs under a thread suspender (all other threads paused) so none can be
-/// executing the target's prologue while it is rewritten. Called only from the active render path, so
-/// a normal (single-pass-off) session never installs it.
-fn ensure_viewport_detours() {
+/// Install the single-pass COM-vtable detours on the immediate-context (and device) vtables, once.
+/// Patching runs under a thread suspender (all other threads paused) so none can be executing the
+/// target's prologue while it is rewritten. Called from the active render path and from the
+/// `CreateVertexProgram` hook -- the latter so the `CreateVertexShader` detour that records a patched
+/// shader into [`PATCHED_VS`] exists *before* the shader is created, not lazily on the first rendered
+/// frame (a shader created in between, e.g. a character shader loaded at level start, would otherwise
+/// be patched at the blob level but never recorded, so `BOUND_VS_PATCHED` stays false and its draw is
+/// never doubled). A normal (single-pass-off) session never installs it.
+pub(crate) fn ensure_viewport_detours() {
     if RS_SET_VIEWPORTS.get().is_some() || crate::is_shutting_down() {
         return; // already installed, or tearing down -- never (re)install during eject
     }
@@ -1037,6 +1137,16 @@ static UNPATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static DRAW_SPLIT_LOG: AtomicUsize = AtomicUsize::new(0);
 static VIEWPORT_SPLIT: AtomicUsize = AtomicUsize::new(0);
 static VIEWPORT_DUP: AtomicUsize = AtomicUsize::new(0);
+
+/// `CreateVertexShader`-detour outcome tallies (cumulative since injection), to diagnose what the
+/// shader re-create path -- which bypasses `CreateVertexProgram` -- feeds through the D3D-level
+/// substitution: `pending` came pre-substituted from `CreateVertexProgram`; the four `reacq_*` buckets
+/// are what the detour's own rewrite of the incoming bytecode found.
+static CVS_PENDING: AtomicUsize = AtomicUsize::new(0);
+static CVS_REACQ_PATCHED: AtomicUsize = AtomicUsize::new(0);
+static CVS_REACQ_CB13: AtomicUsize = AtomicUsize::new(0);
+static CVS_REACQ_NOREFS: AtomicUsize = AtomicUsize::new(0);
+static CVS_REACQ_ERR: AtomicUsize = AtomicUsize::new(0);
 
 /// The last full (unsplit) viewport bound during a collapsed camera scene, recorded by
 /// [`rs_set_viewports_detour`] so [`ensure_collapse_viewport`] can derive the L/R eye halves at draw
