@@ -174,9 +174,15 @@ impl<'a> Instruction<'a> {
     /// than an executable instruction. A declaration's constant-buffer operand encodes the buffer
     /// *size* (`dcl_constantbuffer cb0[29]`), not a row access, so per-eye analysis and the operand
     /// rewrite both skip declarations -- otherwise a buffer sized to a per-eye row (e.g. `cb0[29]`)
-    /// reads as a phantom per-eye reference.
+    /// reads as a phantom per-eye reference. It also fixes the rewrite's injection point (the first
+    /// executable instruction), so it must recognise **every** declaration opcode: the SM4 block
+    /// (`0x58..=0x6A`) *and* the SM5 block (`0x91..=0xA2`, `dcl_stream` through
+    /// `dcl_resource_structured` -- the tessellation, UAV, and structured-resource declarations the
+    /// terrain and vegetation shaders use; `dcl_resource_structured` is `0xA2`, with the executable
+    /// `store_*`/`ld_structured` opcodes at `0xA3+`). Missing the SM5 block would treat
+    /// `dcl_resource_structured` as the first instruction and inject the prologue mid-declarations.
     pub fn is_declaration(&self) -> bool {
-        matches!(self.opcode, OPCODE_CUSTOMDATA | 0x58..=0x6A)
+        matches!(self.opcode, OPCODE_CUSTOMDATA | 0x58..=0x6A | 0x91..=0xA2)
     }
 }
 

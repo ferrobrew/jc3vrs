@@ -111,6 +111,12 @@ pub enum DxbcError {
     UnsupportedOperandEncoding,
     /// Rewriting an instruction would push its length past the 7-bit instruction-length field.
     InstructionTooLong,
+    /// The reprojection rewrite found no `SV_Position` output to reproject (no `dcl_output_siv
+    /// position`), so there is no clip position to post-multiply.
+    NoPositionOutput,
+    /// The reprojection rewrite hit a control-flow shape it does not support -- a conditional early
+    /// return (`retc`) would need the per-eye epilogue on that path too.
+    UnsupportedControlFlow,
 }
 
 impl fmt::Display for DxbcError {
@@ -136,6 +142,10 @@ impl fmt::Display for DxbcError {
             }
             DxbcError::InstructionTooLong => {
                 "dxbc: a rewritten instruction exceeds the instruction-length field"
+            }
+            DxbcError::NoPositionOutput => "dxbc: no SV_Position output to reproject",
+            DxbcError::UnsupportedControlFlow => {
+                "dxbc: reprojection does not support a conditional early return (retc)"
             }
         };
         f.write_str(msg)

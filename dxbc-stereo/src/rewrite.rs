@@ -35,6 +35,14 @@ pub const STEREO_CB_REGISTER: u32 = 13;
 /// The stereo constant buffer's size in float4 rows: five per eye (four view-projection rows, then
 /// the camera position), two eyes.
 pub const STEREO_CB_ROWS: u32 = 10;
+/// The `cb13` row where the reprojection `M_eye` block begins, after the 10 `cb0`-remap rows. Eye
+/// `e`'s `M_eye` is the four rows `cb13[MEYE_ROW_BASE + 4*e .. +4]`, addressed as
+/// `cb13[rBase.x + (MEYE_ROW_BASE + j)]` with `rBase.x = 4*e`.
+pub const MEYE_ROW_BASE: u32 = STEREO_CB_ROWS;
+/// The `cb13` size a reprojected shader declares: the 10 `cb0`-remap rows plus a four-rows-per-eye
+/// `M_eye` block. The `cb0`-remap shaders declare only `CB13[10]`; both idioms bind the same `b13`
+/// buffer, which the payload sizes to this full length.
+pub const STEREO_REPROJ_CB_ROWS: u32 = STEREO_CB_ROWS + 8;
 
 /// Rewrites a model vertex shader for single-pass stereo (see the module docs) and returns a new,
 /// checksum-valid DXBC container. Fails without side effects if the shader is not a `SHEX` vertex
@@ -88,8 +96,20 @@ pub fn patch_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
         },
     )?;
 
-    // Reassemble the container, swapping in the rewritten chunks and adding `SFI0` after the shader
-    // chunk if the container had none (fxc's chunk order is RDEF, ISGN, OSGN, SHEX, SFI0, STAT).
+    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex))
+}
+
+/// Reassembles a container with the rewritten `ISGN`/`OSGN`/`SHEX` chunks swapped in, the `SFI0`
+/// viewport-feature bit set (adding an `SFI0` chunk after `SHEX` if the container had none -- fxc's
+/// chunk order is `RDEF, ISGN, OSGN, SHEX, SFI0, STAT`), and a refreshed checksum. Shared by the
+/// `cb0`-remap and reprojection rewrites, which differ only in how they build the new chunks.
+fn reassemble(
+    dxbc: &Dxbc,
+    blob: &[u8],
+    new_isgn: Vec<u8>,
+    new_osgn: Vec<u8>,
+    new_shex: Vec<u8>,
+) -> Vec<u8> {
     let mut chunks: Vec<([u8; 4], Vec<u8>)> = Vec::with_capacity(dxbc.chunks().len() + 1);
     let has_sfi0 = dxbc.chunk(b"SFI0").is_some();
     for chunk in dxbc.chunks() {
@@ -108,7 +128,66 @@ pub fn patch_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
 
     let mut out = build_container(&chunks);
     refresh_checksum(&mut out);
-    Ok(out)
+    out
+}
+
+/// Rewrites a vertex shader for single-pass stereo by **reprojection**: instead of remapping `cb0`
+/// per-eye operands (which the baked-WVP / terrain / GPU-indirect families don't have), it renames
+/// the shader's own `SV_Position` writes to a temp `rClip` and post-multiplies by a per-eye matrix
+/// `M_eye` before each `ret`, so `o0 = M_eye · clip_center` lands the shader's own center-clip
+/// position in each eye. `M_eye = VP_eye · VP_center⁻¹` is uploaded to `cb13`'s four-rows-per-eye
+/// block at [`MEYE_ROW_BASE`]; the eye index, viewport routing, `SV_InstanceID`/`SV_ViewportArrayIndex`
+/// interface, `SFI0` bit, and checksum are the same as the remap. Shader-agnostic: it works on any
+/// vertex shader that writes `SV_Position` from a scene view-projection, whatever buffer that came
+/// from. The runtime gate (scene pass range ∩ `DrawIndexed`) is what excludes NDC-direct writers
+/// (sky, UI), which the bytecode can't distinguish.
+pub fn reproject_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
+    let dxbc = Dxbc::parse(blob)?;
+    if dxbc.chunk(b"SHEX").is_none() && dxbc.chunk(b"SHDR").is_some() {
+        return Err(DxbcError::UnsupportedShaderModel);
+    }
+    let shex = dxbc.chunk(b"SHEX").ok_or(DxbcError::NoShaderChunk)?;
+    let isgn = dxbc
+        .chunk(b"ISGN")
+        .ok_or(DxbcError::MissingInputSignature)?;
+    let osgn = dxbc
+        .chunk(b"OSGN")
+        .ok_or(DxbcError::MissingOutputSignature)?;
+
+    let stream = TokenStream::new(shex.body(blob))?;
+    if stream.stage() != ShaderStage::Vertex {
+        return Err(DxbcError::NotVertexShader);
+    }
+
+    let plan = plan_reproject(&stream)?;
+    let new_shex = rewrite_reproject(&stream, &plan)?;
+
+    let new_isgn = append_signature_element(
+        isgn.body(blob),
+        &SignatureElement {
+            name: "SV_InstanceID",
+            semantic_index: 0,
+            system_value: SIGNATURE_SYSVALUE_INSTANCE_ID,
+            component_type: SIGNATURE_COMPONENT_UINT32,
+            register: plan.input_register,
+            mask: 0x01,
+            rw_mask: 0x01,
+        },
+    )?;
+    let new_osgn = append_signature_element(
+        osgn.body(blob),
+        &SignatureElement {
+            name: "SV_ViewportArrayIndex",
+            semantic_index: 0,
+            system_value: SIGNATURE_SYSVALUE_VIEWPORT_ARRAY_INDEX,
+            component_type: SIGNATURE_COMPONENT_UINT32,
+            register: plan.output_register,
+            mask: 0x01,
+            rw_mask: 0x0E,
+        },
+    )?;
+
+    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex))
 }
 
 /// What the declaration scan learned: where to inject, and which registers are free.
@@ -138,6 +217,16 @@ const OPCODE_DCL_OUTPUT: u32 = 0x65;
 const OPCODE_DCL_OUTPUT_SGV: u32 = 0x66;
 const OPCODE_DCL_OUTPUT_SIV: u32 = 0x67;
 const OPCODE_DCL_TEMPS: u32 = 0x68;
+// Reprojection opcodes.
+const OPCODE_DP4: u32 = 0x11;
+const OPCODE_RET: u32 = 0x3E;
+const OPCODE_RETC: u32 = 0x25;
+
+/// SM4/5 operand type: output register (`oN`). Reprojection renames `SV_Position` writes (which are
+/// output-register destinations) to a temp by clearing this type field to `0` (TEMP).
+const OPERAND_TYPE_OUTPUT: u32 = 2;
+/// `D3D_NAME_POSITION`, the `dcl_output_siv` trailing system-value name for `SV_Position`.
+const SB_NAME_POSITION: u32 = 1;
 
 /// The `dynamicIndexed` access pattern, bit 11 of a `dcl_constantbuffer` opcode token. Required
 /// because `cb13` is indexed through a register, unlike the game's `immediateIndexed` `cb0`.
@@ -162,6 +251,14 @@ const OPERAND_INPUT_SELECT_X: u32 = 0x0010_100A;
 const OPERAND_INPUT_MASK_X: u32 = 0x0010_1012;
 /// `oM.x` as a destination: output register, 1D immediate index, write mask `.x`.
 const OPERAND_OUTPUT_MASK_X: u32 = 0x0010_2012;
+/// `oM.y`/`.z`/`.w` as a destination: [`OPERAND_OUTPUT_MASK_X`] with the write-mask nibble moved to
+/// the y/z/w component. The reprojection epilogue writes one clip component per `dp4`.
+const OPERAND_OUTPUT_MASK_Y: u32 = 0x0010_2022;
+const OPERAND_OUTPUT_MASK_Z: u32 = 0x0010_2042;
+const OPERAND_OUTPUT_MASK_W: u32 = 0x0010_2082;
+/// `rN.xyzw` as a source: temp register, 1D immediate index, full `.xyzw` swizzle (the saved clip
+/// position each `M_eye` row dots against).
+const OPERAND_TEMP_SWIZZLE_XYZW: u32 = 0x0010_0E46;
 /// `rN.x` as a destination: temp register, 1D immediate index, write mask `.x`.
 const OPERAND_TEMP_MASK_X: u32 = 0x0010_0012;
 /// `rN.x` as a source (and as a relative index): temp register, 1D immediate index, select-1 `.x`.
@@ -380,6 +477,263 @@ fn rewrite_instruction(
         return Err(DxbcError::InstructionTooLong);
     }
     out[opcode_at] = (out[opcode_at] & !(0x7F << 24)) | (new_len << 24);
+    Ok(())
+}
+
+/// What the reprojection declaration scan learned: the `SV_Position` output to reproject, the free
+/// registers, the temp base (`rBase` = base, `rClip` = base + 1), and the injection point.
+struct ReprojectPlan {
+    /// The output register `SV_Position` is declared at (`dcl_output_siv oN, position`).
+    pos_register: u32,
+    /// The `v` register for the new `SV_InstanceID` input.
+    input_register: u32,
+    /// The `o` register for the new `SV_ViewportArrayIndex` output.
+    output_register: u32,
+    /// The first of the two temps this rewrite claims: `rBase` (eye row base) at `temp_base`, `rClip`
+    /// (saved clip position) at `temp_base + 1`.
+    temp_base: u32,
+    /// The token index of the existing `dcl_temps`, if any (its count is bumped by two).
+    dcl_temps_start: Option<usize>,
+    /// The token index of the first non-declaration instruction, where declarations and the prologue
+    /// are injected.
+    inject_before: usize,
+}
+
+/// Scans the declarations for the reprojection rewrite: the `SV_Position` output register, the free
+/// input/output registers, the temp count and injection point, and the preconditions (`cb13` and
+/// `SV_InstanceID` unclaimed, an `SV_Position` output present, no `retc`).
+fn plan_reproject(stream: &TokenStream) -> Result<ReprojectPlan, DxbcError> {
+    let tokens = stream.tokens();
+    let mut max_input: Option<u32> = None;
+    let mut max_output: Option<u32> = None;
+    let mut temps: u32 = 0;
+    let mut dcl_temps_start = None;
+    let mut inject_before = None;
+    let mut pos_register = None;
+
+    for insn in stream.instructions() {
+        let insn = insn?;
+        if insn.is_declaration() {
+            match insn.opcode {
+                OPCODE_DCL_INPUT | OPCODE_DCL_INPUT_SGV | OPCODE_DCL_INPUT_SIV => {
+                    let register = declared_register(tokens, &insn)?;
+                    max_input = Some(max_input.unwrap_or(0).max(register));
+                    if insn.opcode == OPCODE_DCL_INPUT_SGV
+                        && tokens[insn.end - 1] == SB_NAME_INSTANCE_ID
+                    {
+                        return Err(DxbcError::InstanceIdAlreadyDeclared);
+                    }
+                }
+                OPCODE_DCL_OUTPUT | OPCODE_DCL_OUTPUT_SGV | OPCODE_DCL_OUTPUT_SIV => {
+                    let register = declared_register(tokens, &insn)?;
+                    max_output = Some(max_output.unwrap_or(0).max(register));
+                    if insn.opcode == OPCODE_DCL_OUTPUT_SIV
+                        && tokens[insn.end - 1] == SB_NAME_POSITION
+                    {
+                        pos_register = Some(register);
+                    }
+                }
+                OPCODE_DCL_TEMPS => {
+                    temps = *tokens
+                        .get(insn.start + 1)
+                        .ok_or(DxbcError::UnexpectedEndOfTokens)?;
+                    dcl_temps_start = Some(insn.start);
+                }
+                OPCODE_DCL_CONSTANT_BUFFER
+                    if declared_register(tokens, &insn)? == STEREO_CB_REGISTER =>
+                {
+                    return Err(DxbcError::Cb13AlreadyDeclared);
+                }
+                _ => {}
+            }
+        } else {
+            if inject_before.is_none() {
+                inject_before = Some(insn.start);
+            }
+            // A conditional early return would need the per-eye epilogue on that path too.
+            if insn.opcode == OPCODE_RETC {
+                return Err(DxbcError::UnsupportedControlFlow);
+            }
+        }
+    }
+
+    let pos_register = pos_register.ok_or(DxbcError::NoPositionOutput)?;
+    Ok(ReprojectPlan {
+        pos_register,
+        input_register: max_input.map_or(0, |r| r + 1),
+        output_register: max_output.map_or(0, |r| r + 1),
+        temp_base: temps,
+        dcl_temps_start,
+        inject_before: inject_before.unwrap_or(tokens.len()),
+    })
+}
+
+/// Rebuilds the shader chunk for reprojection: injects the declarations and eye prologue, renames
+/// every `SV_Position` write to the `rClip` temp, and emits the `M_eye · rClip` `dp4` chain before
+/// each `ret`.
+fn rewrite_reproject(stream: &TokenStream, plan: &ReprojectPlan) -> Result<Vec<u8>, DxbcError> {
+    let tokens = stream.tokens();
+    let mut out: Vec<u32> = Vec::with_capacity(tokens.len() + 128);
+    out.extend_from_slice(&tokens[..2]);
+
+    let mut injected = false;
+    for insn in stream.instructions() {
+        let insn = insn?;
+        if insn.start == plan.inject_before {
+            emit_reproject_injection(&mut out, plan);
+            injected = true;
+        }
+        if Some(insn.start) == plan.dcl_temps_start {
+            out.push(tokens[insn.start]);
+            out.push(plan.temp_base + 2);
+            continue;
+        }
+        if insn.is_declaration() {
+            out.extend_from_slice(&tokens[insn.start..insn.end]);
+            continue;
+        }
+        if insn.opcode == OPCODE_RET {
+            emit_meye_epilogue(&mut out, plan);
+            out.extend_from_slice(&tokens[insn.start..insn.end]);
+            continue;
+        }
+        rewrite_reproject_instruction(tokens, &insn, plan, &mut out)?;
+    }
+    if !injected {
+        emit_reproject_injection(&mut out, plan);
+    }
+
+    let length = out.len() as u32;
+    out[1] = length;
+    Ok(out.iter().flat_map(|t| t.to_le_bytes()).collect())
+}
+
+/// Emits the reprojection declarations and eye prologue: `cb13[18]`, the `SV_InstanceID` input, the
+/// `SV_ViewportArrayIndex` output, then `and rBase.x, vN.x, l(1)` (eye), `mov oM.x, rBase.x`
+/// (viewport), `imul null, rBase.x, rBase.x, l(4)` (the eye's `M_eye` row base, four rows per eye).
+fn emit_reproject_injection(out: &mut Vec<u32>, plan: &ReprojectPlan) {
+    let n = plan.input_register;
+    let m = plan.output_register;
+    let r = plan.temp_base;
+    out.extend_from_slice(&[
+        (4 << 24) | CB_ACCESS_DYNAMIC_INDEXED | OPCODE_DCL_CONSTANT_BUFFER,
+        OPERAND_CB_2D_IMM,
+        STEREO_CB_REGISTER,
+        STEREO_REPROJ_CB_ROWS,
+    ]);
+    out.extend_from_slice(&[
+        (4 << 24) | OPCODE_DCL_INPUT_SGV,
+        OPERAND_INPUT_MASK_X,
+        n,
+        SB_NAME_INSTANCE_ID,
+    ]);
+    out.extend_from_slice(&[
+        (4 << 24) | OPCODE_DCL_OUTPUT_SIV,
+        OPERAND_OUTPUT_MASK_X,
+        m,
+        SB_NAME_VIEWPORT_ARRAY_INDEX,
+    ]);
+    if plan.dcl_temps_start.is_none() {
+        out.extend_from_slice(&[(2 << 24) | OPCODE_DCL_TEMPS, r + 2]);
+    }
+    // and rBase.x, vN.x, l(1) -- the eye index.
+    out.extend_from_slice(&[
+        (7 << 24) | OPCODE_AND,
+        OPERAND_TEMP_MASK_X,
+        r,
+        OPERAND_INPUT_SELECT_X,
+        n,
+        OPERAND_IMM32_SCALAR,
+        1,
+    ]);
+    // mov oM.x, rBase.x -- route to the eye's viewport.
+    out.extend_from_slice(&[
+        (5 << 24) | OPCODE_MOV,
+        OPERAND_OUTPUT_MASK_X,
+        m,
+        OPERAND_TEMP_SELECT_X,
+        r,
+    ]);
+    // imul null, rBase.x, rBase.x, l(4) -- the eye's M_eye row base (four rows per eye).
+    out.extend_from_slice(&[
+        (8 << 24) | OPCODE_IMUL,
+        OPERAND_NULL,
+        OPERAND_TEMP_MASK_X,
+        r,
+        OPERAND_TEMP_SELECT_X,
+        r,
+        OPERAND_IMM32_SCALAR,
+        4,
+    ]);
+}
+
+/// Emits `o<pos> = M_eye · rClip` as four `dp4`s, one clip component each: `dp4 o<pos>.{x,y,z,w},
+/// cb13[rBase.x + (MEYE_ROW_BASE + j)], rClip.xyzw`. `rBase.x` holds `4*eye`, so the immediate row
+/// index selects the eye's `M_eye` block relative to it.
+fn emit_meye_epilogue(out: &mut Vec<u32>, plan: &ReprojectPlan) {
+    let pos = plan.pos_register;
+    let rbase = plan.temp_base;
+    let rclip = plan.temp_base + 1;
+    const OUT_MASKS: [u32; 4] = [
+        OPERAND_OUTPUT_MASK_X,
+        OPERAND_OUTPUT_MASK_Y,
+        OPERAND_OUTPUT_MASK_Z,
+        OPERAND_OUTPUT_MASK_W,
+    ];
+    for (j, &mask) in OUT_MASKS.iter().enumerate() {
+        out.extend_from_slice(&[
+            (10 << 24) | OPCODE_DP4,
+            mask,
+            pos,
+            OPERAND_CB_2D_IMM | (IDX_IMM32_PLUS_RELATIVE << 25),
+            STEREO_CB_REGISTER,
+            MEYE_ROW_BASE + j as u32,
+            OPERAND_TEMP_SELECT_X,
+            rbase,
+            OPERAND_TEMP_SWIZZLE_XYZW,
+            rclip,
+        ]);
+    }
+}
+
+/// Re-serializes one instruction for reprojection, renaming any write to the `SV_Position` output
+/// register into the `rClip` temp (operand type OUTPUT -> TEMP, register -> `rClip`). Output
+/// registers are write-only, so every occurrence is a write and the rename leaves `rClip` holding
+/// the shader's own clip position for the epilogue.
+fn rewrite_reproject_instruction(
+    tokens: &[u32],
+    insn: &Instruction<'_>,
+    plan: &ReprojectPlan,
+    out: &mut Vec<u32>,
+) -> Result<(), DxbcError> {
+    let rclip = plan.temp_base + 1;
+    out.extend_from_slice(&tokens[insn.start..insn.operands_start()]);
+
+    let mut pos = insn.operands_start();
+    while pos < insn.end {
+        let (_, next) = parse_operand(tokens, pos)?;
+        let tok = tokens[pos];
+        let operand_type = (tok >> 12) & 0xFF;
+        let index_dim = (tok >> 20) & 0x3;
+        let extended = ((tok >> 31) & 1) as usize;
+        let rep = (tok >> 22) & 0x7;
+        let reg_at = pos + 1 + extended;
+        let is_position_write = operand_type == OPERAND_TYPE_OUTPUT
+            && index_dim == 1
+            && rep == 0 // IDX_IMM32
+            && tokens.get(reg_at) == Some(&plan.pos_register);
+        if is_position_write {
+            // OUTPUT (2) -> TEMP (0): clear the operand-type field, keep the mask/swizzle; swap the
+            // register index to rClip. Token count is unchanged, so the instruction length stands.
+            out.push(tok & !(0xFF << 12));
+            out.extend_from_slice(&tokens[pos + 1..reg_at]);
+            out.push(rclip);
+            out.extend_from_slice(&tokens[reg_at + 1..next]);
+        } else {
+            out.extend_from_slice(&tokens[pos..next]);
+        }
+        pos = next;
+    }
     Ok(())
 }
 

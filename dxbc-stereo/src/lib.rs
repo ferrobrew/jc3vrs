@@ -18,7 +18,10 @@ mod tokens;
 
 pub use checksum::refresh_checksum;
 pub use container::{Chunk, Dxbc, DxbcError};
-pub use rewrite::{STEREO_CB_REGISTER, STEREO_CB_ROWS, patch_vertex_shader};
+pub use rewrite::{
+    MEYE_ROW_BASE, STEREO_CB_REGISTER, STEREO_CB_ROWS, STEREO_REPROJ_CB_ROWS, patch_vertex_shader,
+    reproject_vertex_shader,
+};
 pub use tokens::{Operand, OperandKind, ShaderStage, TokenStream};
 
 /// The `cb0` rows that carry per-eye data in the vertex position path: `cb0[4]` (camera world
