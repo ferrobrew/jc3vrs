@@ -177,37 +177,59 @@ pub fn apply_native_resolution() {
     issue_resize(&mut st, ge, current, desired);
 }
 
-/// The lifecycle cleanup: mark shutdown and request a restore to the pre-VR display size while the
-/// hooks are still live, so the delayed uninstall services it (`lib.rs` `shutdown_startup`).
+/// The lifecycle cleanup: mark shutdown and restore the pre-VR display size **synchronously**.
+///
+/// Eject renders no further frames (the game thread tears down and unloads without another `Draw`), so
+/// the deferred path used during play -- write the pending size, let the engine's `HandleModeChange`
+/// service it in the next `Draw` prologue -- would never complete, leaving the game stuck at the mod's
+/// (double-wide) render size. Instead call [`ApplyResize`](GraphicsEngine::ApplyResize) directly here:
+/// the eject's shader-bundle bounce has already drained the draw thread, and we drain again, so the
+/// idle-context precondition holds by construction.
 fn on_shutdown() {
     let mut st = STATE.lock();
     st.shutting_down = true;
     let Some(original) = st.original else {
         return;
     };
-    if st.pending.is_some() {
-        // A resize is already in flight; the still-live tick will settle it toward the original.
-        return;
-    }
-    // SAFETY: as in `apply_native_resolution`; every hop is null-guarded.
+    st.pending = None; // supersede any in-flight deferred resize; we restore directly below
+
+    // SAFETY: game thread during eject; every hop is null-guarded.
     let Some(ge) = (unsafe { GraphicsEngine::get() }) else {
         return;
     };
     if !ge.m_HasBeenInitialized {
         return;
     }
-    let Some(device) = (unsafe { ge.m_Device.as_ref() }) else {
-        return;
+    let current = {
+        let Some(device) = (unsafe { ge.m_Device.as_ref() }) else {
+            return;
+        };
+        (
+            device.m_DeviceInfo.m_DisplayWidth,
+            device.m_DeviceInfo.m_DisplayHeight,
+        )
     };
-    let current = (
-        device.m_DeviceInfo.m_DisplayWidth,
-        device.m_DeviceInfo.m_DisplayHeight,
-    );
     if current == original {
         return;
     }
-    tracing::info!(target: "vr", "native resolution: shutdown restore to the pre-VR display size");
-    issue_resize(&mut st, ge, current, original);
+
+    tracing::info!(
+        target: "vr",
+        from_width = current.0,
+        from_height = current.1,
+        to_width = original.0,
+        to_height = original.1,
+        "native resolution: synchronous shutdown restore (eject renders no further frames)",
+    );
+    // Clear the engine's deferred mode-change request too, so a stray frame cannot re-apply the mod's
+    // size after we restore. SAFETY: as above; `ApplyResize` runs on the drained idle context.
+    ge.m_WindowWidth = original.0;
+    ge.m_WindowHeight = original.1;
+    ge.m_HasNewWindowSettings = false;
+    unsafe {
+        ge.WaitForCPUDrawToFinish();
+        ge.ApplyResize(original.0, original.1);
+    }
 }
 
 /// Populate the engine's deferred display-mode state so its next `Draw` prologue `HandleModeChange`
