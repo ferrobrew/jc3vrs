@@ -3,7 +3,7 @@ use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     UI::{
-        Input::KeyboardAndMouse::{VK_F7, VK_F8, VK_F10, VK_F11},
+        Input::KeyboardAndMouse::{VK_F7, VK_F8, VK_F10, VK_F11, VK_F12},
         WindowsAndMessaging::{
             GetClientRect, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
             WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
@@ -108,6 +108,18 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 "F11: sun-shadow PCF patch {}; reloading shaders to apply",
                 if now_on { "ON" } else { "OFF" }
             );
+        }
+        return LRESULT(0);
+    }
+
+    // F12 writes a PNG of the linear back buffer to a DLL-adjacent `screenshots/` folder -- under
+    // single-pass collapse that is the full side-by-side render (both eyes). A robust alternative to
+    // the F10 fullscreen capture for in-headset diagnosis. Edge-detected; consumed.
+    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F12.0 as usize {
+        let previous_down = (lparam.0 & 0x4000_0000) != 0;
+        if !previous_down {
+            crate::screenshot::request();
+            tracing::info!("F12: screenshot requested");
         }
         return LRESULT(0);
     }

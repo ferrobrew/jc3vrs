@@ -298,12 +298,15 @@ fn compute_dual_eye_rows(engine: &RenderEngine) -> Option<[Vector4; STEREO_CB_RO
     let center_campos = engine.m_VPGlobalConstData[4];
 
     let mut rows = [Vector4::default(); STEREO_CB_ROWS];
+    let mut forwards = [glam::Vec3::ZERO; 2];
     for eye in 0..2 {
         let params = crate::vr::render_params(eye)?;
 
         let mut eye_world = center_world;
         eye_world.w_axis += params.world_offset.extend(0.0);
         let eye_world = eye_world * glam::Mat4::from_quat(params.orientation_delta);
+        // Camera forward is -Z of the world transform; kept for the divergence diagnostic below.
+        forwards[eye] = (-eye_world.z_axis.truncate()).normalize_or_zero();
 
         let mut offset_view = eye_world.inverse();
         offset_view.w_axis = glam::Vec4::new(0.0, 0.0, 0.0, 1.0);
@@ -330,7 +333,120 @@ fn compute_dual_eye_rows(engine: &RenderEngine) -> Option<[Vector4; STEREO_CB_RO
             ],
         };
     }
+
+    // Diagnostic (rate-limited): the angle between the two eyes' forward vectors. A stereo pair should
+    // diverge only by the display cant (a few degrees on the Index) -- a large value means a per-eye
+    // matrix bug rather than the canted-runtime views that merely look divergent on a flat capture.
+    if let (Some(p0), Some(p1)) = (crate::vr::render_params(0), crate::vr::render_params(1)) {
+        let diverge = forwards[0]
+            .dot(forwards[1])
+            .clamp(-1.0, 1.0)
+            .acos()
+            .to_degrees();
+
+        // Flatten one eye's four `cb13` view-projection rows into a 16-float matrix.
+        let vp16 = |base: usize| {
+            let mut m = [0.0f32; 16];
+            for r in 0..4 {
+                m[r * 4..r * 4 + 4].copy_from_slice(&rows[base + r].data);
+            }
+            m
+        };
+        let eye_diag = |p: &crate::vr::EyeRenderParams, i: usize| EyeDiagnostics {
+            world_offset: p.world_offset.to_array(),
+            orientation_delta_quat: p.orientation_delta.to_array(),
+            orientation_delta_deg: p.orientation_delta.to_axis_angle().1.to_degrees(),
+            forward: forwards[i].to_array(),
+            projection_reverse_z: p.projection_reverse_z.data,
+            cb13_view_projection: vp16(i * 5),
+            cb13_camera_position: rows[i * 5 + 4].data,
+        };
+        let full_viewport = COLLAPSE_FULL_VIEWPORT.lock().map(|v| {
+            [
+                v.TopLeftX, v.TopLeftY, v.Width, v.Height, v.MinDepth, v.MaxDepth,
+            ]
+        });
+        *LAST_FRAME_DIAG.lock() = Some(FrameDiagnostics {
+            single_pass: active(),
+            dual_eye: dual_eye_active(),
+            collapse: collapse_active(),
+            double_wide: double_wide_active(),
+            capability: match capability() {
+                Capability::Supported => "supported",
+                Capability::Unsupported => "unsupported",
+                Capability::Unprobed => "unprobed",
+            },
+            full_viewport,
+            center_transform: center_transform.data,
+            center_camera_position: center_campos.data,
+            forward_divergence_deg: diverge,
+            eyes: [eye_diag(&p0, 0), eye_diag(&p1, 1)],
+        });
+
+        if CB13_DIVERGE_LOG
+            .fetch_add(1, Ordering::Relaxed)
+            .is_multiple_of(240)
+        {
+            tracing::info!(
+                target: "single_pass",
+                "cb13 eyes: fwd divergence={diverge:.2}deg | eye0 delta={:.2}deg off={:.4?} | eye1 delta={:.2}deg off={:.4?}",
+                p0.orientation_delta.to_axis_angle().1.to_degrees(), p0.world_offset,
+                p1.orientation_delta.to_axis_angle().1.to_degrees(), p1.world_offset,
+            );
+        }
+    }
+
     Some(rows)
+}
+
+static CB13_DIVERGE_LOG: AtomicUsize = AtomicUsize::new(0);
+
+/// A serializable snapshot of one eye's single-pass matrices, dumped in the F12 screenshot's JSON
+/// sidecar so the exact `cb13` state can be inspected offline.
+#[derive(Clone, serde::Serialize)]
+pub struct EyeDiagnostics {
+    /// The per-eye world position offset from the head centre (the IPD parallax), engine world units.
+    pub world_offset: [f32; 3],
+    /// The per-eye orientation delta from the head centre, as a quaternion `[x, y, z, w]`.
+    pub orientation_delta_quat: [f32; 4],
+    /// The magnitude of [`orientation_delta_quat`](Self::orientation_delta_quat), in degrees.
+    pub orientation_delta_deg: f32,
+    /// This eye's world-space view forward direction (`-Z` of the eye world transform).
+    pub forward: [f32; 3],
+    /// The per-eye reverse-Z projection from the runtime, row-major (engine `Matrix4` order).
+    pub projection_reverse_z: [f32; 16],
+    /// The translation-free offset view-projection written into `cb13` for this eye, row-major.
+    pub cb13_view_projection: [f32; 16],
+    /// The eye's world camera position written into `cb13` (`cb0[4]` equivalent).
+    pub cb13_camera_position: [f32; 4],
+}
+
+/// A serializable snapshot of the whole frame's single-pass matrix state, refreshed each time
+/// [`compute_dual_eye_rows`] runs and dumped alongside an F12 screenshot ([`last_frame_diagnostics`]).
+#[derive(Clone, serde::Serialize)]
+pub struct FrameDiagnostics {
+    pub single_pass: bool,
+    pub dual_eye: bool,
+    pub collapse: bool,
+    pub double_wide: bool,
+    pub capability: &'static str,
+    /// The recorded full (unsplit) viewport `[x, y, w, h, minDepth, maxDepth]`, if one is bound.
+    pub full_viewport: Option<[f32; 6]>,
+    /// The pristine head-centre world transform, row-major (engine `Matrix4` order).
+    pub center_transform: [f32; 16],
+    /// The head-centre camera world position (`cb0[4]`).
+    pub center_camera_position: [f32; 4],
+    /// The angle between the two eyes' view forwards, in degrees (a stereo pair should be a few).
+    pub forward_divergence_deg: f32,
+    pub eyes: [EyeDiagnostics; 2],
+}
+
+static LAST_FRAME_DIAG: Mutex<Option<FrameDiagnostics>> = Mutex::new(None);
+
+/// The most recent frame's single-pass matrix diagnostics, for the F12 screenshot JSON sidecar.
+/// `None` until the dual-eye path has run at least once this session.
+pub fn last_frame_diagnostics() -> Option<FrameDiagnostics> {
+    LAST_FRAME_DIAG.lock().clone()
 }
 
 /// The mod-owned `cb13` constant buffer, lazily created and updated per view.

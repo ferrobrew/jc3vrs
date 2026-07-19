@@ -181,6 +181,16 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             } else if let Some(dst) = lock.texture(index) {
                 context.m_Context.CopyResource(dst, &src.m_Texture);
             }
+
+            // Service an F12 screenshot request: the linear back buffer is this frame's final render
+            // (under collapse, both eye-halves side by side). A no-op unless one was requested.
+            if let Some(device) = graphics_engine.m_Device.as_ref() {
+                crate::screenshot::capture_if_requested(
+                    &device.m_Device,
+                    &context.m_Context,
+                    &src.m_Texture,
+                );
+            }
         }
 
         LeaveCriticalSection(context.m_Mutex);

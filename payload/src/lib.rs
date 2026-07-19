@@ -35,6 +35,7 @@ mod lifecycle;
 mod logging;
 #[cfg(feature = "profiler")]
 mod profiler;
+mod screenshot;
 mod stereo;
 
 #[unsafe(no_mangle)]

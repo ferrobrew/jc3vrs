@@ -735,6 +735,23 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             "Master switch. Renders the G-buffer once with stereo-rewritten vertex shaders. \
              Forced inert without the DXVK viewport-routing capability (below).",
         );
+        if ui
+            .button("⚡ One-click WIP setup (full single-pass + native res + reload shaders)")
+            .on_hover_text(
+                "Turns on single-pass, dual-eye, collapse, double-wide, and native resolution, \
+                 clears the census dry-run, and reloads the shaders so the patches take effect -- \
+                 the current work-in-progress configuration in one click.",
+            )
+            .clicked()
+        {
+            cfg.stereo.single_pass = true;
+            cfg.stereo.single_pass_patch_dryrun = false;
+            cfg.stereo.single_pass_dual_eye = true;
+            cfg.stereo.single_pass_collapse = true;
+            cfg.stereo.single_pass_double_wide = true;
+            cfg.vr.native_resolution = true;
+            crate::hooks::graphics_engine::shader::request_reload();
+        }
         ui.checkbox(
             &mut cfg.stereo.single_pass_patch_dryrun,
             "Census only (dry-run: patch + tally, do not substitute -- safe)",
