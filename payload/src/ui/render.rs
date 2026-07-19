@@ -727,6 +727,33 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
     // reports how the vertex-shader rewriter fares against the game's real shader set.
     ui.collapsing("Single-pass stereo (experimental)", |ui| {
         use crate::stereo::single_pass::{self, Capability};
+        // All-in/all-out toggle: flip the whole work-in-progress configuration together, so the one
+        // button is the normal way to turn the feature on or off. The individual levers below stay for
+        // bring-up. Reloads either way -- on to apply the patches, off to restore the pristine shaders.
+        let enabled = cfg.stereo.single_pass;
+        let toggle_label = if enabled {
+            "⚡ Disable single-pass stereo"
+        } else {
+            "⚡ Enable single-pass stereo"
+        };
+        if ui
+            .button(toggle_label)
+            .on_hover_text(
+                "Flips single-pass, dual-eye, collapse, double-wide, and native resolution on or off \
+                 together, clears the census dry-run, and reloads the shaders.",
+            )
+            .clicked()
+        {
+            let on = !enabled;
+            cfg.stereo.single_pass = on;
+            cfg.stereo.single_pass_dual_eye = on;
+            cfg.stereo.single_pass_collapse = on;
+            cfg.stereo.single_pass_double_wide = on;
+            cfg.stereo.single_pass_patch_dryrun = false;
+            cfg.vr.native_resolution = on;
+            crate::hooks::graphics_engine::shader::request_reload();
+        }
+        ui.separator();
         ui.checkbox(
             &mut cfg.stereo.single_pass,
             "Enable single-pass stereo (WIP -- pipeline not yet complete)",
@@ -735,23 +762,6 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             "Master switch. Renders the G-buffer once with stereo-rewritten vertex shaders. \
              Forced inert without the DXVK viewport-routing capability (below).",
         );
-        if ui
-            .button("⚡ One-click WIP setup (full single-pass + native res + reload shaders)")
-            .on_hover_text(
-                "Turns on single-pass, dual-eye, collapse, double-wide, and native resolution, \
-                 clears the census dry-run, and reloads the shaders so the patches take effect -- \
-                 the current work-in-progress configuration in one click.",
-            )
-            .clicked()
-        {
-            cfg.stereo.single_pass = true;
-            cfg.stereo.single_pass_patch_dryrun = false;
-            cfg.stereo.single_pass_dual_eye = true;
-            cfg.stereo.single_pass_collapse = true;
-            cfg.stereo.single_pass_double_wide = true;
-            cfg.vr.native_resolution = true;
-            crate::hooks::graphics_engine::shader::request_reload();
-        }
         ui.checkbox(
             &mut cfg.stereo.single_pass_patch_dryrun,
             "Census only (dry-run: patch + tally, do not substitute -- safe)",
