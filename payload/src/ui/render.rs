@@ -155,9 +155,17 @@ impl EguiDebugRenderState {
                 return;
             };
 
-            // Final back buffer (R8G8B8A8), recreated when its size changes.
+            // Final back buffer (R8G8B8A8), recreated when its size changes. Under single-pass
+            // double-wide the back buffer holds both eye-halves side by side, so each per-eye capture
+            // texture is half its width -- the collapse's capture split copies one full-width half in.
             if let Some(back_buffer) = device.m_BackBuffer.as_ref() {
-                let size = (back_buffer.m_Width as u32, back_buffer.m_Height as u32);
+                let full_width = back_buffer.m_Width as u32;
+                let width = if crate::stereo::single_pass::double_wide_active() {
+                    full_width / 2
+                } else {
+                    full_width
+                };
+                let size = (width, back_buffer.m_Height as u32);
                 if self.target_size != Some(size)
                     || self.target_textures.iter().any(Option::is_none)
                 {
@@ -750,6 +758,10 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 ui.checkbox(
                     &mut cfg.stereo.single_pass_double_wide,
                     "Double-wide render target (full per-eye resolution)",
+                )
+                .on_hover_text(
+                    "Renders the scene targets at 2x per-eye width so each eye-half is full \
+                     resolution instead of squished. Needs Collapse and native resolution on.",
                 );
                 ui.checkbox(
                     &mut cfg.stereo.single_pass_collapse,

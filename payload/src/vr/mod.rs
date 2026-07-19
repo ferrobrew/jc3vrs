@@ -177,6 +177,20 @@ pub fn native_eye_resolution() -> Option<(u32, u32)> {
     state.eye_resolution(&cfg)
 }
 
+/// The resolution the engine's scene render targets should be built at while a session runs. Normally
+/// the per-eye [`native_eye_resolution`]; under single-pass double-wide it is **2x that width**, so a
+/// single walk renders both eye-halves side by side into one target. The XR swapchain and per-eye
+/// capture textures stay per-eye width, so the collapse's capture split copies each full-width half
+/// straight into its eye texture. `None` when no session is up. Read by [`resolution`] once per frame.
+pub fn engine_render_resolution() -> Option<(u32, u32)> {
+    let (width, height) = native_eye_resolution()?;
+    if crate::stereo::single_pass::double_wide_active() {
+        Some((width.saturating_mul(2), height))
+    } else {
+        Some((width, height))
+    }
+}
+
 /// Scale a raw recommended per-eye view size by `resolution_scale`, clamped to a small positive
 /// minimum (and at least 1 px each axis). Shared by the swapchain and the native-resolution driver so
 /// the engine renders each eye at exactly the swapchain size.

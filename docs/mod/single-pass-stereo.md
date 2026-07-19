@@ -209,9 +209,8 @@ the pointer), and viewport routing for odd-`SV_InstanceID` primitives (fixed by 
 COM-vtable detour that mirrors the bound viewport into slot 1, catching the shadow cascades' raw
 viewport sets that `SetRenderSetup` misses).
 
-**Milestone B — dual-eye machinery + collapse BUILT (compile-clean, off by default); double-wide RT
-resize pending.** Gated behind `stereo.single_pass_dual_eye`, applied only in the G-buffer geometry
-range:
+**Milestone B — dual-eye machinery, collapse, and double-wide all BUILT (compile-clean, off by
+default); in-headset bring-up in progress.** Gated behind `stereo.single_pass_dual_eye`:
 - `cb13` filled with **distinct** per-eye view-projections, computed in mod code from the pristine
   center transform + per-eye `EyeRenderParams` (replicating the double-draw camera math);
 - the `RSSetViewports` detour splits the bound viewport into **left/right halves** for the eye
@@ -255,11 +254,17 @@ work.
   eye-half the previous geometry draw left bound and light only one eye, leaving the other eye's
   opaque geometry black. (Particle `DrawInstanced` and already-instanced `DrawIndexedInstanced` scene
   draws are not yet routed.)
-- **Double-wide render target (`single_pass_double_wide`) — PENDING.** Re-create the scene RTs at 2×
-  per-eye width (extend the per-eye `CreateRenderSetups` re-init in `vr::resolution`) so each eye-half
-  is full-res and the collapse's capture-split sub-region copy fills each eye texture exactly (with the
-  back buffer 2× wide, `half_w` == per-eye width == eye-texture width). The fiddly part is the
-  back-buffer-tied setups (`docs/engine/render-setups-reinit.md` §4).
+- **Double-wide render target (`single_pass_double_wide`) — BUILT.** Requires `single_pass_collapse`
+  and `vr.native_resolution`. `vr::engine_render_resolution` returns **2× the per-eye width**, which
+  the existing deferred-`ApplyResize` native-resolution driver (`vr::resolution`) targets — so the
+  whole scene RT set (back buffer, `m_BackBufferLinear`, the G-buffers) is re-created double-wide, and
+  the per-pass viewport follows the RT size automatically. The **XR swapchain stays per-eye width**
+  (`native_eye_resolution` is unchanged), and the per-eye **capture textures** are sized to half the
+  back buffer (`ui::render`), so the collapse's capture split copies each full-width half straight into
+  its eye texture (`half_w` == per-eye width == eye-texture width — no squish). Caveats: the engine's
+  own `cb0` projection/aspect is now 2×-wide, so **unpatched** geometry (which reads `cb0`, not the
+  per-eye `cb13`) renders horizontally squashed; and screen-space/post passes (FSR, SSAO, SSR) run once
+  over the double-wide target and will leak across the eye seam until clamped (Phase 2).
 
 Bring-up order on wake: `single_pass` → Reload shaders (Milestone A, should look identical) →
 `single_pass_dual_eye` (diagnostic squished double-image) → `single_pass_collapse` (single walk,

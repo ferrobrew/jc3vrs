@@ -76,10 +76,11 @@ pub fn install() {
 /// the engine is initialized, and cheap when the size is already correct.
 pub fn apply_native_resolution() {
     let native_enabled = Config::lock_query(|c| c.vr.native_resolution);
-    // The per-eye target, matching the swapchain; `None` when no session is running or native
+    // The engine render target size: the per-eye resolution, or 2x its width under single-pass
+    // double-wide (both eye-halves side by side). `None` when no session is running or native
     // resolution is off, which drives a restore to the original size.
     let target = if native_enabled {
-        super::native_eye_resolution()
+        super::engine_render_resolution()
     } else {
         None
     };

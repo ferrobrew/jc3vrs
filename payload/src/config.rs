@@ -224,10 +224,13 @@ pub struct StereoConfig {
     /// this renders each eye into half of a per-eye-sized target (squished), so it is a bring-up /
     /// bisection step, not a finished look.
     pub single_pass_dual_eye: bool,
-    /// Milestone B step (requires [`single_pass_dual_eye`](Self::single_pass_dual_eye)): re-create the
-    /// scene render targets at **2× per-eye width** so each eye's half is full resolution. Reuses the
-    /// per-eye `CreateRenderSetups` re-init at a doubled width, and reads each eye from its half of the
-    /// double-wide target on capture. Experimental; the back-buffer-tied setups are the fiddly part.
+    /// Milestone B step (requires [`single_pass_collapse`](Self::single_pass_collapse) and
+    /// [`vr.native_resolution`](crate::config::VrConfig::native_resolution)): re-create the scene
+    /// render targets at **2× per-eye width** so each eye's half is full resolution instead of a
+    /// squished half of a per-eye target. Drives the engine render resolution
+    /// ([`crate::vr::engine_render_resolution`]) via the same deferred `ApplyResize` the per-eye
+    /// native-resolution path uses; the XR swapchain and per-eye capture textures stay per-eye width,
+    /// so the collapse's capture split copies each full-width half straight into its eye texture.
     pub single_pass_double_wide: bool,
     /// Milestone B step (requires [`single_pass_dual_eye`](Self::single_pass_dual_eye)): **collapse**
     /// the per-eye double-draw to a single `game.Draw` walk -- the actual draw-submission win. One

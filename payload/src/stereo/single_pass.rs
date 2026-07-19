@@ -189,6 +189,15 @@ pub fn collapse_active() -> bool {
     dual_eye_active() && Config::lock_query(|c| c.stereo.single_pass_collapse)
 }
 
+/// Whether the scene render targets are re-created at 2x per-eye width so each eye-half is full
+/// resolution (instead of a squished half of a per-eye-sized target). Requires [`collapse_active`] --
+/// it only makes sense for the single walk whose capture split reads one full-width half per eye.
+/// Drives the engine render resolution ([`crate::vr::engine_render_resolution`]) and the per-eye
+/// capture-texture width (`ui::render`); the XR swapchain stays per-eye width.
+pub fn double_wide_active() -> bool {
+    collapse_active() && Config::lock_query(|c| c.stereo.single_pass_double_wide)
+}
+
 /// Marks whether the render thread is currently inside the G-buffer geometry pass range
 /// (`RP_Z_OCCLUDERS..RP_FIRST_SCENE`), set around that `DrawRenderPassRange` call. The dual-eye
 /// viewport split and instance doubling apply only here -- so shadow/lighting/post passes, which
