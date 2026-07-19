@@ -1517,7 +1517,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 [[package]]
 name = "pyxis"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/pyxis.git#06e76f8978a7371b424778b7cca6ffb5576bdca7"
+source = "git+https://github.com/ferrobrew/pyxis.git#423e1230f3222e4a9112b07beb56de3e35e3e8ab"
 dependencies = [
  "ariadne",
  "glob",
@@ -1535,7 +1535,7 @@ dependencies = [
 [[package]]
 name = "pyxis_macros"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/pyxis.git#06e76f8978a7371b424778b7cca6ffb5576bdca7"
+source = "git+https://github.com/ferrobrew/pyxis.git#423e1230f3222e4a9112b07beb56de3e35e3e8ab"
 dependencies = [
  "proc-macro2",
  "quote",

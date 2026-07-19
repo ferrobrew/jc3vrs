@@ -30,10 +30,8 @@ impl std::convert::AsMut<Matrix3> for Matrix3 {
 /// `data[0..2]` is right (+X), `data[4..6]` is up (+Y), `data[8..10]` is the +Z basis (so forward is
 /// `-data[8..10]`), and `data[12..14]` is the translation. Right-handed, Y-up.
 ///
-/// The glam conversions below bridge to glam's column-vector convention by transposing (row-major rows
-/// become glam columns), so glam matrix math on a converted [`Matrix4`] works without an explicit
-/// transpose. To build an engine transform in glam, set the basis vectors as the glam *columns*
-/// (right, up, -forward, translation) and use `to_cols_array`.
+/// When converting to a column-major math library, transpose the data and place basis vectors as
+/// columns (right, up, -forward, translation).
 pub struct Matrix4 {
     pub data: [f32; 16],
 }
@@ -93,6 +91,50 @@ impl Matrix4 {
             f(self as *mut Self as _, fov, aspect, far, near)
         }
     }
+}
+impl Matrix4 {
+    /// The identity matrix; identical under either the row-major or the column-major reading.
+    pub const IDENTITY: crate::types::math::Matrix4 = crate::types::math::Matrix4 {
+        data: [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ],
+    };
+    /// All elements zero.
+    pub const ZERO: crate::types::math::Matrix4 = crate::types::math::Matrix4 {
+        data: [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+    };
 }
 impl std::convert::AsRef<Matrix4> for Matrix4 {
     fn as_ref(&self) -> &Matrix4 {
@@ -235,29 +277,6 @@ impl std::fmt::Debug for Matrix4 {
     }
 }
 impl Matrix4 {
-    /// All elements zero.
-    pub const ZERO: Self = Self { data: [0.0; 16] };
-    /// The identity matrix; identical under either the row-major or the column-major reading.
-    pub const IDENTITY: Self = Self {
-        data: [
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-        ],
-    };
     pub fn as_ptr(&self) -> *const f32 {
         self.data.as_ptr()
     }
