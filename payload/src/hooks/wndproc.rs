@@ -16,6 +16,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::VK_F9;
 
 use crate::hud::cursor;
 
+/// Whether F10 toggles the fullscreen stereo capture mode. Off for now: the capture window's
+/// fullscreen toggle is finicky under some setups. The F12 screenshot path covers diagnosis meanwhile.
+const F10_CAPTURE_ENABLED: bool = false;
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new().with_static_binder(&WNDPROC_BINDER)
 }
@@ -36,8 +40,12 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // F10 toggles the fullscreen stereo capture mode. Intercept it before egui or the game sees it:
     // F10 is a system key (it activates the menu bar via WM_SYSKEYDOWN), so consuming it here also
     // suppresses that default behaviour. Edge-detect on the previous-state bit (lparam bit 30) so
-    // holding F10 toggles once, not on every repeat.
-    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F10.0 as usize {
+    // holding F10 toggles once, not on every repeat. Disabled for now (the fullscreen toggle is
+    // finicky under some setups); flip `F10_CAPTURE_ENABLED` to restore it.
+    if F10_CAPTURE_ENABLED
+        && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+        && wparam.0 == VK_F10.0 as usize
+    {
         let previous_down = (lparam.0 & 0x4000_0000) != 0;
         if !previous_down {
             // Release egui's input capture if held, so the game retains input while the overlay is
