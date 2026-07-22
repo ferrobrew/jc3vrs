@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 
 use dxbc_stereo::{
-    Dxbc, ShaderStage, TokenStream, inject_eye_forward_vertex_shader, reproject_domain_shader,
+    Dxbc, ShaderStage, TokenStream, forward_eye_hull_shader, inject_eye_forward_vertex_shader,
+    reproject_domain_shader,
 };
 
 /// The local extracted-shader directory, or `None` if it is not present.
@@ -164,6 +165,67 @@ fn reprojected_ds_widens_lane_and_adds_viewport() {
         "viewport register {} aliases an existing output",
         viewport.register
     );
+}
+
+/// The terrain tessellation HS (`sh_1492`), eye-forwarded -- or `None` when the extract is absent.
+fn forwarded_terrain_hs() -> Option<Vec<u8>> {
+    let dir = shader_dir()?;
+    let blob = std::fs::read(dir.join("sh_1492_00a690b0.dxbc")).expect("read sh_1492");
+    Some(forward_eye_hull_shader(&blob).expect("forward sh_1492"))
+}
+
+/// The eye-forwarded HS must re-parse cleanly and consume its token stream exactly (the hull shader's
+/// multi-phase structure must survive the widening).
+#[test]
+fn forwarded_hs_reparses_cleanly() {
+    let Some(out) = forwarded_terrain_hs() else {
+        eprintln!("skipping: extracted shaders not present");
+        return;
+    };
+    let dxbc = Dxbc::parse(&out).expect("parse");
+    let shex = dxbc.shader_chunk().expect("SHEX");
+    let stream = TokenStream::new(shex.body(&out)).expect("stream");
+    assert_eq!(stream.stage(), ShaderStage::Hull);
+
+    let body = shex.body(&out);
+    let declared_len = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
+    let mut last_end = 2;
+    for insn in stream.instructions() {
+        let insn = insn.expect("instruction decodes");
+        for operand in insn.operands() {
+            operand.expect("operand decodes");
+        }
+        last_end = insn.end;
+    }
+    assert_eq!(
+        last_end, declared_len,
+        "instructions must end exactly at the declared token length"
+    );
+}
+
+/// The eye-forwarded HS must widen the `TEXCOORD3` lane to `.xyz` on both its input and output
+/// signatures (the lane rides through the hull unchanged in width, VS `.xyz` -> DS `.xyz`).
+#[test]
+fn forwarded_hs_widens_lane_both_signatures() {
+    let Some(out) = forwarded_terrain_hs() else {
+        eprintln!("skipping: extracted shaders not present");
+        return;
+    };
+    let dxbc = Dxbc::parse(&out).expect("parse");
+
+    for chunk in [b"ISGN", b"OSGN"] {
+        let sig = signature_elements(dxbc.chunk(chunk).expect("signature").body(&out));
+        let lane = sig
+            .iter()
+            .find(|e| e.name == "TEXCOORD" && e.semantic_index == 3)
+            .expect("signature has TEXCOORD3");
+        assert_eq!(
+            lane.mask & 0x7,
+            0x7,
+            "{} TEXCOORD3 widened to .xyz",
+            std::str::from_utf8(chunk).unwrap()
+        );
+    }
 }
 
 /// A decoded `ISGN`/`OSGN` element, for assertions.

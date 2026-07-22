@@ -14,4 +14,6 @@ mod terrain;
 pub use common::{MEYE_ROW_BASE, STEREO_CB_REGISTER, STEREO_CB_ROWS, STEREO_REPROJ_CB_ROWS};
 pub use remap::patch_vertex_shader;
 pub use reproject::reproject_vertex_shader;
-pub use terrain::{inject_eye_forward_vertex_shader, reproject_domain_shader};
+pub use terrain::{
+    forward_eye_hull_shader, inject_eye_forward_vertex_shader, reproject_domain_shader,
+};

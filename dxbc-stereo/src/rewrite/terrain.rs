@@ -17,8 +17,8 @@ use super::common::{
     OPCODE_DCL_OUTPUT_SIV, OPCODE_DCL_TEMPS, OPCODE_IMUL, OPCODE_MOV, OPCODE_RET, OPCODE_RETC,
     OPERAND_CB_2D_IMM, OPERAND_IMM32_SCALAR, OPERAND_INPUT_MASK_X, OPERAND_INPUT_SELECT_X,
     OPERAND_NULL, OPERAND_OUTPUT_MASK_X, OPERAND_OUTPUT_MASK_Z, OPERAND_TEMP_MASK_X,
-    OPERAND_TEMP_SELECT_X, SB_NAME_INSTANCE_ID, SB_NAME_POSITION, SB_NAME_VIEWPORT_ARRAY_INDEX,
-    SIGNATURE_COMPONENT_UINT32, SIGNATURE_SYSVALUE_INSTANCE_ID,
+    OPERAND_TEMP_SELECT_X, OPERAND_TYPE_OUTPUT, SB_NAME_INSTANCE_ID, SB_NAME_POSITION,
+    SB_NAME_VIEWPORT_ARRAY_INDEX, SIGNATURE_COMPONENT_UINT32, SIGNATURE_SYSVALUE_INSTANCE_ID,
     SIGNATURE_SYSVALUE_VIEWPORT_ARRAY_INDEX, STEREO_CB_REGISTER, STEREO_REPROJ_CB_ROWS,
     SignatureElement, append_signature_element, declared_register, emit_meye_epilogue,
     max_signature_register, reassemble, rewrite_reproject_instruction, signature_register,
@@ -37,6 +37,22 @@ const MASK_BIT_Z: u32 = 0x40;
 /// SM5 operand type: domain-shader input control point (`vicp[cp][reg]`). Identifies the lane
 /// declaration to widen in the terrain domain reprojection.
 const OPERAND_TYPE_INPUT_CONTROL_POINT: u32 = 25;
+/// SM4/5 operand type: input register (`vN`, or `v[cp][reg]` in the hull control-point phase).
+/// Identifies the lane declaration to widen in the hull shader.
+const OPERAND_TYPE_INPUT: u32 = 1;
+
+/// SM5 hull-shader phase markers. The control-point phase forwards each output control point from the
+/// matching input control point (where the eye lane is widened); the fork and join phases compute
+/// tessellation factors and must be left untouched (they reuse the same `o` registers for unrelated
+/// system values).
+const OPCODE_HS_CONTROL_POINT_PHASE: u32 = 0x72;
+const OPCODE_HS_FORK_PHASE: u32 = 0x73;
+const OPCODE_HS_JOIN_PHASE: u32 = 0x74;
+/// The two-bit component selector for `.z` in an operand's swizzle field (component 2, at bits `[9:8]`
+/// of the operand token). The hull passthrough copies the lane with a swizzle; widening it to carry
+/// the eye means forcing its third swizzle component to `.z`.
+const SWIZZLE_Z_COMPONENT_2: u32 = 0x2 << 8;
+const SWIZZLE_COMPONENT_2_MASK: u32 = 0x3 << 8;
 /// `vicp[0][reg].z` as a source: input-control-point register, 2D immediate index, select-1 component
 /// `.z`. The two index tokens (control point `0`, register `reg`) follow. The domain reprojection reads
 /// the eye from the free `.z` of the `TEXCOORD3` control-point lane.
@@ -100,6 +116,170 @@ pub fn inject_eye_forward_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcErro
     )?;
 
     Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, false))
+}
+
+/// Rewrites the terrain tessellation **hull** shader to forward the single-pass eye index the vertex
+/// shader originated on `TEXCOORD3.z`. The hull control-point phase copies each output control point
+/// from its input; this widens the `TEXCOORD3` lane it forwards -- the input `v[..][2]` declaration,
+/// the output `o<lane>` declaration, and the passthrough `mov o<lane>, v[..][lane]` -- from `.xy` to
+/// `.xyz`, so the eye survives VS -> HS -> DS. The fork and join phases (tessellation factors) are left
+/// untouched, since they reuse the same `o` registers for unrelated system values. No reprojection and
+/// no viewport: the hull shader neither builds clip nor feeds the rasterizer.
+pub fn forward_eye_hull_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
+    let dxbc = Dxbc::parse(blob)?;
+    if dxbc.chunk(b"SHEX").is_none() && dxbc.chunk(b"SHDR").is_some() {
+        return Err(DxbcError::UnsupportedShaderModel);
+    }
+    let shex = dxbc.chunk(b"SHEX").ok_or(DxbcError::NoShaderChunk)?;
+    let isgn = dxbc
+        .chunk(b"ISGN")
+        .ok_or(DxbcError::MissingInputSignature)?;
+    let osgn = dxbc
+        .chunk(b"OSGN")
+        .ok_or(DxbcError::MissingOutputSignature)?;
+
+    let stream = TokenStream::new(shex.body(blob))?;
+    if stream.stage() != ShaderStage::Hull {
+        return Err(DxbcError::NotHullShader);
+    }
+
+    // The eye rides TEXCOORD3.z: confirm the input lane exists and its .z is free (mask is .xy).
+    let (lane_register, lane_mask) =
+        signature_register(isgn.body(blob), EYE_LANE_SEMANTIC, EYE_LANE_SEMANTIC_INDEX)
+            .ok_or(DxbcError::NoEyeLane)?;
+    if lane_mask & 0x4 != 0 {
+        return Err(DxbcError::NoEyeLane);
+    }
+    let (_, osgn_lane_mask) =
+        signature_register(osgn.body(blob), EYE_LANE_SEMANTIC, EYE_LANE_SEMANTIC_INDEX)
+            .ok_or(DxbcError::NoEyeLane)?;
+
+    let plan = plan_eye_forward(&stream, lane_register)?;
+    let new_shex = rewrite_eye_forward(&stream, &plan)?;
+
+    // Widen the forwarded lane on both interfaces: the input (from the VS) and the output (to the DS),
+    // both to `.xyz`. For the input, the mask and used-mask both gain `.z`; for the output, the mask
+    // gains `.z` and the never-written mask drops it (only `.w` stays unwritten).
+    let new_isgn = widen_signature_mask(
+        isgn.body(blob),
+        EYE_LANE_SEMANTIC,
+        EYE_LANE_SEMANTIC_INDEX,
+        lane_mask | 0x4,
+        lane_mask | 0x4,
+    )?;
+    let new_osgn = widen_signature_mask(
+        osgn.body(blob),
+        EYE_LANE_SEMANTIC,
+        EYE_LANE_SEMANTIC_INDEX,
+        osgn_lane_mask | 0x4,
+        0x8,
+    )?;
+
+    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, false))
+}
+
+/// What the hull-shader eye-forward scan learned: the token indices of the three control-point-phase
+/// items whose `TEXCOORD3` lane is widened to `.xyz`.
+struct EyeForwardPlan {
+    /// The token index of the control-point-phase `dcl_input v[..][lane]`, whose mask gains `.z`.
+    lane_input_dcl: usize,
+    /// The token index of the control-point-phase `dcl_output o<lane>`, whose mask gains `.z`.
+    lane_output_dcl: usize,
+    /// The token index of the passthrough `mov o<lane>, v[..][lane]`, whose destination mask gains `.z`
+    /// and whose source swizzle's third component is forced to `.z`.
+    lane_mov: usize,
+}
+
+/// Scans the hull control-point phase for the three lane items to widen. Ignores the fork and join
+/// phases entirely -- they reuse the same `o` registers for tessellation factors.
+fn plan_eye_forward(stream: &TokenStream, lane_register: u32) -> Result<EyeForwardPlan, DxbcError> {
+    let tokens = stream.tokens();
+    let mut in_control_point_phase = false;
+    let mut lane_input_dcl = None;
+    let mut lane_output_dcl = None;
+    let mut lane_mov = None;
+
+    for insn in stream.instructions() {
+        let insn = insn?;
+        match insn.opcode {
+            OPCODE_HS_CONTROL_POINT_PHASE => in_control_point_phase = true,
+            OPCODE_HS_FORK_PHASE | OPCODE_HS_JOIN_PHASE => in_control_point_phase = false,
+            _ => {}
+        }
+        if !in_control_point_phase {
+            continue;
+        }
+        match insn.opcode {
+            OPCODE_DCL_INPUT
+                if two_d_input_register(tokens, &insn, OPERAND_TYPE_INPUT)
+                    == Some(lane_register) =>
+            {
+                lane_input_dcl = Some(insn.start);
+            }
+            OPCODE_DCL_OUTPUT if declared_register(tokens, &insn)? == lane_register => {
+                lane_output_dcl = Some(insn.start);
+            }
+            OPCODE_MOV if mov_output_destination(tokens, &insn) == Some(lane_register) => {
+                lane_mov = Some(insn.start);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(EyeForwardPlan {
+        lane_input_dcl: lane_input_dcl.ok_or(DxbcError::NoEyeLane)?,
+        lane_output_dcl: lane_output_dcl.ok_or(DxbcError::NoEyeLane)?,
+        lane_mov: lane_mov.ok_or(DxbcError::NoEyeLane)?,
+    })
+}
+
+/// The output register a `mov` writes to, or `None` if its destination is not a one-dimensionally
+/// indexed output register. Used to find the hull passthrough `mov` for the lane (the destination is
+/// the first operand, at the instruction's operand start).
+fn mov_output_destination(tokens: &[u32], insn: &Instruction<'_>) -> Option<u32> {
+    let at = insn.operands_start();
+    let tok = *tokens.get(at)?;
+    if (tok >> 12) & 0xFF != OPERAND_TYPE_OUTPUT || (tok >> 20) & 0x3 != 1 {
+        return None;
+    }
+    let extended = ((tok >> 31) & 1) as usize;
+    tokens.get(at + 1 + extended).copied()
+}
+
+/// Rebuilds the hull chunk, widening the three control-point-phase lane items to `.xyz`: the input and
+/// output lane declarations (mask bit), and the passthrough `mov` (destination mask bit, plus its
+/// source swizzle's third component forced to `.z` so the copied `.z` is the eye, not a repeat of `.x`).
+fn rewrite_eye_forward(stream: &TokenStream, plan: &EyeForwardPlan) -> Result<Vec<u8>, DxbcError> {
+    let tokens = stream.tokens();
+    let mut out: Vec<u32> = Vec::with_capacity(tokens.len());
+    out.extend_from_slice(&tokens[..2]);
+
+    for insn in stream.instructions() {
+        let insn = insn?;
+        if insn.start == plan.lane_input_dcl || insn.start == plan.lane_output_dcl {
+            // Widen the lane declaration `.xy` -> `.xyz` (mask bit on the operand token).
+            out.push(tokens[insn.start]);
+            out.push(tokens[insn.start + 1] | MASK_BIT_Z);
+            out.extend_from_slice(&tokens[insn.start + 2..insn.end]);
+            continue;
+        }
+        if insn.start == plan.lane_mov {
+            let base = out.len();
+            out.extend_from_slice(&tokens[insn.start..insn.end]);
+            let mut operands = insn.operands();
+            let dest = operands.next().ok_or(DxbcError::UnexpectedEndOfTokens)??;
+            let src = operands.next().ok_or(DxbcError::UnexpectedEndOfTokens)??;
+            out[base + (dest.token_offset - insn.start)] |= MASK_BIT_Z;
+            let src_at = base + (src.token_offset - insn.start);
+            out[src_at] = (out[src_at] & !SWIZZLE_COMPONENT_2_MASK) | SWIZZLE_Z_COMPONENT_2;
+            continue;
+        }
+        out.extend_from_slice(&tokens[insn.start..insn.end]);
+    }
+
+    let length = out.len() as u32;
+    out[1] = length;
+    Ok(out.iter().flat_map(|t| t.to_le_bytes()).collect())
 }
 
 /// Rewrites the terrain tessellation **domain** shader for single-pass stereo by reprojection. The DS
@@ -211,7 +391,8 @@ fn plan_domain_reproject(
         if insn.is_declaration() {
             match insn.opcode {
                 OPCODE_DCL_INPUT
-                    if control_point_input_register(tokens, &insn) == Some(lane_register) =>
+                    if two_d_input_register(tokens, &insn, OPERAND_TYPE_INPUT_CONTROL_POINT)
+                        == Some(lane_register) =>
                 {
                     lane_dcl_start = Some(insn.start);
                 }
@@ -359,14 +540,14 @@ fn emit_domain_reproject_injection(out: &mut Vec<u32>, plan: &DomainReprojectPla
     ]);
 }
 
-/// The control-point input register of a `dcl_input vicp[cp][reg]` declaration (its second index), or
-/// `None` if the declaration is not a two-dimensionally-indexed control-point input (e.g. `dcl_input
-/// vDomain`). Used to find the `TEXCOORD3` lane declaration to widen in the domain shader.
-fn control_point_input_register(tokens: &[u32], insn: &Instruction<'_>) -> Option<u32> {
+/// The register index (second dimension) of a two-dimensionally-indexed `dcl_input` of the given
+/// operand type, or `None` if the declaration is not such an input. The domain shader's control-point
+/// inputs are `vicp[cp][reg]` ([`OPERAND_TYPE_INPUT_CONTROL_POINT`]); the hull control-point phase's
+/// are plain `v[cp][reg]` ([`OPERAND_TYPE_INPUT`]). Both encode the register as the second index, so
+/// this locates the `TEXCOORD3` lane declaration to widen in either stage.
+fn two_d_input_register(tokens: &[u32], insn: &Instruction<'_>, operand_type: u32) -> Option<u32> {
     let tok = *tokens.get(insn.start + 1)?;
-    let operand_type = (tok >> 12) & 0xFF;
-    let index_dim = (tok >> 20) & 0x3;
-    if operand_type != OPERAND_TYPE_INPUT_CONTROL_POINT || index_dim != 2 {
+    if (tok >> 12) & 0xFF != operand_type || (tok >> 20) & 0x3 != 2 {
         return None;
     }
     tokens.get(insn.end - 1).copied()

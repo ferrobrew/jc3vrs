@@ -90,6 +90,8 @@ pub enum DxbcError {
     NotVertexShader,
     /// The shader is not a domain shader, so the domain reprojection does not apply.
     NotDomainShader,
+    /// The shader is not a hull shader, so the hull eye-forward does not apply.
+    NotHullShader,
     /// The shader is SM4 (`SHDR`); the rewrite emits SM5-era structures (`SFI0`, the viewport
     /// output) and only supports `SHEX` shaders.
     UnsupportedShaderModel,
@@ -134,6 +136,7 @@ impl fmt::Display for DxbcError {
             DxbcError::UnexpectedEndOfTokens => "dxbc: token stream ended mid-instruction",
             DxbcError::NotVertexShader => "dxbc: not a vertex shader",
             DxbcError::NotDomainShader => "dxbc: not a domain shader",
+            DxbcError::NotHullShader => "dxbc: not a hull shader",
             DxbcError::UnsupportedShaderModel => "dxbc: SM4 (SHDR) shader; the rewrite needs SHEX",
             DxbcError::MissingInputSignature => "dxbc: no ISGN input-signature chunk",
             DxbcError::MissingOutputSignature => "dxbc: no OSGN output-signature chunk",
