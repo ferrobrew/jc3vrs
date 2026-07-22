@@ -260,6 +260,276 @@ pub fn inject_eye_forward_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcErro
     Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, false))
 }
 
+/// Rewrites the terrain tessellation **domain** shader for single-pass stereo by reprojection. The DS
+/// builds clip in its own registers from `cb1`'s `m_OffsetViewProjection` (byte-identical to `cb0`'s
+/// view-projection) and writes it to `SV_Position`; this renames those writes to a temp `rClip` and
+/// post-multiplies by the per-eye `M_eye` before `ret`, exactly like [`reproject_vertex_shader`]. The
+/// eye is not an `SV_InstanceID` here -- it rides in on the `TEXCOORD3.z` control-point lane the VS
+/// originated ([`inject_eye_forward_vertex_shader`]) and the hull shader forwarded -- so the prologue
+/// reads it from `vicp[0][2].z` (control point 0; the whole patch is one instance, hence one eye),
+/// widens the `vicp[..][2]` input to `.xyz`, and writes `SV_ViewportArrayIndex` (legal from the last
+/// pre-rasterization stage under the `SFI0` capability). `M_eye` and the `cb13` layout are shared with
+/// the vertex reprojection.
+pub fn reproject_domain_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
+    let dxbc = Dxbc::parse(blob)?;
+    if dxbc.chunk(b"SHEX").is_none() && dxbc.chunk(b"SHDR").is_some() {
+        return Err(DxbcError::UnsupportedShaderModel);
+    }
+    let shex = dxbc.chunk(b"SHEX").ok_or(DxbcError::NoShaderChunk)?;
+    let isgn = dxbc
+        .chunk(b"ISGN")
+        .ok_or(DxbcError::MissingInputSignature)?;
+    let osgn = dxbc
+        .chunk(b"OSGN")
+        .ok_or(DxbcError::MissingOutputSignature)?;
+
+    let stream = TokenStream::new(shex.body(blob))?;
+    if stream.stage() != ShaderStage::Domain {
+        return Err(DxbcError::NotDomainShader);
+    }
+
+    // The eye rides TEXCOORD3.z: confirm the input lane exists and its .z is free (mask is .xy).
+    let (lane_register, lane_mask) =
+        signature_register(isgn.body(blob), EYE_LANE_SEMANTIC, EYE_LANE_SEMANTIC_INDEX)
+            .ok_or(DxbcError::NoEyeLane)?;
+    if lane_mask & 0x4 != 0 {
+        return Err(DxbcError::NoEyeLane);
+    }
+
+    // The free output register for the viewport must come from the output signature, not the body's
+    // `dcl_output` opcodes: a shader can declare an output in its `OSGN` (occupying a register) without
+    // ever writing it, so a `dcl_output` scan alone would under-count and collide with that dead slot.
+    let output_register = max_signature_register(osgn.body(blob)).map_or(0, |r| r + 1);
+    let plan = plan_domain_reproject(&stream, lane_register, output_register)?;
+    let new_shex = rewrite_domain_reproject(&stream, &plan)?;
+
+    // Widen the DS's TEXCOORD3 input lane to .xyz (both the component mask and the used mask), so the
+    // .z carrying the eye is read.
+    let new_isgn = widen_signature_mask(
+        isgn.body(blob),
+        EYE_LANE_SEMANTIC,
+        EYE_LANE_SEMANTIC_INDEX,
+        lane_mask | 0x4,
+        lane_mask | 0x4,
+    )?;
+    let new_osgn = append_signature_element(
+        osgn.body(blob),
+        &SignatureElement {
+            name: "SV_ViewportArrayIndex",
+            semantic_index: 0,
+            system_value: SIGNATURE_SYSVALUE_VIEWPORT_ARRAY_INDEX,
+            component_type: SIGNATURE_COMPONENT_UINT32,
+            register: plan.output_register,
+            mask: 0x01,
+            rw_mask: 0x0E,
+        },
+    )?;
+
+    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true))
+}
+
+/// What the terrain-DS reprojection scan learned.
+struct DomainReprojectPlan {
+    /// The output register `SV_Position` is declared at (`dcl_output_siv oN, position`).
+    pos_register: u32,
+    /// The `TEXCOORD3` control-point input register the eye rides in (`vicp[..][lane_register].z`).
+    lane_register: u32,
+    /// The `o` register for the new `SV_ViewportArrayIndex` output.
+    output_register: u32,
+    /// The first of the two temps this rewrite claims: `rBase` (eye row base) at `temp_base`, `rClip`
+    /// (saved clip position) at `temp_base + 1`.
+    temp_base: u32,
+    /// The token index of the existing `dcl_temps`, if any (its count is bumped by two).
+    dcl_temps_start: Option<usize>,
+    /// The token index of the `dcl_input vicp[..][lane_register]` declaration, whose mask is widened
+    /// to `.xyz`.
+    lane_dcl_start: usize,
+    /// The token index of the first non-declaration instruction, where declarations and the prologue
+    /// are injected.
+    inject_before: usize,
+}
+
+/// Scans the domain shader's declarations for the reprojection rewrite: the `SV_Position` output, the
+/// free output register, the control-point lane declaration to widen, the temp count and injection
+/// point, and the preconditions (`cb13` unclaimed, an `SV_Position` output present, no `retc`).
+fn plan_domain_reproject(
+    stream: &TokenStream,
+    lane_register: u32,
+    output_register: u32,
+) -> Result<DomainReprojectPlan, DxbcError> {
+    let tokens = stream.tokens();
+    let mut temps: u32 = 0;
+    let mut dcl_temps_start = None;
+    let mut inject_before = None;
+    let mut pos_register = None;
+    let mut lane_dcl_start = None;
+
+    for insn in stream.instructions() {
+        let insn = insn?;
+        if insn.is_declaration() {
+            match insn.opcode {
+                OPCODE_DCL_INPUT
+                    if control_point_input_register(tokens, &insn) == Some(lane_register) =>
+                {
+                    lane_dcl_start = Some(insn.start);
+                }
+                OPCODE_DCL_OUTPUT_SIV if tokens[insn.end - 1] == SB_NAME_POSITION => {
+                    pos_register = Some(declared_register(tokens, &insn)?);
+                }
+                OPCODE_DCL_TEMPS => {
+                    temps = *tokens
+                        .get(insn.start + 1)
+                        .ok_or(DxbcError::UnexpectedEndOfTokens)?;
+                    dcl_temps_start = Some(insn.start);
+                }
+                OPCODE_DCL_CONSTANT_BUFFER
+                    if declared_register(tokens, &insn)? == STEREO_CB_REGISTER =>
+                {
+                    return Err(DxbcError::Cb13AlreadyDeclared);
+                }
+                _ => {}
+            }
+        } else {
+            if inject_before.is_none() {
+                inject_before = Some(insn.start);
+            }
+            if insn.opcode == OPCODE_RETC {
+                return Err(DxbcError::UnsupportedControlFlow);
+            }
+        }
+    }
+
+    Ok(DomainReprojectPlan {
+        pos_register: pos_register.ok_or(DxbcError::NoPositionOutput)?,
+        lane_register,
+        output_register,
+        temp_base: temps,
+        dcl_temps_start,
+        lane_dcl_start: lane_dcl_start.ok_or(DxbcError::NoEyeLane)?,
+        inject_before: inject_before.unwrap_or(tokens.len()),
+    })
+}
+
+/// Rebuilds the domain shader chunk: injects the declarations and eye prologue, widens the lane
+/// `dcl_input` to `.xyz`, renames every `SV_Position` write to `rClip`, and emits the `M_eye · rClip`
+/// `dp4` chain before each `ret`.
+fn rewrite_domain_reproject(
+    stream: &TokenStream,
+    plan: &DomainReprojectPlan,
+) -> Result<Vec<u8>, DxbcError> {
+    let tokens = stream.tokens();
+    let mut out: Vec<u32> = Vec::with_capacity(tokens.len() + 128);
+    out.extend_from_slice(&tokens[..2]);
+
+    let mut injected = false;
+    for insn in stream.instructions() {
+        let insn = insn?;
+        if insn.start == plan.inject_before {
+            emit_domain_reproject_injection(&mut out, plan);
+            injected = true;
+        }
+        if Some(insn.start) == plan.dcl_temps_start {
+            out.push(tokens[insn.start]);
+            out.push(plan.temp_base + 2);
+            continue;
+        }
+        if insn.start == plan.lane_dcl_start {
+            // Widen the lane input declaration `.xy` -> `.xyz` by setting the .z mask bit on its
+            // operand token (the token right after the opcode).
+            out.push(tokens[insn.start]);
+            out.push(tokens[insn.start + 1] | MASK_BIT_Z);
+            out.extend_from_slice(&tokens[insn.start + 2..insn.end]);
+            continue;
+        }
+        if insn.is_declaration() {
+            out.extend_from_slice(&tokens[insn.start..insn.end]);
+            continue;
+        }
+        if insn.opcode == OPCODE_RET {
+            emit_meye_epilogue(&mut out, plan.pos_register, plan.temp_base);
+            out.extend_from_slice(&tokens[insn.start..insn.end]);
+            continue;
+        }
+        rewrite_reproject_instruction(tokens, &insn, plan.pos_register, plan.temp_base, &mut out)?;
+    }
+    if !injected {
+        emit_domain_reproject_injection(&mut out, plan);
+    }
+
+    let length = out.len() as u32;
+    out[1] = length;
+    Ok(out.iter().flat_map(|t| t.to_le_bytes()).collect())
+}
+
+/// Emits the domain-reprojection declarations and eye prologue: `cb13[18]`, the `SV_ViewportArrayIndex`
+/// output, then `and rBase.x, vicp[0][lane].z, l(1)` (eye from the control-point lane), `mov oM.x,
+/// rBase.x` (viewport), `imul null, rBase.x, rBase.x, l(4)` (the eye's `M_eye` row base). No
+/// `SV_InstanceID` input -- the eye arrives on the lane, not as a system value.
+fn emit_domain_reproject_injection(out: &mut Vec<u32>, plan: &DomainReprojectPlan) {
+    let m = plan.output_register;
+    let r = plan.temp_base;
+    out.extend_from_slice(&[
+        (4 << 24) | CB_ACCESS_DYNAMIC_INDEXED | OPCODE_DCL_CONSTANT_BUFFER,
+        OPERAND_CB_2D_IMM,
+        STEREO_CB_REGISTER,
+        STEREO_REPROJ_CB_ROWS,
+    ]);
+    out.extend_from_slice(&[
+        (4 << 24) | OPCODE_DCL_OUTPUT_SIV,
+        OPERAND_OUTPUT_MASK_X,
+        m,
+        SB_NAME_VIEWPORT_ARRAY_INDEX,
+    ]);
+    if plan.dcl_temps_start.is_none() {
+        out.extend_from_slice(&[(2 << 24) | OPCODE_DCL_TEMPS, r + 2]);
+    }
+    // and rBase.x, vicp[0][lane].z, l(1) -- the eye index from the control-point lane. Eight dwords:
+    // the `vicp[0][lane]` source is a 2D-indexed operand (token + two index tokens), one wider than
+    // the vertex path's `vN.x`.
+    out.extend_from_slice(&[
+        (8 << 24) | OPCODE_AND,
+        OPERAND_TEMP_MASK_X,
+        r,
+        OPERAND_VICP_SELECT_Z,
+        0, // control point 0
+        plan.lane_register,
+        OPERAND_IMM32_SCALAR,
+        1,
+    ]);
+    // mov oM.x, rBase.x -- route to the eye's viewport.
+    out.extend_from_slice(&[
+        (5 << 24) | OPCODE_MOV,
+        OPERAND_OUTPUT_MASK_X,
+        m,
+        OPERAND_TEMP_SELECT_X,
+        r,
+    ]);
+    // imul null, rBase.x, rBase.x, l(4) -- the eye's M_eye row base (four rows per eye).
+    out.extend_from_slice(&[
+        (8 << 24) | OPCODE_IMUL,
+        OPERAND_NULL,
+        OPERAND_TEMP_MASK_X,
+        r,
+        OPERAND_TEMP_SELECT_X,
+        r,
+        OPERAND_IMM32_SCALAR,
+        4,
+    ]);
+}
+
+/// The control-point input register of a `dcl_input vicp[cp][reg]` declaration (its second index), or
+/// `None` if the declaration is not a two-dimensionally-indexed control-point input (e.g. `dcl_input
+/// vDomain`). Used to find the `TEXCOORD3` lane declaration to widen in the domain shader.
+fn control_point_input_register(tokens: &[u32], insn: &Instruction<'_>) -> Option<u32> {
+    let tok = *tokens.get(insn.start + 1)?;
+    let operand_type = (tok >> 12) & 0xFF;
+    let index_dim = (tok >> 20) & 0x3;
+    if operand_type != OPERAND_TYPE_INPUT_CONTROL_POINT || index_dim != 2 {
+        return None;
+    }
+    tokens.get(insn.end - 1).copied()
+}
+
 /// What the terrain-VS eye-inject scan learned.
 struct EyeInjectPlan {
     /// The `TEXCOORD3` output register the eye rides in (`.z`).
@@ -401,6 +671,13 @@ const OPCODE_RETC: u32 = 0x25;
 /// SM4/5 operand type: output register (`oN`). Reprojection renames `SV_Position` writes (which are
 /// output-register destinations) to a temp by clearing this type field to `0` (TEMP).
 const OPERAND_TYPE_OUTPUT: u32 = 2;
+/// SM5 operand type: domain-shader input control point (`vicp[cp][reg]`). Identifies the lane
+/// declaration to widen in the terrain domain reprojection.
+const OPERAND_TYPE_INPUT_CONTROL_POINT: u32 = 25;
+/// `vicp[0][reg].z` as a source: input-control-point register, 2D immediate index, select-1 component
+/// `.z`. The two index tokens (control point `0`, register `reg`) follow. The domain reprojection reads
+/// the eye from the free `.z` of the `TEXCOORD3` control-point lane.
+const OPERAND_VICP_SELECT_Z: u32 = 0x0021_902A;
 /// `D3D_NAME_POSITION`, the `dcl_output_siv` trailing system-value name for `SV_Position`.
 const SB_NAME_POSITION: u32 = 1;
 
@@ -769,11 +1046,11 @@ fn rewrite_reproject(stream: &TokenStream, plan: &ReprojectPlan) -> Result<Vec<u
             continue;
         }
         if insn.opcode == OPCODE_RET {
-            emit_meye_epilogue(&mut out, plan);
+            emit_meye_epilogue(&mut out, plan.pos_register, plan.temp_base);
             out.extend_from_slice(&tokens[insn.start..insn.end]);
             continue;
         }
-        rewrite_reproject_instruction(tokens, &insn, plan, &mut out)?;
+        rewrite_reproject_instruction(tokens, &insn, plan.pos_register, plan.temp_base, &mut out)?;
     }
     if !injected {
         emit_reproject_injection(&mut out, plan);
@@ -845,11 +1122,13 @@ fn emit_reproject_injection(out: &mut Vec<u32>, plan: &ReprojectPlan) {
 
 /// Emits `o<pos> = M_eye · rClip` as four `dp4`s, one clip component each: `dp4 o<pos>.{x,y,z,w},
 /// cb13[rBase.x + (MEYE_ROW_BASE + j)], rClip.xyzw`. `rBase.x` holds `4*eye`, so the immediate row
-/// index selects the eye's `M_eye` block relative to it.
-fn emit_meye_epilogue(out: &mut Vec<u32>, plan: &ReprojectPlan) {
-    let pos = plan.pos_register;
-    let rbase = plan.temp_base;
-    let rclip = plan.temp_base + 1;
+/// index selects the eye's `M_eye` block relative to it. Shared by the vertex and domain reprojection
+/// rewrites: `pos_register` is the `SV_Position` output, `temp_base` is `rBase` (with `rClip` at
+/// `temp_base + 1`).
+fn emit_meye_epilogue(out: &mut Vec<u32>, pos_register: u32, temp_base: u32) {
+    let pos = pos_register;
+    let rbase = temp_base;
+    let rclip = temp_base + 1;
     const OUT_MASKS: [u32; 4] = [
         OPERAND_OUTPUT_MASK_X,
         OPERAND_OUTPUT_MASK_Y,
@@ -879,10 +1158,11 @@ fn emit_meye_epilogue(out: &mut Vec<u32>, plan: &ReprojectPlan) {
 fn rewrite_reproject_instruction(
     tokens: &[u32],
     insn: &Instruction<'_>,
-    plan: &ReprojectPlan,
+    pos_register: u32,
+    temp_base: u32,
     out: &mut Vec<u32>,
 ) -> Result<(), DxbcError> {
-    let rclip = plan.temp_base + 1;
+    let rclip = temp_base + 1;
     out.extend_from_slice(&tokens[insn.start..insn.operands_start()]);
 
     let mut pos = insn.operands_start();
@@ -897,7 +1177,7 @@ fn rewrite_reproject_instruction(
         let is_position_write = operand_type == OPERAND_TYPE_OUTPUT
             && index_dim == 1
             && rep == 0 // IDX_IMM32
-            && tokens.get(reg_at) == Some(&plan.pos_register);
+            && tokens.get(reg_at) == Some(&pos_register);
         if is_position_write {
             // OUTPUT (2) -> TEMP (0): clear the operand-type field, keep the mask/swizzle; swap the
             // register index to rClip. Token count is unchanged, so the instruction length stands.
@@ -1027,6 +1307,24 @@ fn signature_register(body: &[u8], name: &str, semantic_index: u32) -> Option<(u
         }
     }
     None
+}
+
+/// The highest register index any element of an `ISGN`/`OSGN` chunk occupies, or `None` if the chunk
+/// is empty. The authoritative count of used registers -- unlike a `dcl_output` scan, it also counts
+/// signature-declared-but-unwritten slots, so the next free register is `max + 1`.
+fn max_signature_register(body: &[u8]) -> Option<u32> {
+    if body.len() < 8 {
+        return None;
+    }
+    let count = u32::from_le_bytes(body[0..4].try_into().ok()?) as usize;
+    let table = u32::from_le_bytes(body[4..8].try_into().ok()?) as usize;
+    (0..count)
+        .filter_map(|i| {
+            let rec = table.checked_add(i.checked_mul(SIGNATURE_ELEMENT_LEN)?)?;
+            let record = body.get(rec..rec + SIGNATURE_ELEMENT_LEN)?;
+            Some(u32::from_le_bytes(record[16..20].try_into().ok()?))
+        })
+        .max()
 }
 
 /// Sets the component mask and rw-mask of the `ISGN`/`OSGN` element with the given semantic name and
