@@ -125,12 +125,19 @@ id still indexes the original instance.
 
 **Black-in-VR.** Foliage is forward-lit with clustered lighting, not deferred — the type `Setup` binds
 the clustered-light constant buffer (FS cb3), the light-cluster index texture (FS t15), GI, reflection,
-and sun-shadow cascades (t44/t45) to the fragment stage. The froxel/cluster grid and the shadow sample
-are indexed from screen position and view depth; if that volume or those resources are built for a
-projection/resolution that doesn't match the eye being rendered (the double-wide/collapse case), the
-lookup resolves to empty cells and the alpha-blended foliage receives no light — rendering black, with
-no deferred pass to rescue it. Audit whether the cluster/light-grid resources are sized/rebuilt per eye;
-this is likely the black-grass root cause, independent of the stereo geometry.
+and sun-shadow cascades to the fragment stage. From `CRenderBlockType::SetupLightingTextures`
+(`0x140101160`): the sun-shadow cascades bind at **FS t44/t45** (`0x2C`/`0x2D`) from
+`RenderContext+122`/`+123` (falling back to `CShadowManager+25088`), GI/reflection at t12/t31. The
+froxel/cluster grid and the shadow sample are indexed from screen position and view depth; if that
+volume or those resources are built for a projection/resolution that doesn't match the eye being
+rendered (the double-wide/collapse case), the lookup resolves to empty cells and the alpha-blended
+foliage receives no light — rendering black, with no deferred pass to rescue it.
+
+Two suspects, one isolation test: (1) the clustered-light grid (cb3/t15), built for the full/center
+projection but sampled per eye-half; (2) the sun-shadow cascades (t44/t45), tied to the "shadows a bit
+broken" report. **Disable the sun shadows** (`single_pass`'s shadow-disable diagnostic) — if the grass
+un-blacks, it's the shadow term (t44/t45); if it stays black, it's the clustered-light grid (cb3/t15).
+The fix in either case is per-eye resource correctness, which needs in-game iteration.
 
 ## TreeImpostor
 
