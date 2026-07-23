@@ -102,6 +102,66 @@ for RenderBlockAtmosphericScattering {
     }
 }
 #[repr(C, align(8))]
+/// The tree-trunk/branch render block (`NGraphicsEngine::CRenderBlockBark`, registered name
+/// `"VegetationBark"`): the solid woody geometry of trees, as distinct from the leaf cards. Forward-lit
+/// vegetation.
+pub struct RenderBlockBark {}
+impl RenderBlockBark {
+    pub const Draw_ADDRESS: usize = 0x140136F90;
+    /// Issues the color-pass geometry. The clip transform is a CPU-baked world-view-projection staged
+    /// on vertex `cb1` registers 0..3 via `SetVertexProgramConstants` before any draw-kind routing:
+    /// `cb1[0..3] = M_model_camera_relative · m_OffsetViewProjection` for the non-instanced case, or
+    /// `m_OffsetViewProjection` verbatim for the instanced/billboard cases (the per-instance model
+    /// matrix is then applied in-shader). The global `m_VPGlobals` is bound at `cb0` for wind/time
+    /// globals only, not the view-projection. One of three draw kinds is selected from the instance-data
+    /// pointer in [`CRBIInfo`](RBIInfo): a non-instanced `DrawIndexed`, a CPU-instanced
+    /// `DrawIndexedInstanced` (per-instance stream at slot 2), or a GPU-indirect `DrawIndexedNoMutex`
+    /// whose instance count lives in the type's `m_InstDrawParams` buffer. `m_RenderStatus` bits select
+    /// bounce/GI, billboard, and geometry-program permutations.
+    pub unsafe fn Draw(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, render_context, info)
+        }
+    }
+    pub const DrawZ_ADDRESS: usize = 0x140136A90;
+    /// Issues the depth-prepass and depth-and-velocity geometry. Same cb1-baked transform as
+    /// [`Draw`](RenderBlockBark::Draw); the velocity pass additionally bakes the previous frame's
+    /// world-view-projection into `cb1` registers 5..8 from `m_PreviousOffsetViewProjection`.
+    pub unsafe fn DrawZ(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::DrawZ_ADDRESS);
+            f(self as *const Self as _, render_context, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockBark> for RenderBlockBark {
+    fn as_ref(&self) -> &RenderBlockBark {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockBark> for RenderBlockBark {
+    fn as_mut(&mut self) -> &mut RenderBlockBark {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The skinned character render block (the `Character` RBMDL block type). A character model is
 /// composed of one block per material; the same block objects are drawn for every pass, branching
 /// internally on [`RenderContext::m_RenderStatus`](graphics_engine::graphics_engine::RenderContext::m_RenderStatus)
@@ -305,6 +365,91 @@ impl std::convert::AsMut<RenderBlockDeferredLighting> for RenderBlockDeferredLig
     }
 }
 #[repr(C, align(8))]
+/// The grass/foliage render block (`NGraphicsEngine::CRenderBlockFoliage`, registered name
+/// `"VegetationFoliage"`): forward-lit ground cover and small plants, drawn in `RP_VEGETATION_OPAQUE`.
+/// The bulk is grass drawn GPU-indirect.
+pub struct RenderBlockFoliage {}
+impl RenderBlockFoliage {
+    pub const Draw_ADDRESS: usize = 0x14012DDA0;
+    /// Issues the color-pass geometry. The clip transform is staged per draw on vertex `cb2`: register 0
+    /// the camera-relative world matrix (from [`CRBIInfo`](RBIInfo)'s matrix, translation minus
+    /// `m_CameraPosition`), registers 4..7 a per-draw copy of `m_OffsetViewProjection` (byte-identical to
+    /// the global `cb0[29..32]`), so the vertex shader composes `clip = world · OffsetVP` from `cb2`
+    /// rather than reading `cb0`. `SetupConstantBuffers` binds `cb0 = m_VPGlobals` but only for globals.
+    /// One of three draw kinds is selected from the instance-data flags: a CPU-instanced
+    /// `DrawIndexedInstancedNoMutex` (instance count a CPU `u16`), the dominant grass path
+    /// `DrawIndexedInstancedIndirect` (instance count in the type's GPU-only `m_InstDrawParams` args
+    /// buffer, populated by the vegetation draw-indirect compute pass), or a non-instanced
+    /// `DrawIndexedNoMutex`. The pass is forward-lit: the type's `Setup` binds the clustered-lighting
+    /// constant buffer, the light-cluster index texture, GI, reflection, and sun-shadow-cascade
+    /// resources to the fragment stage.
+    pub unsafe fn Draw(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, render_context, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockFoliage> for RenderBlockFoliage {
+    fn as_ref(&self) -> &RenderBlockFoliage {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockFoliage> for RenderBlockFoliage {
+    fn as_mut(&mut self) -> &mut RenderBlockFoliage {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The occluder render block (`NGraphicsEngine::CRenderBlockOccluder`, registered name `"Occluder"`): a
+/// unit-cube depth proxy scaled per scene occluder, injected once per frame into `RP_Z_OCCLUDERS`
+/// (pass 47) to prime the main camera depth buffer so later Z and G-buffer passes early-Z reject
+/// occluded geometry. Depth-only (null fragment program). The CPU software-occlusion system consumes
+/// the same occluder data independently and is not fed by this GPU depth pass.
+pub struct RenderBlockOccluder {}
+impl RenderBlockOccluder {
+    pub const DrawZ_ADDRESS: usize = 0x14017DFA0;
+    /// Issues the occluder-box depth geometry. The non-instanced path bakes
+    /// `WVP = (world - camera_offset) · m_OffsetViewProjection` (via
+    /// `CRenderBlock::CalculateOffsetWorldViewProjectionMatrix`, `0x140136070`) into vertex `cb1`
+    /// registers 0..3, register 4 a depth bias, then `DrawIndexed` per box. The instanced path
+    /// (`gfx.occluders.use_instancing`) instead reads the global `m_VPGlobals` view-projection at `cb0`
+    /// with per-instance world rows from a vertex stream and issues one `DrawIndexedInstanced`.
+    /// `Draw`/`Setup` tail-call this and its `SetupZ`.
+    pub unsafe fn DrawZ(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::DrawZ_ADDRESS);
+            f(self as *const Self as _, render_context, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockOccluder> for RenderBlockOccluder {
+    fn as_ref(&self) -> &RenderBlockOccluder {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockOccluder> for RenderBlockOccluder {
+    fn as_mut(&mut self) -> &mut RenderBlockOccluder {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// A base VolumetricTerrain render block instance (`CRenderBlockTerrain`): one per terrain tile/sector.
 pub struct RenderBlockTerrain {}
 impl RenderBlockTerrain {
@@ -449,6 +594,41 @@ impl RenderBlockTerrainPatch {
                 camera_translation: *const crate::types::math::Vector3,
             ) = ::std::mem::transmute(Self::UpdateSortID_ADDRESS);
             f(self as *mut Self as _, camera_translation)
+        }
+    }
+    pub const Draw_ADDRESS: usize = 0x14032E540;
+    /// Issues the patch's geometry for the active render pass, keyed on
+    /// [`m_ActiveRenderPass`](graphics_engine::graphics_engine::RenderContext::m_ActiveRenderPass):
+    ///
+    /// - Passes **56 and 57** (the near tessellating passes) draw GPU-indirect via
+    ///   `DrawIndexedInstancedIndirectNoMutex`: the per-patch instance count comes from the terrain
+    ///   patch system's GPU compute output, so no instance count is known CPU-side. Each stages a
+    ///   one-`float4` control constant on vertex slot 3 (`{ m_DetailPatchIndex, mode, 0, 0 }`, `mode` = 2
+    ///   for 56, 3 for 57) and binds the shared global detail index/vertex texture buffers before the
+    ///   indirect draw.
+    /// - Passes **58 and 60** draw the tail index range (`[m_SplitIndex, m_IndexCount)`) with a plain
+    ///   `DrawIndexed`; passes **59 and 61** draw the head range (`[0, m_SplitIndex)`). The split
+    ///   partitions the patch's index buffer between the two families.
+    /// - Passes **14** and **38..=40** draw the full index range with a plain `DrawIndexed`.
+    /// - Any other pass returns without drawing.
+    ///
+    /// The vertex transform for every path is the global view-projection: the type-level
+    /// `SetupConstantBuffers` binds `m_VPGlobals` at vertex `cb0` (the rows carrying
+    /// [`m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)),
+    /// and the per-patch streamed constant buffer at vertex `cb1`; the tessellating passes additionally
+    /// carry `m_OffsetViewProjection` in the hull/domain constants baked once per frame.
+    pub unsafe fn Draw(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, render_context, info)
         }
     }
 }
@@ -775,6 +955,45 @@ impl std::convert::AsRef<SkinBatch> for SkinBatch {
 }
 impl std::convert::AsMut<SkinBatch> for SkinBatch {
     fn as_mut(&mut self) -> &mut SkinBatch {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The tree-impostor render block (`CTreeImpostorRB`): far-distance flat billboard cards that replace
+/// full tree meshes at range.
+pub struct TreeImpostorRB {}
+impl TreeImpostorRB {
+    pub const Draw_ADDRESS: usize = 0x14034F520;
+    /// Issues the impostor cards as a single non-instanced `DrawIndexed` over a static quad index
+    /// buffer (`6 * min(card_count, 0x1400)` indices); the vertex shader keys off
+    /// `SV_VertexID` (`card = id >> 2`, `corner = id & 3`), pulling each card's world position, size, and
+    /// atlas data from a texture buffer bound at vertex slot 0. The card orientation (facing) is computed
+    /// in the vertex shader from the render camera carried in the engine's global per-view billboard
+    /// constant buffer (the translation-bearing `m_ViewProjectionF`); the block stages only per-draw
+    /// scalars on `cb1`. `m_RenderStatus & 6` selects the depth/shadow vertex- and fragment-program
+    /// permutations. The vertex shader writes `SV_Position` directly, so this is not GPU-indirect.
+    pub unsafe fn Draw(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, render_context, info)
+        }
+    }
+}
+impl std::convert::AsRef<TreeImpostorRB> for TreeImpostorRB {
+    fn as_ref(&self) -> &TreeImpostorRB {
+        self
+    }
+}
+impl std::convert::AsMut<TreeImpostorRB> for TreeImpostorRB {
+    fn as_mut(&mut self) -> &mut TreeImpostorRB {
         self
     }
 }
