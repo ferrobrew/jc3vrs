@@ -5,4 +5,8 @@
 set -e
 cargo xwin build --xwin-cache-dir .xwin --target x86_64-pc-windows-msvc -p jc3vrs_payload
 cargo xwin build --xwin-cache-dir .xwin --target x86_64-pc-windows-msvc -p jc3vrs_injector
+# The payload loads its OpenXR loader from an openxr_loader.dll beside the DLL; stage it if a clean
+# build wiped it (one-time download, cached under .openxr -- see scripts/fetch_openxr_loader.sh).
+[ -f ./target/x86_64-pc-windows-msvc/debug/openxr_loader.dll ] ||
+    "$(dirname "$0")/fetch_openxr_loader.sh"
 wine ./target/x86_64-pc-windows-msvc/debug/jc3vrs_injector.exe "$@"

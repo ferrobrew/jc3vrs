@@ -27,9 +27,12 @@ jc3gi = { path = "../jc3gi" }
 fsr-sys = { path = "../fsr-sys" }
 dxbc-stereo = { path = "../dxbc-stereo" }
 # Runtime-loaded (`loaded` default feature): the OpenXR loader is opened at runtime via
-# `xr::Entry::load_from`, not linked. The `static` loader (build the loader through cmake against the
-# xwin/clang-cl cross toolchain) does not build here -- cmake requires Ninja, which the cross
-# environment lacks -- so the dynamic route is the portable choice. See `vr` module docs.
+# `xr::Entry::load_from`, not linked, so an `openxr_loader.dll` must sit beside the payload DLL (see
+# the `vr` module docs). The `static` feature would build the loader in and drop that DLL, but it does
+# not cross-build cleanly on Linux: with cmake + ninja added it compiles the loader, then CMake feeds
+# the Windows resource step (`loader.rc`) a spurious Clang `-fPIC` that clang-cl rejects, and the fix
+# (`CMAKE_POSITION_INDEPENDENT_CODE=OFF`) does not stick because cargo-xwin regenerates its toolchain
+# file every build. So the dynamic route stays the portable choice.
 openxr = "0.21"
 
 tracing = "0.1"
