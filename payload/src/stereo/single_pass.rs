@@ -24,7 +24,12 @@ use std::{
 
 use dxbc_stereo::DxbcError;
 use jc3gi::{
-    graphics_engine::{graphics_engine::GraphicsEngine, render_engine::RenderEngine},
+    graphics_engine::{
+        draw::SetVertexProgramConstants,
+        graphics_engine::{GraphicsEngine, HContext_t, RenderContext},
+        render_block::RenderBlockTerrainDetail,
+        render_engine::RenderEngine,
+    },
     types::math::{Matrix4, Vector4},
 };
 use parking_lot::Mutex;
@@ -421,6 +426,127 @@ pub fn set_ui_viewport_raw(context: *mut c_void, viewport: &D3D11_VIEWPORT) {
     }
 }
 
+/// One eye's re-issue of a terrain-detail draw: the reprojected `cb1` (four float4 rows) to stage on
+/// vertex slot 1, and the eye-half viewport to render into.
+struct TerrainDetailEyePass {
+    cb1: [f32; 16],
+    viewport: D3D11_VIEWPORT,
+}
+
+/// The per-eye passes for a terrain-detail draw, or `None` when the single-pass terrain intercept
+/// should not run -- the same gate every other per-eye re-issue takes
+/// ([`baked_cb_intercept_ready`]: the collapse, the G-buffer range, and a published `M_eye` and
+/// viewport), plus the terrain flag.
+///
+/// The detail draw is GPU-indirect, so it cannot be instance-doubled like the model geometry; instead
+/// the render block's `Draw` is re-issued once per eye with a per-eye `cb1`. The detail VS computes
+/// `clip = P_local · cb1` with `cb1[0..3] = T_patch · OffsetVP` (`T_patch` translating the patch origin
+/// relative to the camera), so `clip` is the center-eye clip and the per-eye buffer is
+/// `cb1_eye[k] = M_eye · cb1_center[k]`. `cb1[4]` (the LOD-fade vector) is left untouched. `this` and
+/// `rc` are the [`RenderBlockTerrainDetail`] and [`RenderContext`] the block's `Draw` received.
+///
+/// # Safety
+///
+/// `this` and `rc` must be the live pointers the detoured `Draw` received.
+unsafe fn terrain_detail_eye_passes(
+    this: *const RenderBlockTerrainDetail,
+    rc: *const RenderContext,
+) -> Option<(
+    [TerrainDetailEyePass; 2],
+    D3D11_VIEWPORT,
+    ID3D11DeviceContext,
+)> {
+    if !terrain_active() {
+        return None;
+    }
+    let (m_eye, full, d3d) = baked_cb_intercept_ready()?;
+
+    // SAFETY: caller guarantees live pointers.
+    let ovp = unsafe { (*rc).m_OffsetViewProjection.data };
+    let cam = unsafe { (*rc).m_CameraPosition.data };
+    let (patch_x, patch_z) = unsafe { ((*this).m_WorldPatchX, (*this).m_WorldPatchZ) };
+
+    let row =
+        |r: usize| glam::Vec4::new(ovp[r * 4], ovp[r * 4 + 1], ovp[r * 4 + 2], ovp[r * 4 + 3]);
+    let (r0, r1, r2, r3) = (row(0), row(1), row(2), row(3));
+    // cb1_center[0..3] = rows of `T_patch · OffsetVP`: the first three are the OffsetVP rows; the last
+    // folds in the patch-relative camera translation `T_patch`.
+    let (tx, ty, tz) = (patch_x - cam[0], -cam[1], patch_z - cam[2]);
+    let cb1_center = [r0, r1, r2, r3 + tx * r0 + ty * r1 + tz * r2];
+
+    let passes = std::array::from_fn(|eye| {
+        let mut cb1 = [0.0f32; 16];
+        for (k, center) in cb1_center.iter().enumerate() {
+            cb1[k * 4..k * 4 + 4].copy_from_slice(&m_eye[eye].mul_vec4(*center).to_array());
+        }
+        TerrainDetailEyePass {
+            cb1,
+            viewport: eye_half_viewport(full, eye),
+        }
+    });
+    Some((passes, full, d3d))
+}
+
+/// The graphics context (`HContext_t*`) a render block's `Draw` stages constants into, read from its
+/// [`RenderContext`]. Used by the terrain-detail intercept to call `SetVertexProgramConstants`.
+///
+/// # Safety
+///
+/// `rc` must be a live pointer.
+unsafe fn render_context_graphics_context(rc: *const RenderContext) -> *mut HContext_t {
+    unsafe { (*rc).m_Context }
+}
+
+/// The engine's immediate `ID3D11DeviceContext`, or `None` if the device/context is not live yet.
+fn immediate_context() -> Option<ID3D11DeviceContext> {
+    // SAFETY: read on the render thread, where the engine device/context pointers are stable.
+    unsafe {
+        let ge = GraphicsEngine::get()?;
+        let device = ge.m_Device.as_ref()?;
+        let context = device.m_Context.as_ref()?;
+        Some(context.m_Context.clone())
+    }
+}
+
+/// Bind `viewport` to both viewport slots of the immediate context. Binding two slots (rather than
+/// one) passes the collapse viewport detour through untouched -- it only special-cases a single-slot
+/// set -- and the terrain-detail VS has no `SV_ViewportArrayIndex`, so it rasterizes into slot 0.
+fn bind_both_viewport_slots(d3d: &ID3D11DeviceContext, viewport: D3D11_VIEWPORT) {
+    // SAFETY: `d3d` is the live immediate context; a two-element slice is a valid viewport array.
+    unsafe { d3d.RSSetViewports(Some(&[viewport, viewport])) };
+}
+
+/// Re-issue a terrain-detail `Draw` once per eye with a per-eye `cb1` and the eye's half-viewport,
+/// calling `draw` (the block's original `Draw` trampoline) each time. Returns `false` when the
+/// single-pass terrain intercept should not run, in which case the caller draws normally once. The
+/// detail draw is GPU-indirect and so cannot be instance-doubled; this drives per-eye rendering from
+/// the CPU instead. See [`terrain_detail_eye_passes`].
+///
+/// # Safety
+///
+/// `this` and `rc` must be the live pointers the detoured `Draw` received, and `draw` must invoke the
+/// original `Draw`.
+pub unsafe fn terrain_detail_per_eye(
+    this: *const RenderBlockTerrainDetail,
+    rc: *const RenderContext,
+    mut draw: impl FnMut(),
+) -> bool {
+    let Some((passes, full, d3d)) = (unsafe { terrain_detail_eye_passes(this, rc) }) else {
+        return false;
+    };
+    // SAFETY: `rc` is live per the caller contract.
+    let ctx = unsafe { render_context_graphics_context(rc) };
+    for pass in &passes {
+        // SAFETY: `ctx` is the render context's live graphics context; `cb1` is four float4 rows.
+        unsafe { SetVertexProgramConstants(ctx, 1, 0, pass.cb1.as_ptr(), 4) };
+        bind_both_viewport_slots(&d3d, pass.viewport);
+        draw();
+    }
+    // Restore the collapse's full viewport for the draws that follow in this pass.
+    bind_both_viewport_slots(&d3d, full);
+    true
+}
+
 /// The per-eye **full** (translation-carrying) world→clip view-projection, matching the render
 /// camera's `m_ViewProjectionF` for that eye -- for projecting the mod's world-space overlay quads
 /// per eye in the collapse, where the render camera stays centered. `None` if the centre transform or
@@ -441,6 +567,12 @@ fn full_eye_view_projection(eye: usize) -> Option<Matrix4> {
 /// reuse the same patched shaders but are not double-wide, keep the identical-viewport behaviour.
 pub fn set_gbuffer_range(inside: bool) {
     IN_GBUFFER_RANGE.store(inside, Ordering::Relaxed);
+    if !inside {
+        // The per-eye matrices belong to the range that just ended. Dropping them means a re-issue
+        // that somehow runs outside a range -- or in a later frame where `compute_dual_eye_rows`
+        // declined to publish -- reprojects with nothing rather than with last frame's head pose.
+        *CURRENT_M_EYE.lock() = None;
+    }
 }
 
 fn in_gbuffer_range() -> bool {
@@ -583,6 +715,7 @@ fn compute_dual_eye_rows(engine: &RenderEngine) -> Option<[Vector4; STEREO_CB_TO
 
     let mut rows = [Vector4::default(); STEREO_CB_TOTAL_ROWS];
     let mut forwards = [glam::Vec3::ZERO; 2];
+    let mut m_eyes = [glam::Mat4::IDENTITY; 2];
     for eye in 0..2 {
         let params = crate::vr::render_params(eye)?;
 
@@ -627,7 +760,11 @@ fn compute_dual_eye_rows(engine: &RenderEngine) -> Option<[Vector4; STEREO_CB_TO
         let vp_eye = offset_vp_glam * glam::Mat4::from_translation(-eye_campos);
         let m_eye = (vp_eye.as_dmat4() * vp_center_inv).as_mat4();
         write_meye(&mut rows, eye, m_eye);
+        m_eyes[eye] = m_eye;
     }
+    // Publish the per-eye reprojection matrices for the render-block-level intercepts (terrain detail),
+    // which apply `M_eye` on the CPU to a per-draw constant buffer rather than through a rewritten shader.
+    *CURRENT_M_EYE.lock() = Some(m_eyes);
 
     // Diagnostic (rate-limited): the angle between the two eyes' forward vectors. A stereo pair should
     // diverge only by the display cant (a few degrees on the Index) -- a large value means a per-eye
@@ -1409,7 +1546,16 @@ static CVS_REACQ_ERR: AtomicUsize = AtomicUsize::new(0);
 /// The last full (unsplit) viewport bound during a collapsed camera scene, recorded by
 /// [`rs_set_viewports_detour`] so [`ensure_collapse_viewport`] can derive the L/R eye halves at draw
 /// time. `None` until the scene's first viewport bind.
+///
+/// Deliberately *not* cleared at the end of the G-buffer range, unlike [`CURRENT_M_EYE`]: the
+/// post-draw UI overlay ([`collapse_ui_eye_override`]) reads it to place each eye's HUD quad, and that
+/// runs long after the range. Every consumer that must not see a stale value gates on
+/// [`in_gbuffer_range`] instead.
 static COLLAPSE_FULL_VIEWPORT: Mutex<Option<D3D11_VIEWPORT>> = Mutex::new(None);
+/// The two per-eye reprojection matrices `M_eye` (`clip_eye = M_eye · clip_center`), published each
+/// view by [`compute_dual_eye_rows`]. The terrain-detail render-block intercept reads them to build a
+/// per-eye `cb1` on the CPU (the detail draw is GPU-indirect, so it cannot be instance-doubled).
+static CURRENT_M_EYE: Mutex<Option<[glam::Mat4; 2]>> = Mutex::new(None);
 
 static CAPABILITY: AtomicU8 = AtomicU8::new(Capability::Unprobed as u8);
 static PATCHED: AtomicUsize = AtomicUsize::new(0);

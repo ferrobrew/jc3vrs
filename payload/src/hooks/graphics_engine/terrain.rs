@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use detours_macro::detour;
 use jc3gi::graphics_engine::{
     graphics_engine::{GraphicsEngine, RenderContext},
-    render_block::RenderBlockTerrain,
+    render_block::{RBIInfo, RenderBlockTerrain, RenderBlockTerrainDetail},
     render_engine::{
         RenderBlockTypeRegistry, RenderEngine, TerrainDetailBudgetPatchSites as BudgetSites,
     },
@@ -33,7 +33,32 @@ use re_utilities::hook_library::HookLibrary;
 use crate::config::Config;
 
 pub(super) fn hook_library() -> HookLibrary {
-    HookLibrary::new().with_static_binder(&HULL_CLIP_TYPE_BINDER)
+    HookLibrary::new()
+        .with_static_binder(&HULL_CLIP_TYPE_BINDER)
+        .with_static_binder(&TERRAIN_DETAIL_DRAW_BINDER)
+}
+
+/// Detour on the terrain-detail render block's `Draw` for single-pass stereo. The detail rock skin is
+/// GPU-indirect (`DrawIndexedInstancedIndirect`), so it cannot be instance-doubled like the model
+/// geometry -- `SV_InstanceID` stays `0`, so nothing selects an eye. When the single-pass terrain path
+/// is active, re-issue the draw once per eye with a per-eye `cb1` (the detail VS's `T_patch·OffsetVP`
+/// transform reprojected by that eye's `M_eye`) and the eye's half-viewport; otherwise draw normally.
+#[detour(address = jc3gi::graphics_engine::render_block::RenderBlockTerrainDetail::Draw_ADDRESS)]
+fn terrain_detail_draw(
+    this: *const RenderBlockTerrainDetail,
+    rc: *mut RenderContext,
+    info: *const RBIInfo,
+) {
+    let detour = TERRAIN_DETAIL_DRAW.get().unwrap();
+    // SAFETY: `this`/`rc`/`info` are the live pointers the engine passed into `Draw`.
+    let handled = unsafe {
+        crate::stereo::single_pass::terrain_detail_per_eye(this, rc, || {
+            detour.call(this, rc, info);
+        })
+    };
+    if !handled {
+        detour.call(this, rc, info);
+    }
 }
 
 // Diagnostic: override the base VolumetricTerrain block's *water*-clip hull type (clip type 2 — the
