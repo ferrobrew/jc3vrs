@@ -14,7 +14,7 @@ use windows::Win32::{
     System::Threading::{EnterCriticalSection, LeaveCriticalSection},
 };
 
-use crate::config;
+use crate::{config, hooks::graphics_engine::shader};
 
 /// Post-stage indices (matching the Previews tab's stage labels); used by the stage detours.
 pub const POST_STAGE_DOF: usize = 0;
@@ -692,7 +692,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 &mut cfg.stereo.patch_shadow_pcf_hash,
                 "Sun-shadow PCF screen-hash (kills per-eye shimmer + foliage grain)",
             );
-            let patched = crate::hooks::graphics_engine::shader::patched_count();
+            let patched = shader::patched_count();
             ui.label(if patched == 0 {
                 "(0 patched -- click Reload shaders)".to_string()
             } else {
@@ -704,7 +704,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 &mut cfg.stereo.patch_lod_dissolve,
                 "Jitter-unstable LOD dissolve (only matters with FSR jitter on)",
             );
-            let patched = crate::hooks::graphics_engine::shader::dissolve_patched_count();
+            let patched = shader::dissolve_patched_count();
             ui.label(if patched == 0 {
                 "(0 patched -- click Reload shaders)".to_string()
             } else {
@@ -713,7 +713,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
         });
         ui.horizontal(|ui| {
             if ui.button("Reload shaders").clicked() {
-                crate::hooks::graphics_engine::shader::request_reload();
+                shader::request_reload();
             }
             ui.label(
                 "re-creates all shaders so the shader patches take effect (F11 toggles + reloads)",
@@ -750,9 +750,10 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             cfg.stereo.single_pass_collapse = on;
             cfg.stereo.single_pass_double_wide = on;
             cfg.stereo.single_pass_reproject = on;
+            cfg.stereo.single_pass_terrain = on;
             cfg.stereo.single_pass_patch_dryrun = false;
             cfg.vr.native_resolution = on;
-            crate::hooks::graphics_engine::shader::request_reload();
+            shader::request_reload();
         }
         ui.separator();
         ui.checkbox(
@@ -812,7 +813,23 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                     )
                     .changed()
                 {
-                    crate::hooks::graphics_engine::shader::request_reload();
+                    shader::request_reload();
+                }
+                if ui
+                    .checkbox(
+                        &mut cfg.stereo.single_pass_terrain,
+                        "Single-pass the tessellated terrain (VS -> HS -> DS)",
+                    )
+                    .on_hover_text(
+                        "Rides the eye index through the terrain tessellation pipeline: the vertex \
+                         shader writes it on the free TEXCOORD3.z lane, the hull forwards it, and the \
+                         domain reprojects its clip by the per-eye M_eye. Covers the DrawIndexed \
+                         terrain passes; the GPU-indirect near passes stay double-drawn. Reloads \
+                         shaders to apply.",
+                    )
+                    .changed()
+                {
+                    shader::request_reload();
                 }
             });
         });
@@ -843,6 +860,10 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 );
             }
         }
+        let (hs_forwarded, ds_reprojected) = single_pass::terrain_counts();
+        ui.label(format!(
+            "Terrain: {hs_forwarded} hull forwarded, {ds_reprojected} domain reprojected"
+        ));
         let s = single_pass::substitution_stats();
         ui.label(format!(
             "Recorded VS (doubled): {} | CreateVertexShader: pending {}, re-acquired [patched {}, already-cb13 {}, no-refs {}, err {}]",
@@ -855,7 +876,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
         ));
         ui.horizontal(|ui| {
             if ui.button("Reload shaders").clicked() {
-                crate::hooks::graphics_engine::shader::request_reload();
+                shader::request_reload();
             }
             ui.label("re-runs the census over a fresh shader-creation pass");
         });

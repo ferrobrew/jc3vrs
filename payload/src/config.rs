@@ -253,6 +253,12 @@ pub struct StereoConfig {
     /// [`crate::stereo::single_pass`]); NDC writers (sky, UI, post) are excluded by the allowlist.
     /// Requires [`single_pass`](Self::single_pass); independent of the others so it can be A/B'd.
     pub single_pass_reproject: bool,
+    /// Single-pass the tessellated base terrain (VS → HS → DS): the vertex shader originates the eye
+    /// index on the free `TEXCOORD3.z` lane, the hull shader forwards it, and the domain shader reads
+    /// it to reproject its clip by the per-eye `M_eye` and route to the eye's viewport. Covers the
+    /// `DrawIndexed` terrain passes (far/color/shadow); the GPU-indirect near passes stay double-drawn.
+    /// Requires [`single_pass`](Self::single_pass); independent so it can be A/B'd against the models.
+    pub single_pass_terrain: bool,
     /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
     /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
@@ -511,6 +517,7 @@ impl StereoConfig {
             single_pass_collapse: false,
             single_pass_patch_dryrun: false,
             single_pass_reproject: false,
+            single_pass_terrain: false,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,

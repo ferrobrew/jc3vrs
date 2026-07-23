@@ -29,7 +29,10 @@ use std::{
 use detours_macro::detour;
 use dxbc_stereo::refresh_checksum;
 use jc3gi::graphics_engine::{
-    draw::{CreateFragmentProgramParams, CreateVertexProgramParams},
+    draw::{
+        CreateDomainProgramParams, CreateFragmentProgramParams, CreateHullProgramParams,
+        CreateVertexProgramParams,
+    },
     graphics_engine::GraphicsEngine,
 };
 use re_utilities::hook_library::HookLibrary;
@@ -71,10 +74,23 @@ static PATCHED: AtomicUsize = AtomicUsize::new(0);
 static DISSOLVE_PATCHED: AtomicUsize = AtomicUsize::new(0);
 static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Read a shader program's engine debug name (a null-terminated C string in
+/// `Create*ProgramParams.m_Name`), or `None` if the pointer is null. Used to log which tessellation
+/// shaders the terrain hooks transform, to catch structural over-capture of non-terrain families.
+fn program_name(m_name: *const u8) -> Option<String> {
+    (!m_name.is_null()).then(|| {
+        unsafe { std::ffi::CStr::from_ptr(m_name.cast::<std::ffi::c_char>()) }
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&CREATE_FRAGMENT_PROGRAM_BINDER)
         .with_static_binder(&CREATE_VERTEX_PROGRAM_BINDER)
+        .with_static_binder(&CREATE_HULL_PROGRAM_BINDER)
+        .with_static_binder(&CREATE_DOMAIN_PROGRAM_BINDER)
 }
 
 /// Detour on `Graphics::CreateVertexProgram` for single-pass stereo: census the vertex-shader rewrite
@@ -126,6 +142,30 @@ fn create_vertex_program(
                     if crate::stereo::single_pass::should_reproject(name.as_deref()) =>
                 {
                     dxbc_stereo::reproject_vertex_shader(code).ok()
+                }
+                // The terrain VS builds no clip (the domain shader does), so it neither remaps nor
+                // reprojects -- it originates the eye index on the free TEXCOORD3.z lane, forwarded
+                // through the hull to the domain (see the terrain path in `single_pass`).
+                Err(dxbc_stereo::DxbcError::NoPerEyeReferences)
+                    if crate::stereo::single_pass::should_eye_inject(name.as_deref()) =>
+                {
+                    // Terrain VS families split by whether they tessellate. The non-tessellated
+                    // variants write SV_Position directly, so they reproject per-eye by M_eye exactly
+                    // like the model families; only the tessellated variants (no SV_Position -- clip is
+                    // built in the domain shader) need the eye-lane inject. Try reproject first, fall
+                    // back to eye-inject.
+                    let (out, path) = match dxbc_stereo::reproject_vertex_shader(code) {
+                        Ok(blob) => (Some(blob), "reproject"),
+                        Err(_) => (
+                            dxbc_stereo::inject_eye_forward_vertex_shader(code).ok(),
+                            "eye-inject",
+                        ),
+                    };
+                    tracing::info!(
+                        target: "single_pass", stage = "vertex", name = ?name, path,
+                        transformed = out.is_some(), "terrain: VS transform",
+                    );
+                    out
                 }
                 Err(_) => None,
             }
@@ -208,6 +248,90 @@ fn create_fragment_program(
         && let Some(p) = unsafe { params.as_mut() }
     {
         p.m_Code = original;
+    }
+    result
+}
+
+/// Detour on `Graphics::CreateHullProgram` for the single-pass terrain path: when terrain single-pass
+/// is active, forward the eye index through the tessellation control-point phase by widening the hull's
+/// `TEXCOORD3` lane to `.xyz` ([`dxbc_stereo::forward_eye_hull_shader`]). Gated structurally -- only
+/// hulls that carry the free lane transform; the rest return an error and are left untouched -- since
+/// the hull is created without a paired-VS identity to name-gate on. The patched blob replaces the
+/// bytecode for the (copying) `CreateHullShader` call, then the caller's pointer is restored.
+#[detour(address = jc3gi::graphics_engine::draw::CreateHullProgram_ADDRESS)]
+fn create_hull_program(device: *mut c_void, params: *mut CreateHullProgramParams) -> *mut c_void {
+    let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
+    if crate::stereo::single_pass::terrain_active()
+        && let Some(p) = unsafe { params.as_mut() }
+        && !p.m_Code.is_null()
+        && p.m_Size >= 4
+    {
+        let name = program_name(p.m_Name);
+        // Skip shadow-pass terrain: it renders from the light's view, so eye-forwarding its lane feeds
+        // a shadow-atlas draw an eye it must not have.
+        if !crate::stereo::single_pass::is_terrain_shadow_pass(name.as_deref()) {
+            let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
+            if let Ok(blob) = dxbc_stereo::forward_eye_hull_shader(code) {
+                let len = blob.len() as u64;
+                tracing::info!(target: "single_pass", stage = "hull", name = ?name, "terrain: eye-lane forwarded");
+                saved = Some((p.m_Code, p.m_Size, blob));
+                p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
+                p.m_Size = len;
+                crate::stereo::single_pass::record_hull_forwarded();
+            }
+        }
+    }
+
+    let result = CREATE_HULL_PROGRAM.get().unwrap().call(device, params);
+
+    if let Some((original_code, original_size, _copy)) = saved
+        && let Some(p) = unsafe { params.as_mut() }
+    {
+        p.m_Code = original_code;
+        p.m_Size = original_size;
+    }
+    result
+}
+
+/// Detour on `Graphics::CreateDomainProgram` for the single-pass terrain path: when terrain single-pass
+/// is active, reproject the domain shader's clip by the per-eye `M_eye` and route to the eye's viewport
+/// ([`dxbc_stereo::reproject_domain_shader`]), reading the eye off the `TEXCOORD3.z` lane the vertex and
+/// hull stages carried. Gated structurally like the hull hook. The domain shader reads `cb13`, which is
+/// bound to the domain stage in [`crate::stereo::single_pass`]'s per-view upload.
+#[detour(address = jc3gi::graphics_engine::draw::CreateDomainProgram_ADDRESS)]
+fn create_domain_program(
+    device: *mut c_void,
+    params: *mut CreateDomainProgramParams,
+) -> *mut c_void {
+    let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
+    if crate::stereo::single_pass::terrain_active()
+        && let Some(p) = unsafe { params.as_mut() }
+        && !p.m_Code.is_null()
+        && p.m_Size >= 4
+    {
+        let name = program_name(p.m_Name);
+        // Skip shadow-pass terrain: reprojecting a shadow-atlas draw by the eye M_eye (and routing it to
+        // a per-eye viewport that does not exist in the shadow pass) corrupts the shadow map.
+        if !crate::stereo::single_pass::is_terrain_shadow_pass(name.as_deref()) {
+            let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
+            if let Ok(blob) = dxbc_stereo::reproject_domain_shader(code) {
+                let len = blob.len() as u64;
+                tracing::info!(target: "single_pass", stage = "domain", name = ?name, "terrain: reprojected");
+                saved = Some((p.m_Code, p.m_Size, blob));
+                p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
+                p.m_Size = len;
+                crate::stereo::single_pass::record_domain_reprojected();
+            }
+        }
+    }
+
+    let result = CREATE_DOMAIN_PROGRAM.get().unwrap().call(device, params);
+
+    if let Some((original_code, original_size, _copy)) = saved
+        && let Some(p) = unsafe { params.as_mut() }
+    {
+        p.m_Code = original_code;
+        p.m_Size = original_size;
     }
     result
 }

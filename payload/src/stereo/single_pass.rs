@@ -151,6 +151,80 @@ pub fn should_reproject(name: Option<&str>) -> bool {
         && REPROJECT_NAME_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
+/// Vertex-shader name prefixes of the tessellated base terrain, whose VS originates the single-pass
+/// eye index on the free `TEXCOORD3.z` lane (it writes no `SV_Position`, so it takes neither the `cb0`
+/// remap nor the reprojection). The hull and domain shaders that pair with these are transformed
+/// structurally -- gated on the transform succeeding, not by name -- since they are created through
+/// separate calls that do not carry a paired-VS identity. Names come from `CreateVertexProgramParams.m_Name`.
+const TERRAIN_VS_NAME_PREFIXES: &[&str] = &[
+    "volumetricterrain",
+    "terrainscroller",
+    "terrainshaderforest",
+    "controlpoint",
+    // `terraindetailrt*` is deliberately absent: the terrain-detail render block is GPU-indirect and is
+    // reprojected per-eye by a render-block intercept (`terrain_detail_per_eye`) that rebuilds its `cb1`,
+    // so its vertex shader must stay pristine -- reprojecting it here would double-transform.
+];
+
+/// Whether a no-`cb0` vertex shader named `name` should be eye-injected for the single-pass terrain
+/// path: the `single_pass_terrain` config flag is on and the name is on [`TERRAIN_VS_NAME_PREFIXES`].
+/// Called from the `CreateVertexProgram` hook when `patch_vertex_shader` reports no per-eye `cb0`
+/// operands and the name is not a reprojection candidate.
+pub fn should_eye_inject(name: Option<&str>) -> bool {
+    let Some(name) = name else {
+        return false;
+    };
+    Config::lock_query(|c| c.stereo.single_pass_terrain)
+        && TERRAIN_VS_NAME_PREFIXES.iter().any(|p| name.starts_with(p))
+        && !is_terrain_shadow_pass(Some(name))
+}
+
+/// Whether a terrain shader named `name` is a shadow-pass variant. Shadow passes render the terrain
+/// from the light's view into the shadow atlas, not per eye, so the single-pass eye transforms
+/// (reprojection and viewport routing) must skip them: eye-transforming a shadow-pass draw corrupts
+/// the shadow map, dropping large areas into shadow and blacking out the geometry that samples it.
+///
+/// The substring is the engine's own naming convention, readable in the shader bundle's name table:
+/// the terrain families that have a shadow permutation spell it out --
+/// `volumetricterrain4shadow`, `volumetricterrain4shadowblend[instanced]`,
+/// `volumetricterrain4notessellationshadow*`, `terrainshaderforestshadow`, `terrainshadowsimple` --
+/// and no non-shadow terrain permutation contains it (`terrainshaderforest` is the near miss, and it
+/// is "shader", not "shadow").
+///
+/// An **unnamed** shader counts as a shadow pass. The name is the only thing distinguishing the two,
+/// and the hull and domain hooks are reached without a paired-VS identity, so failing closed costs a
+/// terrain draw its single-pass treatment (it stays double-drawn -- correct, just slower) where
+/// failing open would silently eye-transform a shadow-atlas draw.
+pub fn is_terrain_shadow_pass(name: Option<&str>) -> bool {
+    name.is_none_or(|n| n.contains("shadow"))
+}
+
+/// Whether the single-pass terrain path is live: single-pass is [`active`] and the `single_pass_terrain`
+/// flag is on. Gates the hull-forward and domain-reproject substitutions in the shader-creation hooks.
+pub fn terrain_active() -> bool {
+    active() && Config::lock_query(|c| c.stereo.single_pass_terrain)
+}
+
+/// Record that a terrain hull shader's eye lane was forwarded (its `TEXCOORD3.z` widened), for the
+/// debug UI's is-the-terrain-path-catching-anything readout.
+pub fn record_hull_forwarded() {
+    TERRAIN_HS_FORWARDED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Record that a terrain domain shader was reprojected, for the debug UI.
+pub fn record_domain_reprojected() {
+    TERRAIN_DS_REPROJECTED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The number of terrain hull shaders forwarded and domain shaders reprojected since injection (reset
+/// on a shader reload alongside the vertex census).
+pub fn terrain_counts() -> (usize, usize) {
+    (
+        TERRAIN_HS_FORWARDED.load(Ordering::Relaxed),
+        TERRAIN_DS_REPROJECTED.load(Ordering::Relaxed),
+    )
+}
+
 /// Record the outcome of running [`dxbc_stereo::patch_vertex_shader`] on one vertex shader, for the
 /// census the debug UI reports. Classifies into four buckets: successfully patched; no per-eye
 /// references (the baked-WVP / no-position families left double-drawn -- expected); the
@@ -263,6 +337,8 @@ pub fn reset_census() {
     NO_REFS.store(0, Ordering::Relaxed);
     DEFERRED.store(0, Ordering::Relaxed);
     ERRORED.store(0, Ordering::Relaxed);
+    TERRAIN_HS_FORWARDED.store(0, Ordering::Relaxed);
+    TERRAIN_DS_REPROJECTED.store(0, Ordering::Relaxed);
     VS_NAME_CENSUS.lock().clear();
 }
 
@@ -729,6 +805,10 @@ impl Cb13Buffer {
             std::ptr::copy_nonoverlapping(rows.as_ptr(), mapped.pData.cast(), STEREO_CB_TOTAL_ROWS);
             context.Unmap(buffer, 0);
             context.VSSetConstantBuffers(STEREO_CB_REGISTER, Some(&[Some(buffer.clone())]));
+            // The terrain domain shader also reads `cb13` (its per-eye `M_eye` reprojection block), so
+            // bind the same buffer at `b13` on the domain stage. The hull shader only forwards the eye
+            // lane and reads nothing from `cb13`, so it needs no binding.
+            context.DSSetConstantBuffers(STEREO_CB_REGISTER, Some(&[Some(buffer.clone())]));
         }
         Ok(())
     }
@@ -1336,3 +1416,8 @@ static PATCHED: AtomicUsize = AtomicUsize::new(0);
 static NO_REFS: AtomicUsize = AtomicUsize::new(0);
 static DEFERRED: AtomicUsize = AtomicUsize::new(0);
 static ERRORED: AtomicUsize = AtomicUsize::new(0);
+/// Terrain tessellation shaders substituted for single-pass since injection: hull shaders whose eye
+/// lane was forwarded, and domain shaders reprojected. Surfaced in the debug UI so it is clear whether
+/// the terrain path is catching anything.
+static TERRAIN_HS_FORWARDED: AtomicUsize = AtomicUsize::new(0);
+static TERRAIN_DS_REPROJECTED: AtomicUsize = AtomicUsize::new(0);
