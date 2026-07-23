@@ -1,5 +1,30 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
+/// Parameters to [`CreateDomainProgram`]: the compiled DXBC bytecode, its byte length, and a debug
+/// name. Same layout as [`CreateVertexProgramParams`].
+pub struct CreateDomainProgramParams {
+    pub m_Code: *const u8,
+    pub m_Size: u64,
+    pub m_Name: *const u8,
+}
+fn _CreateDomainProgramParams_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x18], CreateDomainProgramParams>([0u8; 0x18]);
+    }
+    unreachable!()
+}
+impl CreateDomainProgramParams {}
+impl std::convert::AsRef<CreateDomainProgramParams> for CreateDomainProgramParams {
+    fn as_ref(&self) -> &CreateDomainProgramParams {
+        self
+    }
+}
+impl std::convert::AsMut<CreateDomainProgramParams> for CreateDomainProgramParams {
+    fn as_mut(&mut self) -> &mut CreateDomainProgramParams {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// Parameters to [`CreateFragmentProgram`]: the compiled DXBC bytecode (`m_Code`) and its byte length
 /// (`m_Size`), passed straight through to `ID3D11Device::CreatePixelShader`. `m_Size` is read as a
 /// pointer-width value (the bytecode length argument to `CreatePixelShader`).
@@ -21,6 +46,31 @@ impl std::convert::AsRef<CreateFragmentProgramParams> for CreateFragmentProgramP
 }
 impl std::convert::AsMut<CreateFragmentProgramParams> for CreateFragmentProgramParams {
     fn as_mut(&mut self) -> &mut CreateFragmentProgramParams {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// Parameters to [`CreateHullProgram`]: the compiled DXBC bytecode, its byte length, and a debug name.
+/// Same layout as [`CreateVertexProgramParams`].
+pub struct CreateHullProgramParams {
+    pub m_Code: *const u8,
+    pub m_Size: u64,
+    pub m_Name: *const u8,
+}
+fn _CreateHullProgramParams_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x18], CreateHullProgramParams>([0u8; 0x18]);
+    }
+    unreachable!()
+}
+impl CreateHullProgramParams {}
+impl std::convert::AsRef<CreateHullProgramParams> for CreateHullProgramParams {
+    fn as_ref(&self) -> &CreateHullProgramParams {
+        self
+    }
+}
+impl std::convert::AsMut<CreateHullProgramParams> for CreateHullProgramParams {
+    fn as_mut(&mut self) -> &mut CreateHullProgramParams {
         self
     }
 }
@@ -369,6 +419,44 @@ pub unsafe fn CreateVertexProgram(
             params: *const crate::graphics_engine::draw::CreateVertexProgramParams,
         ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(
             CreateVertexProgram_ADDRESS,
+        );
+        f(device, params)
+    }
+}
+pub const CreateHullProgram_ADDRESS: usize = 0x141953690;
+/// The leaf hull-program creator: it wraps `ID3D11Device::CreateHullShader` (vtable slot 16) over
+/// `params.m_Code`/`params.m_Size`. `CreateHullShader` copies the bytecode, so a hook may substitute a
+/// patched copy that only has to outlive the call; unlike [`CreateVertexProgram`], the returned holder
+/// is a bare shader pointer with no retained bytecode copy. Static (no `this`); the first argument is
+/// the graphics device.
+pub unsafe fn CreateHullProgram(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    params: *const crate::graphics_engine::draw::CreateHullProgramParams,
+) -> *mut ::std::ffi::c_void {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+            params: *const crate::graphics_engine::draw::CreateHullProgramParams,
+        ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(CreateHullProgram_ADDRESS);
+        f(device, params)
+    }
+}
+pub const CreateDomainProgram_ADDRESS: usize = 0x1419537A0;
+/// The leaf domain-program creator: it wraps `ID3D11Device::CreateDomainShader` (vtable slot 17) over
+/// `params.m_Code`/`params.m_Size`. `CreateDomainShader` copies the bytecode, so a hook may substitute
+/// a patched copy that only has to outlive the call; like [`CreateHullProgram`], the returned holder is
+/// a bare shader pointer with no retained bytecode copy. Static (no `this`); the first argument is the
+/// graphics device.
+pub unsafe fn CreateDomainProgram(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    params: *const crate::graphics_engine::draw::CreateDomainProgramParams,
+) -> *mut ::std::ffi::c_void {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+            params: *const crate::graphics_engine::draw::CreateDomainProgramParams,
+        ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(
+            CreateDomainProgram_ADDRESS,
         );
         f(device, params)
     }
