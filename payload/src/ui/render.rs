@@ -845,6 +845,31 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 {
                     shader::request_reload();
                 }
+                ui.label("Render-block re-issue (blind-implemented, unvalidated -- no shader reload):");
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_bark,
+                    "Bark (tree trunks/branches)",
+                )
+                .on_hover_text(
+                    "Re-issues CRenderBlockBark's Draw/DrawZ once per eye with its baked cb1 \
+                     view-projection reprojected by M_eye. Covers its plain/instanced/GPU-indirect \
+                     draw kinds.",
+                );
+                ui.checkbox(&mut cfg.stereo.single_pass_foliage, "Foliage (grass)")
+                    .on_hover_text(
+                        "Re-issues CRenderBlockFoliage's Draw once per eye with its baked cb2 \
+                         view-projection reprojected by M_eye. Does not fix the separate forward-\
+                         lighting black-grass issue.",
+                    );
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_occluder,
+                    "Occluder (depth-prime boxes)",
+                )
+                .on_hover_text(
+                    "Re-issues CRenderBlockOccluder's DrawZ once per eye with its baked cb1 \
+                     view-projection reprojected by M_eye, priming each eye's depth with its own \
+                     projection.",
+                );
             });
         });
 

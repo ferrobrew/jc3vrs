@@ -569,6 +569,147 @@ pub unsafe fn terrain_detail_per_eye(
     true
 }
 
+// ---- Baked-cb per-eye re-issue -----------------------------------------------------------------
+//
+// The generalization of the terrain-detail intercept above, for the render blocks (bark, foliage,
+// occluder) that bake their view-projection into a constant buffer inside their own `Draw` -- across
+// draw kinds that cannot be instance-doubled (CPU-instanced, GPU-indirect). Rather than replicate each
+// block's bake, [`reproject_baked_cb_per_eye`] re-issues the block's whole `Draw` once per eye and, for
+// the duration of each call, arms [`set_vertex_program_constants_detour`] to post-multiply the block's
+// own constant upload by that eye's `M_eye`.
+
+/// A pending reprojection of a render block's baked view-projection constant, armed around a per-eye
+/// re-issue. While armed, the game's stage of the four `float4` rows at (`cb_index`, `reg_offset`) is
+/// post-multiplied by `m_eye`.
+#[derive(Clone, Copy)]
+struct ReprojectUpload {
+    cb_index: i32,
+    reg_offset: u32,
+    m_eye: glam::Mat4,
+}
+
+/// Fast-path guard for [`set_vertex_program_constants_detour`]: a relaxed load skips the mutex on every
+/// un-armed stage (the common case -- the detour sees every VS constant upload in the frame).
+static REPROJECT_ARMED: AtomicBool = AtomicBool::new(false);
+static REPROJECT_UPLOAD: Mutex<Option<ReprojectUpload>> = Mutex::new(None);
+
+fn arm_reproject(upload: ReprojectUpload) {
+    *REPROJECT_UPLOAD.lock() = Some(upload);
+    REPROJECT_ARMED.store(true, Ordering::Release);
+}
+
+fn disarm_reproject() {
+    REPROJECT_ARMED.store(false, Ordering::Release);
+    *REPROJECT_UPLOAD.lock() = None;
+}
+
+/// The eye-half of `full` for eye `e` (left = 0, right = 1).
+fn eye_half_viewport(full: D3D11_VIEWPORT, eye: usize) -> D3D11_VIEWPORT {
+    let half = full.Width / 2.0;
+    D3D11_VIEWPORT {
+        TopLeftX: full.TopLeftX + eye as f32 * half,
+        Width: half,
+        ..full
+    }
+}
+
+/// The state a baked-cb per-eye re-issue needs, or `None` when it must not run: the two per-eye `M_eye`
+/// matrices, the collapse full viewport, and the immediate context. Requires the collapse (a single
+/// centered walk) and the G-buffer pass range -- outside the range the eye-half split does not apply
+/// (the shadow-cascade and reflection passes reuse these blocks' `DrawZ`, and eye-splitting a
+/// shadow-atlas draw would corrupt it), and outside the collapse re-issuing per eye is wrong.
+fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, ID3D11DeviceContext)> {
+    if !collapse_active() || !in_gbuffer_range() {
+        return None;
+    }
+    let m_eye = (*CURRENT_M_EYE.lock())?;
+    let full = (*COLLAPSE_FULL_VIEWPORT.lock())?;
+    let d3d = immediate_context()?;
+    Some((m_eye, full, d3d))
+}
+
+/// Re-issue a render block's `Draw` once per eye, reprojecting the four `float4` rows the block bakes at
+/// (`cb_index`, `reg_offset`) by that eye's `M_eye` and binding the eye's half-viewport. Returns `false`
+/// when the intercept must not run (collapse inactive, or the dual-eye state not yet published), in which
+/// case the caller draws normally once.
+///
+/// The block writes its view-projection into a constant buffer inside its own `Draw`, so rather than
+/// replicate that bake, this arms [`set_vertex_program_constants_detour`] to reproject the block's own
+/// upload for the duration of a wrapped original-`Draw` call. It covers every draw kind (plain,
+/// CPU-instanced, GPU-indirect) uniformly, since it re-drives the block's whole `Draw` -- the block's
+/// vertex shader stays pristine (unpatched), so the draw-doubling detour leaves it single, and each of
+/// the two re-issues renders into its eye's viewport half.
+///
+/// # Safety
+///
+/// `draw` must invoke the block's original `Draw` trampoline.
+pub unsafe fn reproject_baked_cb_per_eye(
+    cb_index: i32,
+    reg_offset: u32,
+    mut draw: impl FnMut(),
+) -> bool {
+    let Some((m_eye, full, d3d)) = baked_cb_intercept_ready() else {
+        return false;
+    };
+    for (eye, &m) in m_eye.iter().enumerate() {
+        arm_reproject(ReprojectUpload {
+            cb_index,
+            reg_offset,
+            m_eye: m,
+        });
+        bind_both_viewport_slots(&d3d, eye_half_viewport(full, eye));
+        draw();
+        disarm_reproject();
+    }
+    bind_both_viewport_slots(&d3d, full);
+    true
+}
+
+type SetVertexProgramConstantsFn =
+    unsafe extern "system" fn(*mut c_void, i32, u32, *const f32, u32);
+static SET_VERTEX_PROGRAM_CONSTANTS: OnceLock<GenericDetour<SetVertexProgramConstantsFn>> =
+    OnceLock::new();
+
+/// Detour on `Graphics::SetVertexProgramConstants`. While a baked-cb per-eye re-issue is armed (see
+/// [`reproject_baked_cb_per_eye`]), post-multiply the four `float4` rows at the armed (`cb_index`,
+/// `reg_offset`) by the armed `M_eye` before the engine stages them (per-row `M_eye · row`, the same
+/// reprojection the terrain-detail intercept applies), so the block's own view-projection upload becomes
+/// that eye's. Every other stage -- un-armed, a different slot, or a range that does not contain the
+/// target rows -- passes through unchanged.
+unsafe extern "system" fn set_vertex_program_constants_detour(
+    ctx: *mut c_void,
+    cb_index: i32,
+    start_offset: u32,
+    data: *const f32,
+    count: u32,
+) {
+    let detour = SET_VERTEX_PROGRAM_CONSTANTS
+        .get()
+        .expect("set before enable");
+    if REPROJECT_ARMED.load(Ordering::Acquire)
+        && !data.is_null()
+        && let Some(up) = *REPROJECT_UPLOAD.lock()
+        && cb_index == up.cb_index
+        && start_offset <= up.reg_offset
+        && up.reg_offset + 4 <= start_offset + count
+    {
+        let n = count as usize * 4;
+        let mut buf = vec![0.0f32; n];
+        // SAFETY: the caller stages `count` float4 rows = `n` floats from `data`.
+        unsafe { std::ptr::copy_nonoverlapping(data, buf.as_mut_ptr(), n) };
+        let base = (up.reg_offset - start_offset) as usize * 4;
+        for r in 0..4 {
+            let row = glam::Vec4::from_slice(&buf[base + r * 4..base + r * 4 + 4]);
+            buf[base + r * 4..base + r * 4 + 4].copy_from_slice(&up.m_eye.mul_vec4(row).to_array());
+        }
+        // SAFETY: `buf` holds `n` floats and outlives the call; `detour.call` is the trampoline.
+        unsafe { detour.call(ctx, cb_index, start_offset, buf.as_ptr(), count) };
+        return;
+    }
+    // SAFETY: forwards the original arguments to the trampoline.
+    unsafe { detour.call(ctx, cb_index, start_offset, data, count) };
+}
+
 /// The per-eye **full** (translation-carrying) world→clip view-projection, matching the render
 /// camera's `m_ViewProjectionF` for that eye -- for projecting the mod's world-space overlay quads
 /// per eye in the collapse, where the render camera stays centered. `None` if the centre transform or
@@ -1451,6 +1592,7 @@ pub fn uninstall_com_detours() {
         disable_detour!(DRAW, "Draw");
         disable_detour!(VS_SET_SHADER, "VSSetShader");
         disable_detour!(CREATE_VERTEX_SHADER, "CreateVertexShader");
+        disable_detour!(SET_VERTEX_PROGRAM_CONSTANTS, "SetVertexProgramConstants");
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     });
     tracing::info!("single-pass: COM detours uninstalled");
@@ -1495,6 +1637,11 @@ pub(crate) fn ensure_viewport_detours() {
             std::mem::transmute(*vtable.add(VS_SET_SHADER_SLOT));
         let create_vertex_shader_target: CreateVertexShaderFn =
             std::mem::transmute(*device_vtable.add(CREATE_VERTEX_SHADER_SLOT));
+        // Unlike the rest, this one is a static engine function (not a COM vtable slot): the leaf
+        // vertex-constant stager, detoured so the baked-cb per-eye re-issue can reproject a block's own
+        // constant upload.
+        let set_vs_consts_target: SetVertexProgramConstantsFn =
+            std::mem::transmute(jc3gi::graphics_engine::draw::SetVertexProgramConstants_ADDRESS);
 
         let (
             Ok(viewports_detour),
@@ -1503,6 +1650,7 @@ pub(crate) fn ensure_viewport_detours() {
             Ok(draw_detour_handle),
             Ok(vs_set_shader_detour_handle),
             Ok(create_vertex_shader_detour_handle),
+            Ok(set_vs_consts_detour_handle),
         ) = (
             GenericDetour::new(viewports_target, rs_set_viewports_detour),
             GenericDetour::new(scissors_target, rs_set_scissor_rects_detour),
@@ -1510,6 +1658,7 @@ pub(crate) fn ensure_viewport_detours() {
             GenericDetour::new(draw_target, draw_detour),
             GenericDetour::new(vs_set_shader_target, vs_set_shader_detour),
             GenericDetour::new(create_vertex_shader_target, create_vertex_shader_detour),
+            GenericDetour::new(set_vs_consts_target, set_vertex_program_constants_detour),
         )
         else {
             tracing::warn!("single-pass: COM detour construction failed");
@@ -1525,6 +1674,7 @@ pub(crate) fn ensure_viewport_detours() {
         let _ = DRAW.set(draw_detour_handle);
         let _ = VS_SET_SHADER.set(vs_set_shader_detour_handle);
         let _ = CREATE_VERTEX_SHADER.set(create_vertex_shader_detour_handle);
+        let _ = SET_VERTEX_PROGRAM_CONSTANTS.set(set_vs_consts_detour_handle);
         let _ = ThreadSuspender::for_block(|| {
             RS_SET_VIEWPORTS.get().expect("just set").enable().ok();
             RS_SET_SCISSOR_RECTS.get().expect("just set").enable().ok();
@@ -1532,6 +1682,11 @@ pub(crate) fn ensure_viewport_detours() {
             DRAW.get().expect("just set").enable().ok();
             VS_SET_SHADER.get().expect("just set").enable().ok();
             CREATE_VERTEX_SHADER.get().expect("just set").enable().ok();
+            SET_VERTEX_PROGRAM_CONSTANTS
+                .get()
+                .expect("just set")
+                .enable()
+                .ok();
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         });
         tracing::info!("single-pass: viewport + draw + shader-tracking COM detours installed");

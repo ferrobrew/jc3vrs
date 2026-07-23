@@ -266,6 +266,23 @@ pub struct StereoConfig {
     /// the `treeimpostor*` vertex shaders take the same `M_eye` post-multiply as the reprojected scene
     /// families. Requires [`single_pass`](Self::single_pass); independent so it can be A/B'd.
     pub single_pass_tree_impostors: bool,
+    /// Single-pass the tree-trunk/branch render block (`CRenderBlockBark`, "VegetationBark"). Its vertex
+    /// shader reads a CPU-baked world-view-projection from `cb1` (not `cb0`) and draws via one of three
+    /// kinds (plain, CPU-instanced, or GPU-indirect), so it can't ride the reprojection rewrite; instead
+    /// the block's `Draw`/`DrawZ` is re-issued once per eye with the baked `cb1` reprojected by that eye's
+    /// `M_eye`. Requires the collapse; independent so it can be A/B'd. **Blind-implemented, unvalidated.**
+    pub single_pass_bark: bool,
+    /// Single-pass the grass/foliage render block (`CRenderBlockFoliage`, "VegetationFoliage"). Its vertex
+    /// shader reads a baked view-projection from `cb2` (registers 4..7); the block's `Draw` is re-issued
+    /// once per eye with that `cb2` copy reprojected by `M_eye`. The dominant grass path is GPU-indirect,
+    /// so re-issue (not instance-doubling) is the only option. Does not address the separate forward-
+    /// clustered-lighting black-in-VR issue. Requires the collapse. **Blind-implemented, unvalidated.**
+    pub single_pass_foliage: bool,
+    /// Single-pass the occluder depth-prime render block (`CRenderBlockOccluder`). Its non-instanced path
+    /// bakes a world-view-projection into `cb1`; the block's `DrawZ` is re-issued once per eye with `cb1`
+    /// reprojected by `M_eye`, so each eye's depth is primed with its own projection. Requires the
+    /// collapse. **Blind-implemented, unvalidated.**
+    pub single_pass_occluder: bool,
     /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
     /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
@@ -526,6 +543,9 @@ impl StereoConfig {
             single_pass_reproject: false,
             single_pass_terrain: false,
             single_pass_tree_impostors: false,
+            single_pass_bark: false,
+            single_pass_foliage: false,
+            single_pass_occluder: false,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,
