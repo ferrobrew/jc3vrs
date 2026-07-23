@@ -345,6 +345,62 @@ impl std::convert::AsMut<RenderBlockTerrain> for RenderBlockTerrain {
     }
 }
 #[repr(C, align(8))]
+/// The terrain detail render block (`NGraphicsEngine::CTerrainRenderBlockDetail`, engine name
+/// "TerrainDetail"): the procedurally-generated detail rock skin — cliff walls, cave ceilings, and
+/// near-field rock detail scattered on the base terrain. Its vertices/indices/texels are produced
+/// each frame by the compute pipeline in the sibling terrain-setup block into shared structured
+/// buffers, and drawn GPU-indirect via a single `DrawIndexedInstancedIndirect` (the colour pass runs
+/// plain vertex+fragment, no tessellation). The vertex shader reads a patch-local vertex and
+/// transforms it by a CPU-baked `cb1` (vertex slot 1) whose rows are `T_patch · m_OffsetViewProjection`,
+/// where `T_patch` translates by the patch origin expressed relative to the camera; the resulting
+/// clip is the standard `m_OffsetViewProjection · (world - m_CameraPosition)`. `cb1` is staged by the
+/// block's per-patch `Setup` (via `SetVertexProgramConstants` on vertex slot 1) immediately before
+/// each `Draw`.
+pub struct RenderBlockTerrainDetail {
+    _field_0: [u8; 48],
+    /// The patch origin's world X. The vertices are patch-local in X relative to this; the baked `cb1`
+    /// folds `(m_WorldPatchX - m_CameraPosition.x)` into its translation row.
+    pub m_WorldPatchX: f32,
+    /// The patch origin's world Z (see `m_WorldPatchX`).
+    pub m_WorldPatchZ: f32,
+    _field_38: [u8; 16],
+}
+fn _RenderBlockTerrainDetail_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x48], RenderBlockTerrainDetail>([0u8; 0x48]);
+    }
+    unreachable!()
+}
+impl RenderBlockTerrainDetail {
+    pub const Draw_ADDRESS: usize = 0x140326050;
+    /// Issues the colour-pass draw: a single `DrawIndexedInstancedIndirect` over the compute-generated
+    /// detail geometry, using the `cb1` transform staged by `Setup`.
+    pub unsafe fn Draw(
+        &mut self,
+        ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *mut Self as _, ctx, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockTerrainDetail> for RenderBlockTerrainDetail {
+    fn as_ref(&self) -> &RenderBlockTerrainDetail {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTerrainDetail> for RenderBlockTerrainDetail {
+    fn as_mut(&mut self) -> &mut RenderBlockTerrainDetail {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// One volumetric-terrain patch instance (`NGraphicsEngine::CRenderBlockTerrainPatch`): the
 /// per-patch render block the terrain patch system enqueues onto the terrain basemesh passes, one
 /// per quadtree patch. Partial: only the placement and sort fields are mapped.

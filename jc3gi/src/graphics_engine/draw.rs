@@ -483,3 +483,27 @@ pub unsafe fn SetFragmentProgramConstants(
         f(ctx, cb_index, start_offset, data, count)
     }
 }
+pub const SetVertexProgramConstants_ADDRESS: usize = 0x141964740;
+/// Stages `count` float4 constants into the given **vertex** constant buffer slot, starting at
+/// `start_offset` (in float4 rows), writing to the context's per-slot staging buffer and setting the
+/// dirty flag; the GPU upload happens at the next state flush. The vertex analogue of
+/// [`SetFragmentProgramConstants`]. `cb_index` is the vertex-shader constant-buffer slot (e.g. `1`
+/// for `cb1`). A row-level redundancy check skips rows byte-identical to what is already staged.
+pub unsafe fn SetVertexProgramConstants(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    data: *const f32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            data: *const f32,
+            count: u32,
+        ) = ::std::mem::transmute(SetVertexProgramConstants_ADDRESS);
+        f(ctx, cb_index, start_offset, data, count)
+    }
+}
