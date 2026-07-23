@@ -590,21 +590,28 @@ fn show_render_block_type_registry(ui: &mut egui::Ui) {
             entries.len()
         ));
         let mut disabled_slots = DISABLED_TYPE_SLOTS.lock().unwrap();
+        // Sort by type name so the list is stable and scannable (the registry's own order is
+        // registration order, which shuffles as the engine loads).
+        let mut rows: Vec<(&str, usize, u32)> = entries
+            .iter()
+            .filter_map(|entry| {
+                let ty = entry.m_Type.as_mut()?;
+                let name = ty.get_type_name_str().unwrap_or("(unnamed)");
+                // The patch target: the address of the vtable's `IsEnabled` entry, with the field
+                // offset taken from the generated vftable type.
+                let slot = (&raw const (*ty.vftable()).IsEnabled) as usize;
+                Some((name, slot, entry.m_Hash))
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(b.0));
         egui::ScrollArea::vertical()
             .id_salt("render_block_type_registry")
             .max_height(240.0)
             .show(ui, |ui| {
-                for entry in entries {
-                    let Some(ty) = entry.m_Type.as_mut() else {
-                        continue;
-                    };
-                    let name = ty.get_type_name_str().unwrap_or("(unnamed)");
-                    // The patch target: the address of the vtable's `IsEnabled` entry, with the
-                    // field offset taken from the generated vftable type.
-                    let slot = (&raw const (*ty.vftable()).IsEnabled) as usize;
+                for (name, slot, hash) in rows {
                     let mut enabled = !disabled_slots.contains(&slot);
                     if ui
-                        .checkbox(&mut enabled, format!("{name} ({:#010x})", entry.m_Hash))
+                        .checkbox(&mut enabled, format!("{name} ({hash:#010x})"))
                         .changed()
                     {
                         let Some(mut patcher) = crate::hooks::patcher() else {
