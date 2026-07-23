@@ -146,14 +146,36 @@ const REPROJECT_NAME_PREFIXES: &[&str] = &[
 ];
 
 /// Whether a no-`cb0` vertex shader named `name` should be reprojected for single-pass: the
-/// `single_pass_reproject` config flag is on and the name is on [`REPROJECT_NAME_PREFIXES`]. Called
-/// from the `CreateVertexProgram` hook when `patch_vertex_shader` reports no per-eye `cb0` operands.
+/// Vertex-shader name prefixes of the far-distance tree impostors (`CTreeImpostorRB`), gated by the
+/// separate [`single_pass_tree_impostors`](crate::config::StereoConfig::single_pass_tree_impostors)
+/// flag. The impostor VS writes `SV_Position` from the global billboard view-projection and draws a
+/// single non-instanced `DrawIndexed` -- no GPU-indirect path shares it -- so the same reprojection
+/// rewrite the scene families take covers it completely. The other vegetation families
+/// (`vegetationfoliage*`, `vegetationbark*`, `grass`, `leaves`) are deliberately absent: their dominant
+/// draw is GPU-indirect and shares the VS, so reprojecting it would break the indirect path -- they need
+/// the coordinated indirect handling (see `docs/mod/single-pass-render-blocks.md`).
+const VEGETATION_REPROJECT_NAME_PREFIXES: &[&str] = &["treeimpostor"];
+
+/// Whether a no-`cb0` vertex shader named `name` should be reprojected for single-pass: either the
+/// `single_pass_reproject` flag is on and the name is on [`REPROJECT_NAME_PREFIXES`], or the
+/// `single_pass_tree_impostors` flag is on and the name is on [`VEGETATION_REPROJECT_NAME_PREFIXES`].
+/// Called from the `CreateVertexProgram` hook when `patch_vertex_shader` reports no per-eye `cb0`
+/// operands.
 pub fn should_reproject(name: Option<&str>) -> bool {
     let Some(name) = name else {
         return false;
     };
-    Config::lock_query(|c| c.stereo.single_pass_reproject)
-        && REPROJECT_NAME_PREFIXES.iter().any(|p| name.starts_with(p))
+    let (reproject, tree_impostors) = Config::lock_query(|c| {
+        (
+            c.stereo.single_pass_reproject,
+            c.stereo.single_pass_tree_impostors,
+        )
+    });
+    (reproject && REPROJECT_NAME_PREFIXES.iter().any(|p| name.starts_with(p)))
+        || (tree_impostors
+            && VEGETATION_REPROJECT_NAME_PREFIXES
+                .iter()
+                .any(|p| name.starts_with(p)))
 }
 
 /// Vertex-shader name prefixes of the tessellated base terrain, whose VS originates the single-pass

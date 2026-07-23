@@ -831,6 +831,20 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 {
                     shader::request_reload();
                 }
+                if ui
+                    .checkbox(
+                        &mut cfg.stereo.single_pass_tree_impostors,
+                        "Single-pass the tree impostors (far-distance billboards)",
+                    )
+                    .on_hover_text(
+                        "Reprojects the treeimpostor* vertex shaders by the per-eye M_eye, like the \
+                         scene families. They draw non-instanced with no GPU-indirect path, so this \
+                         covers them completely. Reloads shaders to apply.",
+                    )
+                    .changed()
+                {
+                    shader::request_reload();
+                }
             });
         });
 

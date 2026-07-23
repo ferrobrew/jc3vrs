@@ -259,6 +259,13 @@ pub struct StereoConfig {
     /// `DrawIndexed` terrain passes (far/color/shadow); the GPU-indirect near passes stay double-drawn.
     /// Requires [`single_pass`](Self::single_pass); independent so it can be A/B'd against the models.
     pub single_pass_terrain: bool,
+    /// Single-pass the far-distance tree impostors (`CTreeImpostorRB`): the impostor vertex shader
+    /// writes its clip position from the global billboard view-projection and draws non-instanced, with
+    /// no GPU-indirect path sharing it, so the reprojection rewrite plus instance-doubling covers it
+    /// completely (unlike the other vegetation families, whose dominant draw is GPU-indirect). When on,
+    /// the `treeimpostor*` vertex shaders take the same `M_eye` post-multiply as the reprojected scene
+    /// families. Requires [`single_pass`](Self::single_pass); independent so it can be A/B'd.
+    pub single_pass_tree_impostors: bool,
     /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
     /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
@@ -518,6 +525,7 @@ impl StereoConfig {
             single_pass_patch_dryrun: false,
             single_pass_reproject: false,
             single_pass_terrain: false,
+            single_pass_tree_impostors: false,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,
