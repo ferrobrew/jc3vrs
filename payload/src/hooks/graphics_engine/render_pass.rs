@@ -1,5 +1,5 @@
 //! Detours that gate per-frame render-list state so it advances only once per *real* frame, even
-//! though we render the scene twice (once per eye). See PLAN.md sections 5.2/5.3.
+//! though we render the scene twice (once per eye). See `docs/mod/single-pass-stereo.md`.
 //!
 //! Each gate is toggleable at runtime (debug UI) so the working combination can be found in-game.
 //! `SetupRenderFrameData` (the per-batch list *build*, not the swap) and `HandBackBuffers`
@@ -188,7 +188,7 @@ fn draw_render_pass_range(
         }
         return;
     }
-    // Single-pass stereo (Milestone B): mark the camera-scene geometry range so the dual-eye cb13,
+    // Single-pass stereo: mark the camera-scene geometry range so the dual-eye cb13,
     // viewport split, and instance doubling apply to it. `first >= RP_Z_OCCLUDERS` selects the main
     // camera scene, excluding the shadow/reflection prepasses (<= RP_LAST_PREPASS) that reuse the same
     // patched shaders under a different (sun/reflection) view. Without collapse the range is just the

@@ -751,7 +751,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
         ui.separator();
         ui.checkbox(
             &mut cfg.stereo.single_pass,
-            "Enable single-pass stereo (WIP -- pipeline not yet complete)",
+            "Enable single-pass stereo (experimental)",
         )
         .on_hover_text(
             "Master switch. Renders the G-buffer once with stereo-rewritten vertex shaders. \
@@ -766,7 +766,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
              outcomes, without changing rendering. Validates the rewriter against real shaders.",
         );
         ui.separator();
-        ui.label("Milestone B (bring-up; enable top-to-bottom, all needed together for a clean image):");
+        ui.label("Enable top-to-bottom; all are needed together for a clean image:");
         ui.add_enabled_ui(cfg.stereo.single_pass, |ui| {
             ui.checkbox(
                 &mut cfg.stereo.single_pass_dual_eye,

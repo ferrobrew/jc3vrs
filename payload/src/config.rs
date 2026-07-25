@@ -124,15 +124,15 @@ pub struct StereoConfig {
     /// This adds `M * delta` to the cascade transform translation to re-anchor the lookup at center. The
     /// directly visible stereo-shadow fix; A/B by flipping `present_eye_0` with it on/off.
     pub fix_shadow_cascade_anchor: bool,
-    /// Diagnostic: hash a curated set of engine render targets after each eye's Draw and record the
-    /// per-eye hashes into the active render trace. Run with `cameras` off (both eyes share one
-    /// camera) so any RT whose two eyes' hashes differ is being accumulated across the two Draws --
-    /// the "stronger in one eye" bug. See [`crate::debug::rt_hash`].
     /// Diagnostic: during a stereo frame, record each eye's per-pass GPU-op count and log a diff --
     /// which passes draw identically between eyes (replayable from one walk) and which diverge (the
     /// per-eye special-casing burden). The feasibility probe for single-pass stereo; see
     /// [`crate::debug::stereo_diff`]. Logs on target `"stereo_diff"`.
     pub diagnose_stereo_draw_diff: bool,
+    /// Diagnostic: hash a curated set of engine render targets after each eye's Draw and record the
+    /// per-eye hashes into the active render trace. Run with `cameras` off (both eyes share one
+    /// camera) so any RT whose two eyes' hashes differ is being accumulated across the two Draws --
+    /// the "stronger in one eye" bug. See [`crate::debug::rt_hash`].
     pub diagnose_rt_hashes: bool,
     /// Diagnostic: while a render trace collects, encode eye 0's final `BackBufferLinear` to a PNG each
     /// frame into the trace's `traces/<stamp>/` folder (alongside `trace.ndjson`), named by frame index
@@ -215,8 +215,7 @@ pub struct StereoConfig {
     /// viewport-routing capability (see [`crate::stereo::single_pass::capability`]); forced off if
     /// absent.
     pub single_pass: bool,
-    /// Milestone B step (requires [`single_pass`](Self::single_pass)): make the two eyes actually
-    /// diverge. Fills `cb13` with **distinct** per-eye view-projections (slot 0 = eye 0, slot 1 =
+    /// Requires [`single_pass`](Self::single_pass): make the two eyes actually diverge. Fills `cb13` with **distinct** per-eye view-projections (slot 0 = eye 0, slot 1 =
     /// eye 1) instead of both = the current view, splits the bound viewport into left/right **halves**
     /// for `SV_ViewportArrayIndex` routing instead of two identical copies, and **doubles** the
     /// instance count of the G-buffer geometry draws (so `SV_InstanceID & 1` selects the eye). On its
@@ -224,7 +223,7 @@ pub struct StereoConfig {
     /// this renders each eye into half of a per-eye-sized target (squished), so it is a bring-up /
     /// bisection step, not a finished look.
     pub single_pass_dual_eye: bool,
-    /// Milestone B step (requires [`single_pass_collapse`](Self::single_pass_collapse) and
+    /// Requires [`single_pass_collapse`](Self::single_pass_collapse) and
     /// [`vr.native_resolution`](crate::config::VrConfig::native_resolution)): re-create the scene
     /// render targets at **2× per-eye width** so each eye's half is full resolution instead of a
     /// squished half of a per-eye target. Drives the engine render resolution
@@ -232,7 +231,7 @@ pub struct StereoConfig {
     /// native-resolution path uses; the XR swapchain and per-eye capture textures stay per-eye width,
     /// so the collapse's capture split copies each full-width half straight into its eye texture.
     pub single_pass_double_wide: bool,
-    /// Milestone B step (requires [`single_pass_dual_eye`](Self::single_pass_dual_eye)): **collapse**
+    /// Requires [`single_pass_dual_eye`](Self::single_pass_dual_eye): **collapse**
     /// the per-eye double-draw to a single `game.Draw` walk -- the actual draw-submission win. One
     /// walk produces both eyes (via the dual-eye `cb13` + viewport routing + instance doubling); the
     /// render camera stays centered, the between-eye snapshot/restore is dropped, and the capture
