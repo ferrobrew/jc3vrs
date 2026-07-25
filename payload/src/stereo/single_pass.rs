@@ -747,13 +747,26 @@ static REPROJECT_UPLOAD: Mutex<Option<ReprojectUpload>> = Mutex::new(None);
 
 fn arm_reproject(upload: ReprojectUpload) {
     *REPROJECT_UPLOAD.lock() = Some(upload);
+    REPROJECT_FIRED.store(false, Ordering::Relaxed);
     REPROJECT_ARMED.store(true, Ordering::Release);
 }
 
-fn disarm_reproject() {
+/// Disarm, reporting whether the block actually staged the constants the arm was waiting for.
+fn disarm_reproject() -> bool {
     REPROJECT_ARMED.store(false, Ordering::Release);
     *REPROJECT_UPLOAD.lock() = None;
+    REPROJECT_FIRED.load(Ordering::Relaxed)
 }
+
+/// Whether the armed reprojection matched a stage before it was disarmed.
+///
+/// A block that takes a different internal path than the intercept expects -- the occluder's
+/// instanced path, selected by the `gfx.occluders.use_instancing` cvar, reads `cb0`'s
+/// `m_VPGlobals` with per-instance world rows instead of baking a `cb1` matrix -- stages nothing the
+/// arm can reproject, so the re-issue would draw the same mono geometry into both eye halves. This
+/// makes that condition observable rather than silent; nothing in the mod forces the cvar, so it is
+/// the only thing standing between the intercept and its precondition.
+static REPROJECT_FIRED: AtomicBool = AtomicBool::new(false);
 
 /// Whether `viewport` covers the scene render target, as opposed to one of the reduced-resolution
 /// post-effect targets. Compared against [`crate::stereo::render_size`] -- the engine's
@@ -839,11 +852,30 @@ pub unsafe fn reproject_baked_cb_per_eye(
         });
         bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
         draw();
-        disarm_reproject();
+        if !disarm_reproject() {
+            warn_reproject_never_fired(cb_index, reg_offset);
+        }
     }
     bind_both_viewport_slots(d3d, full);
     true
 }
+
+/// Warn, at most once per (`cb_index`, `reg_offset`), that a per-eye re-issue found nothing to
+/// reproject -- see [`REPROJECT_FIRED`].
+fn warn_reproject_never_fired(cb_index: i32, reg_offset: u32) {
+    let key = (cb_index as i64) << 32 | i64::from(reg_offset);
+    if REPROJECT_NEVER_FIRED.lock().insert(key) {
+        tracing::warn!(
+            target: "single_pass",
+            "baked-cb per-eye re-issue at cb{cb_index}[{reg_offset}..{}] staged nothing to \
+             reproject: the block took a path that does not bake this constant, so both eyes get \
+             the same view",
+            reg_offset + 4,
+        );
+    }
+}
+
+static REPROJECT_NEVER_FIRED: Mutex<BTreeSet<i64>> = Mutex::new(BTreeSet::new());
 
 type SetVertexProgramConstantsFn =
     unsafe extern "system" fn(*mut c_void, i32, u32, *const f32, u32);
@@ -889,6 +921,7 @@ unsafe extern "system" fn set_vertex_program_constants_detour(
             buf[base + k * 4..base + k * 4 + 4]
                 .copy_from_slice(&up.m_eye.mul_vec4(column).to_array());
         }
+        REPROJECT_FIRED.store(true, Ordering::Relaxed);
         // SAFETY: `buf` holds `n` floats and outlives the call; `detour.call` is the trampoline.
         unsafe { detour.call(ctx, cb_index, start_offset, buf.as_ptr(), count) };
         return;

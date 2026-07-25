@@ -102,6 +102,13 @@ fn render_block_foliage_draw(
 
 /// The occluder depth-prime block's non-instanced path bakes its world-view-projection into vertex
 /// `cb1` registers 0..3; reproject it per eye so each eye's depth is primed with its own projection.
+///
+/// This is conditional on the block taking that path: its instanced path (selected by the engine's
+/// `gfx.occluders.use_instancing` cvar) reads `cb0`'s `m_VPGlobals` with per-instance world rows and
+/// bakes no `cb1` matrix, so there is nothing to reproject and both eyes would be primed from the
+/// centred view. Nothing in the mod writes that cvar, so the precondition is unenforced; the
+/// re-issue logs when it finds nothing to reproject (see `REPROJECT_FIRED`), which is what surfaces
+/// the condition until the cvar is driven.
 #[detour(address = jc3gi::graphics_engine::render_block::RenderBlockOccluder::DrawZ_ADDRESS)]
 fn render_block_occluder_draw_z(
     this: *const RenderBlockOccluder,
