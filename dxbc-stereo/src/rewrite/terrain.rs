@@ -13,12 +13,12 @@ use crate::{
 
 use super::common::{
     CB_ACCESS_DYNAMIC_INDEXED, OPCODE_AND, OPCODE_DCL_CONSTANT_BUFFER, OPCODE_DCL_INPUT,
-    OPCODE_DCL_INPUT_SGV, OPCODE_DCL_INPUT_SIV, OPCODE_DCL_OUTPUT, OPCODE_DCL_OUTPUT_SGV,
-    OPCODE_DCL_OUTPUT_SIV, OPCODE_DCL_TEMPS, OPCODE_IMUL, OPCODE_MOV, OPCODE_RET, OPCODE_RETC,
-    OPERAND_CB_2D_IMM, OPERAND_IMM32_SCALAR, OPERAND_INPUT_MASK_X, OPERAND_INPUT_SELECT_X,
-    OPERAND_NULL, OPERAND_OUTPUT_MASK_X, OPERAND_OUTPUT_MASK_Z, OPERAND_TEMP_MASK_X,
-    OPERAND_TEMP_SELECT_X, OPERAND_TYPE_OUTPUT, SB_NAME_INSTANCE_ID, SB_NAME_POSITION,
-    SB_NAME_VIEWPORT_ARRAY_INDEX, SIGNATURE_COMPONENT_UINT32, SIGNATURE_SYSVALUE_INSTANCE_ID,
+    OPCODE_DCL_INPUT_SGV, OPCODE_DCL_OUTPUT, OPCODE_DCL_OUTPUT_SGV, OPCODE_DCL_OUTPUT_SIV,
+    OPCODE_DCL_TEMPS, OPCODE_IMUL, OPCODE_MOV, OPCODE_RET, OPCODE_RETC, OPERAND_CB_2D_IMM,
+    OPERAND_IMM32_SCALAR, OPERAND_INPUT_MASK_X, OPERAND_INPUT_SELECT_X, OPERAND_NULL,
+    OPERAND_OUTPUT_MASK_X, OPERAND_OUTPUT_MASK_Z, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELECT_X,
+    OPERAND_TYPE_OUTPUT, SB_NAME_INSTANCE_ID, SB_NAME_POSITION, SB_NAME_VIEWPORT_ARRAY_INDEX,
+    SIGNATURE_COMPONENT_UINT32, SIGNATURE_SYSVALUE_INSTANCE_ID,
     SIGNATURE_SYSVALUE_VIEWPORT_ARRAY_INDEX, STEREO_CB_REGISTER, STEREO_REPROJ_CB_ROWS,
     SignatureElement, append_signature_element, declared_register, emit_meye_epilogue,
     max_signature_register, reassemble, rewrite_reproject_instruction, signature_register,
@@ -90,7 +90,12 @@ pub fn inject_eye_forward_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcErro
         return Err(DxbcError::NoEyeLane);
     }
 
-    let plan = plan_eye_inject(&stream, lane_register)?;
+    // The free input register must come from the input signature, not the body's `dcl_input` opcodes:
+    // fxc keeps an `ISGN` element for an input the shader never reads (`ReadWriteMask = 0`) and emits
+    // no declaration for it, so a declaration scan alone under-counts and `SV_InstanceID` would land
+    // on that dead slot.
+    let input_register = max_signature_register(isgn.body(blob)).map_or(0, |r| r + 1);
+    let plan = plan_eye_inject(&stream, lane_register, input_register)?;
     let new_shex = rewrite_eye_inject(&stream, &plan)?;
 
     let new_isgn = append_signature_element(
@@ -566,11 +571,15 @@ struct EyeInjectPlan {
     inject_before: usize,
 }
 
-/// Scans the terrain VS declarations for the eye-inject: the free input register, the lane's
-/// `dcl_output`, the injection point, and the precondition that `SV_InstanceID` is unclaimed.
-fn plan_eye_inject(stream: &TokenStream, lane_register: u32) -> Result<EyeInjectPlan, DxbcError> {
+/// Scans the terrain VS declarations for the eye-inject: the lane's `dcl_output`, the injection
+/// point, and the precondition that `SV_InstanceID` is unclaimed. The free input register is supplied
+/// by the caller from the input signature, which is authoritative over the declarations.
+fn plan_eye_inject(
+    stream: &TokenStream,
+    lane_register: u32,
+    input_register: u32,
+) -> Result<EyeInjectPlan, DxbcError> {
     let tokens = stream.tokens();
-    let mut max_input: Option<u32> = None;
     let mut dcl_output_lane_start = None;
     let mut inject_before = None;
 
@@ -578,14 +587,8 @@ fn plan_eye_inject(stream: &TokenStream, lane_register: u32) -> Result<EyeInject
         let insn = insn?;
         if insn.is_declaration() {
             match insn.opcode {
-                OPCODE_DCL_INPUT | OPCODE_DCL_INPUT_SGV | OPCODE_DCL_INPUT_SIV => {
-                    let register = declared_register(tokens, &insn)?;
-                    max_input = Some(max_input.unwrap_or(0).max(register));
-                    if insn.opcode == OPCODE_DCL_INPUT_SGV
-                        && tokens[insn.end - 1] == SB_NAME_INSTANCE_ID
-                    {
-                        return Err(DxbcError::InstanceIdAlreadyDeclared);
-                    }
+                OPCODE_DCL_INPUT_SGV if tokens[insn.end - 1] == SB_NAME_INSTANCE_ID => {
+                    return Err(DxbcError::InstanceIdAlreadyDeclared);
                 }
                 OPCODE_DCL_OUTPUT | OPCODE_DCL_OUTPUT_SGV | OPCODE_DCL_OUTPUT_SIV
                     if declared_register(tokens, &insn)? == lane_register =>
@@ -601,7 +604,7 @@ fn plan_eye_inject(stream: &TokenStream, lane_register: u32) -> Result<EyeInject
 
     Ok(EyeInjectPlan {
         lane_register,
-        input_register: max_input.map_or(0, |r| r + 1),
+        input_register,
         dcl_output_lane_start: dcl_output_lane_start.ok_or(DxbcError::NoEyeLane)?,
         inject_before: inject_before.unwrap_or(tokens.len()),
     })

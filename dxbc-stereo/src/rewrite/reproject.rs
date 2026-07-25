@@ -13,16 +13,15 @@ use crate::{
 };
 
 use super::common::{
-    CB_ACCESS_DYNAMIC_INDEXED, OPCODE_AND, OPCODE_DCL_CONSTANT_BUFFER, OPCODE_DCL_INPUT,
-    OPCODE_DCL_INPUT_SGV, OPCODE_DCL_INPUT_SIV, OPCODE_DCL_OUTPUT, OPCODE_DCL_OUTPUT_SGV,
+    CB_ACCESS_DYNAMIC_INDEXED, OPCODE_AND, OPCODE_DCL_CONSTANT_BUFFER, OPCODE_DCL_INPUT_SGV,
     OPCODE_DCL_OUTPUT_SIV, OPCODE_DCL_TEMPS, OPCODE_IMUL, OPCODE_MOV, OPCODE_RET, OPCODE_RETC,
     OPERAND_CB_2D_IMM, OPERAND_IMM32_SCALAR, OPERAND_INPUT_MASK_X, OPERAND_INPUT_SELECT_X,
     OPERAND_NULL, OPERAND_OUTPUT_MASK_X, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELECT_X,
     SB_NAME_INSTANCE_ID, SB_NAME_POSITION, SB_NAME_VIEWPORT_ARRAY_INDEX,
     SIGNATURE_COMPONENT_UINT32, SIGNATURE_SYSVALUE_INSTANCE_ID,
     SIGNATURE_SYSVALUE_VIEWPORT_ARRAY_INDEX, STEREO_CB_REGISTER, STEREO_REPROJ_CB_ROWS,
-    SignatureElement, append_signature_element, declared_register, emit_meye_epilogue, reassemble,
-    rewrite_reproject_instruction,
+    SignatureElement, append_signature_element, declared_register, emit_meye_epilogue,
+    max_signature_register, reassemble, rewrite_reproject_instruction,
 };
 
 /// Rewrites a vertex shader for single-pass stereo by **reprojection**: instead of remapping `cb0`
@@ -53,7 +52,13 @@ pub fn reproject_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
         return Err(DxbcError::NotVertexShader);
     }
 
-    let plan = plan_reproject(&stream)?;
+    // The free input/output registers must come from the signatures, not the body's `dcl_input`/
+    // `dcl_output` opcodes: fxc keeps an `ISGN`/`OSGN` element for an input the shader never reads
+    // (`ReadWriteMask = 0`) and emits no declaration for it, so a declaration scan alone under-counts
+    // and the appended element collides with that dead slot.
+    let input_register = max_signature_register(isgn.body(blob)).map_or(0, |r| r + 1);
+    let output_register = max_signature_register(osgn.body(blob)).map_or(0, |r| r + 1);
+    let plan = plan_reproject(&stream, input_register, output_register)?;
     let new_shex = rewrite_reproject(&stream, &plan)?;
 
     let new_isgn = append_signature_element(
@@ -103,13 +108,16 @@ struct ReprojectPlan {
     inject_before: usize,
 }
 
-/// Scans the declarations for the reprojection rewrite: the `SV_Position` output register, the free
-/// input/output registers, the temp count and injection point, and the preconditions (`cb13` and
-/// `SV_InstanceID` unclaimed, an `SV_Position` output present, no `retc`).
-fn plan_reproject(stream: &TokenStream) -> Result<ReprojectPlan, DxbcError> {
+/// Scans the declarations for the reprojection rewrite: the `SV_Position` output register, the temp
+/// count and injection point, and the preconditions (`cb13` and `SV_InstanceID` unclaimed, an
+/// `SV_Position` output present, no `retc`). The free input/output registers are supplied by the
+/// caller from the signatures, which are authoritative over the declarations.
+fn plan_reproject(
+    stream: &TokenStream,
+    input_register: u32,
+    output_register: u32,
+) -> Result<ReprojectPlan, DxbcError> {
     let tokens = stream.tokens();
-    let mut max_input: Option<u32> = None;
-    let mut max_output: Option<u32> = None;
     let mut temps: u32 = 0;
     let mut dcl_temps_start = None;
     let mut inject_before = None;
@@ -119,23 +127,11 @@ fn plan_reproject(stream: &TokenStream) -> Result<ReprojectPlan, DxbcError> {
         let insn = insn?;
         if insn.is_declaration() {
             match insn.opcode {
-                OPCODE_DCL_INPUT | OPCODE_DCL_INPUT_SGV | OPCODE_DCL_INPUT_SIV => {
-                    let register = declared_register(tokens, &insn)?;
-                    max_input = Some(max_input.unwrap_or(0).max(register));
-                    if insn.opcode == OPCODE_DCL_INPUT_SGV
-                        && tokens[insn.end - 1] == SB_NAME_INSTANCE_ID
-                    {
-                        return Err(DxbcError::InstanceIdAlreadyDeclared);
-                    }
+                OPCODE_DCL_INPUT_SGV if tokens[insn.end - 1] == SB_NAME_INSTANCE_ID => {
+                    return Err(DxbcError::InstanceIdAlreadyDeclared);
                 }
-                OPCODE_DCL_OUTPUT | OPCODE_DCL_OUTPUT_SGV | OPCODE_DCL_OUTPUT_SIV => {
-                    let register = declared_register(tokens, &insn)?;
-                    max_output = Some(max_output.unwrap_or(0).max(register));
-                    if insn.opcode == OPCODE_DCL_OUTPUT_SIV
-                        && tokens[insn.end - 1] == SB_NAME_POSITION
-                    {
-                        pos_register = Some(register);
-                    }
+                OPCODE_DCL_OUTPUT_SIV if tokens[insn.end - 1] == SB_NAME_POSITION => {
+                    pos_register = Some(declared_register(tokens, &insn)?);
                 }
                 OPCODE_DCL_TEMPS => {
                     temps = *tokens
@@ -164,8 +160,8 @@ fn plan_reproject(stream: &TokenStream) -> Result<ReprojectPlan, DxbcError> {
     let pos_register = pos_register.ok_or(DxbcError::NoPositionOutput)?;
     Ok(ReprojectPlan {
         pos_register,
-        input_register: max_input.map_or(0, |r| r + 1),
-        output_register: max_output.map_or(0, |r| r + 1),
+        input_register,
+        output_register,
         temp_base: temps,
         dcl_temps_start,
         inject_before: inject_before.unwrap_or(tokens.len()),

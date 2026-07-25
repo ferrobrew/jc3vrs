@@ -163,3 +163,104 @@ fn corpus_patch_is_sound() {
         "every VS is patched, has no per-eye refs, or is an instance-id deferral"
     );
 }
+
+/// The fixed size of an `ISGN`/`OSGN` element record.
+const SIGNATURE_ELEMENT_LEN: usize = 24;
+
+/// One signature element: its semantic name and index, its register, and its component mask.
+fn signature_elements(body: &[u8]) -> Vec<(String, u32, u32, u8)> {
+    let Some(header) = body.get(..8) else {
+        return Vec::new();
+    };
+    let count = u32::from_le_bytes(header[0..4].try_into().expect("4 bytes")) as usize;
+    let table = u32::from_le_bytes(header[4..8].try_into().expect("4 bytes")) as usize;
+    (0..count)
+        .filter_map(|i| {
+            let record = body.get(table + i * SIGNATURE_ELEMENT_LEN..)?;
+            let record = record.get(..SIGNATURE_ELEMENT_LEN)?;
+            let name_offset =
+                u32::from_le_bytes(record[0..4].try_into().expect("4 bytes")) as usize;
+            let name = body.get(name_offset..)?.split(|&b| b == 0).next()?;
+            Some((
+                String::from_utf8_lossy(name).into_owned(),
+                u32::from_le_bytes(record[4..8].try_into().expect("4 bytes")),
+                u32::from_le_bytes(record[16..20].try_into().expect("4 bytes")),
+                record[20],
+            ))
+        })
+        .collect()
+}
+
+/// Two elements of one signature that claim the same register with overlapping components, reported
+/// as `"<new element> at v<reg> overlaps <existing element>"`.
+fn register_collisions(body: &[u8]) -> Vec<String> {
+    let mut occupied: BTreeMap<u32, Vec<(String, u8)>> = BTreeMap::new();
+    let mut collisions = Vec::new();
+    for (name, semantic_index, register, mask) in signature_elements(body) {
+        let slot = occupied.entry(register).or_default();
+        for (other, other_mask) in slot.iter() {
+            if other_mask & mask != 0 {
+                collisions.push(format!(
+                    "{name}{semantic_index} (mask {mask:#04x}) at v{register} overlaps {other}"
+                ));
+            }
+        }
+        slot.push((format!("{name}{semantic_index} (mask {mask:#04x})"), mask));
+    }
+    collisions
+}
+
+/// The rewrite appends `SV_InstanceID` to `ISGN` and `SV_ViewportArrayIndex` to `OSGN` at the next
+/// free register, so no two elements of either signature may end up claiming the same register with
+/// overlapping components -- a duplicated input register makes the shader's signature contradict
+/// itself, and `SV_InstanceID` sharing a register with a vertex attribute is a per-vertex eye index
+/// rather than a per-instance one.
+///
+/// This is the invariant [`corpus_patch_is_sound`] does not cover: it validates the token stream and
+/// the `cb0` remap, but never re-reads the signatures it rewrote.
+#[test]
+fn corpus_patch_signatures_have_no_register_collision() {
+    let Some(dir) = shader_dir() else {
+        eprintln!("skipping: extracted shaders not present");
+        return;
+    };
+
+    let mut colliding: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("read shader dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().is_none_or(|e| e != "dxbc") {
+            continue;
+        }
+        let blob = std::fs::read(&path).expect("read blob");
+        if !is_vertex_shader(&blob) {
+            continue;
+        }
+        let Ok(patched) = patch_vertex_shader(&blob) else {
+            continue;
+        };
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let dxbc = Dxbc::parse(&patched).expect("patched container re-parses");
+        for tag in [b"ISGN", b"OSGN"] {
+            let Some(chunk) = dxbc.chunk(tag) else {
+                continue;
+            };
+            let signature = String::from_utf8_lossy(tag).into_owned();
+            for collision in register_collisions(chunk.body(&patched)) {
+                colliding.push(format!("{name}: {signature}: {collision}"));
+            }
+        }
+    }
+
+    for line in &colliding {
+        eprintln!("  {line}");
+    }
+    assert!(
+        colliding.is_empty(),
+        "{} patched shaders have a signature register collision",
+        colliding.len()
+    );
+}

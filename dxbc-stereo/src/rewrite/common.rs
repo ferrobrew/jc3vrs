@@ -339,7 +339,6 @@ pub(super) const OPCODE_MOV: u32 = 0x36;
 pub(super) const OPCODE_DCL_CONSTANT_BUFFER: u32 = 0x59;
 pub(super) const OPCODE_DCL_INPUT: u32 = 0x5F;
 pub(super) const OPCODE_DCL_INPUT_SGV: u32 = 0x60;
-pub(super) const OPCODE_DCL_INPUT_SIV: u32 = 0x61;
 pub(super) const OPCODE_DCL_OUTPUT: u32 = 0x65;
 pub(super) const OPCODE_DCL_OUTPUT_SGV: u32 = 0x66;
 pub(super) const OPCODE_DCL_OUTPUT_SIV: u32 = 0x67;
