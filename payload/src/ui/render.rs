@@ -527,8 +527,19 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      composite its G-buffer under both eyes; requires stereo",
                 ),
             ] {
-                ui.selectable_value(&mut cfg.far_field.mode, mode, label)
-                    .on_hover_text(hover);
+                // `Share` needs the two per-eye dispatches it composites into, which the single-pass
+                // collapse does away with; the two are mutually exclusive.
+                let blocked = mode == FarFieldMode::Share && collapse_configured(&cfg);
+                ui.add_enabled_ui(!blocked, |ui| {
+                    ui.selectable_value(&mut cfg.far_field.mode, mode, label)
+                        .on_hover_text(if blocked {
+                            "Unavailable while the single-pass collapse is on: the collapse renders \
+                             both eyes in one walk, so there are no per-eye dispatches to share a \
+                             far G-buffer between"
+                        } else {
+                            hover
+                        });
+                });
             }
         });
         if ui
@@ -746,6 +757,9 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             cfg.stereo.single_pass_terrain = on;
             cfg.stereo.single_pass_patch_dryrun = false;
             cfg.vr.native_resolution = on;
+            if on && cfg.far_field.mode == crate::config::FarFieldMode::Share {
+                cfg.far_field.mode = crate::config::FarFieldMode::Collect;
+            }
             shader::request_reload();
         }
         ui.separator();
@@ -785,15 +799,23 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                     "Renders the scene targets at 2x per-eye width so each eye-half is full \
                      resolution instead of squished. Needs Collapse and native resolution on.",
                 );
-                ui.checkbox(
-                    &mut cfg.stereo.single_pass_collapse,
-                    "Collapse to a single game.Draw walk (the actual perf win; riskiest)",
-                )
-                .on_hover_text(
-                    "One walk renders both eyes: centered camera, no between-eye restore, the \
-                     back buffer split into the two eye textures. Without double-wide each eye is \
-                     squished/half-filled; unpatched geometry and the HUD reach the left eye only.",
-                );
+                if ui
+                    .checkbox(
+                        &mut cfg.stereo.single_pass_collapse,
+                        "Collapse to a single game.Draw walk (the actual perf win; riskiest)",
+                    )
+                    .on_hover_text(
+                        "One walk renders both eyes: centered camera, no between-eye restore, the \
+                         back buffer split into the two eye textures. Without double-wide each eye \
+                         is squished/half-filled; unpatched geometry and the HUD reach the left eye \
+                         only. Turns the far-field Share mode off -- the two are exclusive.",
+                    )
+                    .changed()
+                    && cfg.stereo.single_pass_collapse
+                    && cfg.far_field.mode == crate::config::FarFieldMode::Share
+                {
+                    cfg.far_field.mode = crate::config::FarFieldMode::Collect;
+                }
                 if ui
                     .checkbox(
                         &mut cfg.stereo.single_pass_reproject,
@@ -1012,6 +1034,14 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             "Player-damage vignette",
         );
     });
+}
+
+/// Whether the config asks for the single-pass collapse, ignoring the runtime gates
+/// ([`crate::stereo::single_pass::collapse_active`] also requires the device capability and a live
+/// session). The UI needs the *intent*, so a mutually-exclusive option greys out as soon as the boxes
+/// are ticked rather than only once the collapse is running.
+fn collapse_configured(cfg: &config::Config) -> bool {
+    cfg.stereo.single_pass && cfg.stereo.single_pass_dual_eye && cfg.stereo.single_pass_collapse
 }
 
 /// The per-pass near/far split counters, freshest first. Entries older than a second (passes that

@@ -331,8 +331,15 @@ unsafe extern "system" fn far_gated_type_is_enabled(_this: *mut ::core::ffi::c_v
 
 /// Whether this frame should run the three-dispatch far-field share: the split is enabled in
 /// `Share` mode (the Draw driver also requires stereo to be active).
+///
+/// Mutually exclusive with the single-pass collapse, which is the stronger claim on the dispatch
+/// list: the collapse renders both eyes from one walk, so there is no per-eye dispatch for the far
+/// G-buffer to be shared *between*, and the share's own range splitting bypasses the single-pass
+/// G-buffer marking entirely -- leaving `cb13` mirrored and the viewport unsplit, so both eyes get
+/// the same mono image cropped in half.
 pub fn share_configured() -> bool {
-    Config::lock_query(|c| c.far_field.enabled && c.far_field.mode == FarFieldMode::Share)
+    !crate::stereo::single_pass::collapse_active()
+        && Config::lock_query(|c| c.far_field.enabled && c.far_field.mode == FarFieldMode::Share)
 }
 
 /// The sentinel boundary appended after the threshold. The engine's bucket search
