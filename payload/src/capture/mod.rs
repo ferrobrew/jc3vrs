@@ -143,16 +143,10 @@ unsafe fn present_active() -> anyhow::Result<()> {
     let context =
         unsafe { device.m_Context.as_ref() }.context("the graphics context is unavailable")?;
 
-    // Eye size = back buffer size. The capture swapchain is `2 * eye_width x eye_height`, one half
-    // per eye. Read before locking CAPTURE_STATE so the (brief) EGUI_DEBUG_RENDER_STATE lock taken
-    // below is not nested under CAPTURE_STATE.
-    let eye_size = unsafe {
-        device
-            .m_BackBuffer
-            .as_ref()
-            .map(|bb| (u32::from(bb.m_Width), u32::from(bb.m_Height)))
-    }
-    .context("the back buffer is unavailable")?;
+    // Eye size = the engine's render size. The capture swapchain is `2 * eye_width x eye_height`,
+    // one half per eye. Read before locking CAPTURE_STATE so the (brief) EGUI_DEBUG_RENDER_STATE
+    // lock taken below is not nested under CAPTURE_STATE.
+    let eye_size = crate::stereo::render_size().context("the render size is unavailable")?;
 
     // Clone the eye textures (AddRef) under a brief EGUI_DEBUG_RENDER_STATE lock, dropped before the
     // CAPTURE_STATE lock is taken -- avoids nesting the two mutexes.

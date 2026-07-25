@@ -155,3 +155,37 @@ pub fn share_frame() -> bool {
 pub fn dispatch_ordinal() -> usize {
     STEREO_STATE.lock().dispatch_ordinal
 }
+
+/// The engine's current render-target size in pixels, read from
+/// [`GraphicsEngine::m_BackBufferLinear`], or `None` if the engine is not up yet.
+///
+/// This is the size the scene is rendered at, and it is deliberately *not* `Device::m_BackBuffer`,
+/// the DXGI swapchain's buffer. Stock, the two are the same surface -- the engine builds
+/// `m_BackBufferLinear` as a format alias of swapchain buffer 0 -- but they answer different
+/// questions, and they diverge outright while the mod owns the back buffer, which is the default in
+/// a session (`docs/mod/swapchain-ownership.md`). Anything sizing a resource *to the render* --
+/// capture textures, HUD targets -- wants this; only code addressing the presented surface wants the
+/// swapchain's.
+pub fn render_size() -> Option<(u32, u32)> {
+    // SAFETY: the engine singleton and its surface pointer are read under the same discipline as the
+    // rest of the render hooks; both are null-checked.
+    let texture = unsafe {
+        jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get()?
+            .m_BackBufferLinear
+            .as_ref()?
+    };
+    let size = (u32::from(texture.m_Width), u32::from(texture.m_Height));
+    (size.0 > 0 && size.1 > 0).then_some(size)
+}
+
+/// One eye's slice of [`render_size`]. Under single-pass double-wide the render target holds both
+/// eyes side by side, so the per-eye width is half of it.
+pub fn per_eye_render_size() -> Option<(u32, u32)> {
+    let (width, height) = render_size()?;
+    let width = if single_pass::double_wide_active() {
+        (width / 2).max(1)
+    } else {
+        width
+    };
+    Some((width, height))
+}

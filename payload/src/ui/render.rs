@@ -155,34 +155,27 @@ impl EguiDebugRenderState {
                 return;
             };
 
-            // Final back buffer (R8G8B8A8), recreated when its size changes. Under single-pass
-            // double-wide the back buffer holds both eye-halves side by side, so each per-eye capture
-            // texture is half its width -- the collapse's capture split copies one full-width half in.
-            if let Some(back_buffer) = device.m_BackBuffer.as_ref() {
-                let full_width = back_buffer.m_Width as u32;
-                let width = if crate::stereo::single_pass::double_wide_active() {
-                    full_width / 2
-                } else {
-                    full_width
-                };
-                let size = (width, back_buffer.m_Height as u32);
-                if self.target_size != Some(size)
-                    || self.target_textures.iter().any(Option::is_none)
-                {
-                    for slot in &mut self.target_textures {
-                        if let Some((_, id)) = slot.take() {
-                            renderer.unregister_user_texture(id);
-                        }
-                        *slot = Self::create_target(
-                            device,
-                            renderer,
-                            size.0,
-                            size.1,
-                            DXGI_FORMAT_R8G8B8A8_UNORM,
-                        );
+            // One eye's worth of the engine's render target (R8G8B8A8), recreated when its size
+            // changes. Under single-pass double-wide the render target holds both eye-halves side by
+            // side, so each per-eye capture texture is half its width -- the collapse's capture split
+            // copies one full-width half in.
+            if let Some(size) = crate::stereo::per_eye_render_size()
+                && (self.target_size != Some(size)
+                    || self.target_textures.iter().any(Option::is_none))
+            {
+                for slot in &mut self.target_textures {
+                    if let Some((_, id)) = slot.take() {
+                        renderer.unregister_user_texture(id);
                     }
-                    self.target_size = Some(size);
+                    *slot = Self::create_target(
+                        device,
+                        renderer,
+                        size.0,
+                        size.1,
+                        DXGI_FORMAT_R8G8B8A8_UNORM,
+                    );
                 }
+                self.target_size = Some(size);
             }
 
             // HDR scene (MainColor), matching its own format, recreated on size/format change.

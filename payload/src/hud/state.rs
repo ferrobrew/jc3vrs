@@ -40,11 +40,11 @@ pub struct HudState {
     target: Option<HudTarget>,
     /// Whether the redirect is currently applied to the UI's render buffer.
     redirected: bool,
-    /// The last back-buffer size seen by [`ensure_redirected`]. A change means the engine re-ran
+    /// The last engine render size seen by [`ensure_redirected`]. A change means the engine re-ran
     /// `InitPlatformRT` (its device/reset path), rebuilding `m_RenderBuffer` from the engine surface
     /// and discarding our rebind -- so the redirect must be re-applied even though our target texture
-    /// is independent of the back buffer.
-    back_buffer_size: Option<(u32, u32)>,
+    /// is independent of the engine's own targets.
+    render_size: Option<(u32, u32)>,
     /// The egui texture id for the HUD preview, registered lazily on the UI thread.
     preview_id: Option<egui::TextureId>,
     /// The egui texture ids for the marker/center layer previews, registered lazily.
@@ -126,7 +126,7 @@ impl HudState {
         Self {
             target: None,
             redirected: false,
-            back_buffer_size: None,
+            render_size: None,
             preview_id: None,
             layer_preview_ids: [None, None],
             quad: None,
@@ -145,8 +145,8 @@ impl HudState {
     }
 
     /// Ensure the HUD is redirected into a target at `texture_width` x `texture_height`, (re)creating
-    /// the target on a config-size change and applying the rebind once. A back-buffer size change
-    /// (`back_buffer_width`/`back_buffer_height`) forces a re-apply without recreating the target,
+    /// the target on a config-size change and applying the rebind once. A render-size change
+    /// (`render_width`/`render_height`) forces a re-apply without recreating the target,
     /// because the engine re-runs `InitPlatformRT` on a device/reset and discards our rebind. A failed
     /// target build or a not-yet-live UI leaves the state unredirected, so the next tick retries.
     pub(super) fn ensure_redirected(
@@ -154,8 +154,8 @@ impl HudState {
         device: &Device,
         texture_width: u32,
         texture_height: u32,
-        back_buffer_width: u32,
-        back_buffer_height: u32,
+        render_width: u32,
+        render_height: u32,
     ) {
         if texture_width == 0 || texture_height == 0 {
             return;
@@ -178,11 +178,11 @@ impl HudState {
             }
         }
 
-        // A back-buffer size change means the engine re-ran `InitPlatformRT` (its device/reset path),
+        // A render-size change means the engine re-ran `InitPlatformRT` (its device/reset path),
         // which rebuilds `m_RenderBuffer` from the engine surface and discards our rebind. Re-apply it
-        // even though our target texture is independent of the back buffer.
-        if self.back_buffer_size != Some((back_buffer_width, back_buffer_height)) {
-            self.back_buffer_size = Some((back_buffer_width, back_buffer_height));
+        // even though our target texture is independent of the engine's own targets.
+        if self.render_size != Some((render_width, render_height)) {
+            self.render_size = Some((render_width, render_height));
             self.redirected = false;
         }
 
@@ -255,11 +255,11 @@ impl HudState {
     }
 
     /// Restore the engine's own binding and drop our target, so the UI no longer renders into our
-    /// texture. A no-op when not redirected. `back_buffer_width`/`back_buffer_height` are the
-    /// back-buffer dimensions `InitPlatformRT` and the viewport expect.
-    pub(super) fn restore(&mut self, back_buffer_width: u32, back_buffer_height: u32) {
+    /// texture. A no-op when not redirected. `render_width`/`render_height` are the engine render
+    /// dimensions `InitPlatformRT` and the viewport expect.
+    pub(super) fn restore(&mut self, render_width: u32, render_height: u32) {
         if self.redirected {
-            binding::restore_engine_binding(back_buffer_width, back_buffer_height);
+            binding::restore_engine_binding(render_width, render_height);
             self.redirected = false;
         }
         self.target = None;
