@@ -77,11 +77,11 @@ general path or need a bucket-b reproject.
 | 59, 61 | `DrawIndexed` head range `[0, split)` | Same. |
 | 14, 38–40 | `DrawIndexed` full range | Depth/other. |
 
-**Wiring recipe.** The DrawIndexed passes ride the general path if their VS is cb0-remapped (verify
-via the census). The near passes 56/57 need the bucket-(d) intercept: detour `Draw`, and for each eye
-bind the eye's half-viewport and override the transform for that eye (cb13-both-slots if the VS is
-cb0-remapped; otherwise reproject the bound cb1 WVP into a mod scratch buffer), then re-issue. Gate
-behind its own flag, default off, so it stays isolated from the confirmed TerrainDetail path.
+**Wiring — not built.** The `DrawIndexed` passes ride the general path when their VS is cb0-remapped.
+The near passes 56/57 would need the bucket-(d) intercept: detour `Draw`, and for each eye bind the
+eye's half-viewport and override the transform for that eye (cb13-both-slots if the VS is cb0-remapped,
+otherwise reproject the bound cb1 WVP into a mod scratch buffer), then re-issue. Nothing does this
+today; the near passes stay double-drawn.
 
 ## VegetationBark
 
@@ -102,18 +102,22 @@ block. cb1 also carries opacity/UV (reg 4), the raw model matrix (regs 5–8), a
 non-instanced `DrawIndexed`; CPU-instanced `DrawIndexedInstanced`; GPU-indirect `DrawIndexedNoMutex`.
 All three read the same cb1 regs 0–3, so one reprojection corrects every kind.
 
-**Wiring recipe.** Reproject `cb1[0..3]` by the per-eye `M_eye` (`cb1[k]_eye = M_eye · cb1[k]_mono`,
-one constant-buffer entry at a time — the same `M_eye` the mod builds for cb13) and re-issue per eye into the eye's
-half-viewport. Because `Draw` itself bakes cb1, the clean intercept transparently reprojects the
-game's own `SetVertexProgramConstants(slot 1)` during a wrapped original-`Draw` call, per eye — see the
-shared bucket-(b) mechanism below. The `DrawIndexedNoMutex` (GPU-indirect) sub-path can only be
-re-issued, never instance-doubled. Velocity-pass regs 5–8 want the previous-frame `M_eye` (cosmetic;
-skip unless chasing motion-vector correctness).
+**Wiring — `single_pass_bark`, built.** `Draw` and `DrawZ` are detoured and re-issued once per eye
+into the eye's half-viewport, with `cb1[0..3]` reprojected as `cb1[k]_eye = M_eye · cb1[k]_mono` (one
+entry at a time — the same `M_eye` the mod builds for cb13). Because `Draw` itself bakes cb1, the
+intercept reprojects the game's own `SetVertexProgramConstants(slot 1)` during a wrapped
+original-`Draw` call rather than replicating the bake — the shared bucket-(b) mechanism below. This
+covers all three draw kinds uniformly; the `DrawIndexedNoMutex` (GPU-indirect) sub-path can only ever
+be re-issued, never instance-doubled.
 
-Bark's VS writes `SV_Position`, so the CB-agnostic `reproject_vertex_shader` handles the non-indirect
-draws directly — but the VS is shared with the GPU-indirect `DrawIndexedNoMutex` path, and rewriting it
-breaks that path (a single indirect instance can't select an eye). So Bark can't be a plain reproject
-allowlist entry; it needs the coordinated indirect handling below.
+The velocity pass's previous-frame WVP at regs 5–8 is **not** reprojected: it would need the previous
+frame's `M_eye` retained and a second armed range. Bark's motion vectors therefore carry the centre
+view's parallax, which SMAA and FSR reproject slightly wrongly.
+
+Bark's VS writes `SV_Position`, so the CB-agnostic `reproject_vertex_shader` would handle the
+non-indirect draws directly — but the VS is shared with the GPU-indirect path, and rewriting it breaks
+that path (a single indirect instance cannot select an eye). That is why Bark is not a plain reproject
+allowlist entry and takes the whole-`Draw` re-issue instead.
 
 ## VegetationFoliage
 
@@ -131,12 +135,14 @@ rewriter applies. cb0 is bound for globals only.
 `DrawIndexedInstancedIndirect` (instance count in the GPU-only `m_InstDrawParams` args, populated by the
 vegetation draw-indirect compute pass); non-instanced `DrawIndexedNoMutex`.
 
-**Wiring.** Same story as Bark: the non-indirect paths are bucket (b), but the dominant grass path is
-GPU-indirect and shares the VS, so a naive reproject allowlist entry breaks the grass. This is the
-Phase-3 GPU-indirect work: reproject the VS *and* double each `m_InstDrawParams` slot's `InstanceCount`
-(dword +1) in an in-place compute pre-pass (the args buffer has no CPU copy), or detour `Draw` and
-re-issue the indirect draw per eye with a cb13-both-slots override and the eye half-viewport. The
-CPU-instanced path additionally needs the `SV_InstanceID >> 1` consumer rewrite so the doubled instance
+**Wiring — `single_pass_foliage`, built.** Same story as Bark: the non-indirect paths are bucket (b),
+but the dominant grass path is GPU-indirect and shares the VS, so a reproject allowlist entry would
+break the grass. `Draw` is therefore detoured and re-issued per eye with `cb2[4..7]` reprojected, which
+covers every draw kind without touching the VS.
+
+The cheaper shape — reproject the VS and double each `m_InstDrawParams` slot's `InstanceCount` (dword
++1) in an in-place compute pre-pass, since the args buffer has no CPU copy — is not built; it would
+also need the `SV_InstanceID >> 1` consumer rewrite on the CPU-instanced path so the doubled instance
 id still indexes the original instance.
 
 **Black-in-VR.** Foliage is forward-lit with clustered lighting, not deferred — the type `Setup` binds
@@ -167,12 +173,12 @@ at vertex slot 0, and computes clip from the engine's global per-view billboard 
 translation-bearing `m_ViewProjectionF`) — not cb0. It writes `SV_Position` directly and there is **no
 GPU-indirect path** sharing the VS.
 
-**Wiring recipe.** This is the one clean allowlist win: add the `treeimpostor*` VS name prefixes to the
-reproject set. The CB-agnostic reproject rewriter post-multiplies `SV_Position` by `M_eye` and emits
-`SV_ViewportArrayIndex`; the plain `DrawIndexed` is then auto-doubled by the existing detour with the
-L/R viewport split. The card faces the center camera rather than each eye, but at impostor range the
-per-eye facing difference is arcseconds — `M_eye` supplies the correct parallax/disparity, so shared
-facing is correct and sufficient. No per-draw special-casing.
+**Wiring — `single_pass_tree_impostors`, built.** The one clean allowlist win: `treeimpostor*` is a VS
+name prefix in the reproject set. The CB-agnostic reproject rewriter post-multiplies `SV_Position` by
+`M_eye` and emits `SV_ViewportArrayIndex`, and the plain `DrawIndexed` is then instance-doubled by the
+draw detour with the L/R viewport split. The card faces the centre camera rather than each eye, but at
+impostor range the per-eye facing difference is arcseconds — `M_eye` supplies the parallax, so shared
+facing is sufficient. No per-draw special-casing.
 
 ## Occluder
 
@@ -193,9 +199,14 @@ separate. So forcing it per-eye is safe and correct — and necessary: a mono oc
 shared depth with one eye's projection, giving the other eye wrong early-Z (over-cull holes or lost
 priming).
 
-**Wiring recipe.** Force `gfx.occluders.use_instancing = 0` so every box goes through the non-instanced
-`DrawIndexed` (baked cb1 WVP), then treat it as bucket (b): reproject `cb1[0..3]` by `M_eye` and re-issue
-per eye into the eye's half-viewport (row 4 depth-bias unchanged). The box count is small and bounded.
+**Wiring — `single_pass_occluder`, built with an unenforced precondition.** `DrawZ` is detoured and
+re-issued per eye into the eye's half-viewport with `cb1[0..3]` reprojected by `M_eye` (row 4, the depth
+bias, unchanged). The box count is small and bounded.
+
+This assumes the non-instanced path. Nothing in the mod writes `gfx.occluders.use_instancing`, so if
+the instanced path is selected the block bakes no `cb1` matrix and the re-issue reprojects nothing —
+both eyes are primed from the centre view. The intercept logs when its armed reprojection never fires,
+which is what surfaces the condition; forcing the cvar needs the cvar seam, which is not RE'd.
 
 ## The shared bucket-(b) / (d) mechanism
 
@@ -204,13 +215,21 @@ re-issue a block's `Draw` once per eye, with the eye's transform and half-viewpo
 paths cover every case:
 
 - **Reproject a baked cb** (bucket b, when the VS reads a CPU-baked WVP): before each eye's re-issue,
-  overwrite the baked matrix rows by `M_eye` (per-row `M_eye · row`, matching the confirmed TerrainDetail
-  math). When the block bakes the cb inside its own `Draw`, arm a reproject-interception on the game's
-  `SetVertexProgramConstants(slot 1|2, start 0, count ≥ 4)` for the duration of a wrapped original-`Draw`
-  call, so the game's own upload is transparently reprojected — no need to replicate the bake.
+  overwrite the baked matrix entries by `M_eye` (entry-wise `M_eye · cb[k]`, since the entries are the
+  matrix's columns). When the block bakes the cb inside its own `Draw` — all four built intercepts do —
+  a reproject-interception is armed on the game's `SetVertexProgramConstants` for the duration of a
+  wrapped original-`Draw` call, so the game's own upload is transparently reprojected and the bake need
+  not be replicated. The arm is keyed to the block's graphics context: the detour sees every
+  vertex-constant stage in the process, and `(slot, offset)` alone does not identify a block.
 - **cb13 override** (bucket d, when the VS is cb0-remapped to `cb13`): before each eye's re-issue, write
   the mod's `cb13` with both eye slots set to that eye's rows, so a single (indirect) instance reads the
-  correct eye.
+  correct eye. **Not built** — no block uses this path yet.
 
-Gate the new families behind their own default-off flags, so the confirmed model/terrain-detail paths
-stay isolated while each new block is validated in-game.
+Each family has its own default-off flag (`single_pass_bark`, `single_pass_foliage`,
+`single_pass_occluder`, `single_pass_terrain`, `single_pass_tree_impostors`), so the model and
+terrain-detail paths stay isolated while a new block is validated in-game.
+
+A re-issue marks itself while it runs, so the draw and viewport detours leave the block's own calls
+alone rather than compounding the split, and the intercept declines outright if the bound vertex
+shader turns out to be one the rewriter patched — that block already renders both eyes from a single
+draw.

@@ -1,7 +1,7 @@
 //! Single-pass stereo (experimental): render the G-buffer geometry once, emitting both eyes via
 //! instancing + `SV_ViewportArrayIndex` routing into a double-wide render target, instead of the
 //! double-draw (two full `game.Draw` walks, one per eye). See `docs/mod/single-pass-stereo.md` for
-//! the design and phased plan.
+//! the design.
 //!
 //! This module owns the mod-side state that the double-draw path does not need:
 //! - the DXVK viewport-routing **capability probe** ([`probe`] / [`capability`]);
