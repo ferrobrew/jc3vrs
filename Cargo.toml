@@ -58,3 +58,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.crc32fast]
 opt-level = 3
+
+# Keep line tables in release. Without them a release hang or crash symbolizes to a bare RVA, which
+# is what made the allocator deadlock in `uninstall_com_detours` take a session to pin down. Costs
+# image size, not speed.
+[profile.release]
+debug = 1

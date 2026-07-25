@@ -20,7 +20,7 @@ use std::{
     ffi::c_void,
     sync::{
         OnceLock,
-        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering},
     },
 };
 
@@ -36,7 +36,7 @@ use jc3gi::{
 };
 use parking_lot::Mutex;
 use re_utilities::ThreadSuspender;
-use retour::GenericDetour;
+use retour::{Function, GenericDetour};
 use windows::{
     Win32::{
         Foundation::RECT,
@@ -674,8 +674,7 @@ pub unsafe fn reproject_baked_cb_per_eye(
 
 type SetVertexProgramConstantsFn =
     unsafe extern "system" fn(*mut c_void, i32, u32, *const f32, u32);
-static SET_VERTEX_PROGRAM_CONSTANTS: OnceLock<GenericDetour<SetVertexProgramConstantsFn>> =
-    OnceLock::new();
+static SET_VERTEX_PROGRAM_CONSTANTS: DetourSlot<SetVertexProgramConstantsFn> = DetourSlot::new();
 
 /// Detour on `Graphics::SetVertexProgramConstants`. While a baked-cb per-eye re-issue is armed (see
 /// [`reproject_baked_cb_per_eye`]), reproject the four `float4` entries at the armed (`cb_index`,
@@ -1236,6 +1235,55 @@ unsafe fn duplicate_viewport(context: &ID3D11DeviceContext) {
 // Detouring `RSSetViewports`/`RSSetScissorRects` on the immediate-context vtable catches *every*
 // viewport set, wherever it comes from, and mirrors a single-viewport set into two identical slots.
 
+/// A process-global slot for one installed detour: lock-free to read, and reclaimable at teardown.
+///
+/// A `OnceLock` cannot give its contents back, so a `OnceLock<GenericDetour<_>>` static can only leak
+/// -- Rust statics are not dropped, and a detour's trampoline lives in a `VirtualAlloc` region that
+/// outlives the unmapped payload, so every inject/eject cycle strands one page per detour. An
+/// `AtomicPtr` keeps the read on the hot path down to a single load while still allowing
+/// [`take`](Self::take) to hand ownership back on eject.
+struct DetourSlot<T: Function>(AtomicPtr<GenericDetour<T>>);
+
+impl<T: Function> DetourSlot<T> {
+    const fn new() -> Self {
+        Self(AtomicPtr::new(std::ptr::null_mut()))
+    }
+
+    /// The installed detour, or `None` before install and after teardown.
+    fn get(&self) -> Option<&GenericDetour<T>> {
+        // SAFETY: the pointer is null or a `Box` this slot owns. It is published with `Release`
+        // before the detour it belongs to can be entered, and reclaimed only with every other thread
+        // suspended, so a borrow taken here cannot outlive the allocation.
+        unsafe { self.0.load(Ordering::Acquire).as_ref() }
+    }
+
+    /// Install `detour` into an empty slot. A second call leaves the slot alone and drops `detour`.
+    fn set(&self, detour: GenericDetour<T>) {
+        let raw = Box::into_raw(Box::new(detour));
+        if self
+            .0
+            .compare_exchange(
+                std::ptr::null_mut(),
+                raw,
+                Ordering::Release,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            // SAFETY: the slot was already occupied, so nothing else can have seen `raw`.
+            drop(unsafe { Box::from_raw(raw) });
+        }
+    }
+
+    /// Empty the slot, returning the detour so dropping it frees the trampoline.
+    fn take(&self) -> Option<Box<GenericDetour<T>>> {
+        let raw = self.0.swap(std::ptr::null_mut(), Ordering::AcqRel);
+        // SAFETY: a non-null pointer here is the `Box` this slot owned; the swap makes the take
+        // exclusive.
+        (!raw.is_null()).then(|| unsafe { Box::from_raw(raw) })
+    }
+}
+
 /// `ID3D11DeviceContext` vtable slots (7 base `IUnknown`/`ID3D11DeviceChild` slots + the method's
 /// index), verified against `windows`'s `ID3D11DeviceContext_Vtbl`.
 const RS_SET_VIEWPORTS_SLOT: usize = 44;
@@ -1244,8 +1292,8 @@ const RS_SET_SCISSOR_RECTS_SLOT: usize = 45;
 type RsSetViewportsFn = unsafe extern "system" fn(*mut c_void, u32, *const D3D11_VIEWPORT);
 type RsSetScissorRectsFn = unsafe extern "system" fn(*mut c_void, u32, *const RECT);
 
-static RS_SET_VIEWPORTS: OnceLock<GenericDetour<RsSetViewportsFn>> = OnceLock::new();
-static RS_SET_SCISSOR_RECTS: OnceLock<GenericDetour<RsSetScissorRectsFn>> = OnceLock::new();
+static RS_SET_VIEWPORTS: DetourSlot<RsSetViewportsFn> = DetourSlot::new();
+static RS_SET_SCISSOR_RECTS: DetourSlot<RsSetScissorRectsFn> = DetourSlot::new();
 
 unsafe extern "system" fn rs_set_viewports_detour(
     context: *mut c_void,
@@ -1343,8 +1391,8 @@ type DrawIndexedFn = unsafe extern "system" fn(*mut c_void, u32, u32, i32);
 type DrawFn = unsafe extern "system" fn(*mut c_void, u32, u32);
 type DrawIndexedInstancedFn = unsafe extern "system" fn(*mut c_void, u32, u32, u32, i32, u32);
 
-static DRAW_INDEXED: OnceLock<GenericDetour<DrawIndexedFn>> = OnceLock::new();
-static DRAW: OnceLock<GenericDetour<DrawFn>> = OnceLock::new();
+static DRAW_INDEXED: DetourSlot<DrawIndexedFn> = DetourSlot::new();
+static DRAW: DetourSlot<DrawFn> = DetourSlot::new();
 /// The raw `DrawIndexedInstanced` entry (not detoured), used to re-issue a promoted draw.
 static DRAW_INDEXED_INSTANCED_RAW: OnceLock<DrawIndexedInstancedFn> = OnceLock::new();
 
@@ -1411,8 +1459,8 @@ type CreateVertexShaderFn = unsafe extern "system" fn(
 ) -> i32;
 type VsSetShaderFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *const *mut c_void, u32);
 
-static CREATE_VERTEX_SHADER: OnceLock<GenericDetour<CreateVertexShaderFn>> = OnceLock::new();
-static VS_SET_SHADER: OnceLock<GenericDetour<VsSetShaderFn>> = OnceLock::new();
+static CREATE_VERTEX_SHADER: DetourSlot<CreateVertexShaderFn> = DetourSlot::new();
+static VS_SET_SHADER: DetourSlot<VsSetShaderFn> = DetourSlot::new();
 
 /// Substitute and record the `ID3D11VertexShader` for a stereo-patched blob, covering both the fresh
 /// and the re-created shader-creation paths.
@@ -1608,20 +1656,39 @@ pub fn uninstall_com_detours() {
     if RS_SET_VIEWPORTS.get().is_none() {
         return; // never installed (single-pass never activated this session)
     }
+
+    // Ordering here has to satisfy two constraints that pull against each other.
+    //
+    // The slots must stay populated for as long as the functions are still patched: a detour that
+    // fires with its slot already emptied finds no trampoline and aborts (it runs in a `nounwind`
+    // context, so the panic is fatal rather than recoverable).
+    //
+    // And the trampolines must be freed *outside* the thread suspender: dropping a detour frees its
+    // trampoline, a heap free takes the process heap lock, and if a suspended thread holds that lock
+    // the free waits on a thread only we can resume -- an unrecoverable wedge, seen as a hang with a
+    // thread spinning in the game's `PlatformAllocHook`.
+    //
+    // So: disable under suspension with the slots intact, resume, and only then reclaim and drop.
+    // Between the two, the functions are unpatched, so nothing can enter a detour at all.
+    let mut failed: [Option<&'static str>; 8] = [None; 8];
+    let mut failures = 0usize;
+
     let _ = ThreadSuspender::for_block(|| {
         // A detour left enabled here is a relay still pointing into the about-to-be-freed payload
-        // image, so a swallowed failure would be an undiagnosable crash -- log it instead.
+        // image, so a swallowed failure would be an undiagnosable crash -- record it. Recorded
+        // rather than logged because formatting a `tracing` event allocates, which is the very
+        // thing that must not happen under suspension.
         macro_rules! disable_detour {
-            ($lock:expr, $name:literal) => {
-                if let Some(detour) = $lock.get() {
+            ($slot:expr, $name:literal) => {
+                if let Some(detour) = $slot.get() {
                     // SAFETY: patching the function back runs with all other threads suspended.
-                    match unsafe { detour.disable() } {
-                        Err(e) => tracing::error!("single-pass: {} disable failed: {e}", $name),
-                        Ok(()) if detour.is_enabled() => tracing::error!(
-                            "single-pass: {} still enabled after disable (dangling into freed payload)",
-                            $name
-                        ),
-                        Ok(()) => {}
+                    let bad = match unsafe { detour.disable() } {
+                        Err(_) => true,
+                        Ok(()) => detour.is_enabled(),
+                    };
+                    if bad {
+                        failed[failures] = Some($name);
+                        failures += 1;
                     }
                 }
             };
@@ -1635,6 +1702,23 @@ pub fn uninstall_com_detours() {
         disable_detour!(SET_VERTEX_PROGRAM_CONSTANTS, "SetVertexProgramConstants");
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     });
+
+    for name in failed.iter().flatten() {
+        tracing::error!(
+            "single-pass: {name} did not disable (still dangling into the freed payload image)"
+        );
+    }
+
+    // Threads are running again and the functions are unpatched, so these drops are unreachable by
+    // any detour and their frees cannot deadlock against a suspended lock holder.
+    drop(RS_SET_VIEWPORTS.take());
+    drop(RS_SET_SCISSOR_RECTS.take());
+    drop(DRAW_INDEXED.take());
+    drop(DRAW.take());
+    drop(DRAW_INDEXED_INSTANCED.take());
+    drop(VS_SET_SHADER.take());
+    drop(CREATE_VERTEX_SHADER.take());
+    drop(SET_VERTEX_PROGRAM_CONSTANTS.take());
     release_cb13();
     for shader in std::mem::take(&mut *PATCHED_VS.lock()) {
         // SAFETY: every entry was `com_add_ref`'d exactly once when it was recorded.
@@ -1748,13 +1832,13 @@ pub(crate) fn ensure_viewport_detours() {
         // Publish into the statics before enabling, so a detour that fires mid-enable finds its
         // trampoline. Enabling itself runs with other threads suspended.
         let _ = DRAW_INDEXED_INSTANCED_RAW.set(draw_indexed_instanced);
-        let _ = RS_SET_VIEWPORTS.set(viewports_detour);
-        let _ = RS_SET_SCISSOR_RECTS.set(scissors_detour);
-        let _ = DRAW_INDEXED.set(draw_indexed_detour_handle);
-        let _ = DRAW.set(draw_detour_handle);
-        let _ = VS_SET_SHADER.set(vs_set_shader_detour_handle);
-        let _ = CREATE_VERTEX_SHADER.set(create_vertex_shader_detour_handle);
-        let _ = SET_VERTEX_PROGRAM_CONSTANTS.set(set_vs_consts_detour_handle);
+        RS_SET_VIEWPORTS.set(viewports_detour);
+        RS_SET_SCISSOR_RECTS.set(scissors_detour);
+        DRAW_INDEXED.set(draw_indexed_detour_handle);
+        DRAW.set(draw_detour_handle);
+        VS_SET_SHADER.set(vs_set_shader_detour_handle);
+        CREATE_VERTEX_SHADER.set(create_vertex_shader_detour_handle);
+        SET_VERTEX_PROGRAM_CONSTANTS.set(set_vs_consts_detour_handle);
         let _ = ThreadSuspender::for_block(|| {
             RS_SET_VIEWPORTS.get().expect("just set").enable().ok();
             RS_SET_SCISSOR_RECTS.get().expect("just set").enable().ok();
