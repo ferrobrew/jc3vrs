@@ -456,7 +456,9 @@ pub fn compute_panel_vp(symmetric: bool) -> Option<(Matrix4, Matrix4)> {
 pub fn install() {
     crate::lifecycle::on_cleanup(|renderer| {
         crate::config::CONFIG.lock().hud.redirect = false;
-        HUD_STATE.lock().release_preview(renderer);
+        if let Some(renderer) = renderer {
+            HUD_STATE.lock().release_preview(renderer);
+        }
         // The clip handles must be released on the capture (game) thread; the shutdown path lets
         // a few more frames tick before the hooks come down, which drains this request.
         scaleform::request_release_handles();

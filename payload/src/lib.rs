@@ -161,9 +161,14 @@ fn shutdown_from_game() {
     // pipeline must never outlive the payload code they point into.
     far_field::sync_type_gates("");
     far_field::share::teardown();
-    if let Some(egui_state) = EguiState::get().as_mut() {
-        lifecycle::run_cleanups(&mut egui_state.egui_renderer);
-    }
+    // Unconditionally, not only when the debug UI came up: the cleanups undo engine-wide state --
+    // the double-wide render resolution, the HUD redirect -- that a session sets whether or not egui
+    // was ever shown.
+    lifecycle::run_cleanups(
+        EguiState::get()
+            .as_mut()
+            .map(|state| &mut state.egui_renderer),
+    );
     EguiState::uninstall();
 }
 
