@@ -34,6 +34,7 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - **Platform**: Targeting the Windows DX11 build of JC3, run through Proton/Wine.
 - **Debugging**: Primarily log review via `tracing`. Attaching a debugger is difficult due to the Proton/Wine virtualization layers.
 - **Hook placement**: New hooks should generally follow the `pyxis-defs` hierarchy for a 1:1 connection between defined types and hooked code.
+- **Unit tests**: The payload targets Windows, so its tests are cross-compiled and run under wine. On Linux use `./scripts/xwin_test.sh` (which forwards its arguments to `cargo xwin test`), not `cargo test` — the payload does not build for a Linux target. The script points `WINEPREFIX` at a disposable prefix under `target/`, because a stale default prefix can be missing `cryptbase.dll`, which `advapi32`'s forwarded `SystemFunction036` (`RtlGenRandom`, pulled in by the test harness) resolves through — without it, wine aborts before any test runs. Delete `target/wine-test-prefix` if the prefix ever misbehaves; it is recreated on the next run. Much of the payload needs a live game to exercise, so the tests cover the pure logic that does not: projection and viewport math, pose composition, and similar.
 - **Documentation**: The `docs/` directory is organized by nature — `docs/engine/` for reverse-engineered ground truth about the game as it is, `docs/mod/` for the mod's design and implementation, and `docs/issues/` for issue-scoped investigations; `docs/README.md` is the index. New findings go in the directory matching their nature, and a doc that would mix both should be split along that line.
 - **Reverse-engineering**: Done through IDA Pro with its MCP integration, alongside a folder of decompiler output from a debug build of the game. The IDB and decompiler output locations can be provided on request.
 - **Shader compilation**: Payload shaders (`.hlsl` files in `payload/src/shaders/`) are compiled to `.dxbc` bytecode and committed alongside their sources. After modifying a shader, recompile with:
@@ -90,6 +91,7 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - Ensure the following checks pass at the end of each complete task (you do not need to do this for intermediate steps):
   - `cargo +nightly fmt --all -- --check`
   - `cargo clippy -all --all-targets -- -D warnings` or `./scripts/xwin_clippy.sh` (if on Linux)
+  - `./scripts/xwin_test.sh` (if on Linux; see the unit-test note above)
 
 ### Type system patterns
 
