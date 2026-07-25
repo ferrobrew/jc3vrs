@@ -1,7 +1,7 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// Parameters to [`CreateDomainProgram`]: the compiled DXBC bytecode, its byte length, and a debug
-/// name. Same layout as [`CreateVertexProgramParams`].
+/// Parameters to [`CreateDomainProgram`](crate::graphics_engine::draw::CreateDomainProgram): the compiled DXBC bytecode, its byte length, and a debug
+/// name. Same layout as [`CreateVertexProgramParams`](crate::graphics_engine::draw::CreateVertexProgramParams).
 pub struct CreateDomainProgramParams {
     pub m_Code: *const u8,
     pub m_Size: u64,
@@ -25,7 +25,7 @@ impl std::convert::AsMut<CreateDomainProgramParams> for CreateDomainProgramParam
     }
 }
 #[repr(C, align(8))]
-/// Parameters to [`CreateFragmentProgram`]: the compiled DXBC bytecode (`m_Code`) and its byte length
+/// Parameters to [`CreateFragmentProgram`](crate::graphics_engine::draw::CreateFragmentProgram): the compiled DXBC bytecode (`m_Code`) and its byte length
 /// (`m_Size`), passed straight through to `ID3D11Device::CreatePixelShader`. `m_Size` is read as a
 /// pointer-width value (the bytecode length argument to `CreatePixelShader`).
 pub struct CreateFragmentProgramParams {
@@ -50,8 +50,8 @@ impl std::convert::AsMut<CreateFragmentProgramParams> for CreateFragmentProgramP
     }
 }
 #[repr(C, align(8))]
-/// Parameters to [`CreateHullProgram`]: the compiled DXBC bytecode, its byte length, and a debug name.
-/// Same layout as [`CreateVertexProgramParams`].
+/// Parameters to [`CreateHullProgram`](crate::graphics_engine::draw::CreateHullProgram): the compiled DXBC bytecode, its byte length, and a debug name.
+/// Same layout as [`CreateVertexProgramParams`](crate::graphics_engine::draw::CreateVertexProgramParams).
 pub struct CreateHullProgramParams {
     pub m_Code: *const u8,
     pub m_Size: u64,
@@ -75,7 +75,7 @@ impl std::convert::AsMut<CreateHullProgramParams> for CreateHullProgramParams {
     }
 }
 #[repr(C, align(8))]
-/// Parameters to [`CreateVertexProgram`]: the compiled DXBC bytecode, its byte length, and a debug
+/// Parameters to [`CreateVertexProgram`](crate::graphics_engine::draw::CreateVertexProgram): the compiled DXBC bytecode, its byte length, and a debug
 /// name (attached to the D3D object and used to size the retained bytecode copy).
 pub struct CreateVertexProgramParams {
     pub m_Code: *const u8,
@@ -405,7 +405,7 @@ pub unsafe fn CreateFragmentProgram(
 }
 pub const CreateVertexProgram_ADDRESS: usize = 0x141953320;
 /// The leaf vertex-program creator: it wraps `ID3D11Device::CreateVertexShader` over
-/// `params.m_Code`/`params.m_Size`. Unlike [`CreateFragmentProgram`], the returned holder also
+/// `params.m_Code`/`params.m_Size`. Unlike [`CreateFragmentProgram`](crate::graphics_engine::draw::CreateFragmentProgram), the returned holder also
 /// retains a heap copy of the bytecode (used later for input-layout creation), so both the D3D
 /// object and the retained copy reflect whatever bytecode was passed in. Static (no `this`); the
 /// first argument is the graphics device.
@@ -426,7 +426,7 @@ pub unsafe fn CreateVertexProgram(
 pub const CreateHullProgram_ADDRESS: usize = 0x141953690;
 /// The leaf hull-program creator: it wraps `ID3D11Device::CreateHullShader` (vtable slot 16) over
 /// `params.m_Code`/`params.m_Size`. `CreateHullShader` copies the bytecode, so a hook may substitute a
-/// patched copy that only has to outlive the call; unlike [`CreateVertexProgram`], the returned holder
+/// patched copy that only has to outlive the call; unlike [`CreateVertexProgram`](crate::graphics_engine::draw::CreateVertexProgram), the returned holder
 /// is a bare shader pointer with no retained bytecode copy. Static (no `this`); the first argument is
 /// the graphics device.
 pub unsafe fn CreateHullProgram(
@@ -444,7 +444,7 @@ pub unsafe fn CreateHullProgram(
 pub const CreateDomainProgram_ADDRESS: usize = 0x1419537A0;
 /// The leaf domain-program creator: it wraps `ID3D11Device::CreateDomainShader` (vtable slot 17) over
 /// `params.m_Code`/`params.m_Size`. `CreateDomainShader` copies the bytecode, so a hook may substitute
-/// a patched copy that only has to outlive the call; like [`CreateHullProgram`], the returned holder is
+/// a patched copy that only has to outlive the call; like [`CreateHullProgram`](crate::graphics_engine::draw::CreateHullProgram), the returned holder is
 /// a bare shader pointer with no retained bytecode copy. Static (no `this`); the first argument is the
 /// graphics device.
 pub unsafe fn CreateDomainProgram(
@@ -487,7 +487,7 @@ pub const SetVertexProgramConstants_ADDRESS: usize = 0x141964740;
 /// Stages `count` float4 constants into the given **vertex** constant buffer slot, starting at
 /// `start_offset` (in float4 rows), writing to the context's per-slot staging buffer and setting the
 /// dirty flag; the GPU upload happens at the next state flush. The vertex analogue of
-/// [`SetFragmentProgramConstants`]. `cb_index` is the vertex-shader constant-buffer slot (e.g. `1`
+/// [`SetFragmentProgramConstants`](crate::graphics_engine::draw::SetFragmentProgramConstants). `cb_index` is the vertex-shader constant-buffer slot (e.g. `1`
 /// for `cb1`). A row-level redundancy check skips rows byte-identical to what is already staged.
 pub unsafe fn SetVertexProgramConstants(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,

@@ -16,7 +16,7 @@ pub struct SSAOPass {
     /// advances once per draw (the inlined `SetNextHistoryBuffer`), independent of `m_FirstPass`.
     pub m_PrevFrameIndex: u32,
     /// The current slot the resolve writes and the final composite samples; advances with
-    /// [`m_PrevFrameIndex`](SSAOPass::m_PrevFrameIndex).
+    /// [`m_PrevFrameIndex`](crate::graphics_engine::ssao::SSAOPass::m_PrevFrameIndex).
     pub m_CurrFrameIndex: u32,
     _field_9a8: [u8; 8],
     /// Enables the temporal filter, blending the current AO against the previous frame's result

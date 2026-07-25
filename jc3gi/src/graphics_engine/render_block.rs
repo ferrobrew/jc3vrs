@@ -34,7 +34,7 @@ pub struct RBIInfo {}
 impl RBIInfo {
     pub const GetMatrix_ADDRESS: usize = 0x1400B1850;
     /// Writes the instance world transform for the given transform slot into `out` (also returned).
-    /// The render blocks pass [`RenderContext::m_TransformIndex`](graphics_engine::graphics_engine::RenderContext::m_TransformIndex)
+    /// The render blocks pass [`RenderContext::m_TransformIndex`](crate::graphics_engine::graphics_engine::RenderContext::m_TransformIndex)
     /// as the slot for the current dispatch.
     pub unsafe fn GetMatrix(
         &self,
@@ -65,7 +65,7 @@ impl std::convert::AsMut<RBIInfo> for RBIInfo {
 }
 #[repr(C, align(8))]
 /// The atmospheric-scattering / aerial-perspective render block. Its `Draw` reconstructs world
-/// position from depth via [`Matrix4::PerspectiveFovInverse`](types::math::Matrix4) -- for the whole
+/// position from depth via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) -- for the whole
 /// screen, sky included -- and then ray-marches the sun shadow cascade and aerial perspective over
 /// the reconstructed positions.
 pub struct RenderBlockAtmosphericScattering {}
@@ -73,7 +73,7 @@ impl RenderBlockAtmosphericScattering {
     pub const Draw_ADDRESS: usize = 0x14036A820;
     /// Draws the atmospheric-scattering pass. `rc` is the per-view render context; `info` the
     /// instance info. Reconstructs view rays from depth via
-    /// [`Matrix4::PerspectiveFovInverse`](types::math::Matrix4) and samples the sun cascade.
+    /// [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) and samples the sun cascade.
     pub unsafe fn Draw(
         &mut self,
         rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -109,13 +109,13 @@ pub struct RenderBlockBark {}
 impl RenderBlockBark {
     pub const Draw_ADDRESS: usize = 0x140136F90;
     /// Issues the color-pass geometry. The clip transform is a CPU-baked world-view-projection staged
-    /// on vertex `cb1` registers 0..3 via `SetVertexProgramConstants` before any draw-kind routing:
+    /// on vertex `cb1` registers 0..3 via [`SetVertexProgramConstants`](crate::graphics_engine::draw::SetVertexProgramConstants) before any draw-kind routing:
     /// `cb1[0..3] = M_model_camera_relative · m_OffsetViewProjection` for the non-instanced case, or
     /// `m_OffsetViewProjection` verbatim for the instanced/billboard cases (the per-instance model
     /// matrix is then applied in-shader). The global `m_VPGlobals` is bound at `cb0` for wind/time
     /// globals only, not the view-projection. One of three draw kinds is selected from the instance-data
-    /// pointer in [`CRBIInfo`](RBIInfo): a non-instanced `DrawIndexed`, a CPU-instanced
-    /// `DrawIndexedInstanced` (per-instance stream at slot 2), or a GPU-indirect `DrawIndexedNoMutex`
+    /// pointer in [`CRBIInfo`](crate::graphics_engine::render_block::RBIInfo): a non-instanced [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed), a CPU-instanced
+    /// [`DrawIndexedInstanced`](crate::graphics_engine::draw::DrawIndexedInstanced) (per-instance stream at slot 2), or a GPU-indirect `DrawIndexedNoMutex`
     /// whose instance count lives in the type's `m_InstDrawParams` buffer. `m_RenderStatus` bits select
     /// bounce/GI, billboard, and geometry-program permutations.
     pub unsafe fn Draw(
@@ -134,7 +134,7 @@ impl RenderBlockBark {
     }
     pub const DrawZ_ADDRESS: usize = 0x140136A90;
     /// Issues the depth-prepass and depth-and-velocity geometry. Same cb1-baked transform as
-    /// [`Draw`](RenderBlockBark::Draw); the velocity pass additionally bakes the previous frame's
+    /// [`Draw`](crate::graphics_engine::render_block::RenderBlockBark::Draw); the velocity pass additionally bakes the previous frame's
     /// world-view-projection into `cb1` registers 5..8 from `m_PreviousOffsetViewProjection`.
     pub unsafe fn DrawZ(
         &self,
@@ -162,9 +162,9 @@ impl std::convert::AsMut<RenderBlockBark> for RenderBlockBark {
     }
 }
 #[repr(C, align(8))]
-/// The skinned character render block (the `Character` RBMDL block type). A character model is
+/// The skinned character render block (the [`Character`](crate::character::character::Character) RBMDL block type). A character model is
 /// composed of one block per material; the same block objects are drawn for every pass, branching
-/// internally on [`RenderContext::m_RenderStatus`](graphics_engine::graphics_engine::RenderContext::m_RenderStatus)
+/// internally on [`RenderContext::m_RenderStatus`](crate::graphics_engine::graphics_engine::RenderContext::m_RenderStatus)
 /// to select the shadow/depth-only path versus the full material path.
 pub struct RenderBlockCharacter {
     _field_0: [u8; 584],
@@ -182,7 +182,7 @@ fn _RenderBlockCharacter_size_check() {
 impl RenderBlockCharacter {
     pub const Draw_ADDRESS: usize = 0x14013A310;
     /// Draws the block for the current pass. Shadow passes
-    /// ([`RenderContext::m_RenderStatus`](graphics_engine::graphics_engine::RenderContext::m_RenderStatus) `& 6`)
+    /// ([`RenderContext::m_RenderStatus`](crate::graphics_engine::graphics_engine::RenderContext::m_RenderStatus) `& 6`)
     /// take a depth-only path with the depth vertex shaders; other passes run the full material
     /// setup.
     pub unsafe fn Draw(
@@ -250,7 +250,7 @@ impl std::convert::AsMut<RenderBlockCharacter> for RenderBlockCharacter {
 }
 #[repr(C, align(8))]
 /// The skinned character skin render block (the `CharacterSkin` RBMDL block type): the skin-shaded
-/// variant of [`RenderBlockCharacter`], with the same batch and pass structure.
+/// variant of [`RenderBlockCharacter`](crate::graphics_engine::render_block::RenderBlockCharacter), with the same batch and pass structure.
 pub struct RenderBlockCharacterSkin {
     _field_0: [u8; 448],
     /// The `std::vector<CSkinBatch>` begin pointer.
@@ -266,7 +266,7 @@ fn _RenderBlockCharacterSkin_size_check() {
 }
 impl RenderBlockCharacterSkin {
     pub const Draw_ADDRESS: usize = 0x14013B580;
-    /// Draws the block for the current pass; see [`RenderBlockCharacter::Draw`].
+    /// Draws the block for the current pass; see [`RenderBlockCharacter::Draw`](crate::graphics_engine::render_block::RenderBlockCharacter::Draw).
     pub unsafe fn Draw(
         &self,
         rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -298,7 +298,7 @@ impl RenderBlockCharacterSkin {
         }
     }
     pub const SetMatrixPalette_ADDRESS: usize = 0x140108DD0;
-    /// See [`RenderBlockCharacter::SetMatrixPalette`].
+    /// See [`RenderBlockCharacter::SetMatrixPalette`](crate::graphics_engine::render_block::RenderBlockCharacter::SetMatrixPalette).
     pub unsafe fn SetMatrixPalette(
         &self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
@@ -372,13 +372,13 @@ pub struct RenderBlockFoliage {}
 impl RenderBlockFoliage {
     pub const Draw_ADDRESS: usize = 0x14012DDA0;
     /// Issues the color-pass geometry. The clip transform is staged per draw on vertex `cb2`: register 0
-    /// the camera-relative world matrix (from [`CRBIInfo`](RBIInfo)'s matrix, translation minus
+    /// the camera-relative world matrix (from [`CRBIInfo`](crate::graphics_engine::render_block::RBIInfo)'s matrix, translation minus
     /// `m_CameraPosition`), registers 4..7 a per-draw copy of `m_OffsetViewProjection` (byte-identical to
     /// the global `cb0[29..32]`), so the vertex shader composes `clip = world · OffsetVP` from `cb2`
     /// rather than reading `cb0`. `SetupConstantBuffers` binds `cb0 = m_VPGlobals` but only for globals.
     /// One of three draw kinds is selected from the instance-data flags: a CPU-instanced
     /// `DrawIndexedInstancedNoMutex` (instance count a CPU `u16`), the dominant grass path
-    /// `DrawIndexedInstancedIndirect` (instance count in the type's GPU-only `m_InstDrawParams` args
+    /// [`DrawIndexedInstancedIndirect`](crate::graphics_engine::draw::DrawIndexedInstancedIndirect) (instance count in the type's GPU-only `m_InstDrawParams` args
     /// buffer, populated by the vegetation draw-indirect compute pass), or a non-instanced
     /// `DrawIndexedNoMutex`. The pass is forward-lit: the type's `Setup` binds the clustered-lighting
     /// constant buffer, the light-cluster index texture, GI, reflection, and sun-shadow-cascade
@@ -420,9 +420,9 @@ impl RenderBlockOccluder {
     /// Issues the occluder-box depth geometry. The non-instanced path bakes
     /// `WVP = (world - camera_offset) · m_OffsetViewProjection` (via
     /// `CRenderBlock::CalculateOffsetWorldViewProjectionMatrix`, `0x140136070`) into vertex `cb1`
-    /// registers 0..3, register 4 a depth bias, then `DrawIndexed` per box. The instanced path
+    /// registers 0..3, register 4 a depth bias, then [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed) per box. The instanced path
     /// (`gfx.occluders.use_instancing`) instead reads the global `m_VPGlobals` view-projection at `cb0`
-    /// with per-instance world rows from a vertex stream and issues one `DrawIndexedInstanced`.
+    /// with per-instance world rows from a vertex stream and issues one [`DrawIndexedInstanced`](crate::graphics_engine::draw::DrawIndexedInstanced).
     /// `Draw`/`Setup` tail-call this and its `SetupZ`.
     pub unsafe fn DrawZ(
         &self,
@@ -494,12 +494,12 @@ impl std::convert::AsMut<RenderBlockTerrain> for RenderBlockTerrain {
 /// "TerrainDetail"): the procedurally-generated detail rock skin — cliff walls, cave ceilings, and
 /// near-field rock detail scattered on the base terrain. Its vertices/indices/texels are produced
 /// each frame by the compute pipeline in the sibling terrain-setup block into shared structured
-/// buffers, and drawn GPU-indirect via a single `DrawIndexedInstancedIndirect` (the colour pass runs
+/// buffers, and drawn GPU-indirect via a single [`DrawIndexedInstancedIndirect`](crate::graphics_engine::draw::DrawIndexedInstancedIndirect) (the colour pass runs
 /// plain vertex+fragment, no tessellation). The vertex shader reads a patch-local vertex and
 /// transforms it by a CPU-baked `cb1` (vertex slot 1) whose rows are `T_patch · m_OffsetViewProjection`,
 /// where `T_patch` translates by the patch origin expressed relative to the camera; the resulting
 /// clip is the standard `m_OffsetViewProjection · (world - m_CameraPosition)`. `cb1` is staged by the
-/// block's per-patch `Setup` (via `SetVertexProgramConstants` on vertex slot 1) immediately before
+/// block's per-patch `Setup` (via [`SetVertexProgramConstants`](crate::graphics_engine::draw::SetVertexProgramConstants) on vertex slot 1) immediately before
 /// each `Draw`.
 pub struct RenderBlockTerrainDetail {
     _field_0: [u8; 48],
@@ -518,7 +518,7 @@ fn _RenderBlockTerrainDetail_size_check() {
 }
 impl RenderBlockTerrainDetail {
     pub const Draw_ADDRESS: usize = 0x140326050;
-    /// Issues the colour-pass draw: a single `DrawIndexedInstancedIndirect` over the compute-generated
+    /// Issues the colour-pass draw: a single [`DrawIndexedInstancedIndirect`](crate::graphics_engine::draw::DrawIndexedInstancedIndirect) over the compute-generated
     /// detail geometry, using the `cb1` transform staged by `Setup`.
     pub unsafe fn Draw(
         &mut self,
@@ -552,8 +552,8 @@ impl std::convert::AsMut<RenderBlockTerrainDetail> for RenderBlockTerrainDetail 
 pub struct RenderBlockTerrainPatch {
     _field_0: [u8; 200],
     /// The patch's world-space placement origin. Together with
-    /// [`m_Size`](RenderBlockTerrainPatch::m_Size) it spans the patch's footprint; the patch's
-    /// 512 m tile indices ([`m_TileX`](RenderBlockTerrainPatch::m_TileX)) derive from the same
+    /// [`m_Size`](crate::graphics_engine::render_block::RenderBlockTerrainPatch::m_Size) it spans the patch's footprint; the patch's
+    /// 512 m tile indices ([`m_TileX`](crate::graphics_engine::render_block::RenderBlockTerrainPatch::m_TileX)) derive from the same
     /// placement.
     pub m_Position: crate::types::math::Vector3,
     /// The patch's world-space side length (quadtree level dependent).
@@ -567,7 +567,7 @@ pub struct RenderBlockTerrainPatch {
     pub m_TileZ: i16,
     _field_e4: [u8; 12],
     /// The block's sort identifier, rebuilt per frame by
-    /// [`UpdateSortID`](RenderBlockTerrainPatch::UpdateSortID): bits 32..47 carry the squared
+    /// [`UpdateSortID`](crate::graphics_engine::render_block::RenderBlockTerrainPatch::UpdateSortID): bits 32..47 carry the squared
     /// camera tile distance (in 512 m tiles), bits 61+ a tessellation/LOD class, and the low 32
     /// bits the block pointer. The block's `GetSortID` returns it verbatim, so terrain patches
     /// sort by tessellation class, then tile distance.
@@ -581,7 +581,7 @@ fn _RenderBlockTerrainPatch_size_check() {
 }
 impl RenderBlockTerrainPatch {
     pub const UpdateSortID_ADDRESS: usize = 0x1410CA030;
-    /// Rebuilds [`m_SortID`](RenderBlockTerrainPatch::m_SortID) from the camera translation:
+    /// Rebuilds [`m_SortID`](crate::graphics_engine::render_block::RenderBlockTerrainPatch::m_SortID) from the camera translation:
     /// recomputes the camera-relative tile deltas and packs the squared tile distance and
     /// tessellation class. Called by the terrain patch system's per-frame update.
     pub unsafe fn UpdateSortID(
@@ -598,7 +598,7 @@ impl RenderBlockTerrainPatch {
     }
     pub const Draw_ADDRESS: usize = 0x14032E540;
     /// Issues the patch's geometry for the active render pass, keyed on
-    /// [`m_ActiveRenderPass`](graphics_engine::graphics_engine::RenderContext::m_ActiveRenderPass):
+    /// [`m_ActiveRenderPass`](crate::graphics_engine::graphics_engine::RenderContext::m_ActiveRenderPass):
     ///
     /// - Passes **56 and 57** (the near tessellating passes) draw GPU-indirect via
     ///   `DrawIndexedInstancedIndirectNoMutex`: the per-patch instance count comes from the terrain
@@ -607,14 +607,14 @@ impl RenderBlockTerrainPatch {
     ///   for 56, 3 for 57) and binds the shared global detail index/vertex texture buffers before the
     ///   indirect draw.
     /// - Passes **58 and 60** draw the tail index range (`[m_SplitIndex, m_IndexCount)`) with a plain
-    ///   `DrawIndexed`; passes **59 and 61** draw the head range (`[0, m_SplitIndex)`). The split
+    ///   [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed); passes **59 and 61** draw the head range (`[0, m_SplitIndex)`). The split
     ///   partitions the patch's index buffer between the two families.
-    /// - Passes **14** and **38..=40** draw the full index range with a plain `DrawIndexed`.
+    /// - Passes **14** and **38..=40** draw the full index range with a plain [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed).
     /// - Any other pass returns without drawing.
     ///
     /// The vertex transform for every path is the global view-projection: the type-level
     /// `SetupConstantBuffers` binds `m_VPGlobals` at vertex `cb0` (the rows carrying
-    /// [`m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)),
+    /// [`m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)),
     /// and the per-patch streamed constant buffer at vertex `cb1`; the tessellating passes additionally
     /// carry `m_OffsetViewProjection` in the hull/domain constants baked once per frame.
     pub unsafe fn Draw(
@@ -649,10 +649,10 @@ impl std::convert::AsMut<RenderBlockTerrainPatch> for RenderBlockTerrainPatch {
 pub struct RenderBlockTypeFogVolume {
     _field_0: [u8; 296],
     /// The full-resolution fog target width, in pixels, latched from the last
-    /// [`ResizeTextures`](RenderBlockTypeFogVolume::ResizeTextures) call.
+    /// [`ResizeTextures`](crate::graphics_engine::render_block::RenderBlockTypeFogVolume::ResizeTextures) call.
     pub m_HiResTextureWidth: u32,
     /// The full-resolution fog target height, in pixels; see
-    /// [`m_HiResTextureWidth`](RenderBlockTypeFogVolume::m_HiResTextureWidth).
+    /// [`m_HiResTextureWidth`](crate::graphics_engine::render_block::RenderBlockTypeFogVolume::m_HiResTextureWidth).
     pub m_HiResTextureHeight: u32,
 }
 fn _RenderBlockTypeFogVolume_size_check() {
@@ -700,11 +700,11 @@ pub struct RenderBlockTypeParticle {
     /// up by the low-res upsampling pass); when clear, that particle routes to the full-resolution
     /// transparent pass instead. Set from the particle-quality graphics setting. The per-block routing
     /// (`CRenderBlockParticle::GetRenderDetails`) selects the pass index from this flag ORed with
-    /// [`m_ForceLowResRendering`](RenderBlockTypeParticle::m_ForceLowResRendering).
+    /// [`m_ForceLowResRendering`](crate::graphics_engine::render_block::RenderBlockTypeParticle::m_ForceLowResRendering).
     pub m_LowResRendering: bool,
     /// Forces every particle render block onto the low-resolution particle pass regardless of the
     /// per-effect opt-in or the distance threshold, ORed with
-    /// [`m_LowResRendering`](RenderBlockTypeParticle::m_LowResRendering).
+    /// [`m_LowResRendering`](crate::graphics_engine::render_block::RenderBlockTypeParticle::m_LowResRendering).
     pub m_ForceLowResRendering: bool,
     _field_a87: [u8; 1],
 }
@@ -737,7 +737,7 @@ impl std::convert::AsMut<RenderBlockTypeParticle> for RenderBlockTypeParticle {
 /// The terrain render block *type* (the `CRenderBlockTerrain::CRenderBlockTypeTerrain` singleton).
 /// Its `SetupConstantBuffers` uploads the per-LOD-slot hull/domain tessellation constant buffer —
 /// which bakes the dispatch's
-/// [`RenderContext::m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection),
+/// [`RenderContext::m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection),
 /// camera position, and tessellation factors — into `m_HDTypeConstants[slot]` (22 constant-buffer
 /// handles at `0x60`), caching it per slot keyed on the frame the upload was made for.
 pub struct RenderBlockTypeTerrain {
@@ -749,7 +749,7 @@ pub struct RenderBlockTypeTerrain {
     pub m_DebugMode: i32,
     _field_50: [u8; 192],
     /// Per-LOD-slot cache stamp: the
-    /// [`RenderContext::m_RenderFrameNo`](graphics_engine::graphics_engine::RenderContext::m_RenderFrameNo)
+    /// [`RenderContext::m_RenderFrameNo`](crate::graphics_engine::graphics_engine::RenderContext::m_RenderFrameNo)
     /// of the frame whose tessellation constants were last uploaded into that slot's constant buffer.
     /// `SetupConstantBuffers` re-uploads a slot only when the current frame's stamp differs, so the
     /// baked view-projection is written once per frame and reused for every draw of that slot within
@@ -762,13 +762,13 @@ pub struct RenderBlockTypeTerrain {
     /// Enables back-patch culling in the color pass. When set, `SetupConstantBuffers` bakes a cull flag
     /// (gated on the color-pass render-status bit) into the hull/domain constant buffer alongside the
     /// normalized forward vector of the camera manager's render camera and the
-    /// [`m_BackPatchCullThreshold`](RenderBlockTypeTerrain::m_BackPatchCullThreshold), so the hull
+    /// [`m_BackPatchCullThreshold`](crate::graphics_engine::render_block::RenderBlockTypeTerrain::m_BackPatchCullThreshold), so the hull
     /// shader discards patches whose facing is beyond the threshold relative to that view direction.
     pub m_EnableBackPatchCulling: bool,
     /// Enables frustum patch culling in the color pass. When set (and the active pass is not a shadow
     /// cascade or one of the passes 63..=64), `SetupConstantBuffers` bakes a cull flag into the
     /// hull/domain constant buffer so the hull shader discards patches outside the baked
-    /// [`m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
+    /// [`m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
     /// frustum.
     pub m_EnableFrustumPatchCulling: bool,
     /// Debug flag: when set, `Setup` leaves the cull face at `NONE` in the color pass (rather than
@@ -794,7 +794,7 @@ pub struct RenderBlockTypeTerrain {
     pub m_TessellationFactorNormalDiff: f32,
     _field_4ac: [u8; 16],
     /// The facing threshold for
-    /// [`m_EnableBackPatchCulling`](RenderBlockTypeTerrain::m_EnableBackPatchCulling), baked into the
+    /// [`m_EnableBackPatchCulling`](crate::graphics_engine::render_block::RenderBlockTypeTerrain::m_EnableBackPatchCulling), baked into the
     /// hull/domain constant buffer. A patch is culled when its facing relative to the render camera's
     /// forward vector falls beyond this value.
     pub m_BackPatchCullThreshold: f32,
@@ -827,7 +827,7 @@ impl std::convert::AsMut<RenderBlockTypeTerrain> for RenderBlockTypeTerrain {
 #[repr(C, align(8))]
 /// The volumetric-patch terrain render block *type* (the
 /// `NGraphicsEngine::CRenderBlockTerrainPatch::CRenderBlockTypeTerrainPatch` singleton): the tessellated
-/// cliff/overhang variant of [`RenderBlockTypeTerrain`], with the same per-slot constant-buffer caching.
+/// cliff/overhang variant of [`RenderBlockTypeTerrain`](crate::graphics_engine::render_block::RenderBlockTypeTerrain), with the same per-slot constant-buffer caching.
 pub struct RenderBlockTypeTerrainPatch {
     _field_0: [u8; 76],
     /// The debug visualization mode. When `<= 0`, `Setup` selects the normal shading fragment
@@ -835,7 +835,7 @@ pub struct RenderBlockTypeTerrainPatch {
     /// (LOD colours, tessellation, and similar overlays).
     pub m_DebugMode: i32,
     _field_50: [u8; 208],
-    /// Per-LOD-slot cache stamp; see [`RenderBlockTypeTerrain::m_WasCBApplied`]. The constant-buffer
+    /// Per-LOD-slot cache stamp; see [`RenderBlockTypeTerrain::m_WasCBApplied`](crate::graphics_engine::render_block::RenderBlockTypeTerrain::m_WasCBApplied). The constant-buffer
     /// handle array (`m_HDTypeConstants[22]`) sits at `0x70` for this variant, so the stamp array
     /// follows at `0x120`.
     pub m_WasCBApplied: [u32; 22],
@@ -858,13 +858,13 @@ pub struct RenderBlockTypeTerrainPatch {
     /// Enables back-patch culling in the color pass. When set, `SetupConstantBuffers` bakes a cull flag
     /// (gated on the color-pass render-status bit) into the hull/domain constant buffer alongside the
     /// normalized forward vector of the camera manager's render camera and the
-    /// [`m_BackPatchCullThreshold`](RenderBlockTypeTerrainPatch::m_BackPatchCullThreshold), so the hull
+    /// [`m_BackPatchCullThreshold`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_BackPatchCullThreshold), so the hull
     /// shader discards patches whose facing is beyond the threshold relative to that view direction.
     pub m_EnableBackPatchCulling: bool,
     /// Enables frustum patch culling in the color pass. When set (and the active pass is not a shadow
     /// cascade or one of the passes 57..=60), `SetupConstantBuffers` bakes a cull flag into the
     /// hull/domain constant buffer so the hull shader discards patches outside the baked
-    /// [`m_OffsetViewProjection`](graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
+    /// [`m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
     /// frustum.
     pub m_EnableFrustumPatchCulling: bool,
     /// Debug flag: when set, `Setup` leaves the cull face at `NONE` in the color pass (rather than
@@ -876,7 +876,7 @@ pub struct RenderBlockTypeTerrainPatch {
     pub m_EnableCullByDetail: bool,
     _field_451: [u8; 39],
     /// The facing threshold for
-    /// [`m_EnableBackPatchCulling`](RenderBlockTypeTerrainPatch::m_EnableBackPatchCulling), baked into
+    /// [`m_EnableBackPatchCulling`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_EnableBackPatchCulling), baked into
     /// the hull/domain constant buffer. A patch is culled when its facing relative to the render
     /// camera's forward vector falls beyond this value.
     pub m_BackPatchCullThreshold: f32,
@@ -901,7 +901,7 @@ impl RenderBlockTypeTerrainPatch {
     /// The type-level per-pass setup for the color-family passes: binds the pass's vertex, hull,
     /// domain, and fragment programs (the depth-family passes route to `SetupZ` via the render
     /// status). The hull-clip selection is inlined here: passes 56..=57 bind
-    /// [`m_HullProgramHolders`](RenderBlockTypeTerrainPatch::m_HullProgramHolders) index 0, other
+    /// [`m_HullProgramHolders`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_HullProgramHolders) index 0, other
     /// tessellating passes index 2.
     pub unsafe fn Setup(
         &mut self,
@@ -964,7 +964,7 @@ impl std::convert::AsMut<SkinBatch> for SkinBatch {
 pub struct TreeImpostorRB {}
 impl TreeImpostorRB {
     pub const Draw_ADDRESS: usize = 0x14034F520;
-    /// Issues the impostor cards as a single non-instanced `DrawIndexed` over a static quad index
+    /// Issues the impostor cards as a single non-instanced [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed) over a static quad index
     /// buffer (`6 * min(card_count, 0x1400)` indices); the vertex shader keys off
     /// `SV_VertexID` (`card = id >> 2`, `corner = id & 3`), pulling each card's world position, size, and
     /// atlas data from a texture buffer bound at vertex slot 0. The card orientation (facing) is computed

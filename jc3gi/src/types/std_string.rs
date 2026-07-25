@@ -2,7 +2,7 @@
 #[repr(C, align(8))]
 /// A `std::string` in the MSVC layout: the small-string-optimization buffer/pointer union
 /// (`_Bx`), then the length (`_Mysize`) and capacity (`_Myres`). The string is stored inline in
-/// [`buffer`](String::buffer) while `capacity < 16`; otherwise the first eight bytes of the
+/// [`buffer`](crate::types::std_string::String::buffer) while `capacity < 16`; otherwise the first eight bytes of the
 /// buffer are a heap pointer to the character data.
 pub struct String {
     /// `_Bx`: the inline character buffer, or (heap case) a `char*` in the first eight bytes.

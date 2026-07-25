@@ -2,7 +2,7 @@
 #[repr(C, align(8))]
 pub struct Atmosphere {
     _field_0: [u8; 1304],
-    /// The live weather, also returned by [`GetWeather`](Atmosphere::GetWeather).
+    /// The live weather, also returned by [`GetWeather`](crate::environment::Atmosphere::GetWeather).
     pub m_Weather: *mut crate::environment::Weather,
 }
 fn _Atmosphere_size_check() {
@@ -92,9 +92,9 @@ impl std::convert::AsMut<LandscapeManager> for LandscapeManager {
 #[repr(C, align(8))]
 /// The live weather state: a continuous scalar model.
 ///
-/// **Caution:** [`WeatherController`]'s per-frame update overwrites these scalars toward its own
+/// **Caution:** [`WeatherController`](crate::environment::WeatherController)'s per-frame update overwrites these scalars toward its own
 /// targets unless a force flag or a named weather event holds them, so prefer firing an event (see
-/// [`WeatherController::Init`]) to pin a state.
+/// [`WeatherController::Init`](crate::environment::WeatherController::Init)) to pin a state.
 pub struct Weather {
     _field_0: [u8; 28],
     /// The snow blend, in `0..1`.
@@ -175,7 +175,7 @@ impl WeatherController {
     pub const Init_ADDRESS: usize = 0x1403A24F0;
     /// Subscribes the named weather events (the `EVENT_*` constants, plus `cloud_base` and
     /// `cloud_height`). Firing one via the engine's event send is the robust way to hold a weather
-    /// state, since the controller's per-frame update otherwise overwrites the [`Weather`]
+    /// state, since the controller's per-frame update otherwise overwrites the [`Weather`](crate::environment::Weather)
     /// scalars.
     pub unsafe fn Init(&mut self) {
         unsafe {

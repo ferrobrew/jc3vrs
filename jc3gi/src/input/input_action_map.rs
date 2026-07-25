@@ -1,7 +1,7 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// An action ID, indexing [`get_action_name_table`]. The numbering is fixed at build time, so action IDs
+/// An action ID, indexing [`action_name_table`](get_action_name_table). The numbering is fixed at build time, so action IDs
 /// can be hardcoded. The engine takes a raw int, and this enum is int-repr, so it converts cleanly
 /// into the action parameters.
 pub enum Action {
@@ -269,7 +269,7 @@ fn _Action_size_check() {
 }
 #[repr(u32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// The digital state of an [`InputDeviceEffector`].
+/// The digital state of an [`InputDeviceEffector`](crate::input::input_action_map::InputDeviceEffector).
 pub enum EffectorState {
     Idle = 0isize as _,
     Idle2 = 1isize as _,
@@ -317,14 +317,14 @@ impl std::convert::AsMut<InputActionMap> for InputActionMap {
     }
 }
 #[repr(C, align(4))]
-/// One input effector slot. The pointer [`InputActionMap::GetActionEffector`] returns is the head of a
+/// One input effector slot. The pointer [`InputActionMap::GetActionEffector`](crate::input::input_action_map::InputActionMap::GetActionEffector) returns is the head of a
 /// linked-list node whose extra id / next fields follow this struct; reading the effector itself uses
 /// only these fields.
 ///
 /// **Provenance:** the layout is from the debug PDB, cross-checked against retail usage (`m_Value`,
 /// `m_State`, and `m_StateTime` offsets all match).
 pub struct InputDeviceEffector {
-    /// The analog value, e.g. trigger pressure or stick axis. [`Click`](InputDeviceEffector::Click)
+    /// The analog value, e.g. trigger pressure or stick axis. [`Click`](crate::input::input_action_map::InputDeviceEffector::Click)
     /// sets it to `1.0`.
     pub m_Value: f32,
     pub m_PrevValue: f32,
@@ -345,7 +345,7 @@ fn _InputDeviceEffector_size_check() {
 impl InputDeviceEffector {
     pub const Click_ADDRESS: usize = 0x1402EE630;
     /// Drives a one-frame press edge: sets `m_Value` to `1.0` and the state to
-    /// [`EffectorState::Clicked`].
+    /// [`EffectorState::Clicked`](crate::input::input_action_map::EffectorState::Clicked).
     pub unsafe fn Click(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -355,7 +355,7 @@ impl InputDeviceEffector {
         }
     }
     pub const Press_ADDRESS: usize = 0x1402EE660;
-    /// Sets `m_Value` and drives the [`EffectorState::Pressed`] state.
+    /// Sets `m_Value` and drives the [`EffectorState::Pressed`](crate::input::input_action_map::EffectorState::Pressed) state.
     pub unsafe fn Press(&mut self, value: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, value: f32) = ::std::mem::transmute(
@@ -365,7 +365,7 @@ impl InputDeviceEffector {
         }
     }
     pub const Freeze_ADDRESS: usize = 0x1402EE6B0;
-    /// Latches into [`EffectorState::Frozen`], ignoring the device poll until cleared.
+    /// Latches into [`EffectorState::Frozen`](crate::input::input_action_map::EffectorState::Frozen), ignoring the device poll until cleared.
     pub unsafe fn Freeze(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -396,7 +396,7 @@ impl std::convert::AsMut<InputDeviceEffector> for InputDeviceEffector {
     }
 }
 #[repr(C, align(8))]
-/// The local player's action map: a write-side wrapper that drives effectors by [`Action`]. Invalid
+/// The local player's action map: a write-side wrapper that drives effectors by [`Action`](crate::input::input_action_map::Action). Invalid
 /// action IDs resolve to a shared null-effector sentinel, which the setters guard against.
 pub struct LocalPlayerActionMap {}
 impl LocalPlayerActionMap {

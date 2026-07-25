@@ -1,20 +1,20 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// A Scaleform render buffer: what [`UIManager::m_RenderBuffer`] points at. It holds the
-/// render-target and depth-stencil views the UI HAL renders into; [`UpdateData`](RenderTargetData::UpdateData)
+/// A Scaleform render buffer: what [`UIManager::m_RenderBuffer`](crate::ui::ui_manager::UIManager::m_RenderBuffer) points at. It holds the
+/// render-target and depth-stencil views the UI HAL renders into; [`UpdateData`](crate::ui::ui_manager::RenderTargetData::UpdateData)
 /// rebinds those views, and is not tied to startup.
 pub struct RenderTargetData {
     _field_0: [u8; 40],
-    /// The render-target buffer width. [`InitPlatformRT`](UIManager::InitPlatformRT) builds the
+    /// The render-target buffer width. [`InitPlatformRT`](crate::ui::ui_manager::UIManager::InitPlatformRT) builds the
     /// buffer square, setting width = height = its side argument.
     pub m_BufferWidth: i32,
-    /// The render-target buffer height; [`InitPlatformRT`](UIManager::InitPlatformRT) sets it equal to
+    /// The render-target buffer height; [`InitPlatformRT`](crate::ui::ui_manager::UIManager::InitPlatformRT) sets it equal to
     /// the width (a square buffer).
     pub m_BufferHeight: i32,
     _field_30: [u8; 8],
     /// The view rectangle's right edge (x2 = width).
     pub m_ViewRectRight: i32,
-    /// The view rectangle's bottom edge (y2); [`InitPlatformRT`](UIManager::InitPlatformRT) sets it
+    /// The view rectangle's bottom edge (y2); [`InitPlatformRT`](crate::ui::ui_manager::UIManager::InitPlatformRT) sets it
     /// equal to the width.
     pub m_ViewRectBottom: i32,
 }
@@ -27,7 +27,7 @@ fn _RenderTargetData_size_check() {
 impl RenderTargetData {
     pub const UpdateData_ADDRESS: usize = 0x141DE0CF0;
     /// Rebinds the buffer's views, releasing the old ones and adding a reference to the new. `self`
-    /// is the render buffer itself ([`UIManager::m_RenderBuffer`]); the call reaches its inner
+    /// is the render buffer itself ([`UIManager::m_RenderBuffer`](crate::ui::ui_manager::UIManager::m_RenderBuffer)); the call reaches its inner
     /// view-holder internally. Passing `depth` as null leaves the depth buffer unchanged.
     pub unsafe fn UpdateData(
         &mut self,
@@ -81,19 +81,19 @@ fn _ScreenPos_size_check() {
 }
 #[repr(C, align(8))]
 /// The Scaleform-backed UI manager, the single concrete instance behind `IUIManager`. It renders the
-/// HUD into the engine surface. [`InitPlatformRT`](UIManager::InitPlatformRT) builds its render
-/// buffer, [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize) sizes the movie
-/// render rectangle, [`SetMovieViewport`](UIManager::SetMovieViewport) sets the Scaleform movie
-/// viewport, and [`ComputeSafeArea`](UIManager::ComputeSafeArea) derives the UI safe area.
+/// HUD into the engine surface. [`InitPlatformRT`](crate::ui::ui_manager::UIManager::InitPlatformRT) builds its render
+/// buffer, [`ComputeMovieSizeOnViewSize`](crate::ui::ui_manager::UIManager::ComputeMovieSizeOnViewSize) sizes the movie
+/// render rectangle, [`SetMovieViewport`](crate::ui::ui_manager::UIManager::SetMovieViewport) sets the Scaleform movie
+/// viewport, and [`ComputeSafeArea`](crate::ui::ui_manager::UIManager::ComputeSafeArea) derives the UI safe area.
 pub struct UIManager {
     _field_0: [u8; 40],
     /// The horizontal mouse letterbox offset from the engine's `MovieScaleInfo`
     /// (`m_MouseDeltaX`), in movie-viewport pixels.
-    /// [`GetMovieSpaceMouseCursor`](UIManager::GetMovieSpaceMouseCursor) maps a movie-viewport
+    /// [`GetMovieSpaceMouseCursor`](crate::ui::ui_manager::UIManager::GetMovieSpaceMouseCursor) maps a movie-viewport
     /// mouse position into stage coordinates as `(pos - delta) * scale`.
-    /// [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize) writes it: always
+    /// [`ComputeMovieSizeOnViewSize`](crate::ui::ui_manager::UIManager::ComputeMovieSizeOnViewSize) writes it: always
     /// zero today (only the non-clipping path computes a non-trivial
-    /// [`m_MouseDeltaY`](UIManager::m_MouseDeltaY)).
+    /// [`m_MouseDeltaY`](crate::ui::ui_manager::UIManager::m_MouseDeltaY)).
     pub m_MouseDeltaX: i32,
     /// The vertical mouse letterbox offset from the engine's `MovieScaleInfo` (`m_MouseDeltaY`),
     /// in movie-viewport pixels. In `ComputeMovieSizeOnViewSize`'s non-clipping path it is half
@@ -106,11 +106,11 @@ pub struct UIManager {
     pub m_MouseScaleFac: f32,
     /// The movie render rectangle's width, from the engine's `MovieScaleInfo`. The movie is rendered
     /// into a `m_MovieScaleWidth` x `m_MovieScaleHeight` rectangle, centered within the viewport
-    /// passed to [`SetMovieViewport`](UIManager::SetMovieViewport).
-    /// [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize) recomputes it from the
+    /// passed to [`SetMovieViewport`](crate::ui::ui_manager::UIManager::SetMovieViewport).
+    /// [`ComputeMovieSizeOnViewSize`](crate::ui::ui_manager::UIManager::ComputeMovieSizeOnViewSize) recomputes it from the
     /// device resolution and the movie stage size.
     pub m_MovieScaleWidth: i32,
-    /// The movie render rectangle's height; see [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth).
+    /// The movie render rectangle's height; see [`m_MovieScaleWidth`](crate::ui::ui_manager::UIManager::m_MovieScaleWidth).
     pub m_MovieScaleHeight: i32,
     _field_3c: [u8; 8],
     /// The id of the thread that currently owns the Scaleform capture (`m_CurrentCaptureThread`);
@@ -121,13 +121,13 @@ pub struct UIManager {
     /// too, or game-thread invokes keep mutating the display list concurrently.
     pub m_CurrentCaptureThread: u32,
     _field_48: [u8; 108],
-    /// The last mouse position's x, in window-client pixels. `WndProc` writes it on every
-    /// `WM_MOUSEMOVE` via [`SetMousePos`](UIManager::SetMousePos) -- the only writer, so the OS
+    /// The last mouse position's x, in window-client pixels. [`WndProc`](crate::window::WndProc) writes it on every
+    /// `WM_MOUSEMOVE` via [`SetMousePos`](crate::ui::ui_manager::UIManager::SetMousePos) -- the only writer, so the OS
     /// message stream is the sole source of the UI mouse position (the DirectInput mouse device
     /// only contributes deltas, buttons, and the wheel).
     pub m_MouseX: i32,
     /// The last mouse position's y, in window-client pixels; see
-    /// [`m_MouseX`](UIManager::m_MouseX).
+    /// [`m_MouseX`](crate::ui::ui_manager::UIManager::m_MouseX).
     pub m_MouseY: i32,
     _field_bc: [u8; 342],
     /// Whether the render system is initialized. One of the three gates `Render` checks before
@@ -136,7 +136,7 @@ pub struct UIManager {
     /// Whether rendering is active (cleared during device resets). The second `Render` gate.
     pub m_RenderActive: bool,
     _field_214: [u8; 12],
-    /// The active `CSteering`, whose action map [`SendMouseEvents`](UIManager::SendMouseEvents)
+    /// The active `CSteering`, whose action map [`SendMouseEvents`](crate::ui::ui_manager::UIManager::SendMouseEvents)
     /// polls for the mouse-button actions (`MOUSE1` = 249, `MOUSE2` = 250).
     pub m_Steering: *mut ::std::ffi::c_void,
     _field_228: [u8; 4240],
@@ -151,30 +151,30 @@ pub struct UIManager {
     pub m_Loader: *mut ::std::ffi::c_void,
     /// The `GFx::MovieDef` for `ui/root.gfx` -- the definition object, not the live instance.
     pub m_MovieDef: *mut ::std::ffi::c_void,
-    /// The live `GFx::Movie` instance (a [`MovieImpl`]), created by `MovieDef::CreateInstance` in
+    /// The live `GFx::Movie` instance (a [`MovieImpl`](crate::ui::scaleform::MovieImpl)), created by `MovieDef::CreateInstance` in
     /// `InitializeSystem`. All `CUIBase` subclasses share this single movie. The AS3 side (the
     /// [`Movie`](crate::ui::scaleform::Movie) interface: SetVariable, Invoke, the display tree) hangs off
-    /// [`MovieImpl::pASMovieRoot`].
+    /// [`MovieImpl::pASMovieRoot`](crate::ui::scaleform::MovieImpl::pASMovieRoot).
     pub m_Movie: *mut crate::ui::scaleform::MovieImpl,
     _field_12f0: [u8; 56],
     /// The Scaleform `Render::D3D1x::HAL` the UI render worker draws through.
     pub m_RenderHAL: *mut crate::ui::scaleform::RenderHAL,
     _field_1330: [u8; 56],
     /// The UI render worker's command queue; `Render` executes it (and stamps its
-    /// [`m_RenderThreadId`](UiThreadCommandQueue::m_RenderThreadId)) at the top of every call.
+    /// [`m_RenderThreadId`](crate::ui::ui_manager::UiThreadCommandQueue::m_RenderThreadId)) at the top of every call.
     pub m_ThreadCommandQueue: *mut crate::ui::ui_manager::UiThreadCommandQueue,
     /// The Scaleform `D3D1x::TextureManager`; `Render` stamps its
-    /// [`RenderThreadId`](UITextureManager::RenderThreadId) at the top of every call.
+    /// [`RenderThreadId`](crate::ui::ui_manager::UITextureManager::RenderThreadId) at the top of every call.
     pub m_TextureManager: *mut crate::ui::ui_manager::UITextureManager,
     _field_1378: [u8; 24],
     /// The Scaleform render buffer the UI HAL renders into, set up by
-    /// [`InitPlatformRT`](UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`] rebinds which
+    /// [`InitPlatformRT`](crate::ui::ui_manager::UIManager::InitPlatformRT). [`RenderTargetData::UpdateData`](crate::ui::ui_manager::RenderTargetData::UpdateData) rebinds which
     /// views it renders into.
     pub m_RenderBuffer: *mut crate::ui::ui_manager::RenderTargetData,
     _field_1398: [u8; 229],
     /// Whether the player is currently driving the UI with a gamepad. While set,
-    /// [`SendMouseEvents`](UIManager::SendMouseEvents) parks the Scaleform mouse at
-    /// `(-1000, -1000)` and [`MousePointerVisibility`](UIManager::MousePointerVisibility) hides
+    /// [`SendMouseEvents`](crate::ui::ui_manager::UIManager::SendMouseEvents) parks the Scaleform mouse at
+    /// `(-1000, -1000)` and [`MousePointerVisibility`](crate::ui::ui_manager::UIManager::MousePointerVisibility) hides
     /// the overlay cursor.
     pub m_IsUsingGamepad: bool,
     _field_147e: [u8; 1],
@@ -182,20 +182,20 @@ pub struct UIManager {
     pub m_RenderingEnabled: bool,
     _field_1480: [u8; 4],
     /// The movie stage's authored width (`m_CachedStageSize.x`), refreshed every frame from the loaded
-    /// movie. The world-to-screen mapping ([`Convert3DCoords`](UIManager::Convert3DCoords)) maps NDC
+    /// movie. The world-to-screen mapping ([`Convert3DCoords`](crate::ui::ui_manager::UIManager::Convert3DCoords)) maps NDC
     /// into this.
     pub m_CachedStageWidth: f32,
-    /// The movie stage's authored height; see [`m_CachedStageWidth`](UIManager::m_CachedStageWidth).
+    /// The movie stage's authored height; see [`m_CachedStageWidth`](crate::ui::ui_manager::UIManager::m_CachedStageWidth).
     pub m_CachedStageHeight: f32,
     _field_148c: [u8; 12],
     /// The cached viewport width (`m_CachedViewportSize.x`), refreshed every frame from the graphics
-    /// device's display resolution. [`ComputeSafeArea`](UIManager::ComputeSafeArea) reads it to expand
+    /// device's display resolution. [`ComputeSafeArea`](crate::ui::ui_manager::UIManager::ComputeSafeArea) reads it to expand
     /// the UI safe area to the viewport's aspect.
     pub m_CachedViewportWidth: i32,
-    /// The cached viewport height; see [`m_CachedViewportWidth`](UIManager::m_CachedViewportWidth).
+    /// The cached viewport height; see [`m_CachedViewportWidth`](crate::ui::ui_manager::UIManager::m_CachedViewportWidth).
     pub m_CachedViewportHeight: i32,
     /// The cached viewport aspect ratio (`m_CachedViewportSize.y / .x`, i.e. device height / width),
-    /// refreshed every frame from the graphics device. [`Convert3DCoords`](UIManager::Convert3DCoords)
+    /// refreshed every frame from the graphics device. [`Convert3DCoords`](crate::ui::ui_manager::UIManager::Convert3DCoords)
     /// uses it -- not the width/height fields -- to aspect-correct world-to-screen.
     pub m_CachedViewportRatio: f32,
     _field_14a4: [u8; 4],
@@ -216,12 +216,12 @@ impl UIManager {
 }
 impl UIManager {
     pub const Render_ADDRESS: usize = 0x141007B70;
-    /// Binds the UI render target: builds a [`RenderTargetData`] from the engine surface's
-    /// render-target and depth-stencil views via [`RenderTargetData::UpdateData`]. Called at startup
+    /// Binds the UI render target: builds a [`RenderTargetData`](crate::ui::ui_manager::RenderTargetData) from the engine surface's
+    /// render-target and depth-stencil views via [`RenderTargetData::UpdateData`](crate::ui::ui_manager::RenderTargetData::UpdateData). Called at startup
     /// and on every device or resolution reset; `a2` carries the target side length (the buffer is
     /// square: width = height = a2). This only creates the render buffer -- the Scaleform movie's
-    /// viewport is set separately by [`SetMovieViewport`](UIManager::SetMovieViewport).
-    /// The UI render: takes [`m_DeferredRenderLock`](UIManager::m_DeferredRenderLock), checks the
+    /// viewport is set separately by [`SetMovieViewport`](crate::ui::ui_manager::UIManager::SetMovieViewport).
+    /// The UI render: takes [`m_DeferredRenderLock`](crate::ui::ui_manager::UIManager::m_DeferredRenderLock), checks the
     /// three render gates, retargets the Scaleform render-thread ids, drains the thread command
     /// queue, binds the display render target, and draws the movie's latest captured display tree
     /// (`GetDisplayHandle` -> `RTHandle::NextCapture` -> `HAL::Draw`) within a
@@ -249,7 +249,7 @@ impl UIManager {
         }
     }
     pub const RestoreAfterReset_ADDRESS: usize = 0x140FA9C70;
-    /// Re-runs [`InitPlatformRT`](UIManager::InitPlatformRT) after a device or resolution reset. Also
+    /// Re-runs [`InitPlatformRT`](crate::ui::ui_manager::UIManager::InitPlatformRT) after a device or resolution reset. Also
     /// recomputes the movie size, sets the movie viewport, and recomputes the safe area. Gated by an
     /// internal reset counter, so a direct call may no-op if the counter is not at 1.
     pub unsafe fn RestoreAfterReset(&mut self) {
@@ -261,8 +261,8 @@ impl UIManager {
         }
     }
     pub const ComputeMovieSizeOnViewSize_ADDRESS: usize = 0x140F46830;
-    /// Recomputes the movie render rectangle ([`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth) /
-    /// [`m_MovieScaleHeight`](UIManager::m_MovieScaleHeight)). It first refreshes the cached stage and
+    /// Recomputes the movie render rectangle ([`m_MovieScaleWidth`](crate::ui::ui_manager::UIManager::m_MovieScaleWidth) /
+    /// [`m_MovieScaleHeight`](crate::ui::ui_manager::UIManager::m_MovieScaleHeight)). It first refreshes the cached stage and
     /// viewport sizes from the live device resolution (via an internal `UpdateCachedValues`), then
     /// sizes the movie rectangle from them, so the rectangle always reflects the device aspect.
     pub unsafe fn ComputeMovieSizeOnViewSize(&mut self, a2: bool, a3: bool) {
@@ -275,8 +275,8 @@ impl UIManager {
     }
     pub const SetMovieViewport_ADDRESS: usize = 0x140F1B260;
     /// Sets the Scaleform movie's viewport to `width` x `height`, centering the movie (of size
-    /// [`m_MovieScaleWidth`](UIManager::m_MovieScaleWidth) x
-    /// [`m_MovieScaleHeight`](UIManager::m_MovieScaleHeight)) within it at offset
+    /// [`m_MovieScaleWidth`](crate::ui::ui_manager::UIManager::m_MovieScaleWidth) x
+    /// [`m_MovieScaleHeight`](crate::ui::ui_manager::UIManager::m_MovieScaleHeight)) within it at offset
     /// `((width - m_MovieScaleWidth) / 2, (height - m_MovieScaleHeight) / 2)`. This is the viewport the
     /// Scaleform HAL renders into.
     pub unsafe fn SetMovieViewport(&mut self, width: i32, height: i32) {
@@ -331,7 +331,7 @@ impl UIManager {
     pub const Convert3DCoordsDefault_ADDRESS: usize = 0x140F899A0;
     /// The default-VP world-to-screen wrapper `CHUDUI::UpdateGrappleReticle` uses for the grapple
     /// reticle (its only callers): fetches the render camera's view-projection internally and
-    /// forwards to [`Convert3DCoords`](UIManager::Convert3DCoords). Because the VP is not a
+    /// forwards to [`Convert3DCoords`](crate::ui::ui_manager::UIManager::Convert3DCoords). Because the VP is not a
     /// parameter, the grapple reticle bypasses the floating panel's marker reprojection unless
     /// this wrapper is hooked.
     pub unsafe fn Convert3DCoordsDefault(
@@ -351,8 +351,8 @@ impl UIManager {
         }
     }
     pub const Get2DInfo_ADDRESS: usize = 0x140F69CB0;
-    /// Marker placement: [`Convert3DCoords`](UIManager::Convert3DCoords) with the supplied `vp`, plus
-    /// an on-screen test and an off-screen edge-clamp via [`ClampToScreen`](UIManager::ClampToScreen).
+    /// Marker placement: [`Convert3DCoords`](crate::ui::ui_manager::UIManager::Convert3DCoords) with the supplied `vp`, plus
+    /// an on-screen test and an off-screen edge-clamp via [`ClampToScreen`](crate::ui::ui_manager::UIManager::ClampToScreen).
     /// Gameplay markers route through here.
     pub unsafe fn Get2DInfo(
         &self,
@@ -491,9 +491,9 @@ impl UIManager {
     }
     pub const PreUpdate_ADDRESS: usize = 0x141049000;
     /// The per-frame UI input step: computes gamepad use, runs
-    /// [`MousePointerVisibility`](UIManager::MousePointerVisibility), dispatches the
+    /// [`MousePointerVisibility`](crate::ui::ui_manager::UIManager::MousePointerVisibility), dispatches the
     /// highest-input-priority `CUIBase`'s input management, then calls
-    /// [`SendMouseEvents`](UIManager::SendMouseEvents) and drains the queued key events.
+    /// [`SendMouseEvents`](crate::ui::ui_manager::UIManager::SendMouseEvents) and drains the queued key events.
     pub unsafe fn PreUpdate(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
@@ -503,9 +503,9 @@ impl UIManager {
         }
     }
     pub const SetMousePos_ADDRESS: usize = 0x140F46810;
-    /// Stores a window-client-pixel mouse position into [`m_MouseX`](UIManager::m_MouseX) /
-    /// [`m_MouseY`](UIManager::m_MouseY) and immediately runs
-    /// [`SendMouseEvents`](UIManager::SendMouseEvents). Called by `WndProc` on `WM_MOUSEMOVE`
+    /// Stores a window-client-pixel mouse position into [`m_MouseX`](crate::ui::ui_manager::UIManager::m_MouseX) /
+    /// [`m_MouseY`](crate::ui::ui_manager::UIManager::m_MouseY) and immediately runs
+    /// [`SendMouseEvents`](crate::ui::ui_manager::UIManager::SendMouseEvents). Called by `WndProc` on `WM_MOUSEMOVE`
     /// with the `lParam` client coordinates.
     pub unsafe fn SetMousePos(&mut self, x: i32, y: i32) {
         unsafe {
@@ -516,7 +516,7 @@ impl UIManager {
         }
     }
     pub const GetMousePos_ADDRESS: usize = 0x140F1B1F0;
-    /// Reads back [`m_MouseX`](UIManager::m_MouseX) / [`m_MouseY`](UIManager::m_MouseY).
+    /// Reads back [`m_MouseX`](crate::ui::ui_manager::UIManager::m_MouseX) / [`m_MouseY`](crate::ui::ui_manager::UIManager::m_MouseY).
     pub unsafe fn GetMousePos(&self, x: *mut i32, y: *mut i32) {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -529,16 +529,16 @@ impl UIManager {
     }
     pub const SendMouseEvents_ADDRESS: usize = 0x140F1BA60;
     /// Feeds the frame's mouse state to the Scaleform movie. Converts
-    /// [`m_MouseX`](UIManager::m_MouseX) / [`m_MouseY`](UIManager::m_MouseY) to movie-viewport
+    /// [`m_MouseX`](crate::ui::ui_manager::UIManager::m_MouseX) / [`m_MouseY`](crate::ui::ui_manager::UIManager::m_MouseY) to movie-viewport
     /// pixels by subtracting the centering offset
     /// `(m_CachedViewportSize - m_MovieScale size) / 2`, then sends
-    /// [`MouseEvent`](ui::scaleform::MouseEvent)s through
-    /// [`MovieImpl::HandleEvent`](ui::scaleform::MovieImpl::HandleEvent): a move event only when
+    /// [`MouseEvent`](crate::ui::scaleform::MouseEvent)s through
+    /// [`MovieImpl::HandleEvent`](crate::ui::scaleform::MovieImpl::HandleEvent): a move event only when
     /// the DirectInput mouse reported a non-zero x or y delta this frame (also repositioning the
     /// overlay cursor sprite via `COverlayUI::SetMouseCursorPosition`), a wheel event from the z
     /// delta, and down/up events from the steering action map's `MOUSE1` (249) / `MOUSE2` (250)
     /// effector states (2 = pressed edge, 4 = released edge). When
-    /// [`m_IsUsingGamepad`](UIManager::m_IsUsingGamepad) is set it instead parks the mouse at
+    /// [`m_IsUsingGamepad`](crate::ui::ui_manager::UIManager::m_IsUsingGamepad) is set it instead parks the mouse at
     /// `(-1000, -1000)`. Returns false without the movie, the steering, or a mouse device.
     pub unsafe fn SendMouseEvents(&mut self, steering: *mut ::std::ffi::c_void) -> bool {
         unsafe {
@@ -552,7 +552,7 @@ impl UIManager {
     pub const GetMovieSpaceMouseCursor_ADDRESS: usize = 0x140F1BA30;
     /// Maps a movie-viewport-pixel mouse position into movie stage coordinates:
     /// `out = (pos - m_MouseDelta) * m_MouseScaleFac` per axis (see
-    /// [`m_MouseDeltaX`](UIManager::m_MouseDeltaX)).
+    /// [`m_MouseDeltaX`](crate::ui::ui_manager::UIManager::m_MouseDeltaX)).
     pub unsafe fn GetMovieSpaceMouseCursor(
         &self,
         viewport_x: f32,
@@ -582,12 +582,12 @@ impl UIManager {
         }
     }
     pub const UpdateCachedValues_ADDRESS: usize = 0x140F1AEA0;
-    /// Refreshes [`m_CachedStageWidth`](UIManager::m_CachedStageWidth) /
-    /// [`m_CachedStageHeight`](UIManager::m_CachedStageHeight) from the loaded movie and
-    /// [`m_CachedViewportWidth`](UIManager::m_CachedViewportWidth) /
-    /// [`m_CachedViewportHeight`](UIManager::m_CachedViewportHeight) /
-    /// [`m_CachedViewportRatio`](UIManager::m_CachedViewportRatio) from the graphics device.
-    /// First step of [`ComputeMovieSizeOnViewSize`](UIManager::ComputeMovieSizeOnViewSize).
+    /// Refreshes [`m_CachedStageWidth`](crate::ui::ui_manager::UIManager::m_CachedStageWidth) /
+    /// [`m_CachedStageHeight`](crate::ui::ui_manager::UIManager::m_CachedStageHeight) from the loaded movie and
+    /// [`m_CachedViewportWidth`](crate::ui::ui_manager::UIManager::m_CachedViewportWidth) /
+    /// [`m_CachedViewportHeight`](crate::ui::ui_manager::UIManager::m_CachedViewportHeight) /
+    /// [`m_CachedViewportRatio`](crate::ui::ui_manager::UIManager::m_CachedViewportRatio) from the graphics device.
+    /// First step of [`ComputeMovieSizeOnViewSize`](crate::ui::ui_manager::UIManager::ComputeMovieSizeOnViewSize).
     pub unsafe fn UpdateCachedValues(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -671,7 +671,7 @@ impl std::convert::AsMut<UiThreadCommandQueue> for UiThreadCommandQueue {
     }
 }
 pub const GetIUIManager_ADDRESS: usize = 0x1400995A0;
-/// Returns the single [`UIManager`] instance.
+/// Returns the single [`UIManager`](crate::ui::ui_manager::UIManager) instance.
 pub unsafe fn GetIUIManager() -> *mut crate::ui::ui_manager::UIManager {
     unsafe {
         let f: unsafe extern "system" fn() -> *mut crate::ui::ui_manager::UIManager = ::std::mem::transmute(

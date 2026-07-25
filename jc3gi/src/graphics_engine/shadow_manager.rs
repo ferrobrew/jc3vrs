@@ -1,11 +1,11 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// One cascade's bookkeeping in [`ShadowManager`]: the render passes that draw its atlas slice,
+/// One cascade's bookkeeping in [`ShadowManager`](crate::graphics_engine::shadow_manager::ShadowManager): the render passes that draw its atlas slice,
 /// followed by the per-parity fit state.
 pub struct CascadeData {
     /// The pair of render passes that draw this cascade's atlas slice (dynamic and static
-    /// geometry). [`ShadowManager::CommitRenderPassSettings`] gates them per dispatch via
-    /// [`RenderPassState::m_Enabled`](graphics_engine::render_pass::RenderPassState::m_Enabled).
+    /// geometry). [`ShadowManager::CommitRenderPassSettings`](crate::graphics_engine::shadow_manager::ShadowManager::CommitRenderPassSettings) gates them per dispatch via
+    /// [`RenderPassState::m_Enabled`](crate::graphics_engine::render_pass::RenderPassState::m_Enabled).
     pub m_Passes: [*mut crate::graphics_engine::render_pass::RenderPass; 2],
     _field_10: [u8; 1104],
 }
@@ -27,22 +27,22 @@ impl std::convert::AsMut<CascadeData> for CascadeData {
     }
 }
 #[repr(C, align(8))]
-/// The cascaded sun-shadow system. Each sim frame, [`UpdateRender`](ShadowManager::UpdateRender)
+/// The cascaded sun-shadow system. Each sim frame, [`UpdateRender`](crate::graphics_engine::shadow_manager::ShadowManager::UpdateRender)
 /// fits the scheduled cascades to the active camera and writes the parity-buffered fit data; each
-/// dispatch, [`CommitRenderPassSettings`](ShadowManager::CommitRenderPassSettings) enables the
+/// dispatch, [`CommitRenderPassSettings`](crate::graphics_engine::shadow_manager::ShadowManager::CommitRenderPassSettings) enables the
 /// scheduled atlas passes. Cascade re-renders are amortised across frames by an update pattern, so
 /// an unscheduled cascade keeps its previous fit and contents.
 pub struct ShadowManager {
     _field_0: [u8; 4],
-    /// The settings-side enable flag. The per-frame [`UpdateRender`](ShadowManager::UpdateRender)
-    /// syncs the engine to it via [`SetEnabled`](ShadowManager::SetEnabled) whenever it differs
+    /// The settings-side enable flag. The per-frame [`UpdateRender`](crate::graphics_engine::shadow_manager::ShadowManager::UpdateRender)
+    /// syncs the engine to it via [`SetEnabled`](crate::graphics_engine::shadow_manager::ShadowManager::SetEnabled) whenever it differs
     /// from the live state -- the graphics-menu path for toggling shadows.
     pub m_Enabled: bool,
     _field_5: [u8; 91],
     /// The sun-shadow cascade atlas: a single depth `Texture2DArray` whose slices hold every cascade's
-    /// (and the spot shadows') fitted shadow map. Created by [`SetEnabled`](ShadowManager::SetEnabled)
+    /// (and the spot shadows') fitted shadow map. Created by [`SetEnabled`](crate::graphics_engine::shadow_manager::ShadowManager::SetEnabled)
     /// (`CreateShadowDepthTexture`, one render target per array slice). The atlas is parity double-
-    /// buffered: [`m_SliceBase`](ShadowManager::m_SliceBase) gives the base slice for each parity, so the
+    /// buffered: [`m_SliceBase`](crate::graphics_engine::shadow_manager::ShadowManager::m_SliceBase) gives the base slice for each parity, so the
     /// scheduled cascades render into (and the material shaders sample) the parity's half of the array.
     pub m_AtlasTexture: *mut crate::graphics_engine::texture::Texture,
     _field_68: [u8; 200],
@@ -53,7 +53,7 @@ pub struct ShadowManager {
     /// only every `2^level` frames (level 0 = every frame); between refreshes its fit is copied
     /// forward from the previous update. `CalculateUpdatePattern` assigns the levels (the default
     /// pattern is `{0, 1, 2, 3}` -- the nearest cascade every frame, each further one half as often),
-    /// and [`SetActiveShadowPassCount`](ShadowManager::SetActiveShadowPassCount) reads them each frame,
+    /// and [`SetActiveShadowPassCount`](crate::graphics_engine::shadow_manager::ShadowManager::SetActiveShadowPassCount) reads them each frame,
     /// gated against a rolling counter, to decide which cascades refresh. This is the mechanism that
     /// amortises cascade re-renders across frames.
     pub m_CascadeUpdateLevels: [i32; 6],
@@ -84,7 +84,7 @@ impl ShadowManager {
     }
     pub const CommitRenderPassSettings_ADDRESS: usize = 0x1401779C0;
     /// The per-dispatch pass gate: clears every shadow pass's
-    /// [`m_Enabled`](graphics_engine::render_pass::RenderPassState::m_Enabled) flag, then
+    /// [`m_Enabled`](crate::graphics_engine::render_pass::RenderPassState::m_Enabled) flag, then
     /// re-enables the passes the update pattern scheduled this frame and re-points their render
     /// targets by the frame parity.
     pub unsafe fn CommitRenderPassSettings(
@@ -101,7 +101,7 @@ impl ShadowManager {
     }
     pub const SetEnabled_ADDRESS: usize = 0x14019EE50;
     /// Creates or destroys the shadow render targets and passes; the settings path behind
-    /// [`m_Enabled`](ShadowManager::m_Enabled).
+    /// [`m_Enabled`](crate::graphics_engine::shadow_manager::ShadowManager::m_Enabled).
     pub unsafe fn SetEnabled(&mut self, enabled: bool) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, enabled: bool) = ::std::mem::transmute(
@@ -111,9 +111,9 @@ impl ShadowManager {
         }
     }
     pub const UpdateRender_ADDRESS: usize = 0x1401C7370;
-    /// The sim-side per-frame update: syncs [`m_Enabled`](ShadowManager::m_Enabled) via
-    /// [`SetEnabled`](ShadowManager::SetEnabled), fits the scheduled cascades to
-    /// [`CameraManager::m_ActiveCamera`](camera::camera_manager::CameraManager::m_ActiveCamera)
+    /// The sim-side per-frame update: syncs [`m_Enabled`](crate::graphics_engine::shadow_manager::ShadowManager::m_Enabled) via
+    /// [`SetEnabled`](crate::graphics_engine::shadow_manager::ShadowManager::SetEnabled), fits the scheduled cascades to
+    /// [`CameraManager::m_ActiveCamera`](crate::camera::camera_manager::CameraManager::m_ActiveCamera)
     /// (the fit frustum comes from that camera's `m_ProjectionF`), copies the unscheduled
     /// cascades' previous fits forward, writes the parity-indexed cascade transforms and per-slice
     /// matrices the draw side reads, and regenerates the cull planes.
@@ -128,11 +128,11 @@ impl ShadowManager {
     pub const SetActiveShadowPassCount_ADDRESS: usize = 0x14018A7D0;
     /// Sets the number of active shadow passes (sun cascades plus spot shadows) and rebuilds the
     /// per-frame cascade update schedule: it refreshes the amortisation pattern (recomputing
-    /// [`m_CascadeUpdateLevels`](ShadowManager::m_CascadeUpdateLevels) on a cascade/spot count change),
+    /// [`m_CascadeUpdateLevels`](crate::graphics_engine::shadow_manager::ShadowManager::m_CascadeUpdateLevels) on a cascade/spot count change),
     /// then marks each cascade as either refreshing this frame -- when
     /// `((1 << m_CascadeUpdateLevels[c]) - 1) & rolling_counter == 0` -- or copying its previous fit
     /// forward. Called from `CGameStateRun::UpdateShadows` before
-    /// [`UpdateRender`](ShadowManager::UpdateRender).
+    /// [`UpdateRender`](crate::graphics_engine::shadow_manager::ShadowManager::UpdateRender).
     pub unsafe fn SetActiveShadowPassCount(&mut self, count: i32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, count: i32) = ::std::mem::transmute(

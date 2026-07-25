@@ -4,25 +4,25 @@
 /// begin/end pairs into a triple-buffered counter ring, and a once-per-frame update converts the
 /// completed ring slot into per-phase milliseconds with a rolling 30-frame peak.
 ///
-/// In the release build the machinery is dead: [`Update`](CpuProfiler::Update) is compiled to an
-/// empty function, and the phase brackets that write [`m_Counters`](CpuProfiler::m_Counters) are
+/// In the release build the machinery is dead: [`Update`](crate::cpu_profiler::CpuProfiler::Update) is compiled to an
+/// empty function, and the phase brackets that write [`m_Counters`](crate::cpu_profiler::CpuProfiler::m_Counters) are
 /// compiled out of `CGame::Update` and the game states, so every field stays zero. The consumers
-/// remain -- `CBorkReport`'s telemetry serialises [`m_Time`](CpuProfiler::m_Time) via
-/// [`GetScopeName`](CpuProfiler::GetScopeName), and `CGraphicsEngine::DispatchDraw` forwards
-/// [`m_Index`](CpuProfiler::m_Index) to the draw task -- but they only ever read zeros.
+/// remain -- `CBorkReport`'s telemetry serialises [`m_Time`](crate::cpu_profiler::CpuProfiler::m_Time) via
+/// [`GetScopeName`](crate::cpu_profiler::CpuProfiler::GetScopeName), and `CGraphicsEngine::DispatchDraw` forwards
+/// [`m_Index`](crate::cpu_profiler::CpuProfiler::m_Index) to the draw task -- but they only ever read zeros.
 pub struct CpuProfiler {
     /// The last completed frame's milliseconds per phase, converted from
-    /// [`m_Counters`](CpuProfiler::m_Counters) by [`Update`](CpuProfiler::Update).
+    /// [`m_Counters`](crate::cpu_profiler::CpuProfiler::m_Counters) by [`Update`](crate::cpu_profiler::CpuProfiler::Update).
     pub m_Time: [f32; 15],
     /// The rolling peak per phase over the 30-frame peak window.
     pub m_Peak: [f32; 15],
-    /// The counter ring position; [`Update`](CpuProfiler::Update) reads slot `(m_Index + 1) % 3`.
+    /// The counter ring position; [`Update`](crate::cpu_profiler::CpuProfiler::Update) reads slot `(m_Index + 1) % 3`.
     pub m_Index: i32,
     _field_7c: [u8; 4],
     /// QPC begin/end pairs, per phase, per ring slot: `[phase][ring slot][begin, end]`.
     pub m_Counters: [[[u64; 2]; 3]; 15],
     /// The running peak within the current 30-frame window, promoted into
-    /// [`m_Peak`](CpuProfiler::m_Peak) when the window rolls.
+    /// [`m_Peak`](crate::cpu_profiler::CpuProfiler::m_Peak) when the window rolls.
     pub m_LocalPeak: [f32; 15],
     _field_38c: [u8; 4],
 }
@@ -42,9 +42,9 @@ impl CpuProfiler {
 }
 impl CpuProfiler {
     pub const Update_ADDRESS: usize = 0x140062490;
-    /// Converts the completed ring slot's QPC deltas into [`m_Time`](CpuProfiler::m_Time)
+    /// Converts the completed ring slot's QPC deltas into [`m_Time`](crate::cpu_profiler::CpuProfiler::m_Time)
     /// milliseconds and rolls the peak window. Compiled to an empty function in the release build;
-    /// the once-per-frame call at the top of [`Update`](game::Game::Update) remains.
+    /// the once-per-frame call at the top of [`Update`](crate::game::Game::Update) remains.
     pub unsafe fn Update(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -78,9 +78,9 @@ impl std::convert::AsMut<CpuProfiler> for CpuProfiler {
 }
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// The fixed frame-phase ids of the engine's CPU profiler ([`CpuProfiler`]). Each phase is one
+/// The fixed frame-phase ids of the engine's CPU profiler ([`CpuProfiler`](crate::cpu_profiler::CpuProfiler)). Each phase is one
 /// slot in the profiler's per-frame time and counter arrays; the names come from the static table
-/// behind [`GetScopeName`](CpuProfiler::GetScopeName).
+/// behind [`GetScopeName`](crate::cpu_profiler::CpuProfiler::GetScopeName).
 pub enum CpuScopeId {
     CPU_SCOPE_ID_FRAME = 0isize as _,
     CPU_SCOPE_ID_DRAW = 1isize as _,

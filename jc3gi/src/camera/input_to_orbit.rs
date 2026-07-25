@@ -28,7 +28,7 @@ impl std::convert::AsMut<BoomTransform> for BoomTransform {
     }
 }
 #[repr(C, align(8))]
-/// Converts the look effectors into a camera orbit delta-angle and applies it to the [`BoomTransform`]
+/// Converts the look effectors into a camera orbit delta-angle and applies it to the [`BoomTransform`](crate::camera::input_to_orbit::BoomTransform)
 /// camera arm.
 pub struct InputToOrbitModifier {}
 impl InputToOrbitModifier {
@@ -52,9 +52,9 @@ impl InputToOrbitModifier {
         }
     }
     pub const ProcessCameraContext_ADDRESS: usize = 0x1406DBB80;
-    /// The caller of [`CalculateInputDeltaAngles`](InputToOrbitModifier::CalculateInputDeltaAngles):
+    /// The caller of [`CalculateInputDeltaAngles`](crate::camera::input_to_orbit::InputToOrbitModifier::CalculateInputDeltaAngles):
     /// takes the returned delta-angle and applies it to the camera via
-    /// [`BoomTransform::DeltaTransform`].
+    /// [`BoomTransform::DeltaTransform`](crate::camera::input_to_orbit::BoomTransform::DeltaTransform).
     pub unsafe fn ProcessCameraContext(
         &mut self,
         pipeline: *mut crate::camera::camera_context::CameraPipelineContext,

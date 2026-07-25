@@ -1,7 +1,7 @@
 #![cfg_attr(any(), rustfmt::skip)]
 crate::__bitflags! {
     #[doc = " The character's aiming state, written each frame by"] #[doc =
-    " [`HandleAimingInputPlayer`](Character::HandleAimingInputPlayer) for the player. The locomotion"]
+    " [`HandleAimingInputPlayer`](crate::character::character::Character::HandleAimingInputPlayer) for the player. The locomotion"]
     #[doc =
     " state machine reads it to choose aim-relative (strafe) movement over run/steer:"]
     #[doc =
@@ -45,8 +45,8 @@ impl AnimatedModel {
     pub const TryAct_ADDRESS: usize = 0x1404B2E00;
     /// Tests whether the animation state machine would accept the act from its current state,
     /// without queuing it. `CCharacter`'s vtable slot 37 forwards to this on
-    /// [`Character::m_AnimatedModel`]; the game's own act dispatchers call it before
-    /// [`Character::QueueAct`] to pick a supported act.
+    /// [`Character::m_AnimatedModel`](crate::character::character::Character::m_AnimatedModel); the game's own act dispatchers call it before
+    /// [`Character::QueueAct`](crate::character::character::Character::QueueAct) to pick a supported act.
     pub unsafe fn TryAct(&mut self, act: *const u32) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, act: *const u32) -> bool = ::std::mem::transmute(
@@ -57,7 +57,7 @@ impl AnimatedModel {
     }
 }
 impl AnimatedModel {
-    /// The [`m_ModelInstances`](AnimatedModel::m_ModelInstances) slot holding the character's
+    /// The [`m_ModelInstances`](crate::character::character::AnimatedModel::m_ModelInstances) slot holding the character's
     /// *body* model -- the one whose skeleton the character's bone indices belong to. The other
     /// slots are attachments with their own skeletons (the parachute among them), where the same
     /// numeric indices land on arbitrary bones.
@@ -67,7 +67,7 @@ impl AnimatedModel {
     /// `ForEachRb`); that pointer is the `info` every one of its block draws receives. A constant
     /// rather than a field because the instance type itself is unmapped.
     pub const MODEL_INSTANCE_RBI_INFO_OFFSET: u64 = 80;
-    /// The number of [`m_ModelInstances`](AnimatedModel::m_ModelInstances) slots. Keep in sync
+    /// The number of [`m_ModelInstances`](crate::character::character::AnimatedModel::m_ModelInstances) slots. Keep in sync
     /// with that array's length.
     pub const MODEL_INSTANCE_SLOTS: u64 = 8;
 }
@@ -141,7 +141,7 @@ impl AnimationController {
     pub const UpdateAnimationsTime_ADDRESS: usize = 0x1404794D0;
     /// Advances the playback clocks of the controller's time-updatable blenders by `dt` (via
     /// `CPoseProducer::UpdateBlendersTimeInRange`) without recomputing the pose. Runs each SIM frame
-    /// in the character's animation pass, before [`UpdateAnimations`](AnimationController::UpdateAnimations).
+    /// in the character's animation pass, before [`UpdateAnimations`](crate::character::character::AnimationController::UpdateAnimations).
     pub unsafe fn UpdateAnimationsTime(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
@@ -183,22 +183,22 @@ pub struct Character {
     pub m_Inventory: crate::character::inventory::Inventory,
     _field_a50: [u8; 1680],
     /// The character's embedded HumanIK solver. Driven each frame in
-    /// [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel), after the
+    /// [`UpdatePassFinalizePose_Parallel`](crate::character::character::Character::UpdatePassFinalizePose_Parallel), after the
     /// animation graph finalizes the local pose and before the model-space pose is computed. See
-    /// [`HumanIK`] for the per-pass lifecycle.
+    /// [`HumanIK`](crate::animation::ik::HumanIK) for the per-pass lifecycle.
     pub m_HIK: crate::animation::ik::HumanIK,
     pub m_AnimatedModel: crate::character::character::AnimatedModel,
     _field_19c0: [u8; 1696],
-    /// The character's embedded [`ObjectBlackboard`] (`lea rcx, [character+2060h]` at every
+    /// The character's embedded [`ObjectBlackboard`](crate::blackboard::ObjectBlackboard) (`lea rcx, [character+2060h]` at every
     /// blackboard call site in the loco tasks).
     pub m_Blackboard: crate::blackboard::ObjectBlackboard,
     _field_2090: [u8; 97],
-    /// Packed aiming-state bit-flags; see [`AimState`].
+    /// Packed aiming-state bit-flags; see [`AimState`](crate::character::character::AimState).
     pub m_AimFlags: crate::character::character::AimState,
     _field_20f2: [u8; 1336],
     pub m_IsLocalCharacter: bool,
     _field_262b: [u8; 353],
-    /// Per-character LOD/update-gating flags; see [`CharacterLodFlags`].
+    /// Per-character LOD/update-gating flags; see [`CharacterLodFlags`](crate::character::character::CharacterLodFlags).
     pub m_LodFlags: crate::character::character::CharacterLodFlags,
     _field_278d: [u8; 99],
     pub m_WorldMatrixT0: crate::types::math::Matrix4,
@@ -206,16 +206,16 @@ pub struct Character {
     _field_2870: [u8; 400],
     /// The weapon-aim countdown timer, in seconds. It is refreshed while an aim input is held and
     /// decremented by the frame delta otherwise; a positive value keeps
-    /// [`m_AimingWeapon`](AimState::m_AimingWeapon) set in [`m_AimFlags`](Character::m_AimFlags),
+    /// [`m_AimingWeapon`](crate::character::character::AimState::m_AimingWeapon) set in [`m_AimFlags`](crate::character::character::Character::m_AimFlags),
     /// so the character stays in aim/strafe locomotion for a short tail after the aim button is
     /// released.
     pub m_AimTimer: f32,
     _field_2a04: [u8; 428],
     /// The idle-variation countdown, in seconds, driven by
-    /// [`NStateTask_InputLocoIdleTask::Update`](input::locomotion::NStateTask_InputLocoIdleTask::Update):
+    /// [`NStateTask_InputLocoIdleTask::Update`](crate::input::locomotion::NStateTask_InputLocoIdleTask::Update):
     /// while the character stands idle it is decremented by the frame delta, and once it goes
     /// negative the task queues
-    /// [`ACT_TO_IDLE_ONE_OFF`](animation::symbol_table::EventIdSymbolTable::ACT_TO_IDLE_ONE_OFF) to
+    /// [`ACT_TO_IDLE_ONE_OFF`](crate::animation::symbol_table::EventIdSymbolTable::ACT_TO_IDLE_ONE_OFF) to
     /// play a one-off idle break, then resets it to a random ~8.5-12 s the next time the character's
     /// aim reference moves.
     pub m_IdleFidgetTimer: f32,
@@ -266,7 +266,7 @@ impl Character {
     }
     pub const GetGrapplingHook_ADDRESS: usize = 0x140760830;
     /// Returns a reference to the character's grappling-hook slot
-    /// ([`Inventory::m_GrapplingHook`](character::inventory::Inventory::m_GrapplingHook)).
+    /// ([`Inventory::m_GrapplingHook`](crate::character::inventory::Inventory::m_GrapplingHook)).
     pub unsafe fn GetGrapplingHook(
         &self,
     ) -> *const crate::types::shared_ptr::SharedPtr<
@@ -311,10 +311,10 @@ impl Character {
     }
     pub const UpdatePassFinalizePose_Parallel_ADDRESS: usize = 0x1407F9B10;
     /// The character's SIM-phase pose-finalization pass. After the animation graph has finalized the
-    /// local pose, this drives the [`HumanIK`](Character::m_HIK) solve (the `MAIN` body pass, gated
-    /// on [`HumanIK::HasTargets`], followed by the `SECONDARY` hand pass), then computes the
+    /// local pose, this drives the [`HumanIK`](crate::character::character::Character::m_HIK) solve (the `MAIN` body pass, gated
+    /// on [`HumanIK::HasTargets`](crate::animation::ik::HumanIK::HasTargets), followed by the `SECONDARY` hand pass), then computes the
     /// model-space pose (`CalculateModelSpacePose`), and finally calls
-    /// [`UpdatePropEffects`](Character::UpdatePropEffects). Effector targets queued before this runs
+    /// [`UpdatePropEffects`](crate::character::character::Character::UpdatePropEffects). Effector targets queued before this runs
     /// are solved into the pose the same frame.
     pub unsafe fn UpdatePassFinalizePose_Parallel(
         &mut self,
@@ -330,7 +330,7 @@ impl Character {
     }
     pub const UpdatePropEffects_ADDRESS: usize = 0x1407C2380;
     /// The per-frame update of the character's attached prop visual effects. Runs last in
-    /// [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel), after the IK
+    /// [`UpdatePassFinalizePose_Parallel`](crate::character::character::Character::UpdatePassFinalizePose_Parallel), after the IK
     /// solve and the model-space pose computation.
     pub unsafe fn UpdatePropEffects(&mut self, dt: f32) {
         unsafe {
@@ -342,9 +342,9 @@ impl Character {
     }
     pub const HandleAimingInputPlayer_ADDRESS: usize = 0x1407F0530;
     /// The per-frame player aiming-input update. Resolves whether the player is aiming a weapon or
-    /// grapple from the equipped weapon and [`m_AimTimer`](Character::m_AimTimer), then writes the
-    /// result into [`m_AimFlags`](Character::m_AimFlags)
-    /// ([`m_AimingWeapon`](AimState::m_AimingWeapon) / [`m_AimingGrapple`](AimState::m_AimingGrapple)).
+    /// grapple from the equipped weapon and [`m_AimTimer`](crate::character::character::Character::m_AimTimer), then writes the
+    /// result into [`m_AimFlags`](crate::character::character::Character::m_AimFlags)
+    /// ([`m_AimingWeapon`](crate::character::character::AimState::m_AimingWeapon) / [`m_AimingGrapple`](crate::character::character::AimState::m_AimingGrapple)).
     /// The locomotion tasks read those flags to select aim-relative (strafe) movement. NPCs use a
     /// separate `HandleAimingInputNPC`; this variant is player-only and is the single point that
     /// decides the on-foot aim/strafe state.
@@ -405,9 +405,9 @@ crate::__bitflags! {
     #[doc =
     " Per-character LOD/update-gating flags. Checked before the SIM-phase animation and IK work:"]
     #[doc =
-    " [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel) skips the"]
+    " [`UpdatePassFinalizePose_Parallel`](crate::character::character::Character::UpdatePassFinalizePose_Parallel) skips the"]
     #[doc =
-    " HumanIK solve when [`REDUCED_LOD`](CharacterLodFlags::REDUCED_LOD) is set. Only that bit is mapped."]
+    " HumanIK solve when [`REDUCED_LOD`](crate::character::character::CharacterLodFlags::REDUCED_LOD) is set. Only that bit is mapped."]
     pub struct CharacterLodFlags : u8 { const REDUCED_LOD = 2usize as _; }
 }
 fn _CharacterLodFlags_size_check() {
@@ -417,7 +417,7 @@ fn _CharacterLodFlags_size_check() {
     unreachable!()
 }
 /// The global HumanIK enable (`CCharacter::m_EnableHIK`): the engine gates the whole IK pass in
-/// [`UpdatePassFinalizePose_Parallel`](Character::UpdatePassFinalizePose_Parallel) on it.
+/// [`UpdatePassFinalizePose_Parallel`](crate::character::character::Character::UpdatePassFinalizePose_Parallel) on it.
 pub unsafe fn get_Character_EnableHIK() -> &'static mut bool {
     unsafe { &mut *(0x142D621C8 as *mut bool) }
 }

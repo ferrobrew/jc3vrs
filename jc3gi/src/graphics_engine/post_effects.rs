@@ -16,7 +16,7 @@ fn _AAMode_size_check() {
     unreachable!()
 }
 #[repr(C, align(8))]
-/// The anti-aliasing resolve. [`AAMode::AA_SMAA_T2X`] additionally reprojects against a previous-frame
+/// The anti-aliasing resolve. [`AAMode::AA_SMAA_T2X`](crate::graphics_engine::post_effects::AAMode::AA_SMAA_T2X) additionally reprojects against a previous-frame
 /// history texture.
 pub struct AntiAliasingEffect {
     _field_0: [u8; 768],
@@ -52,7 +52,7 @@ impl AntiAliasingEffect {
     }
     pub const ApplySubsampleJitter_ADDRESS: usize = 0x1400C7700;
     /// Post-multiplies the sub-pixel clip-space jitter translation onto `proj`, only when the resolve
-    /// mode is [`AAMode::AA_SMAA_T2X`]. The phase comes from the previous-frame counter parity.
+    /// mode is [`AAMode::AA_SMAA_T2X`](crate::graphics_engine::post_effects::AAMode::AA_SMAA_T2X). The phase comes from the previous-frame counter parity.
     pub unsafe fn ApplySubsampleJitter(
         &self,
         proj: *mut crate::types::math::Matrix4,
@@ -132,8 +132,8 @@ impl std::convert::AsMut<BlurEffect> for BlurEffect {
     }
 }
 #[repr(C, align(8))]
-/// The bokeh blur, used when [`PostEffectsManager::IsBokehActive`]; runs after
-/// [`DownScale2x2PackFocus`].
+/// The bokeh blur, used when [`PostEffectsManager::IsBokehActive`](crate::graphics_engine::post_effects::PostEffectsManager::IsBokehActive); runs after
+/// [`DownScale2x2PackFocus`](crate::graphics_engine::post_effects::DownScale2x2PackFocus).
 pub struct BlurEffectBokeh {}
 impl BlurEffectBokeh {
     pub const Apply_ADDRESS: usize = 0x1400A7870;
@@ -370,7 +370,7 @@ impl std::convert::AsMut<PlayerDamageEffect> for PlayerDamageEffect {
 pub struct PostEffectContext {
     pub m_RenderContext: *mut crate::graphics_engine::post_effects::PostEffectRenderContext,
     _field_8: [u8; 148],
-    /// The auto-exposure target numerator. [`ToneMappingEffect::Update`] sets the exposure target to
+    /// The auto-exposure target numerator. [`ToneMappingEffect::Update`](crate::graphics_engine::tone_mapping::ToneMappingEffect::Update) sets the exposure target to
     /// this divided by the raw-brightness histogram mid-point.
     pub m_AutoExposureKey: f32,
 }
@@ -415,7 +415,8 @@ impl std::convert::AsMut<PostEffectRenderContext> for PostEffectRenderContext {
     }
 }
 crate::__bitflags! {
-    #[doc = " Per-frame render-context flags carried by a [`PostEffectRenderContext`]."]
+    #[doc =
+    " Per-frame render-context flags carried by a [`PostEffectRenderContext`](crate::graphics_engine::post_effects::PostEffectRenderContext)."]
     pub struct PostEffectRenderFlags : u8 { const m_MotionVectorReprojection = 1usize as
     _; }
 }
@@ -430,7 +431,7 @@ pub struct PostEffectsManager {}
 impl PostEffectsManager {
     pub const ApplyWorldFilters_ADDRESS: usize = 0x14014BFE0;
     /// Enqueues the world post-effect block, then steps the world fade accumulator
-    /// ([`ApplyWorldFadeFilter`](PostEffectsManager::ApplyWorldFadeFilter)). `dt` flows only into
+    /// ([`ApplyWorldFadeFilter`](crate::graphics_engine::post_effects::PostEffectsManager::ApplyWorldFadeFilter)). `dt` flows only into
     /// that accumulator; the texture arguments are the scene inputs.
     pub unsafe fn ApplyWorldFilters(
         &mut self,
@@ -485,7 +486,7 @@ impl PostEffectsManager {
     }
     pub const IsBokehActive_ADDRESS: usize = 0x1400A0270;
     /// Whether the bokeh depth-of-field path is active, selecting the downscale plus bokeh blur over
-    /// the plain [`BlurEffect`].
+    /// the plain [`BlurEffect`](crate::graphics_engine::post_effects::BlurEffect).
     pub unsafe fn IsBokehActive(&self) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(this: *const Self) -> bool = ::std::mem::transmute(
@@ -506,7 +507,7 @@ impl PostEffectsManager {
     }
     pub const ApplySubsampleJitter_ADDRESS: usize = 0x1400FA050;
     /// Post-multiplies the temporal sub-pixel jitter onto `proj`. Effective only when the resolve mode
-    /// is [`AAMode::AA_SMAA_T2X`].
+    /// is [`AAMode::AA_SMAA_T2X`](crate::graphics_engine::post_effects::AAMode::AA_SMAA_T2X).
     pub unsafe fn ApplySubsampleJitter(
         &self,
         proj: *mut crate::types::math::Matrix4,
@@ -535,13 +536,13 @@ impl std::convert::AsMut<PostEffectsManager> for PostEffectsManager {
     }
 }
 #[repr(C, align(8))]
-/// The render block for the post-effects pass. Its [`Draw`](RenderBlockPostEffects::Draw) runs the
+/// The render block for the post-effects pass. Its [`Draw`](crate::graphics_engine::post_effects::RenderBlockPostEffects::Draw) runs the
 /// HDR post chain in order: histogram generation, sun-halo pre-apply, blur (bokeh or plain), glare,
 /// depth of field, motion blur, the HDR-to-LDR tonemap, the player-damage vignette, anti-aliasing,
 /// sun halo, and the final fade.
 ///
 /// It threads a single result-texture slot index through the slot-returning effects
-/// ([`DepthOfFieldEffect`], [`MotionBlurEffect`], [`PlayerDamageEffect`], [`AntiAliasingEffect`]),
+/// ([`DepthOfFieldEffect`](crate::graphics_engine::post_effects::DepthOfFieldEffect), [`MotionBlurEffect`](crate::graphics_engine::post_effects::MotionBlurEffect), [`PlayerDamageEffect`](crate::graphics_engine::post_effects::PlayerDamageEffect), [`AntiAliasingEffect`](crate::graphics_engine::post_effects::AntiAliasingEffect)),
 /// hopping between the three fullscreen temp textures.
 pub struct RenderBlockPostEffects {}
 impl RenderBlockPostEffects {
@@ -572,12 +573,12 @@ impl std::convert::AsMut<RenderBlockPostEffects> for RenderBlockPostEffects {
     }
 }
 #[repr(C, align(8))]
-/// The sun halo. [`PreApply`](SunHaloEffect::PreApply) prepares it and sets the ready flag;
-/// [`Apply`](SunHaloEffect::Apply) composites it.
+/// The sun halo. [`PreApply`](crate::graphics_engine::post_effects::SunHaloEffect::PreApply) prepares it and sets the ready flag;
+/// [`Apply`](crate::graphics_engine::post_effects::SunHaloEffect::Apply) composites it.
 pub struct SunHaloEffect {
     _field_0: [u8; 276],
-    /// The ready flag: [`PreApply`](SunHaloEffect::PreApply) sets it when the halo is prepared, and
-    /// [`Apply`](SunHaloEffect::Apply) early-outs when it is clear.
+    /// The ready flag: [`PreApply`](crate::graphics_engine::post_effects::SunHaloEffect::PreApply) sets it when the halo is prepared, and
+    /// [`Apply`](crate::graphics_engine::post_effects::SunHaloEffect::Apply) early-outs when it is clear.
     pub m_Ready: bool,
     _field_115: [u8; 3],
 }

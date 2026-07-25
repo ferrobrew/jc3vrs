@@ -4,19 +4,19 @@
 /// `MCI_black` fade, and the FPS readout inside the shared UI movie. The cursor is doubled:
 /// while visible the engine both shows the OS arrow cursor (via `CGraphicsEngine::SetCursor`)
 /// and repositions the movie's `MCI_cursor` clip every mouse move
-/// ([`SetMouseCursorPosition`](OverlayUI::SetMouseCursorPosition)), so a cursor is also drawn
+/// ([`SetMouseCursorPosition`](crate::ui::overlay_ui::OverlayUI::SetMouseCursorPosition)), so a cursor is also drawn
 /// into the movie's own render target.
 pub struct OverlayUI {
     _field_0: [u8; 20],
-    /// The `CUIBase` activation state; `2` is active. [`SetMouseCursorPosition`](OverlayUI::SetMouseCursorPosition)
+    /// The `CUIBase` activation state; `2` is active. [`SetMouseCursorPosition`](crate::ui::overlay_ui::OverlayUI::SetMouseCursorPosition)
     /// and `CUIManager::MousePointerVisibility` no-op unless it is `2`.
     pub m_Current: u32,
     _field_18: [u8; 264],
-    /// The managed [`Value`] for the movie's `MCI_cursor` clip, bound by `GetMember` when the
+    /// The managed [`Value`](crate::ui::scaleform::Value) for the movie's `MCI_cursor` clip, bound by `GetMember` when the
     /// overlay activates.
     pub m_MouseCursor: crate::ui::scaleform::Value,
-    /// The cursor-visibility refcount. [`ShowMouseCursor`](OverlayUI::ShowMouseCursor) increments
-    /// it, [`HideMouseCursor`](OverlayUI::HideMouseCursor) decrements it; the 0-to-1 and 1-to-0
+    /// The cursor-visibility refcount. [`ShowMouseCursor`](crate::ui::overlay_ui::OverlayUI::ShowMouseCursor) increments
+    /// it, [`HideMouseCursor`](crate::ui::overlay_ui::OverlayUI::HideMouseCursor) decrements it; the 0-to-1 and 1-to-0
     /// transitions switch `CGraphicsEngine`'s active cursor between `Arrow` and `None` (which also
     /// controls the cursor clip to the client rect).
     pub m_MouseCursorShowRefCount: i32,
@@ -38,7 +38,7 @@ impl OverlayUI {
 }
 impl OverlayUI {
     pub const ShowMouseCursor_ADDRESS: usize = 0x140DFB960;
-    /// Increments [`m_MouseCursorShowRefCount`](OverlayUI::m_MouseCursorShowRefCount); the 0-to-1
+    /// Increments [`m_MouseCursorShowRefCount`](crate::ui::overlay_ui::OverlayUI::m_MouseCursorShowRefCount); the 0-to-1
     /// transition sets `CGraphicsEngine::SetCursor(Arrow)`.
     pub unsafe fn ShowMouseCursor(&mut self) {
         unsafe {
@@ -49,7 +49,7 @@ impl OverlayUI {
         }
     }
     pub const HideMouseCursor_ADDRESS: usize = 0x140DFB920;
-    /// Decrements [`m_MouseCursorShowRefCount`](OverlayUI::m_MouseCursorShowRefCount) (warning if
+    /// Decrements [`m_MouseCursorShowRefCount`](crate::ui::overlay_ui::OverlayUI::m_MouseCursorShowRefCount) (warning if
     /// already zero); at zero it sets `CGraphicsEngine::SetCursor(None)`.
     pub unsafe fn HideMouseCursor(&mut self) {
         unsafe {
@@ -61,7 +61,7 @@ impl OverlayUI {
     }
     pub const SetMouseCursorPosition_ADDRESS: usize = 0x140E4F260;
     /// Moves the `MCI_cursor` clip to `(x, y)` in movie stage coordinates (the space
-    /// `CUIManager::GetMovieSpaceMouseCursor` produces) via a `DisplayInfo` X/Y write. No-ops
+    /// `CUIManager::GetMovieSpaceMouseCursor` produces) via a [`DisplayInfo`](crate::ui::scaleform::DisplayInfo) X/Y write. No-ops
     /// unless the overlay is active.
     pub unsafe fn SetMouseCursorPosition(&mut self, x: f32, y: f32) {
         unsafe {
