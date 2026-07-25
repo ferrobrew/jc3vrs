@@ -20,10 +20,25 @@ pub struct HudConfig {
     /// Aspect ratio (width / height) for full-screen UI -- movies, loading screens, and menus
     /// ([`HudMode::Movie`](crate::hud::HudMode)); `16:9` by default. See [`hud_aspect`](HudConfig::hud_aspect).
     pub movie_aspect: f32,
-    /// HUD render-target scale relative to the game's largest back-buffer axis. The texture's longer
-    /// axis is `render_scale * max(back_buffer_width, back_buffer_height)` pixels; the shorter axis
-    /// follows from the effective aspect. Lower trades sharpness for fill rate.
+    /// HUD render-target scale, applied to the geometric mean of the **per-eye** render resolution.
+    /// The texture's longer axis is `render_scale * sqrt(eye_width * eye_height)` pixels; the shorter
+    /// axis follows from the effective aspect. Lower trades sharpness for fill rate. Ignored when
+    /// [`render_resolution`](HudConfig::render_resolution) pins the size outright.
+    ///
+    /// The geometric mean, rather than the larger axis, keeps the HUD's pixel budget stable as the
+    /// render target's shape changes: a per-eye target is much taller than it is wide, and keying off
+    /// the longer axis would inflate the HUD for a shape the HUD does not share.
     pub render_scale: f32,
+    /// Pin the HUD render target's longer axis to an explicit pixel count, ignoring
+    /// [`render_scale`](HudConfig::render_scale) and the render resolution entirely. `None` derives
+    /// the size as described on [`render_scale`](HudConfig::render_scale).
+    ///
+    /// The HUD is a flat panel viewed at a fixed apparent size, so what it actually needs is enough
+    /// texels to look crisp at that size -- a property of the headset and the panel's angular size,
+    /// not of how many pixels the scene happens to be rendered at. Pinning it makes that budget
+    /// explicit and immune to render-resolution changes.
+    #[serde(default)]
+    pub render_resolution: Option<u32>,
     /// Distance from the eye to the panel, in meters. The panel resizes with distance to keep a
     /// constant apparent (angular) size, so this can be changed freely without the HUD growing or
     /// shrinking. Comfort band: 1.5-3m.
@@ -107,6 +122,7 @@ impl HudConfig {
             hud_aspect: 1.3,
             movie_aspect: 16.0 / 9.0,
             render_scale: 1.5,
+            render_resolution: None,
             distance: 6.0,
             panel_scale: 0.8,
             follow: FollowConfig::new(),

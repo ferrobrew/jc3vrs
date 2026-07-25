@@ -30,9 +30,32 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
             ui.add(
                 egui::Slider::new(&mut cfg.hud.movie_aspect, 0.5..=2.5).text("Movie aspect (w/h)"),
             );
-            ui.add(
-                egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0).text("Render scale (x)"),
-            );
+            let mut pinned = cfg.hud.render_resolution.is_some();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut pinned, "Pin resolution")
+                    .on_hover_text(
+                        "Set the HUD texture's longer axis in pixels outright, instead of scaling it \
+                         from the per-eye render resolution. The HUD is a fixed-apparent-size panel, \
+                         so its texel budget need not follow the scene's.",
+                    );
+                if pinned {
+                    let mut pixels = cfg.hud.render_resolution.unwrap_or(3072);
+                    ui.add(egui::Slider::new(&mut pixels, 512..=8192).text("px"));
+                    cfg.hud.render_resolution = Some(pixels);
+                } else {
+                    cfg.hud.render_resolution = None;
+                }
+            });
+            ui.add_enabled_ui(!pinned, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0)
+                        .text("Render scale (x)"),
+                )
+                .on_hover_text(
+                    "Multiplies the geometric mean of the per-eye render resolution to give the HUD \
+                     texture's longer axis.",
+                );
+            });
             ui.checkbox(&mut cfg.hud.quad, "Draw the HUD as a floating quad per eye");
             ui.checkbox(
                 &mut cfg.hud.suppress_overlays,

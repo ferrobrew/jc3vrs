@@ -141,34 +141,39 @@ pub fn panel_height(scale: f32, distance: f32, aspect: f32) -> f32 {
 /// The per-frame render-thread step: redirects the HUD into our texture while enabled, restores the
 /// engine binding while disabled. Called from the render-thread post-draw hook.
 ///
-/// `back_buffer_width`/`back_buffer_height` are the game window's back-buffer dimensions, used both
-/// to size the HUD texture (via [`hud_target_size`], which scales the longer axis and applies the
-/// configured aspect) and to restore the engine binding on a toggle-off. The HUD texture's aspect is
-/// independent of the per-eye render aspect.
-pub fn tick(device: &Device, back_buffer_width: u32, back_buffer_height: u32) {
+/// `window_width`/`window_height` are the swapchain back buffer's dimensions, used only as the
+/// cursor mapping's window basis (its fallback for the client rect). Everything sized against the
+/// *render* -- the reset proxy and the engine-binding restore -- reads
+/// [`crate::stereo::render_size`] instead, because the two diverge once the mod substitutes its own
+/// back buffer (`docs/mod/swapchain-ownership.md`). The HUD texture's own size is neither: it is the
+/// mod's choice (see [`hud_target_size`]), as is its aspect.
+pub fn tick(device: &Device, window_width: u32, window_height: u32) {
     let mut hud = HUD_STATE.lock();
     let cfg = crate::config::Config::lock_query(|c| c.hud);
+    let render = crate::stereo::render_size().unwrap_or((window_width, window_height));
     if cfg.redirect {
         let aspect = aspect_for(&cfg, current_mode());
+        // Size against one eye's render target: under single-pass the render target is double-wide,
+        // and keying off it whole would inflate the HUD by 2x for a target only ever viewed one eye
+        // at a time.
+        let (eye_width, eye_height) = crate::stereo::per_eye_render_size().unwrap_or(render);
         let (width, height) = hud_target_size(
             cfg.render_scale,
+            cfg.render_resolution,
             aspect,
-            back_buffer_width,
-            back_buffer_height,
+            eye_width,
+            eye_height,
         );
-        hud.ensure_redirected(device, width, height, back_buffer_width, back_buffer_height);
+        hud.ensure_redirected(device, width, height, render.0, render.1);
         hud.ensure_layers(device, cfg.split);
     } else {
-        hud.restore(back_buffer_width, back_buffer_height);
+        hud.restore(render.0, render.1);
         hud.ensure_layers(device, false);
     }
     // Publish the frame's mouse-mapping geometry for the cursor injection (the `SendMouseEvents`
     // detour): window-client pixels normalize against the window, and rescale to the movie
     // rectangle -- our texture -- once the redirect is applied.
-    cursor::set_geometry(
-        (back_buffer_width, back_buffer_height),
-        hud.redirected_size(),
-    );
+    cursor::set_geometry((window_width, window_height), hud.redirected_size());
 }
 
 /// The layer views the `CUIManager::Render` detour needs for a partitioned frame, or `None` when
@@ -196,11 +201,15 @@ pub fn split_layers_ready() -> bool {
 /// back buffer or a degenerate aspect never reaches texture creation.
 fn hud_target_size(
     render_scale: f32,
+    render_resolution: Option<u32>,
     aspect: f32,
-    back_buffer_width: u32,
-    back_buffer_height: u32,
+    eye_width: u32,
+    eye_height: u32,
 ) -> (u32, u32) {
-    let base = render_scale * back_buffer_width.max(back_buffer_height) as f32;
+    let base = match render_resolution {
+        Some(pinned) => pinned.max(1) as f32,
+        None => render_scale * (f64::from(eye_width) * f64::from(eye_height)).sqrt() as f32,
+    };
     let aspect = aspect.max(f32::EPSILON);
     let (width, height) = if aspect >= 1.0 {
         (base, base / aspect)
@@ -452,4 +461,49 @@ pub fn install() {
         // a few more frames tick before the hooks come down, which drains this request.
         scaleform::request_release_handles();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hud_target_size;
+
+    /// The derived size keys off the geometric mean of the per-eye target, so a tall per-eye render
+    /// target does not inflate the HUD the way keying off its longer axis did.
+    #[test]
+    fn derived_size_uses_the_geometric_mean() {
+        // 2015x2240 per eye: sqrt(2015 * 2240) = 2124.4, x1.5 = 3186.7.
+        let (w, h) = hud_target_size(1.5, None, 1.0, 2015, 2240);
+        assert_eq!((w, h), (3187, 3187));
+        // Keying off the longer axis would have given 1.5 * 2240 = 3360.
+        assert!(w < 3360, "{w} should be below the longer-axis basis");
+    }
+
+    /// The aspect shapes the target, and the longer axis carries the budget either way.
+    #[test]
+    fn aspect_applies_to_the_derived_size() {
+        let (w, h) = hud_target_size(1.5, None, 4.0 / 3.0, 2015, 2240);
+        assert_eq!(w, 3187);
+        assert_eq!(h, 2390);
+        let (tall_w, tall_h) = hud_target_size(1.5, None, 0.75, 2015, 2240);
+        assert_eq!(tall_h, 3187);
+        assert_eq!(tall_w, 2390);
+    }
+
+    /// A pinned resolution ignores both the scale and the render resolution entirely.
+    #[test]
+    fn pinned_resolution_ignores_the_render_resolution() {
+        let pinned = hud_target_size(1.5, Some(3072), 1.0, 2015, 2240);
+        assert_eq!(pinned, (3072, 3072));
+        // Same pin, wildly different render resolution and scale: unchanged.
+        assert_eq!(hud_target_size(0.25, Some(3072), 1.0, 640, 480), pinned);
+    }
+
+    /// A degenerate pin still yields a usable target rather than a zero-sized texture.
+    #[test]
+    fn degenerate_inputs_stay_positive() {
+        let (w, h) = hud_target_size(1.5, Some(0), 1.0, 2015, 2240);
+        assert!(w >= 1 && h >= 1, "{w}x{h}");
+        let (w, h) = hud_target_size(0.0, None, 0.0, 1, 1);
+        assert!(w >= 1 && h >= 1, "{w}x{h}");
+    }
 }
