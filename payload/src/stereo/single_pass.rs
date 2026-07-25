@@ -16,7 +16,7 @@
 
 use std::{
     cell::Cell,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::c_void,
     sync::{
         OnceLock,
@@ -48,7 +48,7 @@ use windows::{
         },
         System::Threading::{EnterCriticalSection, LeaveCriticalSection},
     },
-    core::Interface,
+    core::{IUnknown, Interface},
 };
 
 use crate::config::Config;
@@ -1471,8 +1471,11 @@ unsafe extern "system" fn create_vertex_shader_detour(
         && !out.is_null()
         && let shader = unsafe { *out }
         && !shader.is_null()
+        && PATCHED_VS.lock().insert(shader as usize)
     {
-        PATCHED_VS.lock().push(shader as usize);
+        // SAFETY: on success `*out` is the newly-created, live COM object. Only the thread that won the
+        // `insert` takes the reference, so records and releases stay balanced.
+        unsafe { com_add_ref(shader) };
     }
     hr
 }
@@ -1491,11 +1494,15 @@ unsafe extern "system" fn vs_set_shader_detour(
     unsafe { detour.call(context, shader, instances, num_instances) };
 }
 
-/// Reset the patched-shader set (on a shader reload, since the old `ID3D11VertexShader` pointers are
-/// released and could be reused by later allocations). Also zeroes the `CreateVertexShader`-path
-/// tallies so [`substitution_stats`] reflects one clean pass over the reloaded shader set.
+/// Reset the patched-shader set, releasing this module's reference to each recorded shader (on a
+/// shader reload, where the game drops the old shaders and their addresses become reusable). Also
+/// zeroes the `CreateVertexShader`-path tallies so [`substitution_stats`] reflects one clean pass over
+/// the reloaded shader set.
 pub fn reset_patched_vs() {
-    PATCHED_VS.lock().clear();
+    for shader in std::mem::take(&mut *PATCHED_VS.lock()) {
+        // SAFETY: every entry was `com_add_ref`'d exactly once when it was recorded.
+        unsafe { com_release(shader as *mut c_void) };
+    }
     CVS_PENDING.store(0, Ordering::Relaxed);
     CVS_REACQ_PATCHED.store(0, Ordering::Relaxed);
     CVS_REACQ_CB13.store(0, Ordering::Relaxed);
@@ -1744,9 +1751,40 @@ thread_local! {
 pub fn set_patch_pending(pending: bool) {
     PATCH_PENDING.with(|flag| flag.set(pending));
 }
-/// The `ID3D11VertexShader` pointers created from patched blobs (as `usize`). Written at creation,
-/// read when a shader is bound.
-static PATCHED_VS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// The `ID3D11VertexShader`s created from patched blobs, keyed by their raw pointer.
+///
+/// The set *owns* a reference to each shader: [`com_add_ref`] on record, [`com_release`] on
+/// [`reset_patched_vs`]. Without that reference a shader the game releases could have its address
+/// recycled by an unpatched shader, which would then match on `VSSetShader` and be instance-doubled --
+/// the recycled draw appears in one eye only. An ordered set rather than a linear scan because the
+/// lookup is on the hottest path in the codebase: every `VSSetShader` of every frame, in a feature
+/// whose whole purpose is cutting draw-submission cost. (The raw pointer is stored rather than an
+/// owned `IUnknown` only because `IUnknown` is not `Send`.)
+static PATCHED_VS: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
+
+/// Take a reference of our own on a COM object, so the pointer we record cannot be freed (and its
+/// address recycled) while we still consider it live. Paired with [`com_release`].
+///
+/// # Safety
+///
+/// `object` must be a live COM object pointer.
+unsafe fn com_add_ref(object: *mut c_void) {
+    // SAFETY: the caller guarantees a live object; cloning the borrowed interface calls `AddRef`, and
+    // forgetting the clone is what keeps that reference outstanding.
+    if let Some(unknown) = unsafe { IUnknown::from_raw_borrowed(&object) } {
+        std::mem::forget(unknown.clone());
+    }
+}
+
+/// Drop the reference [`com_add_ref`] took.
+///
+/// # Safety
+///
+/// `object` must be a pointer this module previously passed to [`com_add_ref`], not yet released.
+unsafe fn com_release(object: *mut c_void) {
+    // SAFETY: `from_raw` adopts the outstanding reference; dropping it calls `Release`.
+    drop(unsafe { IUnknown::from_raw(object) });
+}
 /// Whether the currently-bound vertex shader is a patched one (updated on `VSSetShader`).
 static BOUND_VS_PATCHED: AtomicBool = AtomicBool::new(false);
 static PATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
