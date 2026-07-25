@@ -591,6 +591,12 @@ pub unsafe fn terrain_detail_per_eye(
 /// -- the columns of the baked matrix -- is reprojected by `m_eye`.
 #[derive(Clone, Copy)]
 struct ReprojectUpload {
+    /// The graphics context (`HContext_t*`) the re-issued block stages into. The detour sees *every*
+    /// vertex-constant stage in the process, and `(slot, offset)` alone does not identify the block --
+    /// `RenderBlockTerrainPatch` also stages four rows at vertex `cb1` offset 0 -- so a stage from any
+    /// other context in the armed window would otherwise be reprojected by this eye's matrix. Held as
+    /// an address rather than a pointer so the static stays `Sync`; it is only ever compared.
+    ctx: usize,
     cb_index: i32,
     reg_offset: u32,
     m_eye: glam::Mat4,
@@ -677,7 +683,8 @@ fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, ID3D11
 }
 
 /// Re-issue a render block's `Draw` once per eye, reprojecting the four `float4` entries the block bakes
-/// at (`cb_index`, `reg_offset`) by that eye's `M_eye` and binding the eye's half-viewport. Returns `false`
+/// on `rc`'s graphics context at (`cb_index`, `reg_offset`) by that eye's `M_eye` and binding the eye's
+/// half-viewport. Returns `false`
 /// when the intercept must not run (collapse inactive, or the dual-eye state not yet published), in which
 /// case the caller draws normally once.
 ///
@@ -691,8 +698,10 @@ fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, ID3D11
 ///
 /// # Safety
 ///
-/// `draw` must invoke the block's original `Draw` trampoline.
+/// `rc` must be the live [`RenderContext`] the detoured `Draw` received, and `draw` must invoke the
+/// block's original `Draw` trampoline.
 pub unsafe fn reproject_baked_cb_per_eye(
+    rc: *const RenderContext,
     cb_index: i32,
     reg_offset: u32,
     mut draw: impl FnMut(),
@@ -700,9 +709,12 @@ pub unsafe fn reproject_baked_cb_per_eye(
     let Some((m_eye, full, d3d)) = baked_cb_intercept_ready() else {
         return false;
     };
+    // SAFETY: `rc` is the live render context the detoured `Draw` received.
+    let ctx = unsafe { render_context_graphics_context(rc) } as usize;
     for (eye, &m) in m_eye.iter().enumerate() {
         let _reissue = PerEyeReissue::enter(eye);
         arm_reproject(ReprojectUpload {
+            ctx,
             cb_index,
             reg_offset,
             m_eye: m,
@@ -744,6 +756,7 @@ unsafe extern "system" fn set_vertex_program_constants_detour(
     if REPROJECT_ARMED.load(Ordering::Acquire)
         && !data.is_null()
         && let Some(up) = *REPROJECT_UPLOAD.lock()
+        && ctx as usize == up.ctx
         && cb_index == up.cb_index
         && start_offset <= up.reg_offset
         && up.reg_offset + 4 <= start_offset + count

@@ -50,7 +50,7 @@ fn render_block_bark_draw(
     // original `Draw` trampoline.
     let handled = Config::lock_query(|c| c.stereo.single_pass_bark)
         && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(1, 0, || {
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
                 detour.call(this, rc, info);
             })
         };
@@ -70,7 +70,7 @@ fn render_block_bark_draw_z(
     // SAFETY: as above.
     let handled = Config::lock_query(|c| c.stereo.single_pass_bark)
         && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(1, 0, || {
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
                 detour.call(this, rc, info);
             })
         };
@@ -91,7 +91,7 @@ fn render_block_foliage_draw(
     // SAFETY: as above.
     let handled = Config::lock_query(|c| c.stereo.single_pass_foliage)
         && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(2, 4, || {
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 2, 4, || {
                 detour.call(this, rc, info);
             })
         };
@@ -112,7 +112,7 @@ fn render_block_occluder_draw_z(
     // SAFETY: as above.
     let handled = Config::lock_query(|c| c.stereo.single_pass_occluder)
         && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(1, 0, || {
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
                 detour.call(this, rc, info);
             })
         };
