@@ -293,11 +293,14 @@ All under `stereo`, all off by default.
 
 ## Known gaps
 
-- **`DrawIndexedInstanced` is not detoured.** An already-instanced draw whose patched VS takes its
+- **Already-instanced draws are unhandled** (measured, not fixed). A draw whose patched VS takes its
   per-instance data through a vertex-buffer slot (rather than `SV_InstanceID`, which would have
-  deferred the shader) sends instance `i` to eye `i & 1` — half the instances per eye. Promoting the
-  instance count cannot fix it, because the per-instance vertex-buffer stepping is indexed by the
-  instance id; it needs a per-eye re-issue with both `cb13` eye slots pinned to one eye.
+  deferred the shader) sends instance `i` to eye `i & 1` — half the instances per eye, or the left eye
+  alone at one instance. Promoting the instance count cannot fix it, because the per-instance
+  vertex-buffer stepping is indexed by the instance id; it needs a per-eye re-issue with both `cb13`
+  eye slots pinned to one eye. `DrawIndexedInstanced` **is** detoured, but purely as a pass-through
+  that counts how many draws the fix would change and which shaders they belong to — see
+  "Instanced exposure" below.
 - **Unpatched geometry has no parallax.** It is re-issued per eye so it is present and correctly
   sized in both, but it still reads the centred `cb0`. Patching more of the geometry is what removes
   this.
@@ -314,6 +317,31 @@ All under `stereo`, all off by default.
 - **Bark's velocity pass** reprojects only the current-frame matrix; the previous-frame copy at
   `cb1[5..8]` stays centred, so bark's motion vectors are slightly wrong for SMAA and FSR.
 - **The occluder intercept assumes `gfx.occluders.use_instancing = 0`** and nothing forces that cvar.
+
+## Instanced exposure
+
+The measurement behind the first known gap, so the decision to build the per-eye re-issue for
+already-instanced draws can be made from a session capture rather than a guess.
+`draw_indexed_instanced_detour` sits on the same context vtable as the other single-pass detours (slot
+20) and forwards every call verbatim; it only counts. A call is **affected** when a patched vertex
+shader is bound, the render thread is inside the G-buffer range, and the collapse is on — the exact
+predicate under which `SV_InstanceID & 1` becomes an eye parity the shader never asked for. The mod's
+own draws are excluded: a promoted `DrawIndexed` is re-issued through the trampoline, and a per-eye
+re-issue is excluded by the `PER_EYE_REISSUE` marker, so a bark/foliage/occluder draw counts only when
+its flag is off.
+
+Affected draws are split by instance count — one instance means the geometry is simply missing from
+the right eye, more than one means the batch is halved between the eyes — and summed, so a large count
+of tiny batches is distinguishable from a few large ones. Each is attributed to the bound
+`ID3D11VertexShader`, named where the `CreateVertexProgram` path supplied a name (the re-acquire path
+does not, and those show as `<unnamed 0x…>`).
+
+The Render tab reports the last frame plus a mean over the measured frames, with a per-shader
+breakdown; `single_pass`-target log lines carry the same figures every 120 frames, so `jc3vrs.log`
+alone is enough. A mean affected count near zero says the fix would change nothing worth the code; a
+list dominated by bark/foliage/occluder shaders says to turn their existing flags on rather than build
+anything. The counters reset with the patched-shader set (a shader reload), since both are keyed by
+shader pointer.
 
 ## The non-`cb0` shader census
 

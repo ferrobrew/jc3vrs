@@ -14,7 +14,7 @@ use windows::Win32::{
     System::Threading::{EnterCriticalSection, LeaveCriticalSection},
 };
 
-use crate::{config, hooks::graphics_engine::shader};
+use crate::{config, hooks::graphics_engine::shader, stereo::single_pass};
 
 /// Post-stage indices (matching the Previews tab's stage labels); used by the stage detours.
 pub const POST_STAGE_DOF: usize = 0;
@@ -930,6 +930,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             s.cvs_reacq_no_refs,
             s.cvs_reacq_err,
         ));
+        instanced_exposure_readout(ui);
         ui.horizontal(|ui| {
             if ui.button("Reload shaders").clicked() {
                 shader::request_reload();
@@ -1044,6 +1045,54 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
 /// are ticked rather than only once the collapse is running.
 fn collapse_configured(cfg: &config::Config) -> bool {
     cfg.stereo.single_pass && cfg.stereo.single_pass_dual_eye && cfg.stereo.single_pass_collapse
+}
+
+/// How exposed the collapse is to an already-instanced `DrawIndexedInstanced`, which single-pass does
+/// not handle: its instance ids are the game's own, so the patched shader's `SV_InstanceID & 1` reads
+/// them as an eye parity and the batch is split between the eyes (or, at one instance, lands in the
+/// left eye alone). The counts say how much of the frame a fix would actually change, and the
+/// per-shader list says whether those draws are already covered by a per-block re-issue.
+fn instanced_exposure_readout(ui: &mut egui::Ui) {
+    let report = single_pass::instanced_exposure();
+    if report.frames == 0 {
+        ui.label("Instanced exposure: no single-pass geometry frames measured yet.");
+        return;
+    }
+    let last = report.last_frame;
+    ui.label(format!(
+        "Instanced exposure: {} of {} DrawIndexedInstanced affected last frame | mean over {} frames: \
+         {:.1} affected of {:.1} ({:.1} single-instance, {:.1} split batches), {:.1} instances/frame, \
+         peak {} instances",
+        last.affected,
+        last.total,
+        report.frames,
+        report.mean_affected,
+        report.mean_total,
+        report.mean_affected_single_instance,
+        report.mean_affected_multi_instance,
+        report.mean_affected_instances,
+        report.peak_instances,
+    ))
+    .on_hover_text(
+        "Draws where a patched vertex shader was bound inside the G-buffer range under the collapse, \
+         excluding the mod's own promoted and per-eye re-issued draws. A mean affected count near \
+         zero means the un-detoured DrawIndexedInstanced case costs nothing in practice.",
+    );
+    let offenders = single_pass::instanced_offenders(8);
+    if offenders.is_empty() {
+        return;
+    }
+    ui.collapsing("Instanced exposure by shader", |ui| {
+        for offender in offenders {
+            let name = offender
+                .name
+                .unwrap_or_else(|| format!("<unnamed {:#x}>", offender.shader));
+            ui.label(format!(
+                "{name}: {} draws, {} instances",
+                offender.draws, offender.instances
+            ));
+        }
+    });
 }
 
 /// The per-pass near/far split counters, freshest first. Entries older than a second (passes that

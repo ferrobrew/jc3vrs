@@ -18,10 +18,7 @@ use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
     ffi::c_void,
-    sync::{
-        OnceLock,
-        atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering},
 };
 
 use dxbc_stereo::DxbcError;
@@ -1647,18 +1644,19 @@ type DrawIndexedInstancedFn = unsafe extern "system" fn(*mut c_void, u32, u32, u
 
 static DRAW_INDEXED: DetourSlot<DrawIndexedFn> = DetourSlot::new();
 static DRAW: DetourSlot<DrawFn> = DetourSlot::new();
-/// The raw `DrawIndexedInstanced` entry, captured to re-issue a promoted [`draw_indexed_detour`] draw.
+/// `DrawIndexedInstanced`, detoured **only to measure** (see [`draw_indexed_instanced_detour`]); its
+/// trampoline also serves as the raw entry a promoted [`draw_indexed_detour`] draw is re-issued through.
 ///
-/// Deliberately *not* detoured, which leaves a known gap: an already-instanced draw whose patched
-/// vertex shader takes its per-instance data through a vertex-buffer slot (rather than through
-/// `SV_InstanceID`, which would have deferred the shader with `InstanceIdAlreadyDeclared`) sends
-/// instance `i` to eye `i & 1` -- half the instances in each eye. Promoting the instance count cannot
-/// fix it: the per-instance vertex-buffer stepping is indexed by the instance id, so doubling the
-/// count reads past the instance data. The correct handling is a per-eye re-issue with `cb13`'s two
-/// eye slots temporarily set to the same eye, so `SV_InstanceID & 1` picks that one eye whichever
-/// instance it lands on -- the bucket-(d) mechanism in `docs/mod/single-pass-render-blocks.md`, not
-/// yet built for the general case.
-static DRAW_INDEXED_INSTANCED_RAW: OnceLock<DrawIndexedInstancedFn> = OnceLock::new();
+/// The behaviour it measures is a known gap: an already-instanced draw whose patched vertex shader
+/// takes its per-instance data through a vertex-buffer slot (rather than through `SV_InstanceID`,
+/// which would have deferred the shader with `InstanceIdAlreadyDeclared`) sends instance `i` to eye
+/// `i & 1` -- half the instances in each eye, and a 1-instance draw to the left eye only. Promoting
+/// the instance count cannot fix it: the per-instance vertex-buffer stepping is indexed by the
+/// instance id, so doubling the count reads past the instance data. The correct handling is a per-eye
+/// re-issue with `cb13`'s two eye slots temporarily set to the same eye, so `SV_InstanceID & 1` picks
+/// that one eye whichever instance it lands on -- the bucket-(d) mechanism in
+/// `docs/mod/single-pass-render-blocks.md`, not yet built for the general case.
+static DRAW_INDEXED_INSTANCED: DetourSlot<DrawIndexedInstancedFn> = DetourSlot::new();
 
 /// Handle a `DrawIndexed` while the dual-eye G-buffer geometry is drawing. A **patched** shader is
 /// promoted to a 2-instance `DrawIndexedInstanced` -- its `SV_InstanceID & 1` selects the eye and
@@ -1681,8 +1679,10 @@ unsafe extern "system" fn draw_indexed_detour(
                 ensure_collapse_viewport(context, CollapseViewport::Split);
             }
             PATCHED_DRAWS.fetch_add(1, Ordering::Relaxed);
-            if let Some(instanced) = DRAW_INDEXED_INSTANCED_RAW.get() {
-                unsafe { instanced(context, index_count, 2, start_index, base_vertex, 0) };
+            if let Some(instanced) = DRAW_INDEXED_INSTANCED.get() {
+                // Through the trampoline, not the detoured entry: the promotion is the mod's own
+                // draw, so it must not be counted as exposure by [`draw_indexed_instanced_detour`].
+                unsafe { instanced.call(context, index_count, 2, start_index, base_vertex, 0) };
                 return;
             }
         } else {
@@ -1717,6 +1717,287 @@ unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, s
     let detour = DRAW.get().expect("set before enable");
     unsafe { detour.call(context, vertex_count, start_vertex) };
 }
+
+// ---- Already-instanced draw exposure (measurement only) ----------------------------------------
+
+/// Pass-through detour on `DrawIndexedInstanced`, measuring how much of the frame the un-handled
+/// already-instanced case (see [`DRAW_INDEXED_INSTANCED`]) actually covers, so the cost of building
+/// the per-eye re-issue for it can be weighed against what it would buy.
+///
+/// It changes nothing: every call is forwarded to the trampoline verbatim, on every path. The
+/// classification is the exposed set's exact predicate -- a patched vertex shader (so the shader reads
+/// `SV_InstanceID` as an eye parity it did not ask for), inside the G-buffer range, under the collapse
+/// -- minus the mod's own draws. Promoted draws come through the trampoline and never reach here;
+/// draws a per-eye re-issue re-drives are excluded by [`per_eye_reissue_eye`], since those already
+/// land in one eye deliberately.
+unsafe extern "system" fn draw_indexed_instanced_detour(
+    context: *mut c_void,
+    index_count_per_instance: u32,
+    instance_count: u32,
+    start_index: u32,
+    base_vertex: i32,
+    start_instance: u32,
+) {
+    let detour = DRAW_INDEXED_INSTANCED.get().expect("set before enable");
+    if active() && per_eye_reissue_eye().is_none() {
+        INSTANCED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        if BOUND_VS_PATCHED.load(Ordering::Relaxed) && in_gbuffer_range() && collapse_active() {
+            record_instanced_exposure(instance_count);
+        }
+    }
+    // SAFETY: forwards the original arguments to the trampoline.
+    unsafe {
+        detour.call(
+            context,
+            index_count_per_instance,
+            instance_count,
+            start_index,
+            base_vertex,
+            start_instance,
+        );
+    }
+}
+
+/// Tally one exposed already-instanced draw, and attribute it to the bound vertex shader.
+fn record_instanced_exposure(instance_count: u32) {
+    INSTANCED_AFFECTED.fetch_add(1, Ordering::Relaxed);
+    // A 1-instance draw has no odd instance at all, so it lands in the left eye and is simply missing
+    // from the right; a multi-instance draw is split alternately, so each eye gets half the batch.
+    // The two look different on screen and are worth separating.
+    if instance_count <= 1 {
+        INSTANCED_AFFECTED_SINGLE.fetch_add(1, Ordering::Relaxed);
+    } else {
+        INSTANCED_AFFECTED_MULTI.fetch_add(1, Ordering::Relaxed);
+    }
+    INSTANCED_AFFECTED_INSTANCES.fetch_add(instance_count as usize, Ordering::Relaxed);
+    INSTANCED_MAX_INSTANCES.fetch_max(instance_count, Ordering::Relaxed);
+    // The mutex is only reached on an exposed draw -- the set being measured, expected to be a small
+    // fraction of the frame. An un-exposed draw pays the atomics alone.
+    INSTANCED_OFFENDERS
+        .lock()
+        .entry(BOUND_VS.load(Ordering::Relaxed))
+        .or_default()
+        .accumulate(instance_count);
+}
+
+/// One vertex shader's cumulative share of the exposed already-instanced draws.
+#[derive(Clone, Copy, Default)]
+struct InstancedOffender {
+    draws: u64,
+    instances: u64,
+}
+
+impl InstancedOffender {
+    fn accumulate(&mut self, instance_count: u32) {
+        self.draws += 1;
+        self.instances += u64::from(instance_count);
+    }
+}
+
+/// The exposed already-instanced draws attributed to the vertex shader that was bound, keyed by its
+/// `ID3D11VertexShader` pointer. Cumulative, and cleared alongside [`PATCHED_VS`] (whose released
+/// pointers can be recycled).
+static INSTANCED_OFFENDERS: Mutex<BTreeMap<usize, InstancedOffender>> = Mutex::new(BTreeMap::new());
+
+/// One frame's already-instanced draw exposure. See [`draw_indexed_instanced_detour`].
+#[derive(Clone, Copy, Default, Debug, serde::Serialize)]
+pub struct InstancedExposure {
+    /// Every `DrawIndexedInstanced` the game issued, anywhere in the frame.
+    pub total: u32,
+    /// Those the un-handled case actually applies to: a patched VS, in the G-buffer range, collapsed.
+    pub affected: u32,
+    /// Affected draws with a single instance -- rendered into the left eye only.
+    pub affected_single_instance: u32,
+    /// Affected draws with more than one instance -- the batch split alternately between the eyes.
+    pub affected_multi_instance: u32,
+    /// The instances summed over the affected draws: how much geometry the split actually moves.
+    pub affected_instances: u64,
+    /// The largest instance count seen on an affected draw.
+    pub max_instances: u32,
+}
+
+/// The already-instanced draw exposure, as the debug UI and the diagnostic log report it: the most
+/// recent frame plus a mean over the frames since the counters were last reset.
+#[derive(Clone, Copy, Default, Debug, serde::Serialize)]
+pub struct InstancedExposureReport {
+    pub last_frame: InstancedExposure,
+    /// Frames accumulated into the means (only frames that entered the single-pass geometry range).
+    pub frames: u32,
+    pub mean_total: f32,
+    pub mean_affected: f32,
+    pub mean_affected_single_instance: f32,
+    pub mean_affected_multi_instance: f32,
+    pub mean_affected_instances: f32,
+    /// The largest instance count seen on an affected draw across all accumulated frames.
+    pub peak_instances: u32,
+}
+
+/// The running exposure accumulator behind [`InstancedExposureReport`].
+#[derive(Default)]
+struct ExposureHistory {
+    last: InstancedExposure,
+    frames: u32,
+    total: u64,
+    affected: u64,
+    affected_single: u64,
+    affected_multi: u64,
+    affected_instances: u64,
+    peak_instances: u32,
+}
+
+impl ExposureHistory {
+    fn push(&mut self, frame: InstancedExposure) {
+        self.last = frame;
+        self.frames += 1;
+        self.total += u64::from(frame.total);
+        self.affected += u64::from(frame.affected);
+        self.affected_single += u64::from(frame.affected_single_instance);
+        self.affected_multi += u64::from(frame.affected_multi_instance);
+        self.affected_instances += frame.affected_instances;
+        self.peak_instances = self.peak_instances.max(frame.max_instances);
+    }
+
+    fn report(&self) -> InstancedExposureReport {
+        let mean = |sum: u64| {
+            if self.frames == 0 {
+                0.0
+            } else {
+                sum as f32 / self.frames as f32
+            }
+        };
+        InstancedExposureReport {
+            last_frame: self.last,
+            frames: self.frames,
+            mean_total: mean(self.total),
+            mean_affected: mean(self.affected),
+            mean_affected_single_instance: mean(self.affected_single),
+            mean_affected_multi_instance: mean(self.affected_multi),
+            mean_affected_instances: mean(self.affected_instances),
+            peak_instances: self.peak_instances,
+        }
+    }
+}
+
+static INSTANCED_HISTORY: Mutex<ExposureHistory> = Mutex::new(ExposureHistory {
+    last: InstancedExposure {
+        total: 0,
+        affected: 0,
+        affected_single_instance: 0,
+        affected_multi_instance: 0,
+        affected_instances: 0,
+        max_instances: 0,
+    },
+    frames: 0,
+    total: 0,
+    affected: 0,
+    affected_single: 0,
+    affected_multi: 0,
+    affected_instances: 0,
+    peak_instances: 0,
+});
+
+/// Fold the frame's exposure counters into the history and clear them. Called once per frame from
+/// [`log_draw_split`], at the end of the G-buffer range.
+fn accumulate_instanced_exposure() -> InstancedExposure {
+    let frame = InstancedExposure {
+        total: INSTANCED_TOTAL.swap(0, Ordering::Relaxed) as u32,
+        affected: INSTANCED_AFFECTED.swap(0, Ordering::Relaxed) as u32,
+        affected_single_instance: INSTANCED_AFFECTED_SINGLE.swap(0, Ordering::Relaxed) as u32,
+        affected_multi_instance: INSTANCED_AFFECTED_MULTI.swap(0, Ordering::Relaxed) as u32,
+        affected_instances: INSTANCED_AFFECTED_INSTANCES.swap(0, Ordering::Relaxed) as u64,
+        max_instances: INSTANCED_MAX_INSTANCES.swap(0, Ordering::Relaxed),
+    };
+    INSTANCED_HISTORY.lock().push(frame);
+    frame
+}
+
+/// The already-instanced draw exposure so far this session. See [`InstancedExposureReport`].
+pub fn instanced_exposure() -> InstancedExposureReport {
+    INSTANCED_HISTORY.lock().report()
+}
+
+/// Clear the accumulated exposure history and per-shader attribution, so the reported numbers cover
+/// one clean pass over the shader set (called from [`reset_patched_vs`], on a shader reload).
+fn reset_instanced_exposure() {
+    *INSTANCED_HISTORY.lock() = ExposureHistory::default();
+    INSTANCED_OFFENDERS.lock().clear();
+}
+
+/// One entry of [`instanced_offenders`]: a vertex shader and the exposed already-instanced draws
+/// attributed to it.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct InstancedOffenderReport {
+    /// The shader's engine name (`CreateVertexProgramParams.m_Name`), or `None` when the shader was
+    /// created through the re-acquire path, which carries no name.
+    pub name: Option<String>,
+    /// The `ID3D11VertexShader` pointer -- the only identity an unnamed shader has.
+    pub shader: usize,
+    pub draws: u64,
+    pub instances: u64,
+}
+
+/// The vertex shaders responsible for the exposed already-instanced draws, the busiest first, capped
+/// at `limit`. Which shaders these are is what says whether the exposure is already covered by a
+/// per-block re-issue (bark, foliage, occluder) or needs the general fix.
+pub fn instanced_offenders(limit: usize) -> Vec<InstancedOffenderReport> {
+    let names = PATCHED_VS_NAMES.lock();
+    let mut offenders: Vec<InstancedOffenderReport> = INSTANCED_OFFENDERS
+        .lock()
+        .iter()
+        .map(|(&shader, tally)| InstancedOffenderReport {
+            name: names.get(&shader).cloned(),
+            shader,
+            draws: tally.draws,
+            instances: tally.instances,
+        })
+        .collect();
+    offenders.sort_by(|a, b| b.draws.cmp(&a.draws).then(b.instances.cmp(&a.instances)));
+    offenders.truncate(limit);
+    offenders
+}
+
+/// Log the already-instanced draw exposure, at the same 120-frame cadence as the draw split. Emitted
+/// only once there is something to report, so a session with no exposure stays quiet.
+fn log_instanced_exposure(frame: InstancedExposure) {
+    if frame.affected == 0 {
+        return;
+    }
+    let report = instanced_exposure();
+    let offenders: Vec<String> = instanced_offenders(5)
+        .into_iter()
+        .map(|o| {
+            let name = o
+                .name
+                .unwrap_or_else(|| format!("<unnamed {:#x}>", o.shader));
+            format!("{name} ({} draws, {} inst)", o.draws, o.instances)
+        })
+        .collect();
+    tracing::info!(
+        target: "single_pass",
+        "instanced exposure: {} of {} DrawIndexedInstanced affected this frame ({} single-instance, \
+         {} multi-instance, {} instances, max {}) | mean over {} frames: {:.1} affected of {:.1}, \
+         {:.1} instances, peak {} | top: {}",
+        frame.affected,
+        frame.total,
+        frame.affected_single_instance,
+        frame.affected_multi_instance,
+        frame.affected_instances,
+        frame.max_instances,
+        report.frames,
+        report.mean_affected,
+        report.mean_total,
+        report.mean_affected_instances,
+        report.peak_instances,
+        if offenders.is_empty() { "-".to_string() } else { offenders.join(", ") },
+    );
+}
+
+static INSTANCED_TOTAL: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_AFFECTED: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_AFFECTED_SINGLE: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_AFFECTED_MULTI: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_AFFECTED_INSTANCES: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_MAX_INSTANCES: AtomicU32 = AtomicU32::new(0);
 
 /// `ID3D11Device::CreateVertexShader` (device vtable slot 12) and `ID3D11DeviceContext::VSSetShader`
 /// (context vtable slot 11), verified against the `windows` vtable structs.
@@ -1758,6 +2039,9 @@ unsafe extern "system" fn create_vertex_shader_detour(
 ) -> i32 {
     let detour = CREATE_VERTEX_SHADER.get().expect("set before enable");
     let pending = PATCH_PENDING.with(Cell::take);
+    // Taken unconditionally, so a name left behind by a create that did not reach the record below
+    // cannot be attributed to a later, unrelated shader.
+    let pending_name = PATCH_PENDING_NAME.with(Cell::take);
     let reacquired = (!pending && active() && !bytecode.is_null() && length >= 4).then(|| {
         let code = unsafe { std::slice::from_raw_parts(bytecode.cast::<u8>(), length) };
         dxbc_stereo::patch_vertex_shader(code)
@@ -1797,12 +2081,16 @@ unsafe extern "system" fn create_vertex_shader_detour(
         // SAFETY: on success `*out` is the newly-created, live COM object. Only the thread that won the
         // `insert` takes the reference, so records and releases stay balanced.
         unsafe { com_add_ref(shader) };
+        if let Some(name) = pending_name {
+            PATCHED_VS_NAMES.lock().insert(shader as usize, name);
+        }
     }
     hr
 }
 
 /// Cache whether the vertex shader now bound is a patched one, so [`draw_indexed_detour`] can gate
-/// without a per-draw set lookup.
+/// without a per-draw set lookup, and its pointer, so the already-instanced exposure measurement can
+/// attribute a draw to the shader that issued it.
 unsafe extern "system" fn vs_set_shader_detour(
     context: *mut c_void,
     shader: *mut c_void,
@@ -1811,6 +2099,7 @@ unsafe extern "system" fn vs_set_shader_detour(
 ) {
     let patched = !shader.is_null() && PATCHED_VS.lock().contains(&(shader as usize));
     BOUND_VS_PATCHED.store(patched, Ordering::Relaxed);
+    BOUND_VS.store(shader as usize, Ordering::Relaxed);
     let detour = VS_SET_SHADER.get().expect("set before enable");
     unsafe { detour.call(context, shader, instances, num_instances) };
 }
@@ -1824,6 +2113,10 @@ pub fn reset_patched_vs() {
         // SAFETY: every entry was `com_add_ref`'d exactly once when it was recorded.
         unsafe { com_release(shader as *mut c_void) };
     }
+    // Both are keyed by shader pointer, and those addresses become reusable the moment the references
+    // above are dropped, so an entry that survived the reset would be attributed to a different shader.
+    PATCHED_VS_NAMES.lock().clear();
+    reset_instanced_exposure();
     CVS_PENDING.store(0, Ordering::Relaxed);
     CVS_REACQ_PATCHED.store(0, Ordering::Relaxed);
     CVS_REACQ_CB13.store(0, Ordering::Relaxed);
@@ -1895,9 +2188,11 @@ pub fn log_draw_split() {
     let unpatched = UNPATCHED_DRAWS.swap(0, Ordering::Relaxed);
     let split = VIEWPORT_SPLIT.swap(0, Ordering::Relaxed);
     let dup = VIEWPORT_DUP.swap(0, Ordering::Relaxed);
+    let exposure = accumulate_instanced_exposure();
     if patched + unpatched > 0 {
         let n = DRAW_SPLIT_LOG.fetch_add(1, Ordering::Relaxed);
         if n.is_multiple_of(120) {
+            log_instanced_exposure(exposure);
             let s = substitution_stats();
             tracing::info!(
                 target: "single_pass",
@@ -1970,6 +2265,7 @@ pub fn uninstall_com_detours() {
         disable_detour!(RS_SET_SCISSOR_RECTS, "RSSetScissorRects");
         disable_detour!(DRAW_INDEXED, "DrawIndexed");
         disable_detour!(DRAW, "Draw");
+        disable_detour!(DRAW_INDEXED_INSTANCED, "DrawIndexedInstanced");
         disable_detour!(VS_SET_SHADER, "VSSetShader");
         disable_detour!(CREATE_VERTEX_SHADER, "CreateVertexShader");
         disable_detour!(SET_VERTEX_PROGRAM_CONSTANTS, "SetVertexProgramConstants");
@@ -1997,6 +2293,8 @@ pub fn uninstall_com_detours() {
         // SAFETY: every entry was `com_add_ref`'d exactly once when it was recorded.
         unsafe { com_release(shader as *mut c_void) };
     }
+    PATCHED_VS_NAMES.lock().clear();
+    reset_instanced_exposure();
     tracing::info!("single-pass: COM detours uninstalled");
 }
 
@@ -2068,7 +2366,7 @@ pub(crate) fn ensure_viewport_detours() {
         let draw_indexed_target: DrawIndexedFn =
             std::mem::transmute(*vtable.add(DRAW_INDEXED_SLOT));
         let draw_target: DrawFn = std::mem::transmute(*vtable.add(DRAW_SLOT));
-        let draw_indexed_instanced: DrawIndexedInstancedFn =
+        let draw_indexed_instanced_target: DrawIndexedInstancedFn =
             std::mem::transmute(*vtable.add(DRAW_INDEXED_INSTANCED_SLOT));
         let vs_set_shader_target: VsSetShaderFn =
             std::mem::transmute(*vtable.add(VS_SET_SHADER_SLOT));
@@ -2085,6 +2383,7 @@ pub(crate) fn ensure_viewport_detours() {
             Ok(scissors_detour),
             Ok(draw_indexed_detour_handle),
             Ok(draw_detour_handle),
+            Ok(draw_indexed_instanced_detour_handle),
             Ok(vs_set_shader_detour_handle),
             Ok(create_vertex_shader_detour_handle),
             Ok(set_vs_consts_detour_handle),
@@ -2093,6 +2392,7 @@ pub(crate) fn ensure_viewport_detours() {
             GenericDetour::new(scissors_target, rs_set_scissor_rects_detour),
             GenericDetour::new(draw_indexed_target, draw_indexed_detour),
             GenericDetour::new(draw_target, draw_detour),
+            GenericDetour::new(draw_indexed_instanced_target, draw_indexed_instanced_detour),
             GenericDetour::new(vs_set_shader_target, vs_set_shader_detour),
             GenericDetour::new(create_vertex_shader_target, create_vertex_shader_detour),
             GenericDetour::new(set_vs_consts_target, set_vertex_program_constants_detour),
@@ -2104,11 +2404,11 @@ pub(crate) fn ensure_viewport_detours() {
 
         // Publish into the statics before enabling, so a detour that fires mid-enable finds its
         // trampoline. Enabling itself runs with other threads suspended.
-        let _ = DRAW_INDEXED_INSTANCED_RAW.set(draw_indexed_instanced);
         RS_SET_VIEWPORTS.set(viewports_detour);
         RS_SET_SCISSOR_RECTS.set(scissors_detour);
         DRAW_INDEXED.set(draw_indexed_detour_handle);
         DRAW.set(draw_detour_handle);
+        DRAW_INDEXED_INSTANCED.set(draw_indexed_instanced_detour_handle);
         VS_SET_SHADER.set(vs_set_shader_detour_handle);
         CREATE_VERTEX_SHADER.set(create_vertex_shader_detour_handle);
         SET_VERTEX_PROGRAM_CONSTANTS.set(set_vs_consts_detour_handle);
@@ -2117,6 +2417,11 @@ pub(crate) fn ensure_viewport_detours() {
             RS_SET_SCISSOR_RECTS.get().expect("just set").enable().ok();
             DRAW_INDEXED.get().expect("just set").enable().ok();
             DRAW.get().expect("just set").enable().ok();
+            DRAW_INDEXED_INSTANCED
+                .get()
+                .expect("just set")
+                .enable()
+                .ok();
             VS_SET_SHADER.get().expect("just set").enable().ok();
             CREATE_VERTEX_SHADER.get().expect("just set").enable().ok();
             SET_VERTEX_PROGRAM_CONSTANTS
@@ -2148,13 +2453,25 @@ thread_local! {
     /// the genuinely patched one went unrecorded. The hook sets it and the device detour consumes it
     /// within the same synchronous call, so the flag never needs to cross a thread.
     static PATCH_PENDING: Cell<bool> = const { Cell::new(false) };
+
+    /// The engine name of the shader [`PATCH_PENDING`] refers to, carried alongside it so
+    /// [`create_vertex_shader_detour`] can record the name against the `ID3D11VertexShader` it gets
+    /// back. The D3D layer never sees the name, and the shader pointer is the only identity the
+    /// draw-time paths have, so this is the one point where the two can be joined.
+    static PATCH_PENDING_NAME: Cell<Option<String>> = const { Cell::new(None) };
 }
 
-/// Set (or clear) this thread's [`PATCH_PENDING`] flag. Called by the `CreateVertexProgram` hook
-/// around the engine's shader creation.
-pub fn set_patch_pending(pending: bool) {
+/// Set (or clear) this thread's [`PATCH_PENDING`] flag and the pending shader's engine name. Called
+/// by the `CreateVertexProgram` hook around the engine's shader creation.
+pub fn set_patch_pending(pending: bool, name: Option<&str>) {
     PATCH_PENDING.with(|flag| flag.set(pending));
+    PATCH_PENDING_NAME.with(|slot| slot.set(pending.then(|| name.map(str::to_owned)).flatten()));
 }
+
+/// The engine name of each recorded patched vertex shader, where one was available (the
+/// `CreateVertexProgram` path carries it; the re-acquire path does not). Read only by the diagnostic
+/// readouts, never on a draw path.
+static PATCHED_VS_NAMES: Mutex<BTreeMap<usize, String>> = Mutex::new(BTreeMap::new());
 /// The `ID3D11VertexShader`s created from patched blobs, keyed by their raw pointer.
 ///
 /// The set *owns* a reference to each shader: [`com_add_ref`] on record, [`com_release`] on
@@ -2191,6 +2508,9 @@ unsafe fn com_release(object: *mut c_void) {
 }
 /// Whether the currently-bound vertex shader is a patched one (updated on `VSSetShader`).
 static BOUND_VS_PATCHED: AtomicBool = AtomicBool::new(false);
+/// The currently-bound `ID3D11VertexShader` pointer (updated on `VSSetShader`), so an exposed
+/// already-instanced draw can be attributed to a shader.
+static BOUND_VS: AtomicUsize = AtomicUsize::new(0);
 static PATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static UNPATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static DRAW_SPLIT_LOG: AtomicUsize = AtomicUsize::new(0);

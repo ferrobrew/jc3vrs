@@ -115,6 +115,10 @@ fn create_vertex_program(
     // `m_Code` -- otherwise the engine hands the D3D stack a truncated container whose chunk table
     // runs past the declared length. Both are restored after the (bytecode-copying) call.
     let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
+    // Hoisted out of the census block so it can be handed to `set_patch_pending` below, which records
+    // it against the `ID3D11VertexShader` the engine is about to create -- the only join between a
+    // shader's engine name and the pointer the draw-time paths see.
+    let mut name: Option<String> = None;
     // Skip the census once eject begins, matching the fragment hook. The eject restore bounces the
     // bundle -- two `LoadShaderBundle` calls, so every vertex shader passes through here twice -- on
     // the game thread, which blocks in `shutdown_from_game` throughout. Running the full rewrite ~900
@@ -131,11 +135,7 @@ fn create_vertex_program(
         let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
         let outcome = dxbc_stereo::patch_vertex_shader(code);
         // The shader's engine name (a null-terminated C string) drives the reprojection allowlist.
-        let name = (!p.m_Name.is_null()).then(|| {
-            unsafe { std::ffi::CStr::from_ptr(p.m_Name.cast::<std::ffi::c_char>()) }
-                .to_string_lossy()
-                .into_owned()
-        });
+        name = program_name(p.m_Name);
         crate::stereo::single_pass::record_patch_outcome(&outcome, name.as_deref());
         // Substitute the rewritten bytecode when single-pass is active. The `cb0` remap is the primary
         // path; a shader with no per-eye `cb0` operand instead takes the reprojection rewrite, but only
@@ -194,10 +194,10 @@ fn create_vertex_program(
     // so `BOUND_VS_PATCHED` stays false and its draw is never doubled -- it renders in one eye.
     if saved.is_some() {
         crate::stereo::single_pass::ensure_viewport_detours();
-        crate::stereo::single_pass::set_patch_pending(true);
+        crate::stereo::single_pass::set_patch_pending(true, name.as_deref());
     }
     let result = CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params);
-    crate::stereo::single_pass::set_patch_pending(false);
+    crate::stereo::single_pass::set_patch_pending(false, None);
 
     if let Some((original_code, original_size, _copy)) = saved
         && let Some(p) = unsafe { params.as_mut() }
