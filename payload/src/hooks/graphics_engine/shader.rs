@@ -416,12 +416,19 @@ pub fn process_reload_request() {
 /// pristine shaders instead of keeping the mod's edits after it is gone. Game thread, during
 /// shutdown, before the hooks are uninstalled.
 pub fn restore_original_shaders_on_eject() {
+    // Every substitution the mod makes has to be represented here, or a session that made only that
+    // kind of substitution ejects without a bounce. The tessellation pair is the case that was
+    // missing: a terrain-only session leaves a domain shader reading a `cb13` nothing binds any more.
+    let (hull_forwarded, domain_reprojected) = crate::stereo::single_pass::terrain_counts();
     let patched_anything = crate::stereo::single_pass::has_patched_shaders()
         || patched_count() > 0
-        || dissolve_patched_count() > 0;
+        || dissolve_patched_count() > 0
+        || hull_forwarded > 0
+        || domain_reprojected > 0;
     if !patched_anything {
         return;
     }
+    crate::stereo::single_pass::warn_if_shaders_hold_patched_bytecode();
     tracing::info!("shader restore: re-creating the pristine shaders on eject");
     bounce_shader_bundle();
 }

@@ -1517,6 +1517,21 @@ pub fn has_patched_shaders() -> bool {
     !PATCHED_VS.lock().is_empty()
 }
 
+/// Warn if any shader was created from bytecode that already carried the mod's rewrite (see
+/// [`CVS_REACQ_CB13`]). The eject bounce cannot restore those: it re-creates from the resource's own
+/// bytecode, which in this case is the patched blob, and the rewriter has no inverse. Called from the
+/// eject restore so the condition is on the record instead of only in a live counter.
+pub fn warn_if_shaders_hold_patched_bytecode() {
+    let count = CVS_REACQ_CB13.load(Ordering::Relaxed);
+    if count > 0 {
+        tracing::warn!(
+            "single-pass: {count} shader(s) were created from bytecode that already carried the \
+             stereo rewrite, so some resource holds a patched blob; the eject bounce re-creates \
+             those still patched"
+        );
+    }
+}
+
 /// A snapshot of the shader-substitution tallies, for the bring-up log and the screenshot JSON sidecar.
 /// `recorded_vs` is the live size of [`PATCHED_VS`] (patched shaders the draw gating will double); the
 /// `cvs_*` fields are the [`create_vertex_shader_detour`] outcome buckets; the `census_*` fields are the
@@ -1831,6 +1846,19 @@ static VIEWPORT_DUP: AtomicUsize = AtomicUsize::new(0);
 /// are what the detour's own rewrite of the incoming bytecode found.
 static CVS_PENDING: AtomicUsize = AtomicUsize::new(0);
 static CVS_REACQ_PATCHED: AtomicUsize = AtomicUsize::new(0);
+/// The incoming bytecode already declared `cb13`, so the rewriter refused it as already-patched.
+///
+/// No pristine game vertex shader declares `cb13` -- the offline corpus run over all 455 of them
+/// reports zero `Cb13AlreadyDeclared`, which is why the register was chosen -- so a non-zero count is
+/// unambiguous: something is presenting the mod's *own* rewritten bytecode back to
+/// `CreateVertexShader`, from a store the substitution paths do not own (both of them repoint the
+/// engine's code pointer only for the duration of the create call and restore it afterwards).
+///
+/// That matters for eject. The restore bounce re-creates every shader from whatever bytecode its
+/// resource holds, with the substitution inert; a resource holding patched bytecode therefore
+/// re-creates a patched shader, and there is no inverse rewrite to undo it. Which store that is has
+/// not been identified -- it needs a live session with a non-zero count and a breakpoint on the
+/// caller. [`warn_if_shaders_hold_patched_bytecode`] makes it visible at eject rather than silent.
 static CVS_REACQ_CB13: AtomicUsize = AtomicUsize::new(0);
 static CVS_REACQ_NOREFS: AtomicUsize = AtomicUsize::new(0);
 static CVS_REACQ_ERR: AtomicUsize = AtomicUsize::new(0);
