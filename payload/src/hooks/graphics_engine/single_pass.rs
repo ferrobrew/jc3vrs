@@ -25,7 +25,7 @@ use jc3gi::graphics_engine::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::stereo::single_pass::BlockIntercept;
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -48,7 +48,7 @@ fn render_block_bark_draw(
     let detour = RENDER_BLOCK_BARK_DRAW.get().unwrap();
     // SAFETY: `this`/`rc`/`info` are the live pointers the engine passed in; the closure re-invokes the
     // original `Draw` trampoline.
-    let handled = Config::lock_query(|c| c.stereo.single_pass_bark)
+    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Bark)
         && unsafe {
             crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
                 detour.call(this, rc, info);
@@ -68,7 +68,7 @@ fn render_block_bark_draw_z(
 ) {
     let detour = RENDER_BLOCK_BARK_DRAW_Z.get().unwrap();
     // SAFETY: as above.
-    let handled = Config::lock_query(|c| c.stereo.single_pass_bark)
+    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Bark)
         && unsafe {
             crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
                 detour.call(this, rc, info);
@@ -89,7 +89,7 @@ fn render_block_foliage_draw(
 ) {
     let detour = RENDER_BLOCK_FOLIAGE_DRAW.get().unwrap();
     // SAFETY: as above.
-    let handled = Config::lock_query(|c| c.stereo.single_pass_foliage)
+    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Foliage)
         && unsafe {
             crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 2, 4, || {
                 detour.call(this, rc, info);
@@ -110,7 +110,7 @@ fn render_block_occluder_draw_z(
 ) {
     let detour = RENDER_BLOCK_OCCLUDER_DRAW_Z.get().unwrap();
     // SAFETY: as above.
-    let handled = Config::lock_query(|c| c.stereo.single_pass_occluder)
+    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Occluder)
         && unsafe {
             crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
                 detour.call(this, rc, info);

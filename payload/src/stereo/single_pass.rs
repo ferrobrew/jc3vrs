@@ -20,7 +20,7 @@ use std::{
     ffi::c_void,
     sync::{
         OnceLock,
-        atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering},
     },
 };
 
@@ -167,14 +167,9 @@ pub fn should_reproject(name: Option<&str>) -> bool {
     let Some(name) = name else {
         return false;
     };
-    let (reproject, tree_impostors) = Config::lock_query(|c| {
-        (
-            c.stereo.single_pass_reproject,
-            c.stereo.single_pass_tree_impostors,
-        )
-    });
-    (reproject && REPROJECT_NAME_PREFIXES.iter().any(|p| name.starts_with(p)))
-        || (tree_impostors
+    let flags = config_flags();
+    (flags.has(Flag::Reproject) && REPROJECT_NAME_PREFIXES.iter().any(|p| name.starts_with(p)))
+        || (flags.has(Flag::TreeImpostors)
             && VEGETATION_REPROJECT_NAME_PREFIXES
                 .iter()
                 .any(|p| name.starts_with(p)))
@@ -203,7 +198,7 @@ pub fn should_eye_inject(name: Option<&str>) -> bool {
     let Some(name) = name else {
         return false;
     };
-    Config::lock_query(|c| c.stereo.single_pass_terrain)
+    config_flags().has(Flag::Terrain)
         && TERRAIN_VS_NAME_PREFIXES.iter().any(|p| name.starts_with(p))
         && !is_terrain_shadow_pass(Some(name))
 }
@@ -231,7 +226,7 @@ pub fn is_terrain_shadow_pass(name: Option<&str>) -> bool {
 /// Whether the single-pass terrain path is live: single-pass is [`active`] and the `single_pass_terrain`
 /// flag is on. Gates the hull-forward and domain-reproject substitutions in the shader-creation hooks.
 pub fn terrain_active() -> bool {
-    active() && Config::lock_query(|c| c.stereo.single_pass_terrain)
+    active() && config_flags().has(Flag::Terrain)
 }
 
 /// Record that a terrain hull shader's eye lane was forwarded (its `TEXCOORD3.z` widened), for the
@@ -381,9 +376,8 @@ pub fn active() -> bool {
     if crate::is_shutting_down() {
         return false;
     }
-    let (single_pass, dry_run) =
-        Config::lock_query(|c| (c.stereo.single_pass, c.stereo.single_pass_patch_dryrun));
-    single_pass && !dry_run && capability() == Capability::Supported
+    let flags = config_flags();
+    flags.has(Flag::SinglePass) && !flags.has(Flag::DryRun) && capability() == Capability::Supported
 }
 
 /// Whether the eyes are made to diverge (in addition to [`active`]): distinct per-eye `cb13`,
@@ -392,7 +386,7 @@ pub fn active() -> bool {
 /// identically -- the shape the substitution was brought up in, and still the fallback whenever
 /// [`compute_dual_eye_rows`] cannot produce per-eye data.
 pub fn dual_eye_active() -> bool {
-    active() && Config::lock_query(|c| c.stereo.single_pass_dual_eye)
+    active() && config_flags().has(Flag::DualEye)
 }
 
 /// Whether the per-eye double-draw has been collapsed to a single G-buffer walk: one `game.Draw`
@@ -401,7 +395,7 @@ pub fn dual_eye_active() -> bool {
 /// splits the one back buffer into the two eye textures. Requires [`dual_eye_active`]; independent of
 /// `single_pass_double_wide`, which only upgrades each eye-half from squished to full resolution.
 pub fn collapse_active() -> bool {
-    dual_eye_active() && Config::lock_query(|c| c.stereo.single_pass_collapse)
+    dual_eye_active() && config_flags().has(Flag::Collapse)
 }
 
 /// Whether the scene render targets are re-created at 2x per-eye width so each eye-half is full
@@ -410,8 +404,101 @@ pub fn collapse_active() -> bool {
 /// Drives the engine render resolution ([`crate::vr::engine_render_resolution`]) and the per-eye
 /// capture-texture width (`ui::render`); the XR swapchain stays per-eye width.
 pub fn double_wide_active() -> bool {
-    collapse_active() && Config::lock_query(|c| c.stereo.single_pass_double_wide)
+    collapse_active() && config_flags().has(Flag::DoubleWide)
 }
+
+/// Whether the per-eye re-issue intercept for one of the baked-view-projection render blocks is
+/// enabled. Read from the frame's config snapshot, so the block `Draw` detours -- which fire for
+/// every draw of their type whether or not single-pass is on -- cost a relaxed load rather than a
+/// mutex acquisition.
+pub fn block_intercept_enabled(block: BlockIntercept) -> bool {
+    config_flags().has(match block {
+        BlockIntercept::Bark => Flag::Bark,
+        BlockIntercept::Foliage => Flag::Foliage,
+        BlockIntercept::Occluder => Flag::Occluder,
+    })
+}
+
+/// A render block with a baked-view-projection per-eye intercept.
+#[derive(Clone, Copy)]
+pub enum BlockIntercept {
+    Bark,
+    Foliage,
+    Occluder,
+}
+
+/// One flag in the per-frame single-pass config snapshot.
+#[derive(Clone, Copy)]
+enum Flag {
+    SinglePass,
+    DryRun,
+    DualEye,
+    Collapse,
+    DoubleWide,
+    Reproject,
+    Terrain,
+    TreeImpostors,
+    Bark,
+    Foliage,
+    Occluder,
+}
+
+/// The single-pass config flags, sampled once per frame.
+#[derive(Clone, Copy)]
+struct ConfigFlags(u32);
+
+impl ConfigFlags {
+    fn has(self, flag: Flag) -> bool {
+        self.0 & (1 << flag as u32) != 0
+    }
+}
+
+/// The frame's config snapshot, or a fresh read if none has been taken yet.
+///
+/// Every gate in this module is consulted from the render thread on paths that run per draw -- the
+/// viewport, indexed-draw and render-block detours -- so reading them through `Config`'s mutex made
+/// the feature pay a lock acquisition per draw submission, in a feature whose purpose is to reduce
+/// per-draw cost. The snapshot is refreshed at frame start ([`refresh_config_flags`]), so a change
+/// made in the debug UI takes effect on the next frame rather than mid-frame, which is also the more
+/// coherent behaviour: a flag flipping between two draws of one pass cannot leave the frame
+/// half-transformed.
+fn config_flags() -> ConfigFlags {
+    let snapshot = CONFIG_FLAGS.load(Ordering::Relaxed);
+    if snapshot & CONFIG_FLAGS_VALID != 0 {
+        return ConfigFlags(snapshot);
+    }
+    ConfigFlags(store_config_flags())
+}
+
+/// Re-read the single-pass config flags into the frame snapshot. Called at frame start.
+pub fn refresh_config_flags() {
+    store_config_flags();
+}
+
+fn store_config_flags() -> u32 {
+    let bit = |on: bool, flag: Flag| u32::from(on) << flag as u32;
+    let snapshot = Config::lock_query(|c| {
+        let s = &c.stereo;
+        bit(s.single_pass, Flag::SinglePass)
+            | bit(s.single_pass_patch_dryrun, Flag::DryRun)
+            | bit(s.single_pass_dual_eye, Flag::DualEye)
+            | bit(s.single_pass_collapse, Flag::Collapse)
+            | bit(s.single_pass_double_wide, Flag::DoubleWide)
+            | bit(s.single_pass_reproject, Flag::Reproject)
+            | bit(s.single_pass_terrain, Flag::Terrain)
+            | bit(s.single_pass_tree_impostors, Flag::TreeImpostors)
+            | bit(s.single_pass_bark, Flag::Bark)
+            | bit(s.single_pass_foliage, Flag::Foliage)
+            | bit(s.single_pass_occluder, Flag::Occluder)
+    }) | CONFIG_FLAGS_VALID;
+    CONFIG_FLAGS.store(snapshot, Ordering::Relaxed);
+    snapshot
+}
+
+/// Marks [`CONFIG_FLAGS`] as having been sampled at least once, so a zero snapshot before the first
+/// frame is not mistaken for "everything off".
+const CONFIG_FLAGS_VALID: u32 = 1 << 31;
+static CONFIG_FLAGS: AtomicU32 = AtomicU32::new(0);
 
 /// The eye whose viewport + view-projection the collapse UI overlays (HUD panel, egui panel) should
 /// currently draw with, so a head/world-locked quad lands at the correct 3D spot in each eye instead

@@ -63,6 +63,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // that never returned) could otherwise leave it up and have every shadow and reflection draw
         // of this frame instance-doubled and eye-split.
         crate::stereo::single_pass::clear_gbuffer_range();
+        // Sample the single-pass config once for the whole frame, so the per-draw detours read a
+        // relaxed atomic rather than taking the config mutex.
+        crate::stereo::single_pass::refresh_config_flags();
 
         // Apply the sun-shadow diagnostic override before the original runs, so this frame's
         // sim-side CShadowManager::UpdateRender sees it and drives the engine's own SetEnabled path.
