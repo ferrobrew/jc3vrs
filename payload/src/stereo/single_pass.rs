@@ -1355,28 +1355,40 @@ unsafe extern "system" fn rs_set_viewports_detour(
     }
 }
 
-/// In the collapsed single walk, bind the immediate-context viewport as the L/R eye halves (for a
-/// patched geometry draw) or the full width (for a fullscreen/unpatched draw), re-binding only on a
-/// transition. Derives the halves from the full viewport recorded by [`rs_set_viewports_detour`]; a
+/// What a collapse draw wants bound to the two viewport slots.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CollapseViewport {
+    /// Both slots span the whole double-wide target: the fullscreen lighting and post passes.
+    Full,
+    /// Slot 0 is the left eye's half and slot 1 the right: a patched shader's
+    /// `SV_ViewportArrayIndex` picks its own.
+    Split,
+    /// Both slots are the same eye's half, so a shader that writes no viewport index -- or writes
+    /// either one -- still lands in that eye. Used by the per-eye re-issue of unpatched geometry.
+    Eye(usize),
+}
+
+/// In the collapsed single walk, bind the immediate-context viewport for the draw about to be
+/// submitted. Derives the halves from the full viewport recorded by [`rs_set_viewports_detour`]; a
 /// no-op until the scene's first viewport bind records it.
-fn ensure_collapse_viewport(context: *mut c_void, split: bool) {
+fn ensure_collapse_viewport(context: *mut c_void, target: CollapseViewport) {
     let Some(full) = *COLLAPSE_FULL_VIEWPORT.lock() else {
         return;
     };
     let Some(detour) = RS_SET_VIEWPORTS.get() else {
         return;
     };
-    let viewports = if split {
-        VIEWPORT_SPLIT.fetch_add(1, Ordering::Relaxed);
-        let half = full.Width / 2.0;
-        let mut left = full;
-        left.Width = half;
-        let mut right = full;
-        right.Width = half;
-        right.TopLeftX = full.TopLeftX + half;
-        [left, right]
-    } else {
-        [full, full]
+    let viewports = match target {
+        CollapseViewport::Split => {
+            VIEWPORT_SPLIT.fetch_add(1, Ordering::Relaxed);
+            [eye_half_viewport(full, 0), eye_half_viewport(full, 1)]
+        }
+        CollapseViewport::Eye(eye) => {
+            VIEWPORT_SPLIT.fetch_add(1, Ordering::Relaxed);
+            let half = eye_half_viewport(full, eye);
+            [half, half]
+        }
+        CollapseViewport::Full => [full, full],
     };
     // SAFETY: `context` is the live immediate context; `detour.call` invokes the original
     // RSSetViewports (the trampoline), so this does not re-enter the detour. Bound unconditionally
@@ -1429,9 +1441,10 @@ static DRAW_INDEXED_INSTANCED_RAW: OnceLock<DrawIndexedInstancedFn> = OnceLock::
 /// Handle a `DrawIndexed` while the dual-eye G-buffer geometry is drawing. A **patched** shader is
 /// promoted to a 2-instance `DrawIndexedInstanced` -- its `SV_InstanceID & 1` selects the eye and
 /// `SV_ViewportArrayIndex` routes it to that eye's viewport half (one draw, both eyes). An
-/// **unpatched** shader is left single, so it rasterises to viewport slot 0 -- which under collapse
-/// is the left eye's half, meaning unpatched indexed geometry is absent from the right eye. The
-/// patched/unpatched split is counted for the diagnostic log.
+/// **unpatched** shader writes no viewport index and so would rasterise to slot 0 only; under collapse
+/// it is instead re-issued once per eye with both slots pinned to that eye's half, which costs a
+/// second submission but is the only way it reaches both eyes. The patched/unpatched split is counted
+/// for the diagnostic log.
 unsafe extern "system" fn draw_indexed_detour(
     context: *mut c_void,
     index_count: u32,
@@ -1441,15 +1454,10 @@ unsafe extern "system" fn draw_indexed_detour(
     let detour = DRAW_INDEXED.get().expect("set before enable");
     if dual_eye_active() && in_gbuffer_range() {
         let patched = BOUND_VS_PATCHED.load(Ordering::Relaxed);
-        // Collapse: split the viewport into L/R eye halves for a patched geometry draw, re-binding
-        // only on a transition (a pass boundary, not every draw). Unpatched `DrawIndexed` geometry is
-        // left on whatever viewport is bound -- the fullscreen reset-to-full lives in `draw_detour`
-        // (non-indexed `Draw`), so the deferred-lighting/post passes restore the full width without
-        // dragging unpatched *geometry* to full width and ghosting it across both eyes.
-        if collapse_active() && patched {
-            ensure_collapse_viewport(context, true);
-        }
         if patched {
+            if collapse_active() {
+                ensure_collapse_viewport(context, CollapseViewport::Split);
+            }
             PATCHED_DRAWS.fetch_add(1, Ordering::Relaxed);
             if let Some(instanced) = DRAW_INDEXED_INSTANCED_RAW.get() {
                 unsafe { instanced(context, index_count, 2, start_index, base_vertex, 0) };
@@ -1457,6 +1465,19 @@ unsafe extern "system" fn draw_indexed_detour(
             }
         } else {
             UNPATCHED_DRAWS.fetch_add(1, Ordering::Relaxed);
+            if collapse_active() {
+                // The shader was not rewritten, so it writes no `SV_ViewportArrayIndex` and always
+                // rasterises to slot 0. Left to the split binding it would appear in the left eye
+                // only; left to the full binding it would stretch across both. Re-issue it once per
+                // eye with both slots pinned to that eye's half. It still reads the centred `cb0`, so
+                // there is no parallax on it -- but it is present, in both eyes, at the right size.
+                for eye in 0..2 {
+                    ensure_collapse_viewport(context, CollapseViewport::Eye(eye));
+                    unsafe { detour.call(context, index_count, start_index, base_vertex) };
+                }
+                ensure_collapse_viewport(context, CollapseViewport::Full);
+                return;
+            }
         }
     }
     unsafe { detour.call(context, index_count, start_index, base_vertex) };
@@ -1469,7 +1490,7 @@ unsafe extern "system" fn draw_indexed_detour(
 /// camera scene) this is a straight pass-through.
 unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, start_vertex: u32) {
     if collapse_active() && in_gbuffer_range() {
-        ensure_collapse_viewport(context, false);
+        ensure_collapse_viewport(context, CollapseViewport::Full);
     }
     let detour = DRAW.get().expect("set before enable");
     unsafe { detour.call(context, vertex_count, start_vertex) };
