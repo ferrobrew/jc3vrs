@@ -115,7 +115,14 @@ fn create_vertex_program(
     // `m_Code` -- otherwise the engine hands the D3D stack a truncated container whose chunk table
     // runs past the declared length. Both are restored after the (bytecode-copying) call.
     let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
-    let census = Config::lock_query(|c| c.stereo.single_pass || c.stereo.single_pass_patch_dryrun);
+    // Skip the census once eject begins, matching the fragment hook. The eject restore bounces the
+    // bundle -- two `LoadShaderBundle` calls, so every vertex shader passes through here twice -- on
+    // the game thread, which blocks in `shutdown_from_game` throughout. Running the full rewrite ~900
+    // times there is a multi-second freeze on every F5, on a path already racing teardown, and it buys
+    // nothing: the substitution is inert during shutdown, so the rewrite's only product is a tally
+    // nobody will read.
+    let census = !crate::is_shutting_down()
+        && Config::lock_query(|c| c.stereo.single_pass || c.stereo.single_pass_patch_dryrun);
     if census
         && let Some(p) = unsafe { params.as_mut() }
         && !p.m_Code.is_null()
