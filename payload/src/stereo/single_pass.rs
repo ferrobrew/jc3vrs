@@ -565,7 +565,8 @@ pub unsafe fn terrain_detail_per_eye(
     };
     // SAFETY: `rc` is live per the caller contract.
     let ctx = unsafe { render_context_graphics_context(rc) };
-    for pass in &passes {
+    for (eye, pass) in passes.iter().enumerate() {
+        let _reissue = PerEyeReissue::enter(eye);
         // SAFETY: `ctx` is the render context's live graphics context; `cb1` is four float4 rows.
         unsafe { SetVertexProgramConstants(ctx, 1, 0, pass.cb1.as_ptr(), 4) };
         bind_both_viewport_slots(&d3d, pass.viewport);
@@ -593,6 +594,39 @@ struct ReprojectUpload {
     cb_index: i32,
     reg_offset: u32,
     m_eye: glam::Mat4,
+}
+
+/// `eye + 1` while a render-block per-eye re-issue is in flight, `0` otherwise.
+///
+/// A re-issue re-drives the block's whole `Draw`, so every draw and viewport call the block makes
+/// passes back through this module's own detours. Without a marker they would compound the split the
+/// re-issue just set up: a patched `DrawIndexed` inside would be instance-doubled and re-split
+/// (drawing the geometry twice in each eye), and any `Draw` or single-slot `RSSetViewports` would
+/// restore the full width, un-splitting the eye half mid-re-issue.
+static PER_EYE_REISSUE: AtomicUsize = AtomicUsize::new(0);
+
+/// The eye whose per-eye re-issue is currently in flight, or `None` outside one.
+fn per_eye_reissue_eye() -> Option<usize> {
+    match PER_EYE_REISSUE.load(Ordering::Acquire) {
+        0 => None,
+        marker => Some(marker - 1),
+    }
+}
+
+/// Raises [`PER_EYE_REISSUE`] for one eye for as long as it lives.
+struct PerEyeReissue;
+
+impl PerEyeReissue {
+    fn enter(eye: usize) -> Self {
+        PER_EYE_REISSUE.store(eye + 1, Ordering::Release);
+        Self
+    }
+}
+
+impl Drop for PerEyeReissue {
+    fn drop(&mut self) {
+        PER_EYE_REISSUE.store(0, Ordering::Release);
+    }
 }
 
 /// Fast-path guard for [`set_vertex_program_constants_detour`]: a relaxed load skips the mutex on every
@@ -629,6 +663,13 @@ fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, ID3D11
     if !collapse_active() || !in_gbuffer_range() {
         return None;
     }
+    // A block whose vertex shader the rewriter happened to patch (patching is by operand detection,
+    // not by name, so any permutation touching `cb0[4]`/`cb0[29..32]` gets it) already renders both
+    // eyes from one draw. Re-issuing it would draw the geometry twice per eye, and its position would
+    // come from `cb13`'s eye slot rather than the reprojected constant. Leave it to the patched path.
+    if BOUND_VS_PATCHED.load(Ordering::Relaxed) {
+        return None;
+    }
     let m_eye = (*CURRENT_M_EYE.lock())?;
     let full = (*COLLAPSE_FULL_VIEWPORT.lock())?;
     let d3d = immediate_context()?;
@@ -643,9 +684,10 @@ fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, ID3D11
 /// The block writes its view-projection into a constant buffer inside its own `Draw`, so rather than
 /// replicate that bake, this arms [`set_vertex_program_constants_detour`] to reproject the block's own
 /// upload for the duration of a wrapped original-`Draw` call. It covers every draw kind (plain,
-/// CPU-instanced, GPU-indirect) uniformly, since it re-drives the block's whole `Draw` -- the block's
-/// vertex shader stays pristine (unpatched), so the draw-doubling detour leaves it single, and each of
-/// the two re-issues renders into its eye's viewport half.
+/// CPU-instanced, GPU-indirect) uniformly, since it re-drives the block's whole `Draw`, and each of the
+/// two re-issues renders into its eye's viewport half. The re-issue raises [`PER_EYE_REISSUE`] so the
+/// draw and viewport detours leave the block's own calls alone rather than compounding the split, and
+/// [`baked_cb_intercept_ready`] declines outright if the bound vertex shader turns out to be patched.
 ///
 /// # Safety
 ///
@@ -659,6 +701,7 @@ pub unsafe fn reproject_baked_cb_per_eye(
         return false;
     };
     for (eye, &m) in m_eye.iter().enumerate() {
+        let _reissue = PerEyeReissue::enter(eye);
         arm_reproject(ReprojectUpload {
             cb_index,
             reg_offset,
@@ -1323,6 +1366,14 @@ unsafe extern "system" fn rs_set_viewports_detour(
     let detour = RS_SET_VIEWPORTS.get().expect("set before enable");
     if active() && count == 1 && !viewports.is_null() {
         let vp = unsafe { *viewports };
+        if let Some(eye) = per_eye_reissue_eye() {
+            // Inside a per-eye re-issue the eye half must survive whatever the block binds. Honour the
+            // requested region but keep it pinned to this eye's half, and leave `COLLAPSE_FULL_VIEWPORT`
+            // alone so the re-issue cannot redefine what "full" means for the draws that follow it.
+            let half = eye_half_viewport(vp, eye);
+            unsafe { detour.call(context, 2, [half, half].as_ptr()) };
+            return;
+        }
         if collapse_active() {
             // Collapse: record the full viewport and bind both slots to it unsplit. The eye-split is
             // applied per-draw in `draw_indexed_detour` via `ensure_collapse_viewport`, so the
@@ -1452,7 +1503,7 @@ unsafe extern "system" fn draw_indexed_detour(
     base_vertex: i32,
 ) {
     let detour = DRAW_INDEXED.get().expect("set before enable");
-    if dual_eye_active() && in_gbuffer_range() {
+    if dual_eye_active() && in_gbuffer_range() && per_eye_reissue_eye().is_none() {
         let patched = BOUND_VS_PATCHED.load(Ordering::Relaxed);
         if patched {
             if collapse_active() {
@@ -1489,7 +1540,7 @@ unsafe extern "system" fn draw_indexed_detour(
 /// left the viewport split to. Reset the viewport to full before the draw. Outside collapse (or the
 /// camera scene) this is a straight pass-through.
 unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, start_vertex: u32) {
-    if collapse_active() && in_gbuffer_range() {
+    if collapse_active() && in_gbuffer_range() && per_eye_reissue_eye().is_none() {
         ensure_collapse_viewport(context, CollapseViewport::Full);
     }
     let detour = DRAW.get().expect("set before enable");
