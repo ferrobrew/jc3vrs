@@ -10,8 +10,9 @@
 //!   the game's real shader set.
 //!
 //! The rest of the pipeline (cb13 dual-eye upload, the double-wide render-setup re-init, the
-//! draw-doubling) is built out under [`crate::config::StereoConfig::single_pass`]; until it lands,
-//! [`crate::config::StereoConfig::single_pass_patch_dryrun`] runs the census with no rendering change.
+//! draw-doubling) runs under [`crate::config::StereoConfig::single_pass`] and the per-step flags
+//! beside it. [`crate::config::StereoConfig::single_pass_patch_dryrun`] runs the census alone, with
+//! no rendering change.
 
 use std::{
     collections::BTreeMap,
@@ -384,8 +385,11 @@ pub fn active() -> bool {
     single_pass && !dry_run && capability() == Capability::Supported
 }
 
-/// Whether the Milestone B "make the eyes diverge" step is on (in addition to [`active`]): distinct
-/// per-eye `cb13`, left/right-half viewport routing, and instance doubling of the G-buffer geometry.
+/// Whether the eyes are made to diverge (in addition to [`active`]): distinct per-eye `cb13`,
+/// left/right-half viewport routing, and instance doubling of the G-buffer geometry. With it off the
+/// patched shaders still run, but both `cb13` eye slots hold the same view, so the two eyes render
+/// identically -- the shape the substitution was brought up in, and still the fallback whenever
+/// [`compute_dual_eye_rows`] cannot produce per-eye data.
 pub fn dual_eye_active() -> bool {
     active() && Config::lock_query(|c| c.stereo.single_pass_dual_eye)
 }
@@ -768,12 +772,11 @@ const PER_EYE_SOURCE_ROWS: [usize; 5] = [29, 30, 31, 32, 4];
 
 /// Mirror the current view's per-eye `cb0` rows into the mod-owned `cb13` and bind it at `b13`.
 ///
-/// Milestone A of the single-pass build: both eye slots get the **same** (current-view) rows, so a
-/// patched vertex shader -- which reads its position from `cb13` instead of `cb0` -- renders exactly
-/// what it would have from `cb0`, in *every* pass (the G-buffer, but also the shadow and reflection
-/// passes that reuse the same model shaders under a different view). That shadow-safety is why `cb13`
-/// tracks whatever view is current rather than being written once. Later milestones diverge the two
-/// slots (eye 0 / eye 1) for the doubled G-buffer draw.
+/// Outside the diverging case both eye slots get the **same** (current-view) rows, so a patched
+/// vertex shader -- which reads its position from `cb13` instead of `cb0` -- renders exactly what it
+/// would have from `cb0`, in *every* pass (the G-buffer, but also the shadow and reflection passes
+/// that reuse the same model shaders under a different view). That shadow-safety is why `cb13` tracks
+/// whatever view is current rather than being written once.
 ///
 /// Called from the `SetAllGlobalShaderProgramConstants` detour, after the engine has refreshed
 /// `m_VPGlobalConstData` and uploaded `cb0`, on the render thread.
@@ -781,10 +784,10 @@ pub fn mirror_and_bind_cb13(engine: &RenderEngine) {
     // Ensure the viewport-duplication detours are installed (once, on the first active frame).
     ensure_viewport_detours();
 
-    // Dual-eye (Milestone B): during the main-scene G-buffer range, fill the two eye slots with
-    // *distinct* per-eye view-projections so the eyes diverge. Everywhere else (shadow/reflection
-    // passes, and Milestone A) mirror the current view into both slots -- diverging those would be
-    // wrong (they render from the sun/reflection camera, not the eye camera).
+    // During the main-scene G-buffer range, fill the two eye slots with *distinct* per-eye
+    // view-projections so the eyes diverge. Everywhere else (the shadow and reflection passes, and
+    // whenever divergence is off) mirror the current view into both slots -- diverging those would be
+    // wrong, since they render from the sun or reflection camera, not the eye camera.
     let rows = if dual_eye_active() && in_gbuffer_range() {
         compute_dual_eye_rows(engine).unwrap_or_else(|| mirror_rows(engine))
     } else {
@@ -814,9 +817,10 @@ pub fn mirror_and_bind_cb13(engine: &RenderEngine) {
     }
 }
 
-/// Mirror the current view's per-eye `cb0` rows into both `cb13` eye slots (Milestone A / non-scene
-/// passes): a patched shader then renders exactly what it would from `cb0`. The `M_eye` reprojection
-/// block is left at identity, so a reprojected shader is a no-op here too.
+/// Mirror the current view's per-eye `cb0` rows into both `cb13` eye slots (the non-scene passes, and
+/// any frame where divergence is off): a patched shader then renders exactly what it would from
+/// `cb0`. The `M_eye` reprojection block is left at identity, so a reprojected shader is a no-op here
+/// too.
 fn mirror_rows(engine: &RenderEngine) -> [Vector4; STEREO_CB_TOTAL_ROWS] {
     let vp = &engine.m_VPGlobalConstData;
     let mut rows = [Vector4::default(); STEREO_CB_TOTAL_ROWS];
@@ -1187,12 +1191,13 @@ pub fn apply_eye_split_viewport() {
 /// Duplicate the current (single) viewport into viewport slots 0 **and** 1, both covering the same
 /// region.
 ///
-/// A patched shader writes `SV_ViewportArrayIndex = SV_InstanceID & 1`. Milestone A does not double
-/// instances or set up per-eye viewports, so an instanced draw's odd-`SV_InstanceID` primitives would
-/// route to viewport 1 -- which the engine never bound -- and be discarded, dropping half of every
-/// instanced object (the flicker, since VR head-motion re-sorts which instance ids are odd). Binding
-/// a second, identical viewport makes index 1 valid and render the same as index 0. (Milestone B
-/// replaces the two identical viewports with the left/right halves of the double-wide target.)
+/// A patched shader writes `SV_ViewportArrayIndex = SV_InstanceID & 1`. With divergence off nothing
+/// doubles instances or sets up per-eye viewports, so an instanced draw's odd-`SV_InstanceID`
+/// primitives would route to viewport 1 -- which the engine never bound -- and be discarded, dropping
+/// half of every instanced object (the flicker, since VR head-motion re-sorts which instance ids are
+/// odd). Binding a second, identical viewport makes index 1 valid and render the same as index 0.
+/// When the eyes diverge, the two identical viewports become the left/right halves of the double-wide
+/// target instead.
 unsafe fn duplicate_viewport(context: &ID3D11DeviceContext) {
     unsafe {
         let mut count = 1u32;
@@ -1262,7 +1267,7 @@ unsafe extern "system" fn rs_set_viewports_detour(
             right.TopLeftX = vp.TopLeftX + half;
             (left, right)
         } else {
-            // Milestone A: both slots identical, so a patched shader routes anywhere validly.
+            // Not diverging: both slots identical, so a patched shader routes anywhere validly.
             VIEWPORT_DUP.fetch_add(1, Ordering::Relaxed);
             (vp, vp)
         };
@@ -1336,8 +1341,9 @@ static DRAW_INDEXED_INSTANCED_RAW: OnceLock<DrawIndexedInstancedFn> = OnceLock::
 /// Handle a `DrawIndexed` while the dual-eye G-buffer geometry is drawing. A **patched** shader is
 /// promoted to a 2-instance `DrawIndexedInstanced` -- its `SV_InstanceID & 1` selects the eye and
 /// `SV_ViewportArrayIndex` routes it to that eye's viewport half (one draw, both eyes). An
-/// **unpatched** shader is left single (routed to viewport 0 only for now -- its own per-eye
-/// double-draw is the next step). The patched/unpatched split is counted for the diagnostic log.
+/// **unpatched** shader is left single, so it rasterises to viewport slot 0 -- which under collapse
+/// is the left eye's half, meaning unpatched indexed geometry is absent from the right eye. The
+/// patched/unpatched split is counted for the diagnostic log.
 unsafe extern "system" fn draw_indexed_detour(
     context: *mut c_void,
     index_count: u32,
@@ -1563,8 +1569,10 @@ pub fn log_draw_split() {
 /// Disable all the single-pass COM-vtable detours, restoring the original D3D functions. Must run on
 /// eject **before** the payload unloads: the detours inline-patch the DXVK functions to jump into
 /// payload code, so leaving them enabled while the DLL unmaps dangles those jumps and the next D3D
-/// call crashes. Runs under a thread suspender, like install.
+/// call crashes. Runs under a thread suspender and the install lock, like install -- with the same
+/// caveat that suspension narrows rather than closes the in-prologue window.
 pub fn uninstall_com_detours() {
+    let _install = DETOUR_INSTALL.lock();
     if RS_SET_VIEWPORTS.get().is_none() {
         return; // never installed (single-pass never activated this session)
     }
@@ -1599,19 +1607,27 @@ pub fn uninstall_com_detours() {
 }
 
 /// Install the single-pass COM-vtable detours on the immediate-context (and device) vtables, once.
-/// Patching runs under a thread suspender (all other threads paused) so none can be executing the
-/// target's prologue while it is rewritten. Called from the active render path and from the
+/// Patching runs under a thread suspender, which narrows the window in which another thread can be
+/// executing a target's prologue while it is rewritten -- it does not close it: `SuspendThread` is
+/// asynchronous, and no instruction pointer is inspected, so a thread already inside the bytes being
+/// overwritten stays there. Called from the active render path and from the
 /// `CreateVertexProgram` hook -- the latter so the `CreateVertexShader` detour that records a patched
 /// shader into [`PATCHED_VS`] exists *before* the shader is created, not lazily on the first rendered
 /// frame (a shader created in between, e.g. a character shader loaded at level start, would otherwise
 /// be patched at the blob level but never recorded, so `BOUND_VS_PATCHED` stays false and its draw is
 /// never doubled). A normal (single-pass-off) session never installs it.
 pub(crate) fn ensure_viewport_detours() {
+    // The whole body is serialized, not just the published-yet check: the callers are on different
+    // threads (the render thread's cb13 mirror and the shader-creation thread's `CreateVertexProgram`),
+    // and the publish happens only after seven `GenericDetour::new` calls. Two threads could otherwise
+    // both pass an unpublished check and both reach `ThreadSuspender::for_block`, each suspending the
+    // other -- a silent, permanent hang. `uninstall_com_detours` takes the same lock so an eject cannot
+    // interleave with an install.
+    let _install = DETOUR_INSTALL.lock();
     if RS_SET_VIEWPORTS.get().is_some() || crate::is_shutting_down() {
         return; // already installed, or tearing down -- never (re)install during eject
     }
-    // SAFETY: reads the live immediate-context vtable; the two slots are the standard D3D11 layout,
-    // and the detour targets are enabled under a thread suspender.
+    // SAFETY: reads the live immediate-context vtable; the two slots are the standard D3D11 layout.
     unsafe {
         let Some(ge) = GraphicsEngine::get() else {
             return;
@@ -1692,6 +1708,11 @@ pub(crate) fn ensure_viewport_detours() {
         tracing::info!("single-pass: viewport + draw + shader-tracking COM detours installed");
     }
 }
+
+/// Serializes [`ensure_viewport_detours`] against itself and against [`uninstall_com_detours`]. Both
+/// suspend every other thread while they patch, so two of them running concurrently would suspend each
+/// other and hang the process.
+static DETOUR_INSTALL: Mutex<()> = Mutex::new(());
 
 static CB13: Mutex<Cb13Buffer> = Mutex::new(Cb13Buffer { buffer: None });
 static IN_GBUFFER_RANGE: AtomicBool = AtomicBool::new(false);
