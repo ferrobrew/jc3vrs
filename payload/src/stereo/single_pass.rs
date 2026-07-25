@@ -650,6 +650,19 @@ fn disarm_reproject() {
     *REPROJECT_UPLOAD.lock() = None;
 }
 
+/// Whether `viewport` covers the scene render target, as opposed to one of the reduced-resolution
+/// post-effect targets. Compared against [`crate::stereo::render_size`] -- the engine's
+/// `m_BackBufferLinear`, which under the collapse's double-wide is the full two-eye width -- with a
+/// pixel of slack for the engine's own rounding.
+fn is_scene_sized(viewport: D3D11_VIEWPORT) -> bool {
+    let Some((width, height)) = crate::stereo::render_size() else {
+        // Without a render size to compare against, take the viewport: the alternative is never
+        // recording one and losing the eye split entirely.
+        return true;
+    };
+    (viewport.Width - width as f32).abs() <= 1.0 && (viewport.Height - height as f32).abs() <= 1.0
+}
+
 /// The eye-half of `full` for eye `e` (left = 0, right = 1).
 fn eye_half_viewport(full: D3D11_VIEWPORT, eye: usize) -> D3D11_VIEWPORT {
     let half = full.Width / 2.0;
@@ -1393,7 +1406,14 @@ unsafe extern "system" fn rs_set_viewports_detour(
             // interleaved fullscreen lighting/post passes (which do not route to an eye) keep the full
             // width while patched geometry gets the L/R halves. Binding both slots keeps a patched
             // shader that writes `SV_ViewportArrayIndex` valid before the first split of a pass.
-            *COLLAPSE_FULL_VIEWPORT.lock() = Some(vp);
+            //
+            // Only a scene-sized viewport is recorded. The detour sees every viewport bind in the
+            // frame, including the half-resolution SSAO/SSR/bloom targets, and the eye halves are
+            // derived from this record -- so without the size check the eye split would follow
+            // whichever post pass happened to bind last.
+            if is_scene_sized(vp) {
+                *COLLAPSE_FULL_VIEWPORT.lock() = Some(vp);
+            }
             VIEWPORT_DUP.fetch_add(1, Ordering::Relaxed);
             unsafe { detour.call(context, 2, [vp, vp].as_ptr()) };
             return;
