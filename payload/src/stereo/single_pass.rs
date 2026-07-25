@@ -566,11 +566,7 @@ struct TerrainDetailEyePass {
 unsafe fn terrain_detail_eye_passes(
     this: *const RenderBlockTerrainDetail,
     rc: *const RenderContext,
-) -> Option<(
-    [TerrainDetailEyePass; 2],
-    D3D11_VIEWPORT,
-    ID3D11DeviceContext,
-)> {
+) -> Option<([TerrainDetailEyePass; 2], D3D11_VIEWPORT, EngineContext)> {
     if !terrain_active() {
         return None;
     }
@@ -613,23 +609,45 @@ unsafe fn render_context_graphics_context(rc: *const RenderContext) -> *mut HCon
     unsafe { (*rc).m_Context }
 }
 
-/// The engine's immediate `ID3D11DeviceContext`, or `None` if the device/context is not live yet.
-fn immediate_context() -> Option<ID3D11DeviceContext> {
-    // SAFETY: read on the render thread, where the engine device/context pointers are stable.
-    unsafe {
-        let ge = GraphicsEngine::get()?;
-        let device = ge.m_Device.as_ref()?;
-        let context = device.m_Context.as_ref()?;
-        Some(context.m_Context.clone())
+/// The engine's immediate context, borrowed for the duration of a render-thread operation.
+///
+/// Borrowed rather than cloned: the per-eye re-issues take this per draw, and cloning the
+/// `ID3D11DeviceContext` would be an `AddRef`/`Release` pair each time on a path whose whole purpose
+/// is cutting per-draw cost. The engine owns the context for the process's life, so a `'static`
+/// borrow is sound for as long as the engine is up -- which the render thread guarantees.
+#[derive(Clone, Copy)]
+struct EngineContext(&'static jc3gi::graphics_engine::device::Context);
+
+impl EngineContext {
+    /// The engine's immediate context, or `None` if the device/context is not live yet.
+    fn get() -> Option<Self> {
+        // SAFETY: read on the render thread, where the engine device/context pointers are stable.
+        unsafe {
+            let ge = GraphicsEngine::get()?;
+            let device = ge.m_Device.as_ref()?;
+            Some(Self(device.m_Context.as_ref()?))
+        }
+    }
+
+    /// Run `f` on the D3D immediate context under the engine's own context mutex, which every other
+    /// path in the mod that touches the context also takes.
+    fn with_lock<R>(self, f: impl FnOnce(&ID3D11DeviceContext) -> R) -> R {
+        // SAFETY: `m_Mutex` is the engine's live critical section for this context.
+        unsafe {
+            EnterCriticalSection(self.0.m_Mutex);
+            let result = f(&self.0.m_Context);
+            LeaveCriticalSection(self.0.m_Mutex);
+            result
+        }
     }
 }
 
 /// Bind `viewport` to both viewport slots of the immediate context. Binding two slots (rather than
 /// one) passes the collapse viewport detour through untouched -- it only special-cases a single-slot
 /// set -- and the terrain-detail VS has no `SV_ViewportArrayIndex`, so it rasterizes into slot 0.
-fn bind_both_viewport_slots(d3d: &ID3D11DeviceContext, viewport: D3D11_VIEWPORT) {
-    // SAFETY: `d3d` is the live immediate context; a two-element slice is a valid viewport array.
-    unsafe { d3d.RSSetViewports(Some(&[viewport, viewport])) };
+fn bind_both_viewport_slots(d3d: EngineContext, viewport: D3D11_VIEWPORT) {
+    // SAFETY: a two-element slice is a valid viewport array.
+    d3d.with_lock(|ctx| unsafe { ctx.RSSetViewports(Some(&[viewport, viewport])) });
 }
 
 /// Re-issue a terrain-detail `Draw` once per eye with a per-eye `cb1` and the eye's half-viewport,
@@ -656,11 +674,11 @@ pub unsafe fn terrain_detail_per_eye(
         let _reissue = PerEyeReissue::enter(eye);
         // SAFETY: `ctx` is the render context's live graphics context; `cb1` is four float4 rows.
         unsafe { SetVertexProgramConstants(ctx, 1, 0, pass.cb1.as_ptr(), 4) };
-        bind_both_viewport_slots(&d3d, pass.viewport);
+        bind_both_viewport_slots(d3d, pass.viewport);
         draw();
     }
     // Restore the collapse's full viewport for the draws that follow in this pass.
-    bind_both_viewport_slots(&d3d, full);
+    bind_both_viewport_slots(d3d, full);
     true
 }
 
@@ -765,7 +783,7 @@ fn eye_half_viewport(full: D3D11_VIEWPORT, eye: usize) -> D3D11_VIEWPORT {
 /// centered walk) and the G-buffer pass range -- outside the range the eye-half split does not apply
 /// (the shadow-cascade and reflection passes reuse these blocks' `DrawZ`, and eye-splitting a
 /// shadow-atlas draw would corrupt it), and outside the collapse re-issuing per eye is wrong.
-fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, ID3D11DeviceContext)> {
+fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, EngineContext)> {
     if !collapse_active() || !in_gbuffer_range() {
         return None;
     }
@@ -778,7 +796,7 @@ fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, ID3D11
     }
     let m_eye = (*CURRENT_M_EYE.lock())?;
     let full = (*COLLAPSE_FULL_VIEWPORT.lock())?;
-    let d3d = immediate_context()?;
+    let d3d = EngineContext::get()?;
     Some((m_eye, full, d3d))
 }
 
@@ -819,11 +837,11 @@ pub unsafe fn reproject_baked_cb_per_eye(
             reg_offset,
             m_eye: m,
         });
-        bind_both_viewport_slots(&d3d, eye_half_viewport(full, eye));
+        bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
         draw();
         disarm_reproject();
     }
-    bind_both_viewport_slots(&d3d, full);
+    bind_both_viewport_slots(d3d, full);
     true
 }
 
