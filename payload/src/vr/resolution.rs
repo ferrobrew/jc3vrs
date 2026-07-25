@@ -17,14 +17,19 @@
 //! request from the frame top ([`apply_native_resolution`], before the eye loop) so it is visible to
 //! that prologue.
 //!
-//! Driving the full `ApplyResize` (as opposed to a scene-only `CreateRenderSetups`) also resizes the
-//! DXGI swapchain buffers to the same size (`Graphics::ResizeBuffers`), which **never touches the
-//! Win32 window** (`docs/engine/render-setups-reinit.md` §4/§7: it never calls `SetWindowPos`). Presenting is
-//! suppressed in VR (`BLOCK_FLIP`), so the desktop-visible effect is nil, and this keeps
-//! `m_BackBufferLinear` and the back-buffer render setups coherent with the per-eye scene targets for
-//! free -- the low-risk path. `ApplyResize` also sets `CameraManager.m_AspectRatio` from the per-eye
-//! `width/height`, so flatscreen-built projections do not render squashed. The per-eye capture
-//! textures follow the back-buffer size automatically (`payload/src/ui/render.rs`).
+//! Driving the full `ApplyResize`, rather than a scene-only `CreateRenderSetups`, is what makes the
+//! *whole* pipeline follow: the pass-owned pools resize through the registered callbacks and the
+//! Scaleform view size through the UI reset, neither of which `CreateRenderSetups` touches
+//! (`docs/engine/render-setups-reinit.md` §3/§5). It also sets `CameraManager.m_AspectRatio` from the
+//! per-eye `width/height`, so flatscreen-built projections do not render squashed. It **never touches
+//! the Win32 window** (§4: it never calls `SetWindowPos`).
+//!
+//! It would also resize the DXGI swapchain buffers to the same size (`Graphics::ResizeBuffers`).
+//! While the mod owns the back buffer ([`crate::vr::back_buffer`], the default in a session) that
+//! call is substituted, so the swapchain holds at the window size while everything else follows the
+//! render size; this module sequences the ownership flag against the resize that carries it, in both
+//! directions. Without ownership the swapchain follows along, and presenting is suppressed in VR
+//! (`BLOCK_FLIP`) so the desktop-visible effect is nil either way.
 //!
 //! ## Restore
 //!
@@ -42,14 +47,9 @@
 //! desktop resolution. Never crashes, never wedges.
 
 use parking_lot::Mutex;
-use windows::Win32::{
-    Foundation::{HWND, RECT},
-    UI::WindowsAndMessaging::GetClientRect,
-};
 
 use jc3gi::{
-    camera::camera_manager::CameraManager,
-    graphics_engine::graphics_engine::{GraphicsEngine, get_graphics_params},
+    camera::camera_manager::CameraManager, graphics_engine::graphics_engine::GraphicsEngine,
 };
 
 use crate::config::Config;
@@ -106,7 +106,7 @@ pub fn apply_native_resolution() {
     // Service an in-flight request before issuing a new one.
     if let Some(mut pending) = st.pending.take() {
         if current == pending.target {
-            let after = window_rect();
+            let after = super::window::rect();
             let window_ok = match (pending.window_before, after) {
                 (Some(before), Some(after)) => before == after,
                 // A missing rect on either side cannot prove a change; do not fault on it.
@@ -164,14 +164,35 @@ pub fn apply_native_resolution() {
     } else {
         target
     };
-    // The size the engine should be at: the native target, or the captured original when restoring.
+    // The size the engine should be at: the native target, or -- when restoring -- the window's live
+    // client size, falling back to the size captured at take-over. The live rect wins because the
+    // engine follows WM window resizes itself, so a window moved during the session makes the capture
+    // stale, and restoring it would leave the game rendering at the wrong size for its own window.
     // A `None` original with a `None` target means we never took over, so there is nothing to do.
-    let desired = target.or(st.original);
+    let desired = target.or_else(|| restore_target(&st));
     let Some(desired) = desired else {
         return;
     };
-    if desired == current || st.pending.is_some() {
+    // Whether the mod should own the back buffer: only while driving a render size of our own, and
+    // only when asked to.
+    let want_owned = target.is_some() && Config::lock_query(|c| c.vr.own_back_buffer);
+    // An ownership change needs an `ApplyResize` to carry it, because that is what rebuilds the
+    // render setups the substitution swaps (and, on release, what puts the engine's own back). So a
+    // toggle at an unchanged size still issues a resize -- otherwise flipping `vr.own_back_buffer`
+    // mid-session would appear to do nothing until the next resolution change.
+    let ownership_change = want_owned != super::back_buffer::owned();
+    if (desired == current && !ownership_change) || st.pending.is_some() {
         return;
+    }
+
+    // Ordering is load-bearing in both directions (see `crate::vr::back_buffer`): take ownership
+    // *before* the resize that installs the substitution, and release it *before* the resize that
+    // rebuilds the engine's own objects, so the engine is never left bound to a texture the mod is
+    // about to free.
+    if want_owned {
+        super::back_buffer::enable();
+    } else {
+        super::back_buffer::disable();
     }
 
     issue_resize(&mut st, ge, current, desired);
@@ -186,11 +207,57 @@ pub fn apply_native_resolution() {
 /// the eject's shader-bundle bounce has already drained the draw thread, and we drain again, so the
 /// idle-context precondition holds by construction.
 fn on_shutdown() {
+    // Release back-buffer ownership *before* the restore, so the `ApplyResize` below runs the stock
+    // path: the engine frees the substitutes it allocated and rebuilds its own alias and render
+    // setups over the live swapchain. Clearing it afterwards would leave the engine bound to a
+    // texture we are about to free (see `crate::vr::back_buffer`).
+    super::back_buffer::disable();
+
+    restore_display_size();
+
+    {
+        // A backstop, not the usual path: the `ApplyResize` above normally runs `CreateRenderSetups`,
+        // whose epilogue frees the texture at the one moment the engine is known to have stopped
+        // using it. This covers the case where the restore took an early exit and no resize happened
+        // at all -- and it is safe precisely because the release refuses while a substitution is
+        // still installed, rather than because of anything this call site knows.
+        // Unconditional: it is a no-op when nothing is held, and gating it on this call having been
+        // the one to clear ownership would skip it entirely when the session ended earlier.
+        // SAFETY: ownership is cleared; the release checks for itself whether the engine still holds
+        // the substitutes.
+        if let Some(ge) = unsafe { GraphicsEngine::get() } {
+            unsafe { super::back_buffer::release_backing_texture(ge) };
+        }
+    }
+}
+
+/// The size to restore the engine to when the mod stops driving it: the window's live client size,
+/// falling back to the size captured at take-over.
+///
+/// The live rect wins because the engine follows WM window resizes itself, so a window moved during
+/// the session makes the capture stale, and restoring it would leave the game rendering at the wrong
+/// size for its own window. Shared by the per-frame restore and the synchronous shutdown restore --
+/// the two ran different expressions once, disagreed, and the later one dragged the game back to the
+/// stale size.
+fn restore_target(st: &ResolutionState) -> Option<(u32, u32)> {
+    st.original
+        .map(|original| super::window::client_size().unwrap_or(original))
+}
+
+/// Restore the engine's display size to the pre-VR value, synchronously. Split out of [`on_shutdown`]
+/// so its early exits cannot skip the back-buffer release that must follow it.
+fn restore_display_size() {
     let mut st = STATE.lock();
     st.shutting_down = true;
     let Some(original) = st.original else {
         return;
     };
+    // Restore to the window's *current* client size rather than the size captured at bring-up (see
+    // the note in `apply_native_resolution`). Recorded back into `original` so that if a later frame
+    // still runs the per-frame restore, it agrees rather than dragging the game back to the stale
+    // size -- which is exactly what undid this restore before.
+    let original = restore_target(&st).unwrap_or(original);
+    st.original = Some(original);
     st.pending = None; // supersede any in-flight deferred resize; we restore directly below
 
     // SAFETY: game thread during eject; every hop is null-guarded.
@@ -245,7 +312,7 @@ fn issue_resize(
         st.original = Some(current);
     }
     let is_restore = st.original == Some(target);
-    let window_before = window_rect();
+    let window_before = super::window::rect();
 
     // The same fields `GraphicsEngine::ResizeBuffers` stashes for a deferred windowed/settings resize.
     ge.m_WindowWidth = target.0;
@@ -274,15 +341,6 @@ fn issue_resize(
 /// the mod continues at desktop resolution.
 fn disable_native_resolution() {
     crate::config::CONFIG.lock().vr.native_resolution = false;
-}
-
-/// The game window's client rect (`left, top, right, bottom`), or `None` if it cannot be read.
-fn window_rect() -> Option<(i32, i32, i32, i32)> {
-    let hwnd: HWND = unsafe { get_graphics_params() }.m_Hwnd;
-    let mut rect = RECT::default();
-    // SAFETY: `hwnd` is the live game window handle; `GetClientRect` returns an error for a bad handle.
-    unsafe { GetClientRect(hwnd, &mut rect) }.ok()?;
-    Some((rect.left, rect.top, rect.right, rect.bottom))
 }
 
 /// The engine camera manager's aspect ratio, for the serviced-resize log (set by `ApplyResize`).

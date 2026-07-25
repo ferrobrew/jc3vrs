@@ -110,6 +110,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // prologue (previous dispatch drained, this frame not yet dispatched -- the idle-context
         // boundary `ApplyResize` needs). Must sit before the first `game.Draw`.
         crate::vr::apply_native_resolution();
+        // Once the mod owns the back buffer, bring the swapchain down to the window size (a no-op
+        // otherwise, and once it already matches).
+        crate::vr::sync_swapchain_to_window();
 
         // The sum of the VR-lock tail block, xrWaitFrame, and view location -- each scoped inside
         // `vr::frame_begin` -- so the front-load breakdown shows which dominates.

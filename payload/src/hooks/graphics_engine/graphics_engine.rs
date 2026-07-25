@@ -3,8 +3,8 @@ use std::sync::atomic::AtomicBool;
 use detours_macro::detour;
 use jc3gi::{
     graphics_engine::{
-        device::{Context, Device},
-        graphics_engine::GraphicsEngine,
+        device::{Context, Device, DeviceInfo},
+        graphics_engine::{GraphicsEngine, HDevice_t},
         render_engine::RenderEngine,
     },
     ui::ui_manager::GetIUIManager,
@@ -22,6 +22,77 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&GRAPHICS_FLIP_BINDER)
         .with_static_binder(&GRAPHICS_ENGINE_DRAW_BINDER)
         .with_static_binder(&RENDER_ENGINE_POST_DRAW_BINDER)
+        .with_static_binder(&CREATE_RENDER_SETUPS_BINDER)
+        .with_static_binder(&DEVICE_RESIZE_BUFFERS_BINDER)
+}
+
+/// Keep the DXGI swapchain at the window size while the engine resizes everything else.
+///
+/// While the mod owns the back buffer, this is a **substitute** for the device-level
+/// `ResizeBuffers` rather than a suppression of it: `ApplyResize` reads the new size back out of
+/// `device->m_DeviceInfo` immediately afterwards and feeds it to `CreateRenderSetups` and to every
+/// registered resize callback, so a plain no-op would leave the whole pipeline at the old size.
+/// Writing the device info without touching DXGI lets `ApplyResize` run verbatim -- scene targets,
+/// pass pools, UI reset, and camera aspect all follow the render size -- while the swapchain stays
+/// where it is. See `docs/mod/swapchain-ownership.md` §5.1.
+///
+/// `device->m_BackBuffer`'s own dimensions are written only by the real function, so under the
+/// substitute they keep reporting the true swapchain size: after this, `m_BackBuffer` means "the
+/// window" and `m_BackBufferLinear` means "the render target".
+#[detour(address = jc3gi::graphics_engine::device::ResizeBuffers_ADDRESS)]
+fn device_resize_buffers(device: *mut HDevice_t, width: u32, height: u32) -> bool {
+    // The mod drives a real resize of its own once the substitution is installed, to bring an
+    // already-oversized swapchain down to the window; stand aside for that one.
+    if !crate::vr::back_buffer_owned() || crate::vr::resize_substitute_bypassed() {
+        return DEVICE_RESIZE_BUFFERS
+            .get()
+            .unwrap()
+            .call(device, width, height);
+    }
+    // SAFETY: the engine passes its live device; `ApplyResize` runs on the drained idle context.
+    let Some(dev) = (unsafe { device.cast::<Device>().as_mut() }) else {
+        return DEVICE_RESIZE_BUFFERS
+            .get()
+            .unwrap()
+            .call(device, width, height);
+    };
+    dev.m_DeviceInfo.m_DisplayWidth = width;
+    dev.m_DeviceInfo.m_DisplayHeight = height;
+    dev.m_DeviceInfo.m_DisplayRatio = if height > 0 {
+        width as f32 / height as f32
+    } else {
+        0.0
+    };
+    // Deliberately claims a resize that did not happen to the swapchain. `m_WasResized` is the
+    // engine's own "the buffers moved since you last looked" flag, and setting it is what keeps the
+    // rest of `ApplyResize` -- the resize callbacks, the pass-owned pools -- behaving exactly as they
+    // do on a real resize, which is the point of substituting rather than suppressing. The render
+    // targets really did change size; only the DXGI buffers did not.
+    dev.m_WasResized = true;
+    true
+}
+
+/// The back-buffer substitution point: every path that rebuilds the engine's swapchain-derived render
+/// setups funnels through `CreateRenderSetups` (its only callers are `InitializeSystem` and
+/// `ApplyResize`), so an epilogue here cannot be missed. Inert unless the mod owns the back buffer;
+/// see [`crate::vr::back_buffer`] and `docs/mod/swapchain-ownership.md`.
+#[detour(
+    address = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups_ADDRESS
+)]
+fn create_render_setups(this: *mut GraphicsEngine, device_info: *const DeviceInfo) -> bool {
+    let returned = CREATE_RENDER_SETUPS.get().unwrap().call(this, device_info);
+    // Deliberately *not* gated on `returned`: the release build never sets a return value. Its C++
+    // signature says `bool` and the symbol-dump build ends in `return 1`, but release codegen dropped
+    // that -- the function's last instruction before the epilogue is the `CreateRenderSetup` call, so
+    // `al` is the low byte of an aligned pointer. Read as a `bool` that is reliably even, and a
+    // bit-0 test on it is therefore always false. Gating on it silently disabled the substitution.
+    //
+    // SAFETY: the engine has just rebuilt its own render setups, on the drained idle context that
+    // `CreateRenderSetups` runs under (the `Draw` prologue).
+    if let Some(engine) = unsafe { this.as_mut() } {
+        unsafe { crate::vr::substitute_render_setups(engine) };
+    }
+    returned
 }
 
 // `CGame::Draw` clears `m_DrawScene` while a static-background full-screen UI is up (pause / map), so

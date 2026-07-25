@@ -205,6 +205,11 @@ fn clear(ctx: *mut c_void, flags: u32, color: *mut c_void, depth: f32, stencil: 
     CLEAR.get().unwrap().call(ctx, flags, color, depth, stencil);
 }
 
+/// Note for anyone comparing against a trace captured before the defs were corrected: this address
+/// used to resolve to `Graphics::EndDraw`, which the IDB had mislabelled. Traces recorded then show
+/// one `CopySurfaceToTexture` per dispatch, at its end -- that was the command-list submission, not a
+/// copy. It now records the real thing: the VFX depth copy, several times per frame, mid-frame. The
+/// end-of-dispatch marker those older traces happened to carry is simply gone.
 #[detour(address = jc3gi::graphics_engine::draw::CopySurfaceToTexture_ADDRESS)]
 fn copy_surface_to_texture(ctx: *mut c_void, dst: *mut c_void, src: *mut c_void) {
     TraceState::record_eye(TraceEvent::CopySurfaceToTexture {

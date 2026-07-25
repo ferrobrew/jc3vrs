@@ -50,6 +50,7 @@ pub use frame::{
 };
 pub use projection::{Fov, OffAxisProjection};
 
+mod back_buffer;
 mod blit;
 mod config;
 pub mod foveation;
@@ -57,7 +58,12 @@ mod frame;
 mod mirror;
 mod resolution;
 pub mod tail;
+pub(crate) mod window;
 
+pub use back_buffer::{
+    owned as back_buffer_owned, resize_substitute_bypassed, substitute_render_setups,
+    sync_swapchain_to_window,
+};
 pub use blit::present_and_submit;
 pub use mirror::{MIRROR_ZOOM_RANGE, present_mirror};
 pub use resolution::apply_native_resolution;

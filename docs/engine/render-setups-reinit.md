@@ -1,11 +1,11 @@
 # Runtime re-initialisation of the render setups (per-eye resolution)
 
-Reverse-engineered from the 2026 Denuvo-less Steam build. This is the RE half of `docs/mod/vr-runtime.md`
-"Blocker 2": every render target is sized from the device's display size through
-`CGraphicsEngine::CreateRenderSetups`, and this documents who re-runs that function at runtime, what
-state it assumes, what it tears down and rebuilds, whether the window swapchain is separable from the
-render-target re-init, and the recipe for driving the re-init at a changed size. Data-layout offsets
-are byte-stable across builds; only the function addresses below are build-specific (this build).
+Reverse-engineered from the 2026 Denuvo-less Steam build. Every render target is sized from the
+device's display size through `CGraphicsEngine::CreateRenderSetups`; this documents who re-runs that
+function at runtime, what state it assumes, what it tears down and rebuilds, how far the window
+swapchain is separable from the render-target re-init, and what a size change has to touch to leave
+the pipeline coherent. Data-layout offsets are byte-stable across builds; only the function addresses
+below are build-specific (this build).
 
 All addresses are release RVAs from `JustCause3.exe.i64`. The engine calls the graphics-device
 backend through the `Graphics::` free functions; the engine class is `CGraphicsEngine`
@@ -68,8 +68,13 @@ Decompiled body (`0x140_0CF_A90`), in order:
 8. `GetMasterContext` + `SetRenderSetup(ctx, 0, 0)` then `SetRenderSetup(ctx, m_BackBufferRenderSetup, 0)`
    — unbind, then bind the rebuilt back-buffer setup.
 9. If a UI manager exists, `IUIManager::RestoreAfterReset` (vtable `+0x40`).
-10. `CameraManager.m_AspectRatio = width/height`; `m_Params.m_Width/Height = width/height`;
-    `m_HasNewValidDisplayMode = 1`; plus a title-safe area (`4*width/5`, `4*height/5`).
+10. Scalar fixups, all trivially replicable by hand:
+    - `CameraManager + 0x5D0` (`m_AspectRatio`) `= (float)width / (float)height`.
+    - The graphics params' `m_Width`/`m_Height` (what `get_graphics_params()` returns) `= width`/`height`.
+    - `engine + 0x1244`/`+0x1248` = the *device info's* width/height (also written by `CreateRenderSetups`).
+    - `engine + 0x118` (`m_HasNewValidDisplayMode`) `= 1`.
+    - `engine + 0x1288`/`+0x128C` = `width`/`height`.
+    - `engine + 0x1298`/`+0x129C` = the title-safe area, `max(32, 4*width/5)`/`max(32, 4*height/5)`.
 
 **State assumptions.** The path assumes the immediate context is idle and no render dispatch is in
 flight: `DestroyRenderSetups` begins with `SetRenderSetup(masterCtx, 0, 0)` (which unbinds the OM
@@ -97,8 +102,10 @@ It first unbinds the active setup (`SetRenderSetup(masterCtx, 0, 0)`), then dest
 
 **What it does not touch:** the DXGI swapchain and its back-buffer surface
 (`device->m_BackBufferSurface`, `device+0x8`) are device-owned; only the `BackBufferLinear` alias of
-that surface is destroyed here. Everything is nulled after release, so a following `CreateRenderSetups`
-re-creates cleanly.
+that surface is destroyed here. The back buffer's *own* RTV and SRV are likewise untouched — only
+`Graphics::ResizeBuffers` releases and recreates those, so a `CreateRenderSetups` run on its own
+cannot corrupt them. Everything the teardown does release is nulled after, so a following
+`CreateRenderSetups` re-creates cleanly.
 
 **Stale views / pools to watch (answer to "do stale views linger").** `DestroyRenderSetups` only
 frees what the engine holds directly. Render targets owned by the *passes* — the post-effect
@@ -150,21 +157,13 @@ is **not** a benign mismatch: `m_BackBufferRenderSetup` binds `m_BackBufferLinea
 colour together with `m_MainDepthSurface` (per-eye size) as depth, and D3D11 requires the RTV and DSV
 to share dimensions — the final composite/UI pass would bind a mismatched RTV+DSV pair.
 
-**Consequences for driving per-eye RTs with the swapchain frozen:**
-
-- The scene half is fully separable and viewport-clean (§5).
-- The final-composite half (`BackBufferLinear` + the two back-buffer setups) is *entangled with the
-  live back buffer through `GetDeviceSurface(BACK_BUFFER)`*. To keep the swapchain at the window size
-  **and** have a coherent per-eye final target, mod code must, after `CreateRenderSetups`, replace
-  those three setups with a **mod-owned, per-eye-sized "back buffer"** (a texture of your own, its
-  render setup rebuilt to pair with the per-eye `m_MainDepthSurface`), rather than the back-buffer
-  alias. The mod already suppresses `Graphics::Flip` (`BLOCK_FLIP`) and captures each eye from
-  `m_BackBufferLinear` after the resolve (`docs/engine/rendering.md` §7/§12), so the real DXGI back buffer is
-  only used as the resolve destination; substituting a per-eye `m_BackBufferLinear` and capturing from
-  it keeps the whole scene→composite→capture chain at per-eye resolution with the swapchain never
-  resized. The engine's final `CopySurfaceToTexture` resolve into the (still swapchain-sized) back
-  buffer must then be skipped or retargeted, since its source would be per-eye sized (the mod's
-  existing capture-then-suppress path is the right shape for this).
+So the separation splits cleanly in two: the scene half is fully separable and viewport-clean (§5),
+while the final-composite half (`BackBufferLinear` and the two back-buffer setups) is entangled with
+the live back buffer through `GetDeviceSurface(BACK_BUFFER)`. Freeing that half means replacing those
+three objects after `CreateRenderSetups` has built them, which is a thing the engine offers no seam
+for and mod code must do itself. Nothing has to be suppressed alongside it: there is no final resolve
+into the back buffer, because the composite writes straight into the alias (`docs/engine/rendering.md`
+§12). JC3VRS does exactly this; see [`docs/mod/swapchain-ownership.md`](../mod/swapchain-ownership.md).
 
 ## 5. Viewports and other size-derived state
 
@@ -190,76 +189,32 @@ viewports track them with no per-pass viewport patching.
   through `IUIManager::PrepareForReset`/`RestoreAfterReset` and `CUIManager::UpdateCachedValues`
   (which itself calls `GetDeviceInfo`), i.e. via the resize-callback/UI-reset path, not
   `CreateRenderSetups`. The HUD is composited into `m_BackBufferLinear`, so its target size is whatever
-  that surface ends up being (§4) — another reason to give the mod-owned back buffer the per-eye size
-  and let the UI reset run against it. Aspect-ratio-derived HUD constants come from the same UI-reset
+  that surface ends up being (§4). Aspect-ratio-derived HUD constants come from the same UI-reset
   path.
 
-## 6. Recommended runtime re-init recipe
+## 6. Driving the re-init at a changed size
 
-Goal: scene render targets (and pass pools) at the HMD per-eye resolution, with the game window and its
-DXGI swapchain left at their current size.
+The frame position is the whole constraint: `ApplyResize` must run where `HandleModeChange` runs it,
+on the game thread in the `Draw` prologue, with the previous dispatch drained and this frame's not yet
+dispatched (§2). The engine already offers a way to ask for exactly that — write `m_WindowWidth`,
+`m_WindowHeight`, and `m_HasNewWindowSettings`, and the next prologue services the request — so
+nothing has to call `ApplyResize` directly except a caller that can guarantee the drain itself.
 
-**Where (thread + frame position + locks).** Once per real frame, on the **game/sim thread**, at the
-top of the mod's per-frame driver in `payload/src/hooks/game.rs` (`game_update_render`), **before the
-eye loop's first `game.Draw(spf)`**. This is the same frame position the engine uses for its own
-`HandleModeChange` (previous dispatch drained, this frame not yet dispatched), so the idle-context
-assumption in §2 holds. Do not run it between eye 0 and eye 1, and not on the render worker. The
-internal resource calls take `Context::m_Mutex` themselves; no extra lock is required at this boundary,
-but do not overlap it with an in-flight dispatch.
+Whichever way it is driven, the resize is expensive: `DestroyRenderSetups` plus `CreateRenderSetups`
+free and re-allocate a large set of GPU resources, so it belongs on an actual size change, not on a
+frame boundary. And it must be the *whole* walk, not just `CreateRenderSetups`: the pass-owned pools
+follow only through the registered resize callbacks in step 7, and the Scaleform view size only
+through the UI reset in steps 3 and 9 (§3, §5).
 
-**Sequence** (only when the target per-eye size actually changes):
+For how JC3VRS drives it, see [`docs/mod/vr-runtime.md`](../mod/vr-runtime.md) and
+[`docs/mod/swapchain-ownership.md`](../mod/swapchain-ownership.md).
 
-1. Build a per-eye `SDeviceInfo`: `GetDeviceInfo(engine.m_Device, &info)` to copy the current device
-   info, then override `info.m_DisplayWidth`/`m_DisplayHeight` to the per-eye size and recompute
-   `info.m_DisplayRatio = width/height`. (Do **not** call `Graphics::ResizeBuffers` — that is the
-   swapchain resize.)
-2. To make the pass-owned pools and the UI also follow the per-eye size, temporarily write the per-eye
-   dimensions into `engine.m_Device->m_DeviceInfo.m_DisplayWidth`/`m_DisplayHeight`/`m_DisplayRatio`
-   (`device+0x1A0/0x1A4/0x1A8`) as well, because the registered resize callbacks and
-   `CUIManager::UpdateCachedValues` size their targets from `GetDeviceInfo` (i.e. from
-   `device->m_DeviceInfo`), not from the callback's `{width,height}` argument. This does **not** touch
-   the swapchain — only the cached device-info dimensions. Keep the real values if any code elsewhere
-   depends on window size, and restore them if needed.
-3. Drive the re-init. Two options:
-   - **Reuse the engine path (simplest, correct for the scene + pools + UI):** call
-     `engine.ApplyResize(per_eye_width, per_eye_height)` **with the `Graphics::ResizeBuffers` call
-     neutralised** (hook/patch that one call to a no-op for the duration), so the swapchain is left
-     alone but `DestroyRenderSetups` → `CreateRenderSetups` → all resize callbacks → UI reset run
-     normally. This gives per-eye scene RTs, per-eye pass pools, and a consistent UI reset in one call.
-   - **Hand-roll (more control, more surface):** `DestroyRenderSetups(engine)`;
-     `IUIManager::PrepareForReset`; `CreateRenderSetups(engine, &info)`; run the registered resize
-     callbacks; `IUIManager::RestoreAfterReset`. This mirrors `ApplyResize` minus the swapchain resize
-     but requires the mod to walk the callback vector itself.
-4. Fix up the swapchain-tied final targets (§4): after `CreateRenderSetups`, replace `m_BackBufferLinear`
-   and rebuild `m_PostEffectRenderSetup` / `m_BackBufferRenderSetup` against a mod-owned per-eye
-   texture paired with the per-eye `m_MainDepthSurface`, so the final composite/HUD/capture chain is
-   per-eye and the real back buffer is untouched. Capture each eye from that per-eye surface and skip
-   (or retarget) the engine's `CopySurfaceToTexture` resolve into the real back buffer.
-5. Re-create any mod-owned size-dependent resources (FSR history/output, per-eye capture textures) to
-   the per-eye size in the same pass.
+## 7. Open unknowns
 
-## 7. Risks and open unknowns
-
-- **Step 4 is the load-bearing unknown for "swapchain frozen".** Whether replacing the three
-  back-buffer-derived setups is cleaner than simply resizing the swapchain buffers to the per-eye size
-  is a design call. Note that `Graphics::ResizeBuffers` resizes the *swapchain buffers*, not the Win32
-  window (it never calls `SetWindowPos`), and the mod already suppresses `Flip`; so resizing the
-  swapchain to the per-eye size would give a fully coherent per-eye `BackBufferLinear` for free, with
-  the only visible cost being a (suppressed) stretch on any present. If keeping the DXGI buffers at the
-  window size is not a hard requirement, driving the full `ApplyResize` (swapchain included) is the
-  lowest-risk path; the frozen-swapchain approach trades that simplicity for the step-4 target
-  substitution. This is untested either way and should be validated at runtime.
-- **Frequency / hitching.** `DestroyRenderSetups` + `CreateRenderSetups` free and re-allocate a large
-  set of GPU resources; doing it per frame would hitch badly. Trigger it only on an actual per-eye size
-  change (once at session start, and on runtime reconfiguration), not every frame.
-- **Registered-callback set is not enumerated here.** The recipe relies on the resize callbacks
-  re-sizing the pass pools; the exact membership of `m_RegisteredCallbacksVector` was not enumerated.
-  Reusing `ApplyResize` (option 3a) sidesteps this by letting the engine walk the vector.
+- **Registered-callback set is not enumerated.** The pass pools follow the resize only through
+  `m_RegisteredCallbacksVector`, and the exact membership was never walked. Reusing `ApplyResize`
+  sidesteps needing to know it.
 - **`ApplyMode` / fullscreen path** (`0x140_0F3_AF0`) recreates the device via `Graphics::ResetDevice`
-  rather than resizing buffers; it is not needed for the render-scale use case and was not fully
-  traced.
+  rather than resizing buffers; it was not fully traced.
 - **`m_DisplayModeChangeState` value semantics** are only partially confirmed (idle vs. mode-change
   pending); it is recorded as a `u32` with the observed behaviour rather than a fully enumerated enum.
-- The exact offsets of `m_MainDepthSurface` and `m_PostEffectRenderSetup` on the engine were not pinned
-  (only `m_BackBufferRenderSetup` at `+0x1050` and `m_BackBufferLinear` at `+0x1230` are); the step-4
-  fix-up will need those pinned before implementation.

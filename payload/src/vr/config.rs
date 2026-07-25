@@ -166,6 +166,20 @@ pub struct VrConfig {
     /// in-session transitions like exiting a vehicle (the character stays present through those).
     #[serde(default = "default_true")]
     pub auto_recenter_on_gameplay: bool,
+    /// Substitute a mod-owned render target for the engine's swapchain-derived back buffer, so the
+    /// render resolution and the DXGI swapchain size stop being the same number (see
+    /// [`crate::vr::back_buffer`] and `docs/mod/swapchain-ownership.md`).
+    ///
+    /// The engine builds its final composite target as a format alias of DXGI back buffer 0, so
+    /// driving the scene to the per-eye render resolution resizes the swapchain with it, and the
+    /// desktop present then rescales every frame onto a window of a different size and shape. Owning
+    /// the back buffer breaks that link: the swapchain stays at the window size, the mirror's present
+    /// stops rescaling, and single-pass double-wide stops forcing a 2x-width swapchain.
+    ///
+    /// On by default; it only ever engages while an XR session is running, and is released again
+    /// (with the engine's own objects rebuilt over the live swapchain) on session end and on eject.
+    #[serde(default = "default_true")]
+    pub own_back_buffer: bool,
     /// Diagnostic: freeze the rendered head pose. When on, the first frame's located eye poses (and
     /// FOVs) are captured and reused every frame, so the rendered content is bit-identical frame to
     /// frame -- as if the camera were a still flatscreen camera rather than a live HMD. This isolates
@@ -206,6 +220,7 @@ impl VrConfig {
             mirror_zoom: 1.0,
             persist_instance: true,
             auto_recenter_on_gameplay: true,
+            own_back_buffer: true,
             freeze_pose: false,
         }
     }

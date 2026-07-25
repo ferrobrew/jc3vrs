@@ -14,7 +14,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [hands-and-roomscale.md](engine/hands-and-roomscale.md) — weapon-to-hand attachment, the shipped per-arm aim IK, and the character's velocity-driven collision proxy.
 - [input.md](engine/input.md) — the action effector system, action ids, the write API, the semantic button-mapping layer, and the mouse/UI pipeline.
 - [model-culling.md](engine/model-culling.md) — the two model visibility gates: the instance-level BFBC cull, and the per-render-block frustum cull against the active camera that pops buildings at a widened view's edge.
-- [render-setups-reinit.md](engine/render-setups-reinit.md) — the runtime resize path: `CreateRenderSetups`, its callers, state assumptions, and swapchain separability.
+- [render-setups-reinit.md](engine/render-setups-reinit.md) — the runtime resize path: `CreateRenderSetups`, its callers, what `ApplyResize` and `DestroyRenderSetups` touch, and how far the swapchain is separable from the scene targets.
 - [profiling.md](engine/profiling.md) — what survives of the engine's profiler in release, and the recommended path to per-phase CPU/GPU timings.
 - [shaders.md](engine/shaders.md) — extracting, disassembling, and patching the game's shaders; tooling in `tools/shaders/`.
 - [lighting-shadow-pipeline.md](engine/lighting-shadow-pipeline.md) — the per-frame sun-shadow and global-lighting state: the frame counters, cascade fit and amortization, `SetGlobalShaderConstants`, and the table of which GlobalConstants are parity- or counter-indexed (the flicker ping-pong surface).
@@ -25,8 +25,12 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [head-and-body.md](mod/head-and-body.md) — how head and body yaw relate in VR: coupling schemes, the headpose abstraction, the head-bone override, head hiding, and body IK.
 - [grapple-comfort.md](mod/grapple-comfort.md) — the grapple body-frame filter (issue #36): the hold from fire to landing, the yaw handoff, the landing-snap absorber, and the telemetry capture.
 - [hud.md](mod/hud.md) — the floating-panel HUD: the redirect, compositing, and cursor interaction.
+- [swapchain-ownership.md](mod/swapchain-ownership.md) — the mod-owned back buffer: substituting the engine's swapchain-derived render setups so the scene renders per-eye while the DXGI buffers stay at the window size.
 - [input.md](mod/input.md) — how the mod taps, consumes, and injects the game's input.
 - [fsr.md](mod/fsr.md) — FSR anti-aliasing and upscaling in the stereo pipeline.
+- [single-pass-stereo.md](mod/single-pass-stereo.md) — rendering both eyes in one geometry walk into a double-wide target: the design and the phased plan.
+- [single-pass-render-blocks.md](mod/single-pass-render-blocks.md) — the per-render-block record of what single-pass stereo needs from each, and what it took to get there.
+- [far-field.md](mod/far-field.md) — the monoscopic far field (issue #32): identifying the far-regime scene work and sharing it between eyes.
 - [foveation.md](mod/foveation.md) — static foveated rendering (issue #29): the stencil radial-density-masking design, the depth-stencil-state seam, and the build plan.
 - [controllers-and-roomscale.md](mod/controllers-and-roomscale.md) — the motion-controller and roomscale scope: phases, seams, risks, and per-mode input tables.
 - [environment.md](mod/environment.md) — debug-UI control of time of day and weather.

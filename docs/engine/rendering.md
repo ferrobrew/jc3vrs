@@ -92,7 +92,7 @@ High-level order (offsets are relative to the `HandleDrawThreadTask` entry):
 12. `+0x4A9`/`+0x66D` GPU-profiler `EndFrame` (one of two countdown branches), screenshot countdown `engine+136`.
 13. `+0x4FE` UI render block (clear + IUIManager vtable +48/+16/+24).
 14. `+0x57C` `QuickDrawController::Draw` (debug overlays).
-15. `+0x5A6` `CopySurfaceToTexture(engine+2616)` — final composite copy to the presentable surface (this is the engine-internal "blit to back buffer" the VR redirect intercepts; symbolized `ResolveSurface`, see §12).
+15. `+0x5A6` `Graphics::EndDraw(engine+2616)` — submits the frame's recorded command work. **Not** a copy to the presentable surface; see §12 for the correction and the mislabelling behind it.
 16. `+0x5B2`..`+0x65C` end-draw one-shot signal callbacks (`sig::Signal`) — self-removing.
 17. `+0x6B3` `CRenderEngine::EraseAllDeletedRenderBlocks`.
 18. `+0x724`/`+0x789` compute draw-time floats (`engine+4784`, `engine+4788`).
@@ -367,7 +367,8 @@ GBuffer fill (MainDepth + GBuffer0..3 + Velocity)
      AA, damage, sun halo, fade  -> intermediate fullscreen temp textures (3-slot ring)
   -> global filters (screen fade, heat haze) -> RP_POSTEFFECTS_GLOBAL
   -> PostDraw + UI + debug
-  -> CopySurfaceToTexture -> presentable surface (BackBufferLinear)
+  -> EndDraw (command submission; there is no final copy -- the composite already
+     wrote into BackBufferLinear, which aliases swapchain buffer 0)
   -> graphics_flip (present; suppressed by BLOCK_FLIP in VR)
 ```
 
@@ -453,9 +454,9 @@ The mod currently takes the disable path: `config.stereo.force_smaa_1x` (default
 ## 9. Viewport / render resolution
 
 - **Viewport is set per render-setup, not from a global.** `Graphics::SetRenderSetup`, when binding RTs, sets the viewport to the **bound color/depth target's own dimensions** (`vp = {0,0,target->m_Width, target->m_Height, 0, 1}; RSSetViewports(...)`). So per-pass viewport = bound RT size. (`Graphics::SetViewport` -> `RSSetViewports` exists for explicit sets.)
-- **Render resolution source:** every RT in `CreateRenderSetups` is sized from `device->m_DeviceInfo.m_DisplayWidth` / `m_DisplayHeight` (set in `Graphics::Reset`/`SetDisplayMode`). `m_BackBufferLinear` is sized to the same. Some derived RTs are `>>1` (half-res).
+- **Render resolution source:** every scene RT in `CreateRenderSetups` is sized from its `SDeviceInfo` *parameter*'s `m_DisplayWidth`/`m_DisplayHeight`, which `ApplyResize` fills from `device->m_DeviceInfo`. Some derived RTs are `>>1` (half-res). `m_BackBufferLinear` is the exception: it is not sized at all, but built as a format alias of swapchain buffer 0, so it inherits the swapchain's dimensions (§7, and `docs/engine/render-setups-reinit.md` §4). The two coincide in the stock game because the same `ApplyResize` drives both.
 - **No dynamic resolution / render-scale** found — RTs are allocated at full display resolution; no scale multiplier between display size and RT size.
-- **Per-eye resolution:** because all RT sizes flow from `m_DisplayWidth/Height` through `CreateRenderSetups`, the clean approach is to **set the device display size to the per-eye render resolution and re-run `CreateRenderSetups`** — viewports then follow automatically (driven by RT size in `SetRenderSetup`). You do **not** need to patch per-pass viewport calls.
+- **Per-eye resolution:** because all scene RT sizes flow from the device info through `CreateRenderSetups`, setting the device display size to the per-eye render resolution and re-running `CreateRenderSetups` resizes the whole scene chain, and viewports follow automatically from the bound RT sizes — no per-pass viewport patching. `m_BackBufferLinear` and the two back-buffer render setups do not follow, because they derive from the swapchain rather than the device info; the mod substitutes its own (`docs/mod/swapchain-ownership.md`).
 
 ## 10. UI / HUD pipeline
 
@@ -467,7 +468,7 @@ The mod currently takes the disable path: `config.stereo.force_smaa_1x` (default
   - `+0x28` `CUIManager::RenderOffScreenTextures` — in-world Scaleform screens (not HUD).
   - `+0x30` `CUIManager::RenderStaticBackGround` — pause/menu background.
   - Mapping: early block `HandleDrawThreadTask+0x1F6` = `+0x28` then `+0x08`; main block `HandleDrawThreadTask+0x4FE` = `Graphics::Clear(ctx,2,...)` then `+0x30`, `+0x10`, `+0x18`, then `ResetContext`.
-- **Which RT the HUD draws into:** **directly into `m_BackBufferLinear`** (the linear alias of the DXGI back buffer). `CUIManager::InitPlatformRT` binds Scaleform's `m_RenderBuffer` to the RTV of `m_BackBufferLinear` + `m_MainDepthSurface` DSV; `CUIManager::Render` does `SetRenderTarget(m_RenderBuffer)` -> `HAL::Draw`. The HUD is composited **on top of the final LDR image**, after the scene resolve (§12). There is no separate HUD RT for the main overlay.
+- **Which RT the HUD draws into:** **directly into `m_BackBufferLinear`** (the linear alias of the DXGI back buffer). `CUIManager::InitPlatformRT` binds Scaleform's `m_RenderBuffer` to the RTV of `m_BackBufferLinear` + `m_MainDepthSurface` DSV; `CUIManager::Render` does `SetRenderTarget(m_RenderBuffer)` -> `HAL::Draw`. The HUD is composited **on top of the final LDR image**, into the same surface the composite pass just wrote. There is no separate HUD RT for the main overlay, and no copy afterwards (§12).
 - **`HandleDrawThreadTask` runs once per frame, not per eye** — so the main UI block is a single HUD emission per real frame already. (If the VR layer calls only the *dispatch body* twice, you must decide which eye gets the UI block; if you call it per eye, gate UI to one.)
 - **World-to-screen (markers / distance labels):** `CUIManager::Convert3DCoords` projects a world point to a HUD pixel: `world·vp`, divide by `|w|`, aspect-correct, map NDC→pixels with `m_ViewWidth`/`m_ViewHeight`, return `w > 0`. **The VP is a parameter**, so feeding a chosen per-eye VP relocates where every projected marker lands. Marker placement + off-screen edge-clamp: `CUIManager::Get2DInfo` → `CUIManager::ClampToScreen`; xref `Get2DInfo` to find each gameplay callsite's VP source. The default VP is the render camera's `m_ViewProjectionF`.
 - **VR UI compositing:** for desktop dial-in we render the HUD into our own texture (hook `CUIManager::InitPlatformRT`, substitute our offscreen RTV for the surface RTV it binds) and draw it as an **in-scene quad per eye** in the stereo render — so it shows up in the side-by-side preview and we can tune distance/size/follow-lag without a headset. World markers are reprojected with the live per-eye VP rather than baked into the lagging panel (see `docs/mod/hud.md`). An `XrCompositionLayerQuad` is the sharper endpoint once in-headset. Simpler fallback: gate the `StartRender`/`Submit` pair to one eye and copy the HUD region into a layer.
@@ -493,9 +494,14 @@ Either way, **no geometry snapshot/restore is needed** — the draw is non-destr
 
 ## 12. Per-eye output routing
 
-`CopySurfaceToTexture` (symbolized `Graphics::ResolveSurface`, called at `HandleDrawThreadTask+0x5A6`) is an **MSAA resolve** (`ID3D11DeviceContext::ResolveSubresource`, or `CopyResource` if non-MSAA) of the **active render-setup color target (final composited scene + HUD) -> the device's presentable BACK_BUFFER surface** (the surface `m_BackBufferLinear` aliases).
+**Correction: there is no final resolve.** Earlier revisions of this section described the call at `HandleDrawThreadTask+0x5A6` as `Graphics::CopySurfaceToTexture`, an MSAA resolve of the composite into the device's presentable surface. That was wrong, and it came from two mislabelled symbols in the release IDB that swap a pair of `Graphics::` functions (`docs/mod/swapchain-ownership.md` §2):
 
-**Recommended approach: (b) copy after the resolve, do NOT redirect it.** Let the resolve run normally (keeps the engine's single presentable surface consistent), then `CopyResource` `m_BackBufferLinear`'s texture into your per-eye texture — exactly what the existing mod does in the `PostDraw`-adjacent path. `m_BackBufferLinear` exposes a clean SRV, so it is directly sampleable/copyable. Do the copy on the **immediate context under `Context::m_Mutex`**, ideally right after `HandleDrawThreadTask+0x5A6`, once per eye dispatch. Redirecting the resolve destination per-eye (approach a) fights the device's internal back-buffer-surface state and the alias relationship, and you still need the back buffer valid for the (suppressed) present bookkeeping.
+- `0x141_95A_BA0`, labelled `Graphics::CopySurfaceToTexture`, is really **`Graphics::EndDraw(ctx)`** — it reads no argument beyond the context, takes the context critical section, and submits the frame's two prebuilt command objects from the command-slot ring. This is the call at `+0x5A6`.
+- `0x141_954_850`, labelled `NGraphicsEngine::CGPUProfiler::BeginScope`, is really **`Graphics::CopySurfaceToTexture(ctx, dst, src)`** — a whole-resource `CopyResource`. Its one call in `HandleDrawThreadTask` is the VFX depth copy at `0x140_0F1_FEA`, nothing to do with the back buffer.
+
+Nothing copies to the back buffer because there is nothing to copy: `m_BackBufferLinear` is a **format alias** of swapchain buffer 0 (`CreateSurfaceAlias` memcpys the source handle, `AddRef`s the same `ID3D11Resource`, and builds fresh views), so the composite pass bound to `m_BackBufferRenderSetup` writes *directly into* the presentable surface. `Graphics::Flip` then presents it.
+
+**Consequence for per-eye routing.** `CopyResource` `m_BackBufferLinear`'s texture into the per-eye texture after the composite — what the mod does in the `PostDraw`-adjacent path — remains correct, and is now simply "read the composite target" rather than "copy after the resolve". There is no resolve to suppress or retarget. Do the copy on the **immediate context under `Context::m_Mutex`**, once per eye dispatch.
 
 ---
 
