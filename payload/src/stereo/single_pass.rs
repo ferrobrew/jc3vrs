@@ -1413,7 +1413,17 @@ type DrawIndexedInstancedFn = unsafe extern "system" fn(*mut c_void, u32, u32, u
 
 static DRAW_INDEXED: DetourSlot<DrawIndexedFn> = DetourSlot::new();
 static DRAW: DetourSlot<DrawFn> = DetourSlot::new();
-/// The raw `DrawIndexedInstanced` entry (not detoured), used to re-issue a promoted draw.
+/// The raw `DrawIndexedInstanced` entry, captured to re-issue a promoted [`draw_indexed_detour`] draw.
+///
+/// Deliberately *not* detoured, which leaves a known gap: an already-instanced draw whose patched
+/// vertex shader takes its per-instance data through a vertex-buffer slot (rather than through
+/// `SV_InstanceID`, which would have deferred the shader with `InstanceIdAlreadyDeclared`) sends
+/// instance `i` to eye `i & 1` -- half the instances in each eye. Promoting the instance count cannot
+/// fix it: the per-instance vertex-buffer stepping is indexed by the instance id, so doubling the
+/// count reads past the instance data. The correct handling is a per-eye re-issue with `cb13`'s two
+/// eye slots temporarily set to the same eye, so `SV_InstanceID & 1` picks that one eye whichever
+/// instance it lands on -- the bucket-(d) mechanism in `docs/mod/single-pass-render-blocks.md`, not
+/// yet built for the general case.
 static DRAW_INDEXED_INSTANCED_RAW: OnceLock<DrawIndexedInstancedFn> = OnceLock::new();
 
 /// Handle a `DrawIndexed` while the dual-eye G-buffer geometry is drawing. A **patched** shader is
