@@ -1620,7 +1620,39 @@ pub fn uninstall_com_detours() {
         disable_detour!(SET_VERTEX_PROGRAM_CONSTANTS, "SetVertexProgramConstants");
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     });
+    release_cb13();
+    for shader in std::mem::take(&mut *PATCHED_VS.lock()) {
+        // SAFETY: every entry was `com_add_ref`'d exactly once when it was recorded.
+        unsafe { com_release(shader as *mut c_void) };
+    }
     tracing::info!("single-pass: COM detours uninstalled");
+}
+
+/// Unbind the mod-owned `cb13` from `b13` on the vertex and domain stages and release the buffer.
+///
+/// Rust statics are not dropped and `FreeLibrary` runs no destructors, so without this the buffer
+/// leaks on every inject/eject cycle *and* stays bound at `b13` on a clean game -- a mod-owned
+/// resource outliving the mod. Called from [`uninstall_com_detours`], after the detours are disabled
+/// (so the unbind goes straight to the real D3D entry points) and while the device is still alive.
+fn release_cb13() {
+    // SAFETY: runs on the eject path with the engine still live; the ops run under the engine's
+    // context mutex, as everywhere else that touches the immediate context.
+    unsafe {
+        if let Some(ge) = GraphicsEngine::get()
+            && let Some(device) = ge.m_Device.as_ref()
+            && let Some(context) = device.m_Context.as_ref()
+        {
+            EnterCriticalSection(context.m_Mutex);
+            context
+                .m_Context
+                .VSSetConstantBuffers(STEREO_CB_REGISTER, Some(&[None]));
+            context
+                .m_Context
+                .DSSetConstantBuffers(STEREO_CB_REGISTER, Some(&[None]));
+            LeaveCriticalSection(context.m_Mutex);
+        }
+    }
+    CB13.lock().buffer = None;
 }
 
 /// Install the single-pass COM-vtable detours on the immediate-context (and device) vtables, once.
