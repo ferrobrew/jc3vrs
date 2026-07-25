@@ -9,13 +9,21 @@
 //!
 //! ## Framing and the stretch pre-compensation
 //!
-//! While the session runs the engine's swapchain buffers are resized to the per-eye render
-//! resolution (`vr.native_resolution`, `docs/engine/rendering.md` §9), which is near-square, but the Win32
-//! window keeps its original (usually 16:9) client rect. DXGI's BitBlt present stretches the whole
-//! back buffer onto the window client rect, so a straight full-buffer draw would be distorted. We
-//! pre-compensate: [`mirror_viewport`] computes a viewport *in buffer space* such that, after the
-//! buffer→window stretch, the eye image lands at its own aspect, centered. A window resize by the WM
-//! only changes the client rect, so the viewport recomputes next frame; the VR path is never touched.
+//! With `vr.own_back_buffer` on -- the default -- the swapchain stays at the window size
+//! ([`crate::vr::back_buffer`]), so the present does not stretch and the buffer-space viewport *is*
+//! the window-space one.
+//!
+//! The pre-compensation below exists for the paths where it is not: with `vr.own_back_buffer` off,
+//! the engine's swapchain buffers are resized to the per-eye render resolution
+//! (`vr.native_resolution`, `docs/engine/rendering.md` §9), which is near-square, while the Win32 window
+//! keeps its original (usually 16:9) client rect. DXGI's BitBlt present then stretches the whole back
+//! buffer onto the window client rect, so a straight full-buffer draw would be distorted.
+//! [`mirror_viewport`] computes a viewport *in buffer space* such that, after the buffer→window
+//! stretch, the eye image lands at its own aspect, centered; with buffer == window that computation
+//! degenerates to the identity on its own (unit-tested), so ownership needs no special case here.
+//! Once ownership is the only mode the compensation can be deleted outright. A window resize by the
+//! WM only changes the client rect, so the viewport recomputes next frame; the VR path is never
+//! touched.
 //!
 //! Within that, [`MirrorFraming`] picks which way the two aspects are reconciled. `Fill` (the default,
 //! and what other VR titles' desktop views do) scales the eye up until it covers the window and lets
@@ -47,7 +55,6 @@ use anyhow::Context as _;
 use parking_lot::Mutex;
 use windows::{
     Win32::{
-        Foundation::{HWND, RECT},
         Graphics::{
             Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
             Direct3D11::{
@@ -62,12 +69,11 @@ use windows::{
             },
         },
         System::Threading::{EnterCriticalSection, LeaveCriticalSection},
-        UI::WindowsAndMessaging::GetClientRect,
     },
     core::Interface as _,
 };
 
-use jc3gi::graphics_engine::{device::Device, graphics_engine::get_graphics_params};
+use jc3gi::graphics_engine::device::Device;
 
 use crate::{ui::render::EGUI_DEBUG_RENDER_STATE, vr::config::MirrorFraming};
 
@@ -101,7 +107,10 @@ pub fn present_mirror(eye: usize) {
     }
 }
 
-/// Tear down the mirror pipeline (COM release). Called from the runtime cleanup.
+/// Tear down the mirror pipeline (COM release), dropping the cached views over swapchain buffer 0
+/// with it; the next mirrored frame rebuilds them lazily. Called from the runtime cleanup, and from
+/// [`crate::vr::back_buffer::sync_swapchain_to_window`] before it resizes the swapchain, since
+/// `IDXGISwapChain::ResizeBuffers` fails while any reference to buffer 0 outstands.
 pub fn teardown() {
     *MIRROR.lock() = None;
 }
@@ -134,7 +143,8 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
         u32::from(back_buffer.m_Height),
     );
     let (src_w, src_h) = unsafe { texture_size(&eye_texture) };
-    let window_size = client_size().context("vr: the game window client rect is unavailable")?;
+    let window_size =
+        super::window::client_size().context("vr: the game window client rect is unavailable")?;
     let (framing, zoom) =
         crate::config::Config::lock_query(|c| (c.vr.mirror_framing, c.vr.mirror_zoom));
     let viewport = mirror_viewport(
@@ -202,7 +212,9 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
                     mirror.draw_overlay(&context.m_Context, &rtv, &srv, overlay);
                 }
             } else if let Some(srv) = crate::hud::mirror_overlay::overlay_srv() {
-                // The flat overlay texture is back-buffer-sized, so it composites 1:1 over the mirror.
+                // The flat overlay texture is window-sized, so stretching it across the whole buffer
+                // is exactly inverted by the present's buffer→window stretch: it lands on the window
+                // at 1:1, undistorted, whatever the render resolution is.
                 let full = Viewport {
                     x: 0.0,
                     y: 0.0,
@@ -319,17 +331,6 @@ fn mirror_viewport(
         width: target_w * sx,
         height: target_h * sy,
     }
-}
-
-/// The game window's client size (`width`, `height`) in pixels, or `None` if it cannot be read. The
-/// game HWND is reached the same way [`crate::vr::resolution`] does, via the graphics params.
-fn client_size() -> Option<(u32, u32)> {
-    let hwnd: HWND = unsafe { get_graphics_params() }.m_Hwnd;
-    let mut rect = RECT::default();
-    // SAFETY: `hwnd` is the live game window handle; `GetClientRect` errors on a bad handle.
-    unsafe { GetClientRect(hwnd, &mut rect) }.ok()?;
-    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
-    (w > 0 && h > 0).then_some((w as u32, h as u32))
 }
 
 /// The pixel dimensions of a texture from its descriptor.
@@ -836,6 +837,24 @@ mod tests {
             (1440, 1600),
             (1600, 900),
         );
+    }
+
+    /// With the mod owning the back buffer the swapchain matches the window, and the buffer→window
+    /// pre-compensation degenerates to the identity: the viewport is simply the window-space rect.
+    /// Pins that so the compensation can be removed once ownership is the only mode.
+    #[test]
+    fn equal_buffer_and_window_needs_no_compensation() {
+        let source = AspectSize {
+            width: 2015,
+            height: 2240,
+        };
+        let window = (1714u32, 1405u32);
+        for framing in [MirrorFraming::Fit, MirrorFraming::Fill] {
+            let v = mirror_viewport(source, window, window, framing, 1.0);
+            // `sx` and `sy` are both 1, so the buffer-space viewport equals the window-space one.
+            let w = to_window(v, window, window);
+            approx(v, w);
+        }
     }
 
     #[test]
