@@ -15,6 +15,7 @@
 //! no rendering change.
 
 use std::{
+    cell::Cell,
     collections::BTreeMap,
     ffi::c_void,
     sync::{
@@ -1435,7 +1436,7 @@ unsafe extern "system" fn create_vertex_shader_detour(
     out: *mut *mut c_void,
 ) -> i32 {
     let detour = CREATE_VERTEX_SHADER.get().expect("set before enable");
-    let pending = PATCH_PENDING.swap(false, Ordering::Relaxed);
+    let pending = PATCH_PENDING.with(Cell::take);
     let reacquired = (!pending && active() && !bytecode.is_null() && length >= 4).then(|| {
         let code = unsafe { std::slice::from_raw_parts(bytecode.cast::<u8>(), length) };
         dxbc_stereo::patch_vertex_shader(code)
@@ -1726,9 +1727,23 @@ static DETOUR_INSTALL: Mutex<()> = Mutex::new(());
 static CB13: Mutex<Cb13Buffer> = Mutex::new(Cb13Buffer { buffer: None });
 static IN_GBUFFER_RANGE: AtomicBool = AtomicBool::new(false);
 
-/// Set by the `CreateVertexProgram` hook right before the engine creates the D3D shader from a
-/// substituted (patched) blob, so [`create_vertex_shader_detour`] knows the next shader is patched.
-pub static PATCH_PENDING: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    /// Set by the `CreateVertexProgram` hook right before the engine creates the D3D shader from a
+    /// substituted (patched) blob, so [`create_vertex_shader_detour`] knows the next shader is patched.
+    ///
+    /// Thread-local, not a global: `ID3D11Device` is free-threaded and JC3 streams resources off the
+    /// render thread, so a loader thread's flag would otherwise tag whatever shader a *different*
+    /// thread happened to create next -- instance-doubling and eye-splitting an unrelated shader while
+    /// the genuinely patched one went unrecorded. The hook sets it and the device detour consumes it
+    /// within the same synchronous call, so the flag never needs to cross a thread.
+    static PATCH_PENDING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Set (or clear) this thread's [`PATCH_PENDING`] flag. Called by the `CreateVertexProgram` hook
+/// around the engine's shader creation.
+pub fn set_patch_pending(pending: bool) {
+    PATCH_PENDING.with(|flag| flag.set(pending));
+}
 /// The `ID3D11VertexShader` pointers created from patched blobs (as `usize`). Written at creation,
 /// read when a shader is bound.
 static PATCHED_VS: Mutex<Vec<usize>> = Mutex::new(Vec::new());

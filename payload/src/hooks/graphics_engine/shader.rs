@@ -187,10 +187,10 @@ fn create_vertex_program(
     // so `BOUND_VS_PATCHED` stays false and its draw is never doubled -- it renders in one eye.
     if saved.is_some() {
         crate::stereo::single_pass::ensure_viewport_detours();
-        crate::stereo::single_pass::PATCH_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+        crate::stereo::single_pass::set_patch_pending(true);
     }
     let result = CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params);
-    crate::stereo::single_pass::PATCH_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
+    crate::stereo::single_pass::set_patch_pending(false);
 
     if let Some((original_code, original_size, _copy)) = saved
         && let Some(p) = unsafe { params.as_mut() }
