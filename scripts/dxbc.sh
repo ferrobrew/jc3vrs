@@ -9,24 +9,16 @@
 #
 # A thin wrapper around the `dxbc-tool` crate (tools/dxbc-tool), which calls D3DCompile /
 # D3DDisassemble through the `windows` crate. This replaced the hand-written compile.c / disasm.c
-# harnesses. It cross-builds the tool with cargo-xwin and runs the resulting exe under wine, against
-# the native d3dcompiler_47.dll that `cargo run -p shadergen --target x86_64-unknown-linux-gnu`
-# provisions under target/fsr-shader-build/.
+# harnesses. It runs against the native d3dcompiler_47.dll in the shared prefix, because wine's
+# built-in reimplementation mis-parses some of the game's shaders.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
-prefix="$repo/target/fsr-shader-build/wineprefix"
+. "$here/wine_prefix.sh"
+jc3vrs_require_d3dcompiler
+
 exe="$repo/target/x86_64-pc-windows-msvc/debug/dxbc-tool.exe"
-
-if [ ! -d "$prefix/drive_c/windows/system32" ] ||
-    [ ! -f "$prefix/drive_c/windows/system32/d3dcompiler_47.dll" ]; then
-    echo "dxbc.sh: missing the provisioned wine prefix + native d3dcompiler_47.dll -- run 'cargo run -p shadergen --target x86_64-unknown-linux-gnu' once" >&2
-    exit 1
-fi
-
 cargo xwin build --xwin-cache-dir "$repo/.xwin" --target x86_64-pc-windows-msvc -p dxbc-tool >&2
 
-# `n` selects the native (provisioned) d3dcompiler_47 over wine's built-in reimplementation, which
-# mis-parses some shaders. The DLL is already installed in the prefix's system32 by shadergen.
-WINEPREFIX="$prefix" WINEDEBUG=-all WINEDLLOVERRIDES="d3dcompiler_47=n" wine "$exe" "$@"
+wine "$exe" "$@"

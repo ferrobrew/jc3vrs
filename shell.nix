@@ -6,8 +6,8 @@
 # `x86_64-pc-windows-msvc` target installed) and `cargo-xwin`, which drives
 # LLVM's clang-cl/lld-link against the Windows SDK + CRT headers it downloads.
 #
-# Build with `scripts/xwin_run.sh` (or `cargo xwin build --target
-# x86_64-pc-windows-msvc`) and run the resulting injector under wine.
+# Build with `cargo xwin build --target x86_64-pc-windows-msvc`; inject into a running game with
+# `scripts/proton_run.sh`, which goes through the game's own Proton container.
 pkgs.mkShell {
   nativeBuildInputs = with pkgs; [
     # Wrapped clang first: it provides the `clang`/`clang++` used as the host
