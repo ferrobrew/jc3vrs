@@ -60,6 +60,14 @@ fn render_block_bark_draw(
 }
 
 /// The tree-trunk/branch depth-and-velocity pass bakes the same `cb1` view-projection; reproject it too.
+///
+/// Only the current-frame matrix at `cb1[0..3]` is reprojected. The pass also bakes the
+/// *previous* frame's world-view-projection at `cb1[5..8]`, which the shader differences against the
+/// current one to produce a velocity vector, and that copy is left centred -- so bark's motion
+/// vectors carry the centre view's parallax rather than the eye's, and SMAA and FSR reproject bark
+/// slightly wrongly. Correcting it needs the previous frame's `M_eye` retained and a second armed
+/// range; it is a temporal-sharpening artefact rather than a geometric one, so it is left until the
+/// per-eye motion-vector path is worked on as a whole.
 #[detour(address = jc3gi::graphics_engine::render_block::RenderBlockBark::DrawZ_ADDRESS)]
 fn render_block_bark_draw_z(
     this: *const RenderBlockBark,
