@@ -4,21 +4,13 @@
 //! ([`reproject_domain_shader`]). The game shaders are a git-ignored local extract, so these tests
 //! skip when absent.
 
-use std::path::PathBuf;
-
 use dxbc_stereo::{
     Dxbc, ShaderStage, TokenStream, forward_eye_hull_shader, inject_eye_forward_vertex_shader,
     reproject_domain_shader,
 };
 
-/// The local extracted-shader directory, or `None` if it is not present.
-fn shader_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../tools/shaders/Shaders_F.shaders")
-        .canonicalize()
-        .ok()?;
-    dir.is_dir().then_some(dir)
-}
+mod common;
+use common::shader_dir;
 
 /// The terrain tessellation VS (`sh_0188`), eye-injected -- or `None` when the extract is absent.
 fn eye_injected_terrain_vs() -> Option<Vec<u8>> {

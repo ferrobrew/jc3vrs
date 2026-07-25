@@ -7,25 +7,20 @@
 //! remapped to `cb13`), and its checksum is self-consistent. It is the offline proof that the
 //! rewriter survives contact with the real shader set before any of it reaches the game.
 //!
-//! The bundle is game-derived and git-ignored, so the test reads the local extract
-//! (`tools/shaders/Shaders_F.shaders/`) and skips cleanly when absent (e.g. in CI).
+//! The bundle is game-derived and git-ignored, so the tests read the local extract
+//! (`tools/shaders/Shaders_F.shaders/`). A missing extract is a **failure**, not a skip -- see
+//! [`common::ALLOW_MISSING`].
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use dxbc_stereo::{Dxbc, DxbcError, ShaderStage, TokenStream, patch_vertex_shader, per_eye_refs};
+
+mod common;
+use common::shader_dir;
 
 /// `SFI0` bit 13 -- `VPAndRTArrayIndexFromAnyShaderFeedingRasterizer`, which every patched shader
 /// must declare so its `SV_ViewportArrayIndex` output is valid.
 const SFI0_VIEWPORT_BIT: u64 = 1 << 13;
-
-/// The local extracted-shader directory, or `None` if it is not present.
-fn shader_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../tools/shaders/Shaders_F.shaders")
-        .canonicalize()
-        .ok()?;
-    dir.is_dir().then_some(dir)
-}
 
 /// Whether a blob is a vertex shader (an `SHEX`/`SHDR` chunk whose program type is vertex).
 fn is_vertex_shader(blob: &[u8]) -> bool {
@@ -262,5 +257,126 @@ fn corpus_patch_signatures_have_no_register_collision() {
         colliding.is_empty(),
         "{} patched shaders have a signature register collision",
         colliding.len()
+    );
+}
+
+/// SM5 `dcl_input_sgv` / `dcl_output_siv` opcodes, and the system-value names for `SV_InstanceID`
+/// and `SV_ViewportArrayIndex`.
+const OPCODE_CUSTOMDATA: u32 = 0x35;
+const OPCODE_DCL_INPUT_SGV: u32 = 0x60;
+const OPCODE_DCL_OUTPUT_SIV: u32 = 0x67;
+const SB_NAME_VIEWPORT_ARRAY_INDEX: u32 = 5;
+const SB_NAME_INSTANCE_ID: u32 = 8;
+
+/// The registers of the appended `SV_InstanceID` input and `SV_ViewportArrayIndex` output, as
+/// *declared in the shader body*. The body is walked as a raw dword array here rather than through
+/// the crate's token stream, so the two sides of the comparison share no code.
+fn declared_stereo_registers(blob: &[u8]) -> (Option<u32>, Option<u32>) {
+    let Some(shex) = Dxbc::parse(blob).ok().and_then(|d| d.shader_chunk()) else {
+        return (None, None);
+    };
+    let tokens: Vec<u32> = shex
+        .body(blob)
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")))
+        .collect();
+
+    let (mut input, mut output) = (None, None);
+    // Skip the version and length dwords, then walk instruction by instruction: the opcode token's
+    // bits 24..31 hold the instruction's length in dwords.
+    let mut i = 2;
+    while i + 1 < tokens.len() {
+        let opcode = tokens[i] & 0x7FF;
+        // A custom-data block (an immediate constant buffer) carries no length in its opcode token;
+        // its total dword count is the following token. Everything else has it in bits 24..30.
+        let length = if opcode == OPCODE_CUSTOMDATA {
+            tokens[i + 1] as usize
+        } else {
+            (tokens[i] >> 24) as usize & 0x7F
+        };
+        if length == 0 {
+            break;
+        }
+        let end = i + length;
+        // `dcl_input_sgv v<reg>.<mask>, <name>` is [opcode, operand, register, name]; the
+        // `dcl_output_siv` form is identical.
+        if end <= tokens.len() && length == 4 {
+            match (opcode, tokens[end - 1]) {
+                (OPCODE_DCL_INPUT_SGV, SB_NAME_INSTANCE_ID) => input = Some(tokens[i + 2]),
+                (OPCODE_DCL_OUTPUT_SIV, SB_NAME_VIEWPORT_ARRAY_INDEX) => {
+                    output = Some(tokens[i + 2])
+                }
+                _ => {}
+            }
+        }
+        i = end;
+    }
+    (input, output)
+}
+
+/// The register a signature element with the given semantic name occupies, read with this test's own
+/// signature reader rather than the rewriter's.
+fn signature_element_register(body: &[u8], name: &str) -> Option<u32> {
+    signature_elements(body)
+        .into_iter()
+        .find(|(n, _, _, _)| n == name)
+        .map(|(_, _, register, _)| register)
+}
+
+/// The rewrite writes each new interface element in two places -- a `dcl_*` in the body and an entry
+/// in the signature -- computed from different scans. They must agree: a body that declares
+/// `SV_InstanceID` at `v9` while the signature places it at `v8` is a shader whose eye index comes
+/// from whatever vertex attribute occupies the register the driver actually binds.
+///
+/// This is the check that pairs with [`corpus_patch_signatures_have_no_register_collision`]: that one
+/// proves the signature is internally consistent, this one proves it describes the body.
+#[test]
+fn corpus_patch_body_and_signature_agree() {
+    let Some(dir) = shader_dir() else {
+        return;
+    };
+
+    let mut mismatched: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("read shader dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().is_none_or(|e| e != "dxbc") {
+            continue;
+        }
+        let blob = std::fs::read(&path).expect("read blob");
+        if !is_vertex_shader(&blob) {
+            continue;
+        }
+        let Ok(patched) = patch_vertex_shader(&blob) else {
+            continue;
+        };
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+        let dxbc = Dxbc::parse(&patched).expect("patched container re-parses");
+        let (declared_input, declared_output) = declared_stereo_registers(&patched);
+        for (tag, semantic, declared) in [
+            (&b"ISGN"[..], "SV_InstanceID", declared_input),
+            (&b"OSGN"[..], "SV_ViewportArrayIndex", declared_output),
+        ] {
+            let signature = dxbc
+                .chunk(tag.try_into().expect("4-byte tag"))
+                .map(|chunk| signature_element_register(chunk.body(&patched), semantic));
+            if signature != Some(declared) {
+                mismatched.push(format!(
+                    "{name}: {semantic} declared at {declared:?} but the signature says                      {signature:?}"
+                ));
+            }
+        }
+    }
+
+    for line in &mismatched {
+        eprintln!("  {line}");
+    }
+    assert!(
+        mismatched.is_empty(),
+        "{} patched shaders declare a stereo interface element at a register their signature          disagrees with",
+        mismatched.len()
     );
 }

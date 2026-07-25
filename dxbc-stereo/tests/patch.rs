@@ -6,25 +6,17 @@
 //! `scripts/dxbc.sh compile`) is our own output and rides with the crate, so the encoding
 //! byte-match tests always run.
 
-use std::path::PathBuf;
-
 use dxbc_stereo::{
     Dxbc, DxbcError, OperandKind, ShaderStage, TokenStream, patch_vertex_shader, per_eye_refs,
     refresh_checksum,
 };
 
+mod common;
+use common::shader_dir;
+
 /// The fxc reference: a vs_5_0 declaring `cb13` dynamicIndexed, reading `SV_InstanceID`, and
 /// writing `SV_ViewportArrayIndex` -- the ground truth for the injected encodings.
 const REFERENCE: &[u8] = include_bytes!("data/ref_vs50.dxbc");
-
-/// The local extracted-shader directory, or `None` if it is not present.
-fn shader_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../tools/shaders/Shaders_F.shaders")
-        .canonicalize()
-        .ok()?;
-    dir.is_dir().then_some(dir)
-}
 
 /// The canonical opaque model VS, patched -- or `None` when the extract is absent.
 fn patched_model_vs() -> Option<Vec<u8>> {

@@ -4,18 +4,10 @@
 //! the local extract (`tools/shaders/Shaders_F.shaders/`) and skip cleanly when it is absent (e.g.
 //! in CI), so the crate still builds and its parser is exercised wherever the shaders exist.
 
-use std::path::PathBuf;
-
 use dxbc_stereo::{Dxbc, OperandKind, PerEyeRef, TokenStream, per_eye_refs};
 
-/// The local extracted-shader directory, or `None` if it is not present.
-fn shader_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../tools/shaders/Shaders_F.shaders")
-        .canonicalize()
-        .ok()?;
-    dir.is_dir().then_some(dir)
-}
+mod common;
+use common::shader_dir;
 
 /// The canonical opaque model VS (`sh_0067`) must show exactly the per-eye operand fingerprint: the
 /// camera position `cb0[4]` once, and each view-projection row `cb0[29..32]` four times.

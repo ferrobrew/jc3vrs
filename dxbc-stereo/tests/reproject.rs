@@ -6,21 +6,13 @@
 //! reads a CPU-baked `WorldViewProj` from `cb1` and writes `o0 = skinnedPos·cb1[4..7]` with no `cb0`
 //! reference. The game shaders are a git-ignored local extract, so these tests skip when absent.
 
-use std::path::PathBuf;
-
 use dxbc_stereo::{
     Dxbc, DxbcError, MEYE_ROW_BASE, STEREO_REPROJ_CB_ROWS, ShaderStage, TokenStream,
     patch_vertex_shader, refresh_checksum, reproject_vertex_shader,
 };
 
-/// The local extracted-shader directory, or `None` if it is not present.
-fn shader_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../tools/shaders/Shaders_F.shaders")
-        .canonicalize()
-        .ok()?;
-    dir.is_dir().then_some(dir)
-}
+mod common;
+use common::shader_dir;
 
 /// The canonical skinned-character (baked-WVP) VS, reprojected -- or `None` when the extract is absent.
 fn reprojected_character_vs() -> Option<Vec<u8>> {
