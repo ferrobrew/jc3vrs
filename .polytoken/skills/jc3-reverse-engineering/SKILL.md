@@ -14,8 +14,8 @@ You are reverse-engineering the Windows DX11 release build of Just Cause 3
 
 | Source | What it is | Role |
 |---|---|---|
-| **Release IDB** | `JustCause3.exe.i64` — the IDA database for the *release* build you are modding. | **Ground truth.** Addresses, sizes, and layouts you record come from here. |
-| **Symbol dump** | A folder of decompiler output from a *2016 release build* of the game (FINAL/`-O2`/`-Z7`, shipped unprotected), with full symbols. | **Reference / locator.** Use it to find and name things, then verify against the release IDB. |
+| **Release IDB** | `JustCause3.exe.i64` — the IDA database for the *release* build you are modding. | **Ground truth for addresses, sizes, and layouts** — record those from here. **Not** for names: most of its symbols were inferred by matching against the dump, and are only as good as that matching was (caveat 4 below). |
+| **Symbol dump** | A folder of decompiler output from a *2016 release build* of the game (FINAL/`-O2`/`-Z7`, shipped unprotected), with full symbols. | **Reference / locator, and the authority on names** — its symbols are real rather than inferred. Use it to find and name things, then verify the address against the release IDB. |
 
 The dump is **not** a 1:1 map of the release build you are modding. Treat it as
 a hint source, never as the source of record. See "Dump-to-release caveats"
@@ -110,13 +110,31 @@ differ in ways that still bite:
 3. **Struct layout can drift.** Despite both being release builds, struct
    sizes/offsets can diverge. Confirm offsets and sizes against the release IDB
    before recording them.
+4. **The IDB's names are largely derived, not authoritative.** Much of the
+   release IDB's naming came from matching functions against the dump — the same
+   process described here, run earlier. That matching was not verified
+   exhaustively, so a name in the IDB is a *previous investigator's conclusion*,
+   not ground truth, and mismatches do occur: functions have been found
+   mislabelled, and adjacent ones swapped with each other. This compounds — a
+   wrong name reads as authoritative to everyone downstream, and definitions
+   built on it inherit the error silently.
+
+   So **never identify a function by its IDB name alone.** Confirm the body does
+   what the name claims: check the shape (a "copy" that never calls
+   `CopyResource` is not a copy), the strings and assert messages, the call
+   targets, and the correspondence with the dump's version of the same function.
+   Be most suspicious where a family of similar functions sits together in one
+   namespace, which is where swaps hide. When you do find a mislabelling, record
+   the correct address in the pyxis defs and say so explicitly in your report —
+   and check whether anything already relies on the wrong one.
 
 Operating rule: **the dump tells you what to look for and what to call it; the
 IDB tells you where it actually is and how big it really is in the release
 binary.** Always confirm offsets, sizes, and addresses against the release IDB
 before recording them. When a dump struct has a field you cannot find in the
 release IDB, suspect a branch/protection difference and verify by
-re-decompiling the release type's consumers.
+re-decompiling the release type's consumers. Where the two disagree on a
+*name*, the dump wins — its symbols are real, the IDB's are inferred.
 
 ## Capture findings as pyxis definitions
 
