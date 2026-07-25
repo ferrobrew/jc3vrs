@@ -176,11 +176,16 @@ impl<'a> Instruction<'a> {
     /// rewrite both skip declarations -- otherwise a buffer sized to a per-eye row (e.g. `cb0[29]`)
     /// reads as a phantom per-eye reference. It also fixes the rewrite's injection point (the first
     /// executable instruction), so it must recognise **every** declaration opcode: the SM4 block
-    /// (`0x58..=0x6A`) *and* the SM5 block (`0x91..=0xA2`, `dcl_stream` through
+    /// (`0x58..=0x6A`) *and* the SM5 block (`0x91..=0xA2`, `dcl_function_table` through
     /// `dcl_resource_structured` -- the tessellation, UAV, and structured-resource declarations the
     /// terrain and vegetation shaders use; `dcl_resource_structured` is `0xA2`, with the executable
     /// `store_*`/`ld_structured` opcodes at `0xA3+`). Missing the SM5 block would treat
     /// `dcl_resource_structured` as the first instruction and inject the prologue mid-declarations.
+    ///
+    /// Two SM5 declaration opcodes sit just below the range and are **not** recognised: `dcl_stream`
+    /// (`0x8F`) and `dcl_function_body` (`0x90`). `dcl_stream` is geometry-shader-only and
+    /// `dcl_function_body` belongs to class linkage, and none of these rewrites accepts a shader from
+    /// either family, so the gap is unreachable today -- but it is a gap, not a deliberate exclusion.
     pub fn is_declaration(&self) -> bool {
         matches!(self.opcode, OPCODE_CUSTOMDATA | 0x58..=0x6A | 0x91..=0xA2)
     }

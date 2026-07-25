@@ -1,7 +1,8 @@
-//! Validates the terrain tessellation eye-lane rewrites. Phase 2 rides the single-pass eye index
-//! through the `TEXCOORD3.z` lane VS -> HS -> DS; this covers the VS originator
-//! ([`inject_eye_forward_vertex_shader`]). The game shaders are a git-ignored local extract, so these
-//! tests skip when absent.
+//! Validates the terrain tessellation eye-lane rewrites, which ride the single-pass eye index through
+//! the `TEXCOORD3.z` lane VS -> HS -> DS: the VS originator ([`inject_eye_forward_vertex_shader`]),
+//! the hull forwarder ([`forward_eye_hull_shader`]), and the domain reprojection
+//! ([`reproject_domain_shader`]). The game shaders are a git-ignored local extract, so these tests
+//! skip when absent.
 
 use std::path::PathBuf;
 
