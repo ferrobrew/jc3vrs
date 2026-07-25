@@ -18,10 +18,6 @@ pub struct EguiState {
     /// into the panel render target. Set from the game thread each frame before [`run`]; `None` is
     /// the flat back-buffer overlay (the default, unchanged) behavior.
     panel: Option<(u32, u32)>,
-    /// The window-client-pixel to layout-point scale for flat-overlay mouse events, computed each
-    /// [`run`] alongside the layout size (see the scaling comment there). `(1, 1)` when the back
-    /// buffer and window agree (or in panel mode, whose pointer has its own mapping).
-    flat_pointer_scale: (f32, f32),
 }
 struct GameInputState {
     input_was_enabled: bool,
@@ -47,7 +43,6 @@ impl EguiState {
             game_input_state: None,
             events: Vec::new(),
             panel: None,
-            flat_pointer_scale: (1.0, 1.0),
         })
     }
 
@@ -84,37 +79,28 @@ impl EguiState {
     }
 
     pub fn run(&mut self, mut callback: impl FnMut(&egui::Context, &mut egui_directx11::Renderer)) {
-        // The layout space and scale. The overlay renders into the engine back buffer, which under a
-        // VR native-resolution resize is larger than the desktop window it is presented into --
-        // laying out at 1 point per back-buffer pixel then shrinks the whole UI with the present.
-        // Instead the vertical window-to-buffer ratio becomes egui's pixels_per_point (the layout
-        // stays back-buffer aligned, just with physically larger UI), and the mouse mapping from
-        // window-client pixels into that point space is published for `wndproc`. The panel keeps a
-        // 1:1 layout: its pointer events are already in panel-texture space.
-        let (screen_size, pixels_per_point) = match self.panel {
-            Some((width, height)) => {
-                self.flat_pointer_scale = (1.0, 1.0);
-                ((width as f32, height as f32), 1.0)
-            }
-            None => {
-                let params = unsafe { get_graphics_params() };
-                // Under single-pass double-wide the back buffer is 2x per-eye wide, but the flat
-                // overlay is composited into a single eye-half of the desktop mirror -- lay it out at
-                // the per-eye width, else the whole UI comes out half-relative-width.
-                let buffer_width = if crate::stereo::single_pass::double_wide_active() {
-                    params.m_Width as f32 / 2.0
-                } else {
-                    params.m_Width as f32
-                };
-                let buffer = (buffer_width, params.m_Height as f32);
-                let client = crate::hud::cursor::client_size()
-                    .map(|(w, h)| (w as f32, h as f32))
-                    .unwrap_or(buffer);
-                let ppp = (buffer.1 / client.1).max(0.25);
-                let layout = (buffer.0 / ppp, buffer.1 / ppp);
-                self.flat_pointer_scale = (layout.0 / client.0, layout.1 / client.1);
-                (layout, ppp)
-            }
+        // The layout space, decided by which surface will carry this frame's UI. The renderer takes
+        // its frame size from the render target and maps points to pixels by `pixels_per_point`, so
+        // `layout * pixels_per_point` must be that target's pixel size or the UI does not fill it.
+        //
+        // Every surface is already sized in the pixels the UI is measured in, so all three lay out one
+        // point per pixel and window-pixel mouse coordinates need no remapping: the VR floating
+        // panel's own texture (whose pointer is re-sourced anyway), the desktop mirror's overlay
+        // texture, which is window-sized and composited across the whole back buffer so the present's
+        // buffer→window stretch lands it 1:1, and the engine back buffer, which the engine keeps at
+        // the window's size outside of the mod's own VR resize.
+        let screen_size = match self.panel {
+            Some((width, height)) => (width as f32, height as f32),
+            // Window pixels, so the UI is independent of the render resolution. The live rect, for
+            // the reason given in `crate::hud::mirror_overlay` -- the cursor mapping's cached copy
+            // only refreshes on mouse movement, and this layout has to match the texture the overlay
+            // is rendered into. Before the window rect is known at all, the overlay texture falls
+            // back to the back buffer's size, so the layout follows it there.
+            None if crate::hud::mirror_overlay::is_active() => crate::vr::window::client_size()
+                .or_else(crate::hud::cursor::client_size)
+                .map(|(w, h)| (w as f32, h as f32))
+                .unwrap_or_else(flat_buffer_size),
+            None => flat_buffer_size(),
         };
         let mut input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_max(
@@ -130,7 +116,7 @@ impl EguiState {
             .viewports
             .entry(egui::ViewportId::ROOT)
             .or_default()
-            .native_pixels_per_point = Some(pixels_per_point);
+            .native_pixels_per_point = Some(1.0);
         let egui_output = self
             .egui_context
             .run_ui(input, |ctx| callback(ctx, &mut self.egui_renderer));
@@ -250,26 +236,25 @@ impl EguiState {
         if self.panel.is_some() && is_mouse_message(msg) {
             return;
         }
-        let start = self.events.len();
+        // Window-client pixel coordinates are already the flat layout's point space (see `run`).
         wndproc(&mut self.events, msg, wparam, lparam);
-        // Map the window-client pixel coordinates into the flat layout's point space (see `run`).
-        let (sx, sy) = self.flat_pointer_scale;
-        if (sx, sy) != (1.0, 1.0) {
-            for event in &mut self.events[start..] {
-                match event {
-                    egui::Event::PointerMoved(pos) => {
-                        pos.x *= sx;
-                        pos.y *= sy;
-                    }
-                    egui::Event::PointerButton { pos, .. } => {
-                        pos.x *= sx;
-                        pos.y *= sy;
-                    }
-                    _ => {}
-                }
-            }
-        }
     }
+}
+
+/// The engine's render size for flat-overlay layout purposes, read from the graphics params (which
+/// `ApplyResize` writes from the size it was driven with, so this follows the render, not the
+/// swapchain).
+///
+/// Under single-pass double-wide the render target is 2x per-eye wide while the image it carries is
+/// one eye's half, so report the per-eye width; else the whole UI comes out half-relative-width.
+fn flat_buffer_size() -> (f32, f32) {
+    let params = unsafe { get_graphics_params() };
+    let width = if crate::stereo::single_pass::double_wide_active() {
+        params.m_Width as f32 / 2.0
+    } else {
+        params.m_Width as f32
+    };
+    (width, params.m_Height as f32)
 }
 
 /// Whether `msg` is a mouse move/button/wheel message whose coordinates are window-relative.
