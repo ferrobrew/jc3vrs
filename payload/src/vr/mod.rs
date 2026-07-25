@@ -43,7 +43,7 @@ use windows::core::Interface as _;
 
 use crate::config::Config;
 
-pub use config::{BlitGamma, ProjectionConvention, VrConfig};
+pub use config::{BlitGamma, MirrorFraming, ProjectionConvention, VrConfig};
 pub use frame::{
     EyeRenderParams, begin_render_frame, clear_render_params, cull_projection_standard,
     render_params,
@@ -59,7 +59,7 @@ mod resolution;
 pub mod tail;
 
 pub use blit::present_and_submit;
-pub use mirror::present_mirror;
+pub use mirror::{MIRROR_ZOOM_RANGE, present_mirror};
 pub use resolution::apply_native_resolution;
 
 /// The OpenXR view configuration: standard stereo, two views (one per eye).

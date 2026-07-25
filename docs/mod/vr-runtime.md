@@ -14,7 +14,7 @@ The whole loop runs on the game's main thread, inside the `game_update_render` h
 - The original `UpdateRender` runs (this frame's animation, so the head-bone anchor is current), then `vr::begin_render_frame` publishes the HMD headpose and the per-eye render parameters from the located views — but only when the runtime asked to render; otherwise the parameters are cleared and the camera hook falls back to flatscreen stereo for the non-submitted keep-alive draws.
 - The existing double-`Draw` stereo path renders both eyes. A running session forces the stereo double-`Draw` on regardless of the flatscreen stereo toggle (the swapchain has a slice per eye), and blocks the flip for both eyes. The `SetupRenderCamera` hook (hooks::camera, rendering §2) applies each eye's off-axis projection and world offset from the render parameters.
 - `vr::present_and_submit()` blits each captured eye into its swapchain slice and ends the XR frame (a world projection layer when rendered, an empty frame otherwise), consuming the frame context and releasing the runtime lock.
-- `vr::present_mirror()` draws one eye into the game window, letterboxed, and presents the game swapchain — the only present this frame.
+- `vr::present_mirror()` draws one eye into the game window, framed to the window aspect, and presents the game swapchain — the only present this frame.
 
 The per-eye render parameters do not flow through the frame's runtime lock: `frame_begin` holds that lock for the whole frame, and the camera hook runs during the eye draws, so the parameters are handed to it through a separate, independently locked slot (`vr::render_params`, in `frame.rs`). Nothing on the game thread may re-enter the runtime between `frame_begin` and the submit.
 
@@ -55,11 +55,13 @@ The pre-VR display size is captured before the first resize and restored both wh
 
 ## The desktop mirror
 
-While a session runs the compositor owns the HMD present and the engine's own present is blocked for both eyes, so the game window would freeze on a stale frame. `mirror.rs` presents the game's own swapchain itself, once per frame, unsynced (`SyncInterval = 0`): a vsynced mirror on a 60 Hz monitor would throttle the whole loop, including the 90 Hz HMD submit, down to the monitor's refresh. It draws the configured eye (`vr.mirror_eye`) into the game back buffer, letterboxed to the window aspect — the buffer is near-square at the per-eye resolution while the window keeps its 16:9 client rect, so a viewport inside the buffer pre-compensates DXGI's buffer→window stretch (unit-tested in `mirror.rs`). The egui debug overlay composites onto the mirror before the present so it stays visible on the desktop. Any draw/present fault disables `vr.mirror` at runtime and never wedges the loop; the window then holds its last frame.
+While a session runs the compositor owns the HMD present and the engine's own present is blocked for both eyes, so the game window would freeze on a stale frame. `mirror.rs` presents the game's own swapchain itself, once per frame, unsynced (`SyncInterval = 0`): a vsynced mirror on a 60 Hz monitor would throttle the whole loop, including the 90 Hz HMD submit, down to the monitor's refresh. It draws the configured eye (`vr.mirror_eye`) into the game back buffer, framed to the window aspect — the buffer is near-square at the per-eye resolution while the window keeps its 16:9 client rect, so a computed viewport pre-compensates DXGI's buffer→window stretch (unit-tested in `mirror.rs`).
+
+`vr.mirror_framing` picks how the two aspects are reconciled. `Fill` (the default) scales the eye until it covers the window and crops the overflow, which is what other VR titles' desktop views do; the viewport it computes deliberately extends past the buffer edges, and since D3D11 rasterizes only within the render target, the crop falls out of the clip for free — no scissor, no extra copy, no UV-transform shader. `Fit` letterboxes the whole eye render instead, which is what you want when checking coverage at the frame edges. `vr.mirror_zoom` magnifies about the centre on top of either, for tightening the desktop view onto the middle of the eye's much wider field of view. The egui panel composite always fits at 1:1 — a cropped UI panel would lose its edges. The egui debug overlay composites onto the mirror before the present so it stays visible on the desktop. Any draw/present fault disables `vr.mirror` at runtime and never wedges the loop; the window then holds its last frame.
 
 ## Recenter and the VR debug tab
 
-Recenter is bound to **F7** (`payload/src/hooks/wndproc.rs`), edge-detected like the other function-key toggles (F5 uninject, F6 egui capture, F10 stereo capture, F11 shadow-PCF A/B) — F7 was the free key in that block. The same action is a Recenter button in two places in the debug overlay: the Camera tab's Headpose section and the dedicated **VR tab** (`payload/src/ui/vr.rs`). The VR tab shows the session state, the runtime name, the effective per-eye resolution, and the live headpose source, and exposes the `vr.enabled`, `vr.native_resolution`, `vr.mirror`, and `body_ik.enabled` toggles live.
+Recenter is bound to **F7** (`payload/src/hooks/wndproc.rs`), edge-detected like the other function-key toggles (F5 uninject, F6 egui capture, F10 stereo capture, F11 shadow-PCF A/B) — F7 was the free key in that block. The same action is a Recenter button in two places in the debug overlay: the Camera tab's Headpose section and the dedicated **VR tab** (`payload/src/ui/vr.rs`). The VR tab shows the session state, the runtime name, the effective per-eye resolution, and the live headpose source, and exposes the `vr.enabled`, `vr.native_resolution`, `vr.mirror` (with its eye, framing, and zoom), and `body_ik.enabled` controls live.
 
 ## Config reference
 
@@ -74,7 +76,7 @@ All under `vr.*` (`payload/src/vr/config.rs`):
 - `projection_convention` — `EnginePreReverseZ` (default) or `ManualReverseZ` (see above).
 - `blit_srgb_gamma` — `Linearize` (default) or `Passthrough` (see above).
 - `native_resolution` — render each eye at the HMD-recommended resolution (default on; auto-disables on a resize fault).
-- `mirror` / `mirror_eye` — desktop mirror on/off and which eye (default on, left).
+- `mirror` / `mirror_eye` / `mirror_framing` / `mirror_zoom` — desktop mirror on/off, which eye, how it is framed against the window aspect (`Fill`, cropping, the default; or `Fit`, letterboxing), and extra centre magnification (default on, left, fill, 1.0).
 
 ## Playtest checklist
 
@@ -102,7 +104,7 @@ Everything below needs a headset in the loop; the desktop build could not settle
 **Resolution and mirror.**
 
 - Confirm each eye renders sharp at the recommended resolution and that the `native resolution: engine resize serviced` line reports the expected per-eye size and a sane aspect ratio, with no runtime auto-disable.
-- Confirm the desktop mirror shows the configured eye letterboxed at the correct aspect, that the egui overlay is visible on it, and that the mirror present never throttles the HMD frame rate.
+- Confirm the desktop mirror fills the window with the configured eye at the correct aspect (no stretch, no bars under the default `Fill`), that `Fit` and the zoom slider behave, that the egui overlay is visible on it, and that the mirror present never throttles the HMD frame rate.
 
 **Body IK.**
 

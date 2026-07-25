@@ -1,6 +1,6 @@
 //! The VR tab: OpenXR runtime status, a Recenter button, and the live-editable runtime toggles.
 
-use crate::{config, headpose, vr};
+use crate::{config, headpose, vr, vr::MirrorFraming};
 
 pub fn egui_debug_vr(ui: &mut egui::Ui) {
     let status = vr::status();
@@ -38,6 +38,39 @@ pub fn egui_debug_vr(ui: &mut egui::Ui) {
         );
     ui.checkbox(&mut cfg.vr.mirror, "Desktop mirror")
         .on_hover_text("Show one eye in the game window while a session runs.");
+    ui.add_enabled_ui(cfg.vr.mirror, |ui| {
+        ui.indent("mirror", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Eye");
+                ui.selectable_value(&mut cfg.vr.mirror_eye, 0, "Left");
+                ui.selectable_value(&mut cfg.vr.mirror_eye, 1, "Right");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Framing").on_hover_text(
+                    "How the near-square eye image is reconciled with the widescreen window.",
+                );
+                ui.selectable_value(&mut cfg.vr.mirror_framing, MirrorFraming::Fill, "Fill")
+                    .on_hover_text(
+                        "Crop to the window and fill it edge to edge, like other VR titles' desktop \
+                         views.",
+                    );
+                ui.selectable_value(&mut cfg.vr.mirror_framing, MirrorFraming::Fit, "Fit")
+                    .on_hover_text(
+                        "Letterbox the whole eye render, showing everything the eye drew including \
+                         the edges.",
+                    );
+            });
+            ui.add(
+                egui::Slider::new(&mut cfg.vr.mirror_zoom, vr::MIRROR_ZOOM_RANGE)
+                    .text("Zoom"),
+            )
+                .on_hover_text(
+                    "Magnify about the centre on top of the framing. Above 1.0 crops in further, \
+                     tightening the desktop view onto the middle of the eye's much wider field of \
+                     view.",
+                );
+        });
+    });
     ui.checkbox(&mut cfg.body_ik.enabled, "Body IK")
         .on_hover_text("Drive the upper body toward the headpose via the engine's HumanIK solver.");
     ui.checkbox(&mut cfg.vr.freeze_pose, "Freeze pose (diagnostic)")

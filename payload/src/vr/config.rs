@@ -52,6 +52,26 @@ pub enum BlitGamma {
     Passthrough,
 }
 
+/// How the desktop mirror frames one eye's image inside the game window.
+///
+/// While a session runs the swapchain buffers are the per-eye render resolution, which is near-square
+/// (often taller than wide), while the Win32 client rect keeps its original widescreen aspect. The two
+/// aspects have to be reconciled, and the choice is the same one every VR game's companion view makes.
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MirrorFraming {
+    /// Scale the eye image up until it covers the whole window, cropping whatever falls outside
+    /// (centred). No bars; the periphery of the eye render -- most of which is outside the lens's
+    /// useful area anyway -- is cut off. This is what other VR titles' desktop views do, and the
+    /// default.
+    #[default]
+    Fill,
+    /// Scale the eye image down until all of it is visible, letterboxing the remainder with black
+    /// bars. Nothing is cropped, so it shows exactly what the eye rendered -- useful when checking
+    /// coverage at the edges of the frame -- but a near-square eye in a widescreen window wastes most
+    /// of the window.
+    Fit,
+}
+
 /// OpenXR runtime settings. `Clone` (not `Copy`) because [`loader_path`](VrConfig::loader_path) owns
 /// a `String`.
 #[derive(Clone, Serialize, Deserialize)]
@@ -104,7 +124,7 @@ pub struct VrConfig {
     pub native_resolution: bool,
     /// Mirror one eye to the game's own desktop window while a session is running. The engine's
     /// present stays blocked (`BLOCK_FLIP`); the mirror draws the configured eye's capture into the
-    /// game swapchain's back buffer, letterboxed to the window aspect, and presents it unsynced (see
+    /// game swapchain's back buffer, framed to the window aspect, and presents it unsynced (see
     /// [`crate::vr::mirror`]). On by default; disabled automatically at runtime on any draw/present
     /// fault, after which the game window simply shows the last mirrored (or stale) frame.
     #[serde(default = "default_true")]
@@ -113,6 +133,17 @@ pub struct VrConfig {
     /// a valid eye at use.
     #[serde(default)]
     pub mirror_eye: u8,
+    /// How the desktop [`mirror`](VrConfig::mirror) reconciles the eye image's aspect with the window's
+    /// (see [`MirrorFraming`]). Defaults to filling the window.
+    #[serde(default)]
+    pub mirror_framing: MirrorFraming,
+    /// Extra magnification applied to the desktop [`mirror`](VrConfig::mirror) image on top of its
+    /// framing, about the centre. `1.0` is the plain fill/fit; above that crops in further, which
+    /// tightens the desktop view onto the middle of the eye render (the eye covers a much wider field
+    /// of view than a flat game would frame). Clamped to a sane range at use; a non-finite value falls
+    /// back to `1.0`.
+    #[serde(default = "default_mirror_zoom")]
+    pub mirror_zoom: f32,
     /// Persist the OpenXR **instance and session** across inject/uninject cycles instead of destroying
     /// them on teardown. The runtime allows only a small number of instances *and* sessions per
     /// process (often one each), and Proton's own startup VR probe contends for that budget, so a
@@ -151,6 +182,11 @@ fn default_true() -> bool {
     true
 }
 
+/// The serde default for [`VrConfig::mirror_zoom`] (see [`default_true`] for why this is needed).
+fn default_mirror_zoom() -> f32 {
+    1.0
+}
+
 impl VrConfig {
     pub const fn new() -> Self {
         Self {
@@ -166,6 +202,8 @@ impl VrConfig {
             native_resolution: true,
             mirror: true,
             mirror_eye: 0,
+            mirror_framing: MirrorFraming::Fill,
+            mirror_zoom: 1.0,
             persist_instance: true,
             auto_recenter_on_gameplay: true,
             freeze_pose: false,
