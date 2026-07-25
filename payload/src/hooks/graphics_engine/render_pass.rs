@@ -199,15 +199,16 @@ fn draw_render_pass_range(
     let scene_geometry = crate::stereo::single_pass::dual_eye_active()
         && first >= RP_Z_OCCLUDERS
         && (crate::stereo::single_pass::collapse_active() || last <= RP_FIRST_SCENE);
-    if scene_geometry {
-        crate::stereo::single_pass::set_gbuffer_range(true);
+    let range = scene_geometry.then(|| {
+        let range = crate::stereo::single_pass::enter_gbuffer_range();
         // The main G-buffer viewport was bound before this range flag went up, so re-split it now.
         // (A no-op under collapse, which splits per-draw instead.)
         crate::stereo::single_pass::apply_eye_split_viewport();
-    }
+        range
+    });
     run_scene_range(first, last, &draw);
-    if scene_geometry {
-        crate::stereo::single_pass::set_gbuffer_range(false);
+    if range.is_some() {
+        drop(range);
         crate::stereo::single_pass::log_draw_split();
     }
 }

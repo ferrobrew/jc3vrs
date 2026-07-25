@@ -58,6 +58,12 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         crate::crash::mark(Phase::UpdateRenderEnter);
         let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
 
+        // Close any single-pass G-buffer range left open by the previous frame. The flag is raised
+        // around a re-entrant engine call, so an interrupted frame (a torn-down session, a dispatch
+        // that never returned) could otherwise leave it up and have every shadow and reflection draw
+        // of this frame instance-doubled and eye-split.
+        crate::stereo::single_pass::clear_gbuffer_range();
+
         // Apply the sun-shadow diagnostic override before the original runs, so this frame's
         // sim-side CShadowManager::UpdateRender sees it and drives the engine's own SetEnabled path.
         apply_sun_shadow_override(crate::config::Config::lock_query(|c| {

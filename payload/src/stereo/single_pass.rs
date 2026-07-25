@@ -737,18 +737,38 @@ fn full_eye_view_projection(eye: usize) -> Option<Matrix4> {
     Some(Matrix4::from(vp))
 }
 
-/// Marks whether the render thread is currently inside the G-buffer geometry pass range
-/// (`RP_Z_OCCLUDERS..RP_FIRST_SCENE`), set around that `DrawRenderPassRange` call. The dual-eye
-/// viewport split and instance doubling apply only here -- so shadow/lighting/post passes, which
-/// reuse the same patched shaders but are not double-wide, keep the identical-viewport behaviour.
-pub fn set_gbuffer_range(inside: bool) {
-    IN_GBUFFER_RANGE.store(inside, Ordering::Relaxed);
-    if !inside {
-        // The per-eye matrices belong to the range that just ended. Dropping them means a re-issue
-        // that somehow runs outside a range -- or in a later frame where `compute_dual_eye_rows`
-        // declined to publish -- reprojects with nothing rather than with last frame's head pose.
-        *CURRENT_M_EYE.lock() = None;
+/// Marks the render thread as inside the G-buffer geometry pass range
+/// (`RP_Z_OCCLUDERS..RP_FIRST_SCENE`) until the returned guard drops. The dual-eye viewport split and
+/// instance doubling apply only here -- so shadow/lighting/post passes, which reuse the same patched
+/// shaders but are not double-wide, keep the identical-viewport behaviour.
+///
+/// A guard rather than a matching pair of calls: the range wraps a re-entrant engine call, and any
+/// non-local exit from it (a panic unwinding through the detour, an early return added later) that
+/// skipped the clear would leave the flag raised for the rest of the session -- after which *every*
+/// shadow and reflection draw is instance-doubled and eye-split.
+#[must_use = "the G-buffer range ends when the guard is dropped"]
+pub fn enter_gbuffer_range() -> GBufferRange {
+    IN_GBUFFER_RANGE.store(true, Ordering::Relaxed);
+    GBufferRange(())
+}
+
+/// Holds [`in_gbuffer_range`] true; see [`enter_gbuffer_range`].
+pub struct GBufferRange(());
+
+impl Drop for GBufferRange {
+    fn drop(&mut self) {
+        clear_gbuffer_range();
     }
+}
+
+/// Force the range closed, whether or not a guard is live. Called at frame start so a range left open
+/// by a torn-down or interrupted frame cannot bleed into the next one.
+pub fn clear_gbuffer_range() {
+    IN_GBUFFER_RANGE.store(false, Ordering::Relaxed);
+    // The per-eye matrices belong to the range that just ended. Dropping them means a re-issue that
+    // somehow runs outside a range -- or in a later frame where `compute_dual_eye_rows` declined to
+    // publish -- reprojects with nothing rather than with a stale head pose.
+    *CURRENT_M_EYE.lock() = None;
 }
 
 fn in_gbuffer_range() -> bool {
