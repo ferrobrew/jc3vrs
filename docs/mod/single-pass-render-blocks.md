@@ -23,6 +23,22 @@ Every scene draw falls into one of these:
   constant buffer (not `cb0`). Single-pass reprojects that matrix by the per-eye `M_eye`
   (`clip_eye = M_eye · clip_center`) and re-issues the draw once per eye into the eye's half-viewport.
   This is the TerrainDetail intercept.
+
+  **The baked matrix is stored column-wise.** Every bucket-(b) VS in the bundle consumes its four
+  registers as a multiply-add chain rather than four `dp4`s — for TerrainDetail (`sh_0224`), Bark
+  (`sh_0246`), Foliage (`sh_0249`) and Occluder (`sh_0138`) alike the body reads
+
+  ```
+  mul r1, p.yyyy, cb[k+1]
+  mad r1, p.xxxx, cb[k+0], r1
+  mad r1, p.zzzz, cb[k+2], r1
+  add o0, r1,     cb[k+3]          // or a fourth mad on p.wwww
+  ```
+
+  so `clip = Σ_i p_i · cb[k+i]`: each register is a **column** of the transform acting on the position
+  as a column vector, not a row. The per-eye buffer is therefore `cb[k+i]_eye = M_eye · cb[k+i]_mono`,
+  one entry at a time — the same `mul_vec4` the mod applies. (`cb13`'s `M_eye` block is the other
+  convention: the rewriter's epilogue is a `dp4` chain, so those rows are rows.)
 - **(c) hull/domain tessellation eye-inject.** The clip transform is built in the domain shader from
   an `m_OffsetViewProjection` constant. The DS is rewritten to reproject by `M_eye` (read from `cb13`
   bound on the domain stage); the paired VS forwards the eye index on a free interpolant. This is the
@@ -86,8 +102,8 @@ block. cb1 also carries opacity/UV (reg 4), the raw model matrix (regs 5–8), a
 non-instanced `DrawIndexed`; CPU-instanced `DrawIndexedInstanced`; GPU-indirect `DrawIndexedNoMutex`.
 All three read the same cb1 regs 0–3, so one reprojection corrects every kind.
 
-**Wiring recipe.** Reproject `cb1[0..3]` by the per-eye `M_eye` (`cb1[0..3]_eye = cb1[0..3]_mono · M_eye`,
-row-vector convention — the same `M_eye` the mod builds for cb13) and re-issue per eye into the eye's
+**Wiring recipe.** Reproject `cb1[0..3]` by the per-eye `M_eye` (`cb1[k]_eye = M_eye · cb1[k]_mono`,
+one constant-buffer entry at a time — the same `M_eye` the mod builds for cb13) and re-issue per eye into the eye's
 half-viewport. Because `Draw` itself bakes cb1, the clean intercept transparently reprojects the
 game's own `SetVertexProgramConstants(slot 1)` during a wrapped original-`Draw` call, per eye — see the
 shared bucket-(b) mechanism below. The `DrawIndexedNoMutex` (GPU-indirect) sub-path can only be

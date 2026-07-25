@@ -465,11 +465,12 @@ struct TerrainDetailEyePass {
 /// viewport), plus the terrain flag.
 ///
 /// The detail draw is GPU-indirect, so it cannot be instance-doubled like the model geometry; instead
-/// the render block's `Draw` is re-issued once per eye with a per-eye `cb1`. The detail VS computes
-/// `clip = P_local · cb1` with `cb1[0..3] = T_patch · OffsetVP` (`T_patch` translating the patch origin
-/// relative to the camera), so `clip` is the center-eye clip and the per-eye buffer is
-/// `cb1_eye[k] = M_eye · cb1_center[k]`. `cb1[4]` (the LOD-fade vector) is left untouched. `this` and
-/// `rc` are the [`RenderBlockTerrainDetail`] and [`RenderContext`] the block's `Draw` received.
+/// the render block's `Draw` is re-issued once per eye with a per-eye `cb1`. The detail VS builds clip
+/// with a multiply-add chain over `cb1[0..3]` (`clip = Σ_i P_local[i] · cb1[i]`), so those four
+/// registers are the *columns* of `T_patch · OffsetVP` (`T_patch` translating the patch origin relative
+/// to the camera) and the per-eye buffer is the column-wise `cb1_eye[k] = M_eye · cb1_center[k]`.
+/// `cb1[4]` (the LOD-fade position) is left untouched. `this` and `rc` are the
+/// [`RenderBlockTerrainDetail`] and [`RenderContext`] the block's `Draw` received.
 ///
 /// # Safety
 ///
@@ -495,8 +496,9 @@ unsafe fn terrain_detail_eye_passes(
     let row =
         |r: usize| glam::Vec4::new(ovp[r * 4], ovp[r * 4 + 1], ovp[r * 4 + 2], ovp[r * 4 + 3]);
     let (r0, r1, r2, r3) = (row(0), row(1), row(2), row(3));
-    // cb1_center[0..3] = rows of `T_patch · OffsetVP`: the first three are the OffsetVP rows; the last
-    // folds in the patch-relative camera translation `T_patch`.
+    // The engine stores `Matrix4` row-major, so `ovp` row `k` is column `k` of the column-vector
+    // `OffsetVP` -- exactly the entry the VS's mad chain wants at `cb1[k]`. The fourth column folds in
+    // the patch-relative camera translation `T_patch`.
     let (tx, ty, tz) = (patch_x - cam[0], -cam[1], patch_z - cam[2]);
     let cb1_center = [r0, r1, r2, r3 + tx * r0 + ty * r1 + tz * r2];
 
@@ -583,8 +585,8 @@ pub unsafe fn terrain_detail_per_eye(
 // own constant upload by that eye's `M_eye`.
 
 /// A pending reprojection of a render block's baked view-projection constant, armed around a per-eye
-/// re-issue. While armed, the game's stage of the four `float4` rows at (`cb_index`, `reg_offset`) is
-/// post-multiplied by `m_eye`.
+/// re-issue. While armed, the game's stage of the four `float4` entries at (`cb_index`, `reg_offset`)
+/// -- the columns of the baked matrix -- is reprojected by `m_eye`.
 #[derive(Clone, Copy)]
 struct ReprojectUpload {
     cb_index: i32,
@@ -632,8 +634,8 @@ fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, ID3D11
     Some((m_eye, full, d3d))
 }
 
-/// Re-issue a render block's `Draw` once per eye, reprojecting the four `float4` rows the block bakes at
-/// (`cb_index`, `reg_offset`) by that eye's `M_eye` and binding the eye's half-viewport. Returns `false`
+/// Re-issue a render block's `Draw` once per eye, reprojecting the four `float4` entries the block bakes
+/// at (`cb_index`, `reg_offset`) by that eye's `M_eye` and binding the eye's half-viewport. Returns `false`
 /// when the intercept must not run (collapse inactive, or the dual-eye state not yet published), in which
 /// case the caller draws normally once.
 ///
@@ -675,11 +677,17 @@ static SET_VERTEX_PROGRAM_CONSTANTS: OnceLock<GenericDetour<SetVertexProgramCons
     OnceLock::new();
 
 /// Detour on `Graphics::SetVertexProgramConstants`. While a baked-cb per-eye re-issue is armed (see
-/// [`reproject_baked_cb_per_eye`]), post-multiply the four `float4` rows at the armed (`cb_index`,
-/// `reg_offset`) by the armed `M_eye` before the engine stages them (per-row `M_eye · row`, the same
-/// reprojection the terrain-detail intercept applies), so the block's own view-projection upload becomes
-/// that eye's. Every other stage -- un-armed, a different slot, or a range that does not contain the
-/// target rows -- passes through unchanged.
+/// [`reproject_baked_cb_per_eye`]), reproject the four `float4` entries at the armed (`cb_index`,
+/// `reg_offset`) by the armed `M_eye` before the engine stages them, so the block's own
+/// view-projection upload becomes that eye's. Every other stage -- un-armed, a different slot, or a
+/// range that does not contain the target entries -- passes through unchanged.
+///
+/// The transform is applied entry-wise (`M_eye · cb[k]`) because the vertex shaders that consume these
+/// registers build clip with a multiply-add chain (`clip = Σ_i p_i · cb[k+i]`) rather than four `dp4`s:
+/// each register is a *column* of the baked matrix, not a row. Confirmed against the bundle's Bark,
+/// Foliage and Occluder vertex shaders; see `docs/mod/single-pass-render-blocks.md`. (`cb13`'s own
+/// `M_eye` block is the opposite convention -- the rewriter's epilogue *is* a `dp4` chain -- so
+/// [`write_meye`] stores rows there.)
 unsafe extern "system" fn set_vertex_program_constants_detour(
     ctx: *mut c_void,
     cb_index: i32,
@@ -702,9 +710,10 @@ unsafe extern "system" fn set_vertex_program_constants_detour(
         // SAFETY: the caller stages `count` float4 rows = `n` floats from `data`.
         unsafe { std::ptr::copy_nonoverlapping(data, buf.as_mut_ptr(), n) };
         let base = (up.reg_offset - start_offset) as usize * 4;
-        for r in 0..4 {
-            let row = glam::Vec4::from_slice(&buf[base + r * 4..base + r * 4 + 4]);
-            buf[base + r * 4..base + r * 4 + 4].copy_from_slice(&up.m_eye.mul_vec4(row).to_array());
+        for k in 0..4 {
+            let column = glam::Vec4::from_slice(&buf[base + k * 4..base + k * 4 + 4]);
+            buf[base + k * 4..base + k * 4 + 4]
+                .copy_from_slice(&up.m_eye.mul_vec4(column).to_array());
         }
         // SAFETY: `buf` holds `n` floats and outlives the call; `detour.call` is the trampoline.
         unsafe { detour.call(ctx, cb_index, start_offset, buf.as_ptr(), count) };
