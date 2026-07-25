@@ -10,5 +10,6 @@ pub mod render_engine;
 pub mod render_pass;
 pub mod shadow_manager;
 pub mod ssao;
+pub mod surface;
 pub mod texture;
 pub mod tone_mapping;

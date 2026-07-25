@@ -193,7 +193,9 @@ pub struct GraphicsEngine {
     /// distinct from the [`CameraManager`](crate::camera::camera_manager::CameraManager)'s camera objects, which are pointers to the gameplay
     /// cameras.
     pub m_RenderCamera: crate::camera::camera::Camera,
-    _field_720: [u8; 1936],
+    /// The engine-owned render context handed to the render passes: the per-view camera matrices,
+    /// the graphics context, and the currently-installed render setup.
+    pub m_RenderContext: crate::graphics_engine::graphics_engine::RenderContext,
     pub m_Device: *mut crate::graphics_engine::device::Device,
     _field_eb8: [u8; 16],
     /// Deferred-shading render targets ("GBuffer0".."GBuffer3").
@@ -209,7 +211,12 @@ pub struct GraphicsEngine {
     pub m_BackBufferRenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
     /// Main scene depth ("MainDepthBuffer").
     pub m_MainDepthTexture: *mut crate::graphics_engine::texture::Texture,
-    _field_1060: [u8; 8],
+    /// The render-target surface over [`m_MainDepthTexture`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_MainDepthTexture), built by
+    /// [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) with
+    /// [`GetRenderTarget`](crate::graphics_engine::surface::GetRenderTarget). It is the depth target of
+    /// the scene and back-buffer render setups, and the depth-stencil view the UI binds alongside
+    /// [`m_BackBufferLinear`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferLinear).
+    pub m_MainDepthSurface: *mut crate::graphics_engine::texture::Texture,
     /// Main scene HDR color ("MainColorBuffer").
     pub m_MainColorBuffer: *mut crate::graphics_engine::texture::Texture,
     _field_1070: [u8; 8],
@@ -220,7 +227,13 @@ pub struct GraphicsEngine {
     pub m_EffectInfo: [crate::graphics_engine::graphics_engine::EffectInfo; 5],
     /// Final linear back buffer ("BackBufferLinear").
     pub m_BackBufferLinear: *mut crate::graphics_engine::texture::Texture,
-    _field_1238: [u8; 134],
+    /// The post-effect render setup: colour[0] is the raw device back-buffer surface, with no
+    /// depth. Built by [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) alongside
+    /// [`m_BackBufferRenderSetup`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferRenderSetup) and bound by
+    /// [`HandleDrawThreadTask`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleDrawThreadTask) for the world filters and the
+    /// post-effect stack.
+    pub m_PostEffectRenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
+    _field_1240: [u8; 126],
     /// Whether [`HandleDrawThreadTask`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleDrawThreadTask) renders the 3D scene
     /// this frame (GBuffer, world, post-effects) rather than only the UI. [`Draw`](crate::graphics_engine::graphics_engine::GraphicsEngine::Draw)
     /// sets it from the game state and the UI's static-background grab: it is cleared while a
@@ -345,6 +358,11 @@ impl GraphicsEngine {
     /// `device_info`. Per-pass viewports follow the bound target's size, so no per-pass viewport
     /// changes are needed. Assumes the previously created setups have been torn down
     /// ([`DestroyRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::DestroyRenderSetups)) and that no draw is in flight.
+    ///
+    /// **The release build leaves the return value undefined.** The declared C++ return type is
+    /// `bool`, but release codegen dropped the final `return 1`: the last instruction before the
+    /// epilogue is the trailing [`CreateRenderSetup`](crate::graphics_engine::surface::CreateRenderSetup) call, so `al` carries the low byte of the
+    /// pointer it returned. Callers must ignore the result.
     pub unsafe fn CreateRenderSetups(
         &mut self,
         device_info: *const crate::graphics_engine::device::DeviceInfo,
@@ -415,6 +433,28 @@ impl GraphicsEngine {
                 Self::HandleModeChange_ADDRESS,
             );
             f(self as *mut Self as _)
+        }
+    }
+    pub const SaveScreen_ADDRESS: usize = 0x1400DEC90;
+    /// Writes the pending screenshot to disk: saves `surface` to the requested colour filename
+    /// (and, when the request asked for depth, `depth_texture` to the depth filename) through the
+    /// device's texture-to-file writer, marks the screenshot request done, and clears a filename
+    /// whose write failed. Called from the draw thread once the frame the request was made on has
+    /// finished compositing, with the engine's
+    /// [`m_BackBufferLinear`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferLinear) as the surface. The release build's symbol
+    /// table labels this address `NGraphicsEngine::CGPUProfiler::EndFrame`.
+    pub unsafe fn SaveScreen(
+        &mut self,
+        surface: *mut crate::graphics_engine::texture::Texture,
+        depth_texture: *mut crate::graphics_engine::texture::Texture,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                surface: *mut crate::graphics_engine::texture::Texture,
+                depth_texture: *mut crate::graphics_engine::texture::Texture,
+            ) = ::std::mem::transmute(Self::SaveScreen_ADDRESS);
+            f(self as *mut Self as _, surface, depth_texture)
         }
     }
     pub const LoadShaderBundle_ADDRESS: usize = 0x1400DE9A0;
@@ -761,10 +801,17 @@ pub struct RenderContext {
     /// path versus the full material path.
     pub m_RenderStatus: u32,
     _field_77c: [u8; 4],
+    /// The render setup this context draws into. On the graphics engine's own context this is the
+    /// context's copy of [`GraphicsEngine::m_BackBufferRenderSetup`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferRenderSetup), written by
+    /// [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) immediately after the engine
+    /// field.
+    pub m_RenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
+    /// The render setup the translucent pass draws into.
+    pub m_TranslucentRenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
 }
 fn _RenderContext_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x780], RenderContext>([0u8; 0x780]);
+        ::std::mem::transmute::<[u8; 0x790], RenderContext>([0u8; 0x790]);
     }
     unreachable!()
 }

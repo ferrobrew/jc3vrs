@@ -330,8 +330,11 @@ pub unsafe fn Clear(
         f(ctx, flags, color, depth, stencil)
     }
 }
-pub const CopySurfaceToTexture_ADDRESS: usize = 0x14195ABA0;
-/// Copies one surface into another texture.
+pub const CopySurfaceToTexture_ADDRESS: usize = 0x141954850;
+/// Copies one surface into another texture: a whole-resource `ID3D11DeviceContext::CopyResource`
+/// of `src`'s D3D11 resource into `dst`'s, issued under the context mutex. The release build's
+/// symbol table misplaces this function's name onto [`EndDraw`](crate::graphics_engine::draw::EndDraw) and labels this address
+/// `NGraphicsEngine::CGPUProfiler::BeginScope`; the body is unambiguous.
 pub unsafe fn CopySurfaceToTexture(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     dst: *mut ::std::ffi::c_void,
@@ -344,6 +347,21 @@ pub unsafe fn CopySurfaceToTexture(
             src: *mut ::std::ffi::c_void,
         ) = ::std::mem::transmute(CopySurfaceToTexture_ADDRESS);
         f(ctx, dst, src)
+    }
+}
+pub const EndDraw_ADDRESS: usize = 0x14195ABA0;
+/// Submits the frame's recorded command work: under the context's critical section it indexes the
+/// context's command-slot ring and submits the two prebuilt command objects for the current slot
+/// through the backend. It takes no arguments beyond the context.
+///
+/// The release build's symbol table labels this address `Graphics::CopySurfaceToTexture`; the two
+/// names are swapped (see [`CopySurfaceToTexture`](crate::graphics_engine::draw::CopySurfaceToTexture)).
+pub unsafe fn EndDraw(ctx: *mut crate::graphics_engine::graphics_engine::HContext_t) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        ) = ::std::mem::transmute(EndDraw_ADDRESS);
+        f(ctx)
     }
 }
 pub const ResolveSurface_ADDRESS: usize = 0x1419672B0;
