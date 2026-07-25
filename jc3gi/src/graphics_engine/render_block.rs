@@ -412,8 +412,9 @@ impl std::convert::AsMut<RenderBlockFoliage> for RenderBlockFoliage {
 /// The occluder render block (`NGraphicsEngine::CRenderBlockOccluder`, registered name `"Occluder"`): a
 /// unit-cube depth proxy scaled per scene occluder, injected once per frame into `RP_Z_OCCLUDERS`
 /// (pass 47) to prime the main camera depth buffer so later Z and G-buffer passes early-Z reject
-/// occluded geometry. Depth-only (null fragment program). The CPU software-occlusion system consumes
-/// the same occluder data independently and is not fed by this GPU depth pass.
+/// occluded geometry. Depth-only (null fragment program), and write-only: nothing reads the primed
+/// depth back on the CPU. The CPU software-occlusion system consumes the same occluder source data
+/// through its own path and is not fed by this GPU depth pass.
 pub struct RenderBlockOccluder {}
 impl RenderBlockOccluder {
     pub const DrawZ_ADDRESS: usize = 0x14017DFA0;
@@ -971,7 +972,8 @@ impl TreeImpostorRB {
     /// in the vertex shader from the render camera carried in the engine's global per-view billboard
     /// constant buffer (the translation-bearing `m_ViewProjectionF`); the block stages only per-draw
     /// scalars on `cb1`. `m_RenderStatus & 6` selects the depth/shadow vertex- and fragment-program
-    /// permutations. The vertex shader writes `SV_Position` directly, so this is not GPU-indirect.
+    /// permutations. The vertex shader writes `SV_Position` directly; the index and instance counts are
+    /// CPU-supplied, so no part of this block's submission is GPU-driven.
     pub unsafe fn Draw(
         &self,
         render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,

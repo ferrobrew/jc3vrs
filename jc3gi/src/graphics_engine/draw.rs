@@ -404,9 +404,9 @@ pub unsafe fn GetDSVFromSurface(
 }
 pub const CreateFragmentProgram_ADDRESS: usize = 0x141953470;
 /// The leaf fragment-program creator: it wraps `ID3D11Device::CreatePixelShader` over
-/// `params.m_Code`/`params.m_Size`. `CreatePixelShader` copies the bytecode, so a hook may substitute a
-/// patched copy that only has to outlive the call. Static (no `this`); the first argument is the
-/// graphics device.
+/// `params.m_Code`/`params.m_Size`. `CreatePixelShader` copies the bytecode, so `params.m_Code` need
+/// not remain valid past the call, and the returned holder retains no bytecode of its own. Static (no
+/// `this`); the first argument is the graphics device.
 pub unsafe fn CreateFragmentProgram(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
     params: *mut crate::graphics_engine::draw::CreateFragmentProgramParams,
@@ -443,10 +443,10 @@ pub unsafe fn CreateVertexProgram(
 }
 pub const CreateHullProgram_ADDRESS: usize = 0x141953690;
 /// The leaf hull-program creator: it wraps `ID3D11Device::CreateHullShader` (vtable slot 16) over
-/// `params.m_Code`/`params.m_Size`. `CreateHullShader` copies the bytecode, so a hook may substitute a
-/// patched copy that only has to outlive the call; unlike [`CreateVertexProgram`](crate::graphics_engine::draw::CreateVertexProgram), the returned holder
-/// is a bare shader pointer with no retained bytecode copy. Static (no `this`); the first argument is
-/// the graphics device.
+/// `params.m_Code`/`params.m_Size`. `CreateHullShader` copies the bytecode, so `params.m_Code` need not
+/// remain valid past the call; unlike [`CreateVertexProgram`](crate::graphics_engine::draw::CreateVertexProgram), the returned holder is a bare shader
+/// pointer with no retained bytecode copy. Static (no `this`); the first argument is the graphics
+/// device.
 pub unsafe fn CreateHullProgram(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
     params: *const crate::graphics_engine::draw::CreateHullProgramParams,
@@ -461,10 +461,10 @@ pub unsafe fn CreateHullProgram(
 }
 pub const CreateDomainProgram_ADDRESS: usize = 0x1419537A0;
 /// The leaf domain-program creator: it wraps `ID3D11Device::CreateDomainShader` (vtable slot 17) over
-/// `params.m_Code`/`params.m_Size`. `CreateDomainShader` copies the bytecode, so a hook may substitute
-/// a patched copy that only has to outlive the call; like [`CreateHullProgram`](crate::graphics_engine::draw::CreateHullProgram), the returned holder is
-/// a bare shader pointer with no retained bytecode copy. Static (no `this`); the first argument is the
-/// graphics device.
+/// `params.m_Code`/`params.m_Size`. `CreateDomainShader` copies the bytecode, so `params.m_Code` need
+/// not remain valid past the call; like [`CreateHullProgram`](crate::graphics_engine::draw::CreateHullProgram), the returned holder is a bare shader
+/// pointer with no retained bytecode copy. Static (no `this`); the first argument is the graphics
+/// device.
 pub unsafe fn CreateDomainProgram(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
     params: *const crate::graphics_engine::draw::CreateDomainProgramParams,
