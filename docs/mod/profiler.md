@@ -15,9 +15,11 @@ feature off, the hooks and scopes do not exist.
 ## Using it
 
 - **Performance tab → "Profiler (issue #34)"**: a checkbox enables scope collection and shows
-  puffin's live flame graph; a button captures ~5 s of frames. A further checkbox
-  controls the GPU per-pass timestamps (on by default, because they are what separates GPU work
-  from GPU starvation), and the rolling GPU busy/starved/submit readout sits under it.
+  puffin's live flame graph; a button captures ~5 s of frames. Two further checkboxes control the
+  fine layers — the per-draw render-block scopes (off by default, because they inflate the
+  draw-submission path they measure) and the GPU per-pass timestamps (on by default, because they
+  are what separates GPU work from GPU starvation). The rolling GPU busy/starved/submit readout
+  and the per-render-block-type draw counts sit under them.
 - **F9** starts the same capture without the overlay (usable in-headset). Progress shows in the
   collapsible; the result is logged.
 - Captures are written next to the payload DLL as `jc3vrs-profile-<timestamp>.json` in Chrome
@@ -38,7 +40,16 @@ CPU scopes, draw thread: `RenderEngine::PreDraw` / `DrawGBuffer` / `Draw (scene)
 
 Inside each pass there is also one scope per render-block-type run, named by the type
 (`CRenderPass::ChangeRenderBlockType` mirrors the engine's own compiled-out scope markers; see
-`docs/engine/profiling.md` §1.5).
+`docs/engine/profiling.md` §1.5) — but that layer is **off by default**. It is hundreds of scopes
+per frame, each a lock and a stream push, sitting on the draw-submission path, so leaving it on
+inflates the cost a capture is usually taken to measure. The checkbox next to the enable toggle
+turns it on for the cases where the per-type timeline is actually the question.
+
+What survives unconditionally is the cheap part of its signal: the same hook adds each finished
+type run's block count to a per-type counter (a relaxed atomic add against a thread-memoized slot,
+no lock and no allocation), and those totals go to the Performance tab and the periodic log line.
+They undercount by the final run of each pass draw, which the engine closes at the pass tail rather
+than through a type switch.
 
 GPU lane: a synthetic "GPU" puffin thread built from the engine's own
 `Graphics::CreateTimeStampQuery` / `SetTimeStampQuery` / disjoint-query wrappers. Each dispatch
@@ -91,6 +102,7 @@ the frame bars.
   and the dynamic-scope registry for engine-supplied names.
 - `payload/src/profiler/gpu.rs` — the GPU timestamp ring, the busy/starved decomposition, and the
   puffin GPU-lane reporting.
+- `payload/src/profiler/blocks.rs` — the per-render-block-type draw counters.
 - `payload/src/profiler/capture.rs` — the 5 s capture state machine (a puffin frame sink).
 - `payload/src/profiler/chrome_trace.rs` — puffin frames → Chrome trace-event JSON.
 - `payload/src/profiler/ui.rs` — the Performance-tab collapsible.

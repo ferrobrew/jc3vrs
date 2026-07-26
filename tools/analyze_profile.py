@@ -25,6 +25,8 @@ Reading notes baked into the numbers:
   * A dispatch's outer GPU scope is a *span*, not busy time: the GPU can idle inside it. The
     per-pass subdivision is what separates the two, and even then busy is an upper bound —
     starvation between individual draws inside one pass is invisible and counted as work.
+  * The per-render-block-type scopes are off by default (they inflate the draw path they measure),
+    so a capture may have no render-block ranking; the block counts go to the log instead.
 
 Usage: uv run tools/analyze_profile.py <jc3vrs-profile-*.json> [--worst N] [--top N] [--csv out.csv]
 """

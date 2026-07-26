@@ -14,6 +14,7 @@
 //! stream per thread, so main-thread and draw-thread scopes land in separate lanes; the GPU layer
 //! reports a third, synthetic "GPU" lane.
 
+pub mod blocks;
 pub mod capture;
 pub mod chrome_trace;
 pub mod gpu;
@@ -49,6 +50,21 @@ pub fn ui_enabled() -> bool {
 pub fn are_scopes_on() -> bool {
     puffin::are_scopes_on()
 }
+
+/// Whether the per-render-block-type run scopes are recorded. Off by default: they are the
+/// finest-grained instrumentation the mod has (hundreds of scopes per frame, each a lock and a
+/// stream push) and they sit on the draw-submission path, so leaving them on inflates the very
+/// cost a capture is usually taken to measure. The [`blocks`] counters carry the cheap part of
+/// their signal (how many blocks of each type were drawn) unconditionally.
+pub fn per_draw_scopes() -> bool {
+    PER_DRAW_SCOPES.load(Ordering::Relaxed)
+}
+
+pub fn set_per_draw_scopes(enabled: bool) {
+    PER_DRAW_SCOPES.store(enabled, Ordering::Relaxed);
+}
+
+static PER_DRAW_SCOPES: AtomicBool = AtomicBool::new(false);
 
 /// Recomputes puffin's global scope switch from the UI toggle and the capture state.
 pub(crate) fn apply_scopes_on() {

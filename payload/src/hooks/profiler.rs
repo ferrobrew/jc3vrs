@@ -8,7 +8,8 @@
 //! - `RenderEngine::DrawGBuffer` and `RenderEngine::Draw` — the two scene seams between `PreDraw`
 //!   and `DrawPosteffects`, bracketed on the GPU timeline and timed on the CPU.
 //! - `CGame::UpdateGame` — one sim tick (the render phases are covered by `game_update_render`).
-//! - `CRenderPass::ChangeRenderBlockType` — opens a per-render-block-type CPU scope named by the
+//! - `CRenderPass::ChangeRenderBlockType` — counts the outgoing type run's blocks (always), and,
+//!   when the per-draw scopes are enabled, opens a per-render-block-type CPU scope named by the
 //!   type, closed by the next switch or by the pass draw's tail (see `render_pass::do_draw`).
 //!
 //! The engine's own scope-marker calls (`Graphics::BeginScopeMarker` / `EndScopeMarker`, §1.5 of
@@ -83,18 +84,32 @@ fn change_render_block_type(
     inout_count: *mut u32,
 ) {
     if profiler::are_scopes_on() {
-        // End the previous run's scope *before* the next one begins: puffin streams are strictly
-        // LIFO per thread, so begin-before-end here would nest the runs into each other and garble
-        // the pass's whole subtree.
-        type_scope::clear();
-        // SAFETY: `next`, when non-null, is a live render-block type with a valid vtable; its type
-        // name is a static string in the module image.
-        let scope = unsafe {
-            next.as_ref()
-                .and_then(|ty| ty.get_type_name_str())
-                .and_then(profiler::scope_for_name)
-        };
-        type_scope::replace(scope);
+        // Count the outgoing run's blocks against its type. `inout_count` is the pass's running
+        // drawn-block counter, which the original is about to zero for the new run, so its value
+        // here belongs to `prev`.
+        // SAFETY: `prev`, when non-null, is a live render-block type with a valid vtable and a
+        // static type-name string; `inout_count` is the engine's live counter for this pass draw.
+        unsafe {
+            if let (Some(ty), Some(&count)) = (prev.as_ref(), inout_count.as_ref())
+                && let Some(name) = ty.get_type_name_str()
+            {
+                profiler::blocks::record(name, count);
+            }
+        }
+        if profiler::per_draw_scopes() {
+            // End the previous run's scope *before* the next one begins: puffin streams are
+            // strictly LIFO per thread, so begin-before-end here would nest the runs into each
+            // other and garble the pass's whole subtree.
+            type_scope::clear();
+            // SAFETY: `next`, when non-null, is a live render-block type with a valid vtable; its
+            // type name is a static string in the module image.
+            let scope = unsafe {
+                next.as_ref()
+                    .and_then(|ty| ty.get_type_name_str())
+                    .and_then(profiler::scope_for_name)
+            };
+            type_scope::replace(scope);
+        }
     }
     CHANGE_RENDER_BLOCK_TYPE
         .get()

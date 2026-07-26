@@ -18,6 +18,20 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
             super::set_ui_enabled(enabled);
         }
 
+        let mut per_draw = super::per_draw_scopes();
+        if ui
+            .checkbox(&mut per_draw, "Per-draw render-block scopes")
+            .on_hover_text(
+                "Adds one puffin scope per render-block-type run (hundreds per frame) on the \
+                 draw-submission path -- which inflates the very path it measures, so a capture \
+                 taken with this on overstates submission cost. Off by default; the per-type block \
+                 counts below are collected either way.",
+            )
+            .changed()
+        {
+            super::set_per_draw_scopes(per_draw);
+        }
+
         let mut pass_timestamps = super::gpu::pass_timestamps_enabled();
         if ui
             .checkbox(&mut pass_timestamps, "GPU per-pass timestamps")
@@ -34,6 +48,7 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
 
         capture_controls(ui);
         gpu_summary(ui);
+        block_counts(ui);
 
         if super::ui_enabled() {
             ui.separator();
@@ -68,6 +83,22 @@ fn gpu_summary(ui: &mut egui::Ui) {
          span -- a GPU span that tracks submit is a fed-just-in-time pipeline, not shading cost.",
     );
     ui.label(format!("CPU submit/frame: {:.2} ms", summary.submit_ms));
+}
+
+/// The busiest render-block types of the last summary window, by blocks drawn.
+fn block_counts(ui: &mut egui::Ui) {
+    let counts = super::blocks::snapshot();
+    if counts.is_empty() {
+        return;
+    }
+    ui.collapsing("Render blocks drawn (current window)", |ui| {
+        for count in counts.iter().take(16) {
+            ui.label(format!(
+                "{}: {} blocks in {} runs",
+                count.name, count.blocks, count.runs
+            ));
+        }
+    });
 }
 
 /// The capture button, a live progress readout while recording, and the last dump's outcome.
