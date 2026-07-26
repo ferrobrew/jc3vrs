@@ -14,7 +14,11 @@ use parking_lot::Mutex;
 
 use crate::{config, grapple, headpose};
 
-use super::{Fov, FrameContext, OffAxisProjection, VrConfig, config::ProjectionConvention};
+use super::{
+    Fov, FrameContext, OffAxisProjection, VrConfig,
+    config::ProjectionConvention,
+    pose_control::{self, pose_orientation, pose_position},
+};
 
 /// The per-eye render parameters the `SetupRenderCamera` hook applies while a VR frame is in flight.
 #[derive(Copy, Clone)]
@@ -49,11 +53,6 @@ static RENDER_PARAMS: Mutex<Option<[EyeRenderParams; 2]>> = Mutex::new(None);
 /// widening the scene cull frustum (see [`cull_projection_standard`]). `None` when no VR frame is
 /// rendering.
 static CULL_PROJECTION: Mutex<Option<Matrix4>> = Mutex::new(None);
-
-/// The captured pose reused every frame while [`VrConfig::freeze_pose`] is on: the two eye views plus
-/// the sim-driven body frame and head anchor, so the *full* composed render camera is bit-identical
-/// frame to frame (`None` when the toggle is off, so the next enable re-captures the then-current pose).
-static FROZEN_POSE: Mutex<Option<([super::EyeView; 2], Quat, Vec3)>> = Mutex::new(None);
 
 /// The render parameters for `eye` (`0` = left, `1` = right) this frame, or `None` when no VR frame
 /// is rendering. Read by the `SetupRenderCamera` hook.
@@ -90,8 +89,10 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // Freeze diagnostic: reuse the first captured pose -- eye views plus the sim-driven body frame and
     // anchor -- so every frame renders from a bit-identical camera, isolating per-frame-input-driven
     // artifacts (pose noise, head-bone idle animation) from intrinsic render ones (see `freeze_pose`).
+    // The captured centre pose is then hand-editable from the Camera tab, so a mis-scaled screen-space
+    // pass can be driven by an exact, repeatable yaw or translation step (see `crate::vr::pose_control`).
     let frozen = if cfg.freeze_pose {
-        Some(*FROZEN_POSE.lock().get_or_insert_with(|| {
+        Some(pose_control::frozen_frame(|| {
             (
                 [frame.eye_view(0), frame.eye_view(1)],
                 headpose::xr::body_rotation(),
@@ -99,17 +100,17 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
             )
         }))
     } else {
-        *FROZEN_POSE.lock() = None;
+        pose_control::clear();
         None
     };
-    let [eye0, eye1] = frozen.map_or_else(|| [frame.eye_view(0), frame.eye_view(1)], |f| f.0);
+    let [eye0, eye1] = frozen.map_or_else(|| [frame.eye_view(0), frame.eye_view(1)], |f| f.eyes);
 
     // Advance the grapple reel-in filter at frame cadence, before the body frame and anchor below
     // are read through it: the engine rotates the body the instant a reel begins, and the ~33 Hz
     // input-tick advance alone left up to a tick of that rotation reaching the view before the
     // filter engaged (issue #36 telemetry). At frame cadence the held pre-reel frame is the one
     // the previous render composed with, so an instant engage is seamless.
-    let anchor_raw = frozen.map_or_else(|| headpose::anchor().unwrap_or(Vec3::ZERO), |f| f.2);
+    let anchor_raw = frozen.map_or_else(|| headpose::anchor().unwrap_or(Vec3::ZERO), |f| f.anchor);
     let headpose_config = config::Config::lock_query(|c| c.headpose);
     grapple::advance(
         headpose::xr::body_rotation_raw(),
@@ -128,19 +129,22 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // head-pose stand-in ([`super::mid_pose`]), which is likewise the slerp-mid.
     let center_orientation = pose_orientation(eye0.pose).slerp(pose_orientation(eye1.pose), 0.5);
 
-    let body_rotation = frozen.map_or_else(headpose::xr::body_rotation, |f| f.1);
+    let body_rotation = frozen.map_or_else(headpose::xr::body_rotation, |f| f.body_rotation);
     // The anchor goes through the grapple filter's landing rate limit; the previous-tick anchor is
     // offset by the same amount so the pair keeps the true tick delta for the engine's `dtf` lerp.
     let anchor = grapple::filter_anchor(anchor_raw);
-    let anchor_prev_raw =
-        frozen.map_or_else(|| headpose::anchor_prev().unwrap_or(anchor_raw), |f| f.2);
+    let anchor_prev_raw = frozen.map_or_else(
+        || headpose::anchor_prev().unwrap_or(anchor_raw),
+        |f| f.anchor,
+    );
 
     // Compose a tick-spaced pose pair sharing the fresh HMD cockpit delta but differing in the
     // sim-driven body frame and head anchor (T1 vs T0), so the engine's `dtf` lerp smooths the
     // per-tick body/anchor motion between rendered frames. The previous-tick anchor and body rotation
     // fall back to the current-tick values until they are available, degenerating to no interpolation
     // rather than a bad one. Under the freeze diagnostic, prev == cur so the lerp is constant too.
-    let body_rotation_prev = frozen.map_or_else(headpose::xr::body_rotation_prev, |f| f.1);
+    let body_rotation_prev =
+        frozen.map_or_else(headpose::xr::body_rotation_prev, |f| f.body_rotation);
     let anchor_prev = anchor - (anchor_raw - anchor_prev_raw);
 
     // Publish the raw cockpit-frame HMD pose (the tracking delta before the body-frame composition
@@ -272,20 +276,5 @@ fn symmetric_projection(fov: openxr::Fovf, near: f32, far: f32) -> OffAxisProjec
         },
         near,
         far,
-    )
-}
-
-/// The position of an OpenXR pose as a [`Vec3`].
-fn pose_position(pose: openxr::Posef) -> Vec3 {
-    Vec3::new(pose.position.x, pose.position.y, pose.position.z)
-}
-
-/// The orientation of an OpenXR pose as a [`glam::Quat`].
-fn pose_orientation(pose: openxr::Posef) -> glam::Quat {
-    glam::Quat::from_xyzw(
-        pose.orientation.x,
-        pose.orientation.y,
-        pose.orientation.z,
-        pose.orientation.w,
     )
 }

@@ -95,12 +95,6 @@ pub fn egui_debug_vr(ui: &mut egui::Ui) {
              stops single-pass double-wide forcing a 2x-width swapchain. Takes effect on the next \
              resize, which toggling this issues.",
         );
-    ui.checkbox(&mut cfg.vr.freeze_pose, "Freeze pose (diagnostic)")
-        .on_hover_text(
-            "Reuse the first frame's head pose every frame, so the render is bit-identical frame to \
-             frame. Isolates HMD pose-noise-driven flicker (present even on a desk) from intrinsic \
-             render artifacts. The view locks in place -- diagnostic only.",
-        );
 }
 
 /// A human-readable label for the runtime's current session state.

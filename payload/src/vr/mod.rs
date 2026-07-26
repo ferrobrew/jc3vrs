@@ -56,6 +56,7 @@ mod config;
 pub mod foveation;
 mod frame;
 mod mirror;
+pub mod pose_control;
 mod resolution;
 pub mod tail;
 pub(crate) mod window;

@@ -186,8 +186,20 @@ pub struct VrConfig {
     /// artifacts driven by the HMD's per-frame pose sensor-noise (which persists even sitting on a
     /// desk) from artifacts intrinsic to the render: if a per-frame flicker vanishes with the pose
     /// frozen, it was the pose noise driving it. Not for gameplay -- the view locks in place.
+    ///
+    /// The captured pose is also hand-editable while frozen (see [`crate::vr::pose_control`]), so a
+    /// motion-dependent artifact can be driven by an exact, repeatable head movement instead of an
+    /// eyeballed one.
     #[serde(default)]
     pub freeze_pose: bool,
+    /// The translation step, in metres, of one nudge of the frozen pose's position (see
+    /// [`crate::vr::pose_control`]). Nudges snap to this grid, so a step is exactly repeatable.
+    #[serde(default = "default_freeze_pose_step_m")]
+    pub freeze_pose_step_m: f32,
+    /// The rotation step, in degrees, of one nudge of the frozen pose's yaw/pitch/roll (see
+    /// [`crate::vr::pose_control`]). Nudges snap to this grid, so a step is exactly repeatable.
+    #[serde(default = "default_freeze_pose_step_deg")]
+    pub freeze_pose_step_deg: f32,
 }
 
 /// The serde default for [`VrConfig::native_resolution`] (the manual [`Default`] via
@@ -198,6 +210,16 @@ fn default_true() -> bool {
 
 /// The serde default for [`VrConfig::mirror_zoom`] (see [`default_true`] for why this is needed).
 fn default_mirror_zoom() -> f32 {
+    1.0
+}
+
+/// The serde default for [`VrConfig::freeze_pose_step_m`] (see [`default_true`] for why this is needed).
+fn default_freeze_pose_step_m() -> f32 {
+    0.1
+}
+
+/// The serde default for [`VrConfig::freeze_pose_step_deg`] (see [`default_true`] for why this is needed).
+fn default_freeze_pose_step_deg() -> f32 {
     1.0
 }
 
@@ -222,6 +244,8 @@ impl VrConfig {
             auto_recenter_on_gameplay: true,
             own_back_buffer: true,
             freeze_pose: false,
+            freeze_pose_step_m: 0.1,
+            freeze_pose_step_deg: 1.0,
         }
     }
 }

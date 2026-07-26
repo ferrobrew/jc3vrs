@@ -3,7 +3,7 @@
 use egui::Slider;
 use jc3gi::types::math::Matrix4;
 
-use crate::{config, grapple, headpose, hooks};
+use crate::{config, grapple, headpose, hooks, vr};
 
 pub fn egui_debug_camera(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
@@ -38,6 +38,9 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
     ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
 
     ui.collapsing("Headpose", |ui| egui_debug_headpose(ui, &mut cfg.headpose));
+    ui.collapsing("Frozen pose (diagnostic)", |ui| {
+        egui_frozen_pose(ui, &mut cfg.vr);
+    });
     ui.collapsing("Grapple reel-in comfort", |ui| {
         egui_grapple(ui, &mut cfg.headpose.grapple);
     });
@@ -138,6 +141,122 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
     ui.add(Slider::new(&mut hp.position_offset.x, -1.0..=1.0).text("Roomscale offset X (m)"));
     ui.add(Slider::new(&mut hp.position_offset.y, -1.0..=1.0).text("Roomscale offset Y (m)"));
     ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Roomscale offset Z (m)"));
+}
+
+/// The frozen-pose diagnostic ([`crate::vr::pose_control`]): pin the rendered head pose, then drive it
+/// by hand. Content that only mis-renders *in motion* (a mis-scaled screen-space pass, a render block
+/// that slides under the camera) cannot be measured by turning your head -- the same movement is never
+/// repeated twice. Frozen, a pose is an exact set of numbers: dial one in, step yaw by exactly one
+/// degree, and the two frames differ in exactly that.
+fn egui_frozen_pose(ui: &mut egui::Ui, vr: &mut vr::VrConfig) {
+    ui.checkbox(&mut vr.freeze_pose, "Freeze pose")
+        .on_hover_text(
+            "Capture the current head pose and reuse it every frame, so the render is bit-identical \
+             frame to frame. Isolates HMD pose-noise-driven flicker (present even on a desk) from \
+             intrinsic render artifacts, and makes the pose controls below live. The view locks in \
+             place -- diagnostic only.",
+        );
+
+    // The frozen pose is the one the frame loop composes the render camera from; the live cockpit pose
+    // is the same quantity sampled from the last rendered frame, so the readout means the same thing
+    // either way (it is the HMD pose in the cockpit frame -- relative to the recenter baseline --
+    // before the body frame and world scale compose it into the world).
+    let frozen = vr::pose_control::current();
+    let live = headpose::xr::cockpit_pose()
+        .map(|p| vr::pose_control::PoseValues::from_pose(p.position, p.orientation));
+    let Some(mut values) = frozen.or(live) else {
+        ui.label("Pose: no VR frame has rendered yet.");
+        return;
+    };
+
+    let step_m = vr.freeze_pose_step_m;
+    let step_deg = vr.freeze_pose_step_deg;
+    let mut changed = false;
+    ui.add_enabled_ui(frozen.is_some(), |ui| {
+        egui::Grid::new("frozen_pose_grid")
+            .num_columns(4)
+            .show(ui, |ui| {
+                changed |= pose_row(ui, "X", &mut values.position.x, step_m, " m");
+                changed |= pose_row(ui, "Y", &mut values.position.y, step_m, " m");
+                changed |= pose_row(ui, "Z", &mut values.position.z, step_m, " m");
+                changed |= pose_row(ui, "Yaw", &mut values.yaw_deg, step_deg, "°");
+                changed |= pose_row(ui, "Pitch", &mut values.pitch_deg, step_deg, "°");
+                changed |= pose_row(ui, "Roll", &mut values.roll_deg, step_deg, "°");
+            });
+        if changed {
+            vr::pose_control::set_current(values);
+        }
+
+        if ui
+            .button("Reset to captured pose")
+            .on_hover_text(match vr::pose_control::base() {
+                Some(base) => format!(
+                    "Return to the pose captured when the freeze engaged: ({:+.3}, {:+.3}, {:+.3}) m, \
+                     yaw {:+.2}°, pitch {:+.2}°, roll {:+.2}°.",
+                    base.position.x,
+                    base.position.y,
+                    base.position.z,
+                    base.yaw_deg,
+                    base.pitch_deg,
+                    base.roll_deg,
+                ),
+                None => "Nothing is frozen.".to_string(),
+            })
+            .clicked()
+        {
+            vr::pose_control::reset();
+        }
+    });
+    if frozen.is_none() {
+        ui.label("(live pose -- freeze to edit)");
+    }
+
+    ui.add(
+        egui::DragValue::new(&mut vr.freeze_pose_step_m)
+            .speed(0.01)
+            .range(0.001..=10.0)
+            .prefix("Translation step: ")
+            .suffix(" m"),
+    );
+    ui.add(
+        egui::DragValue::new(&mut vr.freeze_pose_step_deg)
+            .speed(0.1)
+            .range(0.01..=90.0)
+            .prefix("Rotation step: ")
+            .suffix("°"),
+    );
+}
+
+/// One editable pose component: direct numeric entry plus exact `-`/`+` nudges of `step`. Returns
+/// whether the value changed this frame.
+fn pose_row(ui: &mut egui::Ui, label: &str, value: &mut f32, step: f32, suffix: &str) -> bool {
+    ui.label(label);
+    let mut changed = ui
+        .add(
+            egui::DragValue::new(value)
+                .speed(step * 0.1)
+                .max_decimals(4)
+                .suffix(suffix),
+        )
+        .changed();
+    if ui
+        .button("-")
+        .on_hover_text("Step down by exactly one step, snapped to the step grid.")
+        .clicked()
+    {
+        *value = vr::pose_control::nudge(*value, step, -1);
+        changed = true;
+    }
+    if ui
+        .button("+")
+        .on_hover_text("Step up by exactly one step, snapped to the step grid.")
+        .clicked()
+    {
+        *value = vr::pose_control::nudge(*value, step, 1);
+        changed = true;
+    }
+    ui.end_row();
+    changed
 }
 
 /// The grapple reel-in body-frame filter (issue #36): which rotation the reel is allowed to
