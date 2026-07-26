@@ -302,6 +302,24 @@ pub struct StereoConfig {
     /// `DrawIndexed` re-issue, the geometry is then present and correctly sized in both eyes but has no
     /// parallax. Requires the collapse. On by default: it fixes a confirmed visible artifact.
     pub single_pass_indirect_per_eye: bool,
+    /// Run the deferred clustered-lighting resolve once per eye under the collapse, each run masked to
+    /// that eye's half of the double-wide target and reconstructing with that eye's own basis.
+    ///
+    /// The resolve is a fullscreen quad that rebuilds world positions from depth through the
+    /// `ViewProjInv` [`reconstruct_offaxis_inverse`](Self::reconstruct_offaxis_inverse) substitutes,
+    /// and samples the sun-shadow cascade over them. Collapsed, that single quad covers both eye halves
+    /// while the basis describes one eye's frustum: the left half gets that eye's frustum compressed 2x
+    /// horizontally and the right half a basis unrelated to it. The error is a function of the view
+    /// matrix, so it moves as the camera turns -- the shadows slide across the screen instead of
+    /// staying on the world. Splitting the pass is the only fix; one draw cannot carry two bases.
+    ///
+    /// Each run is masked with a **scissor**, not a half viewport, so the quad keeps its
+    /// one-to-one NDC-to-pixel mapping and its G-buffer sampling stays correct; the half's basis comes
+    /// from folding the full-target-NDC to eye-NDC remap into the substituted inverse. The whole render
+    /// block is re-issued, so its light-assignment phase runs twice (identically) as well. Requires the
+    /// collapse and `reconstruct_offaxis_inverse`. On by default: sliding shadows are a worse defect
+    /// than the extra light-assignment pass is a cost, and the flag remains for an A/B in the headset.
+    pub single_pass_reconstruct_per_eye: bool,
     /// Keep both viewport slots bound to the same region outside the G-buffer range, so a patched
     /// vertex shader's `SV_ViewportArrayIndex = SV_InstanceID & 1` resolves to the same place whichever
     /// parity it computes. The rewrite writes that index unconditionally -- the bytecode cannot tell
@@ -590,6 +608,7 @@ impl StereoConfig {
             single_pass_occluder: false,
             single_pass_instanced_per_eye: true,
             single_pass_indirect_per_eye: true,
+            single_pass_reconstruct_per_eye: true,
             single_pass_uniform_viewport_slots: true,
             single_pass_clear_range_on_dispatch: true,
             disable_sun_shadows: false,

@@ -378,6 +378,25 @@ pub unsafe fn ResolveSurface(
         f(ctx, params)
     }
 }
+pub const SetScissorEnable_ADDRESS: usize = 0x141966B80;
+/// Sets the scissor-enable bit of the context's current rasterizer-state key (bit 7 of the key's low
+/// byte), which becomes `D3D11_RASTERIZER_DESC::ScissorEnable` when the state object for that key is
+/// created. The key is looked up (and the object created on first use) by the render-state flush that
+/// precedes every draw, so the change takes effect from the next draw on. Only the enable flag lives
+/// in the key: the rectangles themselves are passed straight through to the context's
+/// `RSSetScissorRects` by a separate wrapper and are ignored while the flag is clear.
+pub unsafe fn SetScissorEnable(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    enable: bool,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            enable: bool,
+        ) = ::std::mem::transmute(SetScissorEnable_ADDRESS);
+        f(ctx, enable)
+    }
+}
 pub const GetRTVFromSurface_ADDRESS: usize = 0x141956240;
 /// Returns the surface's render-target view.
 pub unsafe fn GetRTVFromSurface(

@@ -915,6 +915,17 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      them sliding across the screen at twice the camera's rate.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.single_pass_reconstruct_per_eye,
+                    "Deferred lighting resolve per eye (sun shadows)",
+                )
+                .on_hover_text(
+                    "Runs the deferred clustered-lighting resolve twice, each run scissor-masked to \
+                     one eye's half of the double-wide target and reconstructing depth with that \
+                     eye's own basis. Off, the one fullscreen quad covers both halves with one eye's \
+                     basis, and the error turns with the camera -- the sun shadows slide across the \
+                     screen. Needs the off-axis reconstruction override on.",
+                );
+                ui.checkbox(
                     &mut cfg.stereo.single_pass_uniform_viewport_slots,
                     "Uniform viewport slots outside the G-buffer",
                 )

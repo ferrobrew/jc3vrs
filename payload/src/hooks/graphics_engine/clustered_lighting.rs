@@ -21,6 +21,32 @@
 //!
 //! Both `DrawClustered` and its `SetFragmentProgramConstants` calls run on the render thread, so the
 //! thread-local flag correctly scopes the interception.
+//!
+//! # The per-eye split under the single-pass collapse
+//!
+//! `DrawClustered` ends with the deferred resolve: a fullscreen triangle whose vertex shader builds a
+//! view ray from the `ViewProjInv` the [`super::reconstruction`] detour substitutes, and whose pixel
+//! shader samples the sun-shadow cascade over the world positions that ray reconstructs. Under the
+//! collapse that one draw spans **both** eye halves of the double-wide target while the substituted
+//! basis describes one eye's frustum, so neither half reconstructs correctly and the error rotates
+//! with the camera -- the sun shadows slide across the screen instead of staying on the world.
+//!
+//! Under [`StereoConfig::single_pass_reconstruct_per_eye`](crate::config::StereoConfig), the block's
+//! whole `Draw` is re-issued once per eye inside a [`reconstruction::enter_per_eye_half`] scope, which
+//! masks each run to that eye's half and hands it that eye's basis. The re-issue is of the whole
+//! block, not of the resolve alone, because the resolve is not separately reachable: the mask has to be
+//! armed after the block's last render-setup bind, and the block's own `PerspectiveFovInverse` call is
+//! the only seam that sits between that bind and the draw.
+//!
+//! The block's earlier light-assignment phase therefore runs twice as well. It is left identical
+//! between the two runs, and it clears and refills the froxel grid each time, so each resolve consumes
+//! the grid its own run built -- the second run's clear cannot reach the first run's already-issued
+//! resolve. That means the froxel grid keeps its existing whole-target geometry: the tile bounds below
+//! still pair one eye's projection with the double-wide tile count. Making the assignment per-eye as
+//! well would need the grid rasterisation masked to the eye's half of the *tile* grid and the tile
+//! bounds made affine in the absolute tile index, and it would leave the grid holding only the last
+//! eye's half for whatever reads it after the pass (the forward-lit vegetation shaders sample
+//! `LightLookup` directly), so it is deliberately not part of this split.
 
 use std::{cell::Cell, ffi::c_void};
 
@@ -34,6 +60,7 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
+use super::reconstruction;
 use crate::config::Config;
 
 pub(super) fn hook_library() -> HookLibrary {
@@ -61,8 +88,46 @@ fn draw_clustered(
     a3: *mut c_void,
     a4: *mut HTexture_t,
 ) {
+    let (fix_frustum, per_eye) = Config::lock_query(|c| {
+        (
+            c.stereo.fix_clustered_light_frustum,
+            c.stereo.single_pass_reconstruct_per_eye && c.stereo.reconstruct_offaxis_inverse,
+        )
+    });
+    let run = |fix_frustum: bool| run_draw_clustered(fix_frustum, this, rc, a3, a4);
+
+    // SAFETY: `rc` is the live render context for this dispatch; the caller (the engine's draw
+    // dispatch) guarantees it is valid for the duration of `DrawClustered`.
+    let ctx = unsafe { rc.as_ref() }.map(|rc| rc.m_Context);
+    if per_eye
+        && crate::stereo::single_pass::collapse_active()
+        && let Some(ctx) = ctx
+        && crate::vr::render_params(1).is_some()
+    {
+        for eye in 0..2 {
+            let half = reconstruction::enter_per_eye_half(eye, ctx);
+            run(fix_frustum);
+            // Eye 0's run was not masked, so it drew the whole target exactly as the un-split pass
+            // does. Issuing eye 1's run would draw the same full-width image a second time, so stop.
+            if !half.masked() {
+                break;
+            }
+        }
+        return;
+    }
+    run(fix_frustum);
+}
+
+/// One `DrawClustered`, with the off-axis tile-bounds override armed around it when enabled.
+fn run_draw_clustered(
+    fix_frustum: bool,
+    this: *const RenderBlockDeferredLighting,
+    rc: *mut RenderContext,
+    a3: *mut c_void,
+    a4: *mut HTexture_t,
+) {
     // When the fix is disabled, call through without setting the thread-local flag.
-    if !Config::lock_query(|c| c.stereo.fix_clustered_light_frustum) {
+    if !fix_frustum {
         DRAW_CLUSTERED.get().unwrap().call(this, rc, a3, a4);
         return;
     }
