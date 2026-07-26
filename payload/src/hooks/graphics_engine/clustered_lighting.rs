@@ -42,11 +42,16 @@
 //! between the two runs, and it clears and refills the froxel grid each time, so each resolve consumes
 //! the grid its own run built -- the second run's clear cannot reach the first run's already-issued
 //! resolve. That means the froxel grid keeps its existing whole-target geometry: the tile bounds below
-//! still pair one eye's projection with the double-wide tile count. Making the assignment per-eye as
-//! well would need the grid rasterisation masked to the eye's half of the *tile* grid and the tile
-//! bounds made affine in the absolute tile index, and it would leave the grid holding only the last
-//! eye's half for whatever reads it after the pass (the forward-lit vegetation shaders sample
-//! `LightLookup` directly), so it is deliberately not part of this split.
+//! still pair one eye's projection with the double-wide tile count, which is wrong for both eyes.
+//!
+//! Making the assignment per-eye as well is a separate, larger change. The grid is live well outside
+//! this block -- ~20 forward-lit render-block types bind it via
+//! `CLightManager::SetupForwardLightingResources`, and foliage reads it a whole frame early, in
+//! `RP_VEGETATION_OPAQUE` -- so it has to be left complete in both halves. That is achievable (the
+//! two eyes' tile halves are disjoint and the fill phase is per-tile-local; only the assignment
+//! phase's `Graphics::Clear` would wipe the first eye's half), but it needs the grid rasterisation
+//! masked to the eye's half of the *tile* grid, the tile bounds made affine in the absolute tile
+//! index, and that clear suppressed on the second run. It is deliberately not part of this split.
 
 use std::{cell::Cell, ffi::c_void};
 
