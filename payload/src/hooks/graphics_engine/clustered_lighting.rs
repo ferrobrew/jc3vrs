@@ -347,11 +347,15 @@ mod tests {
 
         let cb1 = tile_bounds_from_projection(&proj, TILE_COUNT_X, TILE_COUNT_Y);
 
-        // cb1[1] = right + half_tile, cb1[2] = right - half_tile
-        // So right = (cb1[1] + cb1[2]) / 2, and the center = right - extent/2 = (right + left) / 2.
-        // The center is non-zero iff the frustum is asymmetric.
-        let h_center = (cb1[1] + cb1[2]) / 2.0;
-        let v_center = (cb1[5] + cb1[6]) / 2.0;
+        // Recover the frustum centre from the uploaded constants, which is what makes this a
+        // round-trip check rather than a restatement of the formula. `cb1[1]`/`cb1[2]` are
+        // `right +/- half_tile`, so their mean is `right` -- *not* the centre. The extent comes from
+        // the slope (`cb1[0] = -extent / tile_count`), and the centre is then `right - extent/2`,
+        // which equals `(right + left) / 2`. It is non-zero iff the frustum is asymmetric.
+        let h_extent = -cb1[0] * TILE_COUNT_X;
+        let v_extent = -cb1[4] * TILE_COUNT_Y;
+        let h_center = (cb1[1] + cb1[2]) / 2.0 - h_extent / 2.0;
+        let v_center = (cb1[5] + cb1[6]) / 2.0 - v_extent / 2.0;
 
         assert!(
             h_center.abs() > 0.01,
