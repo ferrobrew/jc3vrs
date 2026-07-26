@@ -36,6 +36,21 @@ pub fn egui_debug_vr(ui: &mut egui::Ui) {
             "Drive the engine to render each eye at the HMD-recommended resolution; disabled \
              automatically on a resize fault.",
         );
+    ui.add_enabled_ui(cfg.vr.native_resolution, |ui| {
+        ui.indent("resolution", |ui| {
+            ui.add(
+                egui::Slider::new(&mut cfg.vr.resolution_scale, 0.25..=2.0)
+                    .text("Per-eye resolution scale"),
+            )
+            .on_hover_text(
+                "Multiplies the runtime's recommended per-eye size to give the engine's render \
+                 resolution. Takes effect on the next frame -- the driver notices the target size \
+                 changed and issues a resize. The OpenXR swapchain keeps the size it was created \
+                 at, so a lower scale renders smaller and the blit upscales into it; that is what \
+                 makes this an honest A/B for whether GPU cost tracks pixel count.",
+            );
+        });
+    });
     ui.checkbox(&mut cfg.vr.mirror, "Desktop mirror")
         .on_hover_text("Show one eye in the game window while a session runs.");
     ui.add_enabled_ui(cfg.vr.mirror, |ui| {
