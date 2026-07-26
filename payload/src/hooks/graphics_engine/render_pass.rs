@@ -108,8 +108,13 @@ const RP_AO_VOLUMES: i32 = RenderPassId::RP_AO_VOLUMES as i32;
 const RP_SCREEN_SPACE_REFLECTIONS: i32 = RenderPassId::RP_SCREEN_SPACE_REFLECTIONS as i32;
 const RP_GLOBAL_ILLUMINATION: i32 = RenderPassId::RP_GLOBAL_ILLUMINATION as i32;
 
-// RenderEngine::DrawRenderPassRange -- draws the half-open pass-index range [first, last). The
-// per-eye-divergence and flicker diagnostics drop passes by splitting the range around them, so
+// RenderEngine::DrawRenderPassRange -- draws the half-open pass-index range [first, last). The engine
+// calls it three times per dispatch, from `CGraphicsEngine::HandleDrawThreadTask` in this order:
+// `DrawGBuffer` (0x2F..0x55), `Draw` (0x56..0x96), and `DrawPosteffects` (0x96..0x97); the bounds are
+// compile-time constants at each call site, so the ranges never vary between frames. `PreDraw` (the
+// shadow, reflection, and vegetation prepasses) runs before all three and does not come through here.
+//
+// The per-eye-divergence and flicker diagnostics drop passes by splitting the range around them, so
 // every other pass runs untouched: SSR (reads a previous-frame scene capture regenerated each Draw)
 // and GI (may carry a per-eye temporal/probe history) for the per-eye MainColor divergence, AO
 // volumes (depth-tested proxy geometry whose whole contribution can flip on a sub-pixel jitter
@@ -209,7 +214,7 @@ fn draw_render_pass_range(
     run_scene_range(first, last, &draw);
     if range.is_some() {
         drop(range);
-        crate::stereo::single_pass::log_draw_split();
+        crate::stereo::single_pass::log_draw_split(first as u32, last as u32);
     }
 }
 

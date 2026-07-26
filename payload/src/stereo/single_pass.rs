@@ -1015,7 +1015,14 @@ pub struct GBufferRange(());
 
 impl Drop for GBufferRange {
     fn drop(&mut self) {
-        clear_gbuffer_range();
+        // The guard is the only writer that should ever lower the flag. Finding it already down means
+        // something else cleared it while the range was still running -- every draw between that point
+        // and here was treated as out-of-range -- so count it rather than losing it in the clear.
+        if !IN_GBUFFER_RANGE.swap(false, Ordering::Relaxed) {
+            RANGE_TORN.fetch_add(1, Ordering::Relaxed);
+        }
+        // The per-eye matrices belong to the range that just ended; see [`clear_gbuffer_range`].
+        *CURRENT_M_EYE.lock() = None;
         // The collapse's per-draw split ([`ensure_collapse_viewport`]) leaves the two slots holding
         // different eye halves, and that state outlives the range: everything drawn between here and
         // the next engine viewport bind would route its odd-parity instances into the other eye's half.
@@ -1027,9 +1034,9 @@ impl Drop for GBufferRange {
     }
 }
 
-/// Force the range closed, whether or not a guard is live. Called at frame start so a range left open
-/// by a torn-down or interrupted frame cannot bleed into the next one.
-pub fn clear_gbuffer_range() {
+/// Force the range closed, whether or not a guard is live, so a range left open by a torn-down or
+/// interrupted dispatch cannot bleed into the next one. See [`begin_frame`] for the caller.
+fn clear_gbuffer_range() {
     IN_GBUFFER_RANGE.store(false, Ordering::Relaxed);
     // The per-eye matrices belong to the range that just ended. Dropping them means a re-issue that
     // somehow runs outside a range -- or in a later frame where `compute_dual_eye_rows` declined to
@@ -1040,6 +1047,40 @@ pub fn clear_gbuffer_range() {
 fn in_gbuffer_range() -> bool {
     IN_GBUFFER_RANGE.load(Ordering::Relaxed)
 }
+
+/// Open a new real frame: advance the frame ordinal the diagnostics are keyed to, and fold the
+/// previous frame's already-instanced exposure into the history.
+///
+/// The exposure counters are per *frame*, but the G-buffer range is entered once per
+/// `DrawRenderPassRange` call -- three times per dispatch under the collapse (`DrawGBuffer`
+/// `0x2F..0x55`, `Draw` `0x56..0x96`, `DrawPosteffects` `0x96..0x97`; see
+/// `docs/mod/single-pass-stereo.md`). Folding them at a range boundary therefore cut the frame into
+/// three unequal windows and reported each as if it were a frame; the fold belongs here, where a
+/// frame actually begins.
+pub fn begin_frame() {
+    clear_gbuffer_range();
+    // The frame that just ended owns both the exposure fold and, if it was a diagnostic frame, the
+    // trailing exposure line -- so it carries the same ordinal as its own range lines, which were
+    // emitted before the ordinal advanced.
+    let logged = diagnostic_frame();
+    let exposure = accumulate_instanced_exposure();
+    if logged {
+        log_instanced_exposure(exposure);
+    }
+    FRAME_ORDINAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Whether this frame is one the per-frame single-pass diagnostics log on.
+fn diagnostic_frame() -> bool {
+    FRAME_ORDINAL
+        .load(Ordering::Relaxed)
+        .is_multiple_of(DIAGNOSTIC_FRAME_CADENCE)
+}
+
+/// How often the single-pass bring-up diagnostics log, in real frames. Every range of a logged frame
+/// reports, so the frame's whole pass-range sequence appears together and can be read as one frame
+/// rather than as unrelated samples.
+const DIAGNOSTIC_FRAME_CADENCE: usize = 120;
 
 /// The stereo constant buffer's register slot (`b13`, free across the game's vertex shaders) and its
 /// size in float4 rows (five per eye: four view-projection rows then the camera position, two eyes).
@@ -1919,6 +1960,14 @@ unsafe extern "system" fn draw_indexed_instanced_detour(
         INSTANCED_TOTAL.fetch_add(1, Ordering::Relaxed);
         let patched = BOUND_VS_PATCHED.load(Ordering::Relaxed);
         let in_range = in_gbuffer_range();
+        if patched {
+            let bucket = if in_range {
+                &INSTANCED_RANGE_PATCHED
+            } else {
+                &INSTANCED_RANGE_OUT_PATCHED
+            };
+            bucket.fetch_add(1, Ordering::Relaxed);
+        }
         if patched && in_range && collapse_active() {
             let handled = config_flags().has(Flag::InstancedPerEye) && instanced_per_eye(&submit);
             record_instanced_case(instance_count, handled);
@@ -2616,37 +2665,51 @@ pub fn substitution_stats() -> SubstitutionStats {
     }
 }
 
-/// Log and reset the per-window patched/unpatched G-buffer draw counts -- called once per frame so
-/// the bring-up log shows how the draw gating is splitting the geometry.
-pub fn log_draw_split() {
+/// Log and reset the patched/unpatched draw counts of one G-buffer range -- called at each range's
+/// exit, tagged with the `[first, last)` pass-index window the range covered so the frame's several
+/// ranges can be told apart in the log.
+///
+/// `torn` counts the ranges whose guard found the flag already lowered: a non-zero value means the
+/// range was closed from outside while it was still running, and every draw after that point was
+/// mis-classified as out-of-range.
+pub fn log_draw_split(first: u32, last: u32) {
     let patched = PATCHED_DRAWS.swap(0, Ordering::Relaxed);
     let unpatched = UNPATCHED_DRAWS.swap(0, Ordering::Relaxed);
     let split = VIEWPORT_SPLIT.swap(0, Ordering::Relaxed);
     let dup = VIEWPORT_DUP.swap(0, Ordering::Relaxed);
-    let exposure = accumulate_instanced_exposure();
-    if patched + unpatched > 0 {
-        let n = DRAW_SPLIT_LOG.fetch_add(1, Ordering::Relaxed);
-        if n.is_multiple_of(120) {
-            log_instanced_exposure(exposure);
-            let s = substitution_stats();
-            tracing::info!(
-                target: "single_pass",
-                "gbuffer draws: {patched} patched, {unpatched} unpatched | viewports: {split} split, {dup} identical-dup | \
-                 recorded VS={} | CreateVertexShader: pending={} reacq[patched={} cb13={} no-refs={} err={}] | \
-                 census[patched={} no-refs={} deferred={} errored={}]",
-                s.recorded_vs,
-                s.cvs_pending,
-                s.cvs_reacq_patched,
-                s.cvs_reacq_cb13,
-                s.cvs_reacq_no_refs,
-                s.cvs_reacq_err,
-                s.census_patched,
-                s.census_no_refs,
-                s.census_deferred,
-                s.census_errored,
-            );
-        }
+    let in_patched = INSTANCED_RANGE_PATCHED.swap(0, Ordering::Relaxed);
+    let out_patched = INSTANCED_RANGE_OUT_PATCHED.swap(0, Ordering::Relaxed);
+    let torn = RANGE_TORN.swap(0, Ordering::Relaxed);
+    let torn_total = RANGE_TORN_TOTAL.fetch_add(torn, Ordering::Relaxed) + torn;
+    if torn > 0 {
+        tracing::warn!(
+            target: "single_pass",
+            "pass range [{first:#x}, {last:#x}) was closed from outside while it ran: the draws after \
+             that point were treated as out-of-range ({torn_total} so far this session)"
+        );
     }
+    if !diagnostic_frame() {
+        return;
+    }
+    let s = substitution_stats();
+    tracing::info!(
+        target: "single_pass",
+        "pass range [{first:#x}, {last:#x}): {patched} patched, {unpatched} unpatched draws | \
+         instanced while it ran: {in_patched} patched in-range, {out_patched} patched out-of-range | \
+         torn {torn} ({torn_total} this session) | viewports: {split} split, {dup} identical-dup | \
+         recorded VS={} | CreateVertexShader: pending={} reacq[patched={} cb13={} no-refs={} err={}] | \
+         census[patched={} no-refs={} deferred={} errored={}]",
+        s.recorded_vs,
+        s.cvs_pending,
+        s.cvs_reacq_patched,
+        s.cvs_reacq_cb13,
+        s.cvs_reacq_no_refs,
+        s.cvs_reacq_err,
+        s.census_patched,
+        s.census_no_refs,
+        s.census_deferred,
+        s.census_errored,
+    );
 }
 
 /// Disable all the single-pass COM-vtable detours, restoring the original D3D functions. Must run on
@@ -2882,6 +2945,13 @@ static CB13: Mutex<Cb13Buffer> = Mutex::new(Cb13Buffer {
     rows: None,
 });
 static IN_GBUFFER_RANGE: AtomicBool = AtomicBool::new(false);
+/// Real frames since injection, advanced by [`begin_frame`]; the diagnostics' cadence and grouping.
+static FRAME_ORDINAL: AtomicUsize = AtomicUsize::new(0);
+/// Ranges closed from outside their guard since the last [`log_draw_split`], and the session total --
+/// see [`GBufferRange::drop`]. The tear is intermittent, so the total is never reset: a diagnostic
+/// frame that reports zero of its own still shows whether it has ever happened.
+static RANGE_TORN: AtomicUsize = AtomicUsize::new(0);
+static RANGE_TORN_TOTAL: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     /// Set by the `CreateVertexProgram` hook right before the engine creates the D3D shader from a
@@ -2953,7 +3023,11 @@ static BOUND_VS_PATCHED: AtomicBool = AtomicBool::new(false);
 static BOUND_VS: AtomicUsize = AtomicUsize::new(0);
 static PATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static UNPATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
-static DRAW_SPLIT_LOG: AtomicUsize = AtomicUsize::new(0);
+/// Already-instanced draws with a patched vertex shader bound, split by whether the G-buffer range
+/// was up, accumulated per *range* rather than per frame ([`log_draw_split`] resets them). The
+/// per-frame `INSTANCED_*` buckets carry the same events; these say *when in the frame* they landed.
+static INSTANCED_RANGE_PATCHED: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_RANGE_OUT_PATCHED: AtomicUsize = AtomicUsize::new(0);
 static VIEWPORT_SPLIT: AtomicUsize = AtomicUsize::new(0);
 static VIEWPORT_DUP: AtomicUsize = AtomicUsize::new(0);
 /// How often [`unify_viewport_slots`] had to put a split slot pair back to one region: the number of

@@ -58,11 +58,12 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         crate::crash::mark(Phase::UpdateRenderEnter);
         let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
 
-        // Close any single-pass G-buffer range left open by the previous frame. The flag is raised
-        // around a re-entrant engine call, so an interrupted frame (a torn-down session, a dispatch
-        // that never returned) could otherwise leave it up and have every shadow and reflection draw
-        // of this frame instance-doubled and eye-split.
-        crate::stereo::single_pass::clear_gbuffer_range();
+        // Open the single-pass frame: advance the diagnostics' frame ordinal, fold the previous
+        // frame's instanced-exposure counters, and close any G-buffer range left open by it. The
+        // range flag is raised around a re-entrant engine call, so an interrupted frame (a torn-down
+        // session, a dispatch that never returned) could otherwise leave it up and have every shadow
+        // and reflection draw of this frame instance-doubled and eye-split.
+        crate::stereo::single_pass::begin_frame();
         // Sample the single-pass config once for the whole frame, so the per-draw detours read a
         // relaxed atomic rather than taking the config mutex.
         crate::stereo::single_pass::refresh_config_flags();
