@@ -29,6 +29,31 @@ pub enum ProjectionConvention {
     ManualReverseZ,
 }
 
+/// Which pose the freeze diagnostic holds still (see [`crate::vr::pose_control`]). The two frozen
+/// modes are two answers to the same question -- "what do you want held still?" -- so they are
+/// mutually exclusive: freezing the head's contribution and freezing the whole camera are not
+/// composable, and holding both would only mean the second one.
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default, Debug)]
+pub enum FreezeMode {
+    /// Nothing is frozen; the camera follows the head, the body, and the game as usual.
+    #[default]
+    Off,
+    /// Hold the **cockpit-frame HMD pose**: the head pose relative to the recenter baseline, plus the
+    /// sim-driven body frame and head-bone anchor captured with it. The rendered camera is then
+    /// bit-identical frame to frame *as long as nothing else moves it*, which isolates artifacts
+    /// driven by the HMD's per-frame pose sensor noise (present even sitting on a desk) from ones
+    /// intrinsic to the render. The body frame and anchor are captured too, so on-foot idle motion
+    /// does not leak in; a camera the *game* moves (a vehicle, a cutscene) still does.
+    CockpitPose,
+    /// Hold the **final render camera** in world space: the scene camera's world transform is pinned
+    /// at the last point before the engine consumes it, so nothing upstream -- the head, the body, the
+    /// animated head-bone anchor, or the game's own camera -- can move the view. The per-eye offsets
+    /// and projections are held with it, so the two eyes are static too. This is the mode for
+    /// measuring content that mis-renders only *in motion*: the view is a fixed world-space pose that
+    /// can be stepped by an exact amount and returned to.
+    FullCamera,
+}
+
 /// How the per-eye blit bridges the game's captured back-buffer colour into the OpenXR swapchain.
 ///
 /// The captured eye texture is a `CopyResource` of `m_BackBufferLinear` as `R8G8B8A8_UNORM`
@@ -180,18 +205,13 @@ pub struct VrConfig {
     /// (with the engine's own objects rebuilt over the live swapchain) on session end and on eject.
     #[serde(default = "default_true")]
     pub own_back_buffer: bool,
-    /// Diagnostic: freeze the rendered head pose. When on, the first frame's located eye poses (and
-    /// FOVs) are captured and reused every frame, so the rendered content is bit-identical frame to
-    /// frame -- as if the camera were a still flatscreen camera rather than a live HMD. This isolates
-    /// artifacts driven by the HMD's per-frame pose sensor-noise (which persists even sitting on a
-    /// desk) from artifacts intrinsic to the render: if a per-frame flicker vanishes with the pose
-    /// frozen, it was the pose noise driving it. Not for gameplay -- the view locks in place.
-    ///
-    /// The captured pose is also hand-editable while frozen (see [`crate::vr::pose_control`]), so a
-    /// motion-dependent artifact can be driven by an exact, repeatable head movement instead of an
-    /// eyeballed one.
+    /// Diagnostic: which pose to hold still (see [`FreezeMode`] and [`crate::vr::pose_control`]).
+    /// Whichever pose the mode holds is captured on the first frame it is on and reused every frame
+    /// after, and is hand-editable while held -- so a motion-dependent artifact can be driven by an
+    /// exact, repeatable step instead of an eyeballed head movement. Not for gameplay: the view locks
+    /// in place. **Default off.**
     #[serde(default)]
-    pub freeze_pose: bool,
+    pub freeze_mode: FreezeMode,
     /// The translation step, in metres, of one nudge of the frozen pose's position (see
     /// [`crate::vr::pose_control`]). Nudges snap to this grid, so a step is exactly repeatable.
     #[serde(default = "default_freeze_pose_step_m")]
@@ -243,7 +263,7 @@ impl VrConfig {
             persist_instance: true,
             auto_recenter_on_gameplay: true,
             own_back_buffer: true,
-            freeze_pose: false,
+            freeze_mode: FreezeMode::Off,
             freeze_pose_step_m: 0.1,
             freeze_pose_step_deg: 1.0,
         }

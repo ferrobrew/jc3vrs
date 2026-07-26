@@ -143,29 +143,70 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
     ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Roomscale offset Z (m)"));
 }
 
-/// The frozen-pose diagnostic ([`crate::vr::pose_control`]): pin the rendered head pose, then drive it
-/// by hand. Content that only mis-renders *in motion* (a mis-scaled screen-space pass, a render block
+/// The frozen-pose diagnostic ([`crate::vr::pose_control`]): pin the rendered pose, then drive it by
+/// hand. Content that only mis-renders *in motion* (a mis-scaled screen-space pass, a render block
 /// that slides under the camera) cannot be measured by turning your head -- the same movement is never
 /// repeated twice. Frozen, a pose is an exact set of numbers: dial one in, step yaw by exactly one
 /// degree, and the two frames differ in exactly that.
+///
+/// The mode picks *what* is held: the head's contribution to the camera, or the whole camera. For a
+/// "slides as the camera moves" measurement it is the full camera you want, since only that holds
+/// everything the view is built from.
 fn egui_frozen_pose(ui: &mut egui::Ui, vr: &mut vr::VrConfig) {
-    ui.checkbox(&mut vr.freeze_pose, "Freeze pose")
-        .on_hover_text(
-            "Capture the current head pose and reuse it every frame, so the render is bit-identical \
-             frame to frame. Isolates HMD pose-noise-driven flicker (present even on a desk) from \
-             intrinsic render artifacts, and makes the pose controls below live. The view locks in \
-             place -- diagnostic only.",
-        );
+    use vr::FreezeMode;
 
-    // The frozen pose is the one the frame loop composes the render camera from; the live cockpit pose
-    // is the same quantity sampled from the last rendered frame, so the readout means the same thing
-    // either way (it is the HMD pose in the cockpit frame -- relative to the recenter baseline --
-    // before the body frame and world scale compose it into the world).
+    ui.horizontal(|ui| {
+        ui.label("Freeze:");
+        ui.radio_value(&mut vr.freeze_mode, FreezeMode::Off, "Off");
+        ui.radio_value(
+            &mut vr.freeze_mode,
+            FreezeMode::CockpitPose,
+            "Head pose (cockpit)",
+        )
+        .on_hover_text(
+            "Capture the current HMD pose (and the body frame and head anchor with it) and reuse it \
+             every frame. Isolates HMD pose-noise-driven flicker (present even on a desk) from \
+             intrinsic render artifacts. This holds the head's contribution still, not the camera: \
+             a camera the game moves still moves.",
+        );
+        ui.radio_value(
+            &mut vr.freeze_mode,
+            FreezeMode::FullCamera,
+            "Full camera (world)",
+        )
+        .on_hover_text(
+            "Pin the final scene render camera in world space, at the last point before the engine \
+             consumes it. Nothing moves the view -- not the head, the body, the animated head bone, \
+             or the game's own camera -- and the per-eye offsets are held with it. This is the mode \
+             for measuring content that only mis-renders in motion.",
+        );
+    });
+    // While frozen, edit the pose actually driving the render. Unfrozen there is nothing to edit, so
+    // the live cockpit pose stands in as a readout -- but only in the modes whose numbers are in that
+    // frame. The full-camera mode has no live stand-in (the cockpit pose is a different quantity in a
+    // different frame, and showing it here would read as a world position), so it says so instead.
     let frozen = vr::pose_control::current();
-    let live = headpose::xr::cockpit_pose()
-        .map(|p| vr::pose_control::PoseValues::from_pose(p.position, p.orientation));
-    let Some(mut values) = frozen.or(live) else {
-        ui.label("Pose: no VR frame has rendered yet.");
+    let values = match (frozen, vr.freeze_mode) {
+        (Some(values), _) => Some(values),
+        (None, FreezeMode::FullCamera) => None,
+        (None, _) => headpose::xr::cockpit_pose()
+            .map(|p| vr::pose_control::PoseValues::from_pose(p.position, p.orientation)),
+    };
+    // The two frames are not interchangeable: cockpit metres are head travel from the recenter
+    // baseline, world metres are the camera's position in the game world. A number whose frame is
+    // ambiguous is worse than no number, so the frame is always stated next to the values.
+    ui.label(match (frozen.is_some(), vr.freeze_mode) {
+        (true, FreezeMode::FullCamera) => {
+            "Frame: world -- the render camera's world-space position and orientation"
+        }
+        (true, _) => "Frame: cockpit -- the head pose relative to the recenter baseline",
+        (false, _) => "Frame: cockpit (live head pose) -- freeze to edit",
+    });
+    let Some(mut values) = values else {
+        ui.label(match vr.freeze_mode {
+            FreezeMode::FullCamera => "Pose: no frame has rendered under the freeze yet.",
+            _ => "Pose: no VR frame has rendered yet.",
+        });
         return;
     };
 
@@ -207,9 +248,6 @@ fn egui_frozen_pose(ui: &mut egui::Ui, vr: &mut vr::VrConfig) {
             vr::pose_control::reset();
         }
     });
-    if frozen.is_none() {
-        ui.label("(live pose -- freeze to edit)");
-    }
 
     ui.add(
         egui::DragValue::new(&mut vr.freeze_pose_step_m)

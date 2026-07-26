@@ -41,12 +41,6 @@ pub fn last_dtf() -> f32 {
     f32::from_bits(LAST_DTF.load(Ordering::Relaxed))
 }
 
-/// The render camera's world transform (`m_TransformF`) and view (`m_View`) captured while
-/// [`crate::config::StereoConfig::freeze_render_camera`] is on, reused every Draw so the camera holds
-/// still (issue #31 isolation, Test C). `None` when the toggle is off, so re-enabling recaptures the
-/// then-current pose.
-static FROZEN_RENDER_CAMERA: Mutex<Option<(Matrix4, Matrix4)>> = Mutex::new(None);
-
 /// The scene render camera is the engine-owned copy (`GraphicsEngine::m_RenderCamera`), rebuilt
 /// each Draw by `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF`
 /// from `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye,
@@ -90,26 +84,6 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     // needs jitter, but its own Halton sequence, applied below.
     let jitter = jitter && !fsr_enabled && !(stereo_active && force_smaa_1x);
 
-    // Flicker-isolation diagnostic (issue #31, Test C): pin the render camera's world transform and view
-    // to a value captured when the toggle is enabled, so the game camera holds still while the sun and
-    // the rest of the sim keep moving -- isolating a sun-driven per-frame flicker from a camera-idle one.
-    // Applied before SetupRenderCamera so the engine rebuilds the view-projections (and fits the shadow
-    // cascade) from the frozen centre; the per-eye offset below still runs on top. See
-    // `StereoConfig::freeze_render_camera`.
-    if is_render_camera {
-        let freeze = Config::lock_query(|c| c.stereo.freeze_render_camera);
-        let mut frozen = FROZEN_RENDER_CAMERA.lock();
-        if freeze {
-            if let Some(camera) = unsafe { camera.as_mut() } {
-                let (transform, view) = frozen.get_or_insert((camera.m_TransformF, camera.m_View));
-                camera.m_TransformF = *transform;
-                camera.m_View = *view;
-            }
-        } else {
-            *frozen = None;
-        }
-    }
-
     // The VR per-eye off-axis projection and world offset (docs/mod/vr-runtime.md blockers 1 & 3).
     // Fetch this eye's parameters once; `None` on flatscreen frames. Under the preferred convention,
     // write the standard-depth off-axis projection into `m_Projection` *before* SetupRenderCamera so
@@ -135,6 +109,18 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         && let Some(camera) = unsafe { camera.as_mut() }
     {
         head_track_render_camera(camera);
+    }
+
+    // The full-camera freeze diagnostic. This is the last write to the scene camera before the engine
+    // consumes it, so every contribution above -- the headpose the sim camera was placed from, the
+    // body frame, the animated head-bone anchor, the loading-screen head-track, and the game's own
+    // camera when it owns the view -- is already folded into `m_TransformF` and is captured wholesale
+    // rather than partially. Applied *before* `SetupRenderCamera` so the engine rebuilds the
+    // view-projections (and fits the sun-shadow cascade) from the frozen centre, and the per-eye
+    // offset below still runs on top of it; the per-eye parameters are frozen to match in
+    // `crate::vr::begin_render_frame`. See `crate::vr::FreezeMode`.
+    if is_render_camera && let Some(camera) = unsafe { camera.as_mut() } {
+        freeze_render_camera(camera);
     }
 
     let result = SETUP_RENDER_CAMERA.get().unwrap().call(camera, jitter);
@@ -266,6 +252,25 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     }
 
     result
+}
+
+/// Pin the scene render camera's world transform (and the view derived from it) to the pose the
+/// [`FreezeMode::FullCamera`](crate::vr::FreezeMode::FullCamera) diagnostic holds, capturing the
+/// engine's current one the first frame the mode is on. Inert in every other mode: it reads the
+/// config and returns, leaving the camera exactly as the engine built it.
+///
+/// The held pose is hand-editable in world space from the Camera tab, so the view can be stepped by
+/// an exact translation or rotation and returned to -- which is what turns "this content slides as
+/// the camera moves" into a measurement. `m_View` is re-derived here rather than captured, so an edit
+/// reaches both matrices consistently.
+fn freeze_render_camera(camera: &mut Camera) {
+    if Config::lock_query(|c| c.vr.freeze_mode) != crate::vr::FreezeMode::FullCamera {
+        return;
+    }
+    let world =
+        crate::vr::pose_control::full_camera_transform(|| glam::Mat4::from(camera.m_TransformF));
+    camera.m_TransformF = Matrix4::from(world);
+    camera.m_View = Matrix4::from(world.inverse());
 }
 
 /// The camera pipeline within a frame (see `docs/engine/rendering.md` §2.2): `CameraTree::

@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use crate::{config, grapple, headpose};
 
 use super::{
-    Fov, FrameContext, OffAxisProjection, VrConfig,
+    Fov, FrameContext, FreezeMode, OffAxisProjection, VrConfig,
     config::ProjectionConvention,
     pose_control::{self, pose_orientation, pose_position},
 };
@@ -48,6 +48,11 @@ pub struct EyeRenderParams {
 /// state so the camera hook can read it during the eye Draws without deadlocking against the
 /// frame-held runtime lock.
 static RENDER_PARAMS: Mutex<Option<[EyeRenderParams; 2]>> = Mutex::new(None);
+
+/// The per-eye render parameters captured on the first frame of a [`FreezeMode::FullCamera`] freeze
+/// and reused until it ends, so the eyes hold still around the pinned camera. `None` whenever that
+/// mode is not engaged.
+static FROZEN_EYE_PARAMS: Mutex<Option<[EyeRenderParams; 2]>> = Mutex::new(None);
 
 /// The standard-depth, symmetric, union-FOV projection that bounds *both* eyes' off-axis frusta, for
 /// widening the scene cull frustum (see [`cull_projection_standard`]). `None` when no VR frame is
@@ -86,12 +91,15 @@ pub fn clear_render_params() {
 /// held guard); publishes through the headpose state and the [`RENDER_PARAMS`] slot, both
 /// independently locked.
 pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
-    // Freeze diagnostic: reuse the first captured pose -- eye views plus the sim-driven body frame and
-    // anchor -- so every frame renders from a bit-identical camera, isolating per-frame-input-driven
-    // artifacts (pose noise, head-bone idle animation) from intrinsic render ones (see `freeze_pose`).
-    // The captured centre pose is then hand-editable from the Camera tab, so a mis-scaled screen-space
-    // pass can be driven by an exact, repeatable yaw or translation step (see `crate::vr::pose_control`).
-    let frozen = if cfg.freeze_pose {
+    // Cockpit-pose freeze diagnostic: reuse the first captured pose -- eye views plus the sim-driven
+    // body frame and anchor -- so the head contributes the same thing every frame, isolating
+    // per-frame-input-driven artifacts (pose noise, head-bone idle animation) from intrinsic render
+    // ones. The captured centre pose is then hand-editable from the Camera tab, so a mis-scaled
+    // screen-space pass can be driven by an exact, repeatable yaw or translation step. The
+    // full-camera mode is not handled here at all: it pins the composed camera in the
+    // `SetupRenderCamera` hook, downstream of everything this function publishes (see
+    // `crate::vr::FreezeMode` and `crate::vr::pose_control`).
+    let frozen = if cfg.freeze_mode == FreezeMode::CockpitPose {
         Some(pose_control::frozen_frame(|| {
             (
                 [frame.eye_view(0), frame.eye_view(1)],
@@ -100,7 +108,11 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
             )
         }))
     } else {
-        pose_control::clear();
+        // The full-camera freeze owns the capture from the `SetupRenderCamera` hook, so only drop it
+        // here when nothing is frozen at all.
+        if cfg.freeze_mode == FreezeMode::Off {
+            pose_control::clear();
+        }
         None
     };
     let [eye0, eye1] = frozen.map_or_else(|| [frame.eye_view(0), frame.eye_view(1)], |f| f.eyes);
@@ -256,7 +268,22 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     } else {
         eye_params(eye1, pos1)
     };
-    *RENDER_PARAMS.lock() = Some([eye0_params, eye1_params]);
+
+    // Under the full-camera freeze the render camera itself is pinned in world space (see the
+    // `SetupRenderCamera` hook), so the per-eye parameters must be pinned with it: `world_offset`
+    // carries the live body rotation and the live eye-to-centre delta, and letting those keep moving
+    // would swing each eye by up to the IPD around the frozen centre -- exactly the residual motion
+    // the mode exists to remove. Captured on the first frozen frame and reused until the mode leaves.
+    let params = {
+        let mut frozen_params = FROZEN_EYE_PARAMS.lock();
+        if cfg.freeze_mode == FreezeMode::FullCamera {
+            *frozen_params.get_or_insert([eye0_params, eye1_params])
+        } else {
+            *frozen_params = None;
+            [eye0_params, eye1_params]
+        }
+    };
+    *RENDER_PARAMS.lock() = Some(params);
 }
 
 /// Build a zero-shear (symmetric) off-axis projection that preserves the eye's horizontal and vertical

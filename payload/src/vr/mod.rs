@@ -43,7 +43,7 @@ use windows::core::Interface as _;
 
 use crate::config::Config;
 
-pub use config::{BlitGamma, MirrorFraming, ProjectionConvention, VrConfig};
+pub use config::{BlitGamma, FreezeMode, MirrorFraming, ProjectionConvention, VrConfig};
 pub use frame::{
     EyeRenderParams, begin_render_frame, clear_render_params, cull_projection_standard,
     render_params,
@@ -844,14 +844,23 @@ impl VrState {
                 .context("vr: locate_views failed")?;
             if views.len() >= 2 {
                 head_pose = Some(mid_pose(views[0].pose, views[1].pose));
-                for (eye, view) in eyes.iter_mut().zip(views.iter()) {
+                // The compositor submission poses. While a freeze diagnostic holds the render still,
+                // the image is no longer rendered from where the head is, so the pair latched at
+                // freeze time is submitted instead of the live one -- otherwise the runtime keeps
+                // reprojecting a static image toward the moving head and the headset view warps even
+                // though nothing in the render moved (see `pose_control::submission_poses`).
+                let raw_poses =
+                    pose_control::submission_poses(cfg.freeze_mode != FreezeMode::Off, || {
+                        [views[0].pose, views[1].pose]
+                    });
+                for ((eye, view), raw_pose) in eyes.iter_mut().zip(views.iter()).zip(raw_poses) {
                     let pose = match self.baseline {
                         Some(b) => b.rebase(view.pose),
                         None => view.pose,
                     };
                     *eye = EyeView {
                         pose,
-                        raw_pose: view.pose,
+                        raw_pose,
                         fov: view.fov,
                         projection: OffAxisProjection::new(
                             fov_from_xr(view.fov),

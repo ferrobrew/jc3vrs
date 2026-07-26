@@ -522,16 +522,6 @@ pub struct StereoConfig {
     /// the flicker survives two identical off-axis draws, it is not inter-eye divergence at all. VR only;
     /// no-op on flatscreen. **Default off.**
     pub mirror_eye0_to_both: bool,
-    /// Diagnostic (issue #31 isolation, Test C): pin the scene render camera's world transform and view
-    /// matrix to a value captured when the toggle is enabled, so the game camera holds still -- Rico's
-    /// idle sway, breathing, and any sim-driven camera drift all freeze -- while the sun keeps moving and
-    /// the rest of the sim ticks. Unlike [`VrConfig::freeze_pose`](crate::vr::VrConfig), which only pins
-    /// the HMD head-pose contribution upstream, this freezes the actual `Camera::m_TransformF`/`m_View`
-    /// the engine renders and fits the sun-shadow cascade from. With the HMD sitting still too, this
-    /// cleanly splits a per-frame flicker driven by the sun (survives the freeze) from one driven by
-    /// camera idle motion (dies with it). Re-enabling recaptures the then-current pose. The view locks in
-    /// place -- diagnostic only. VR only. **Default off.**
-    pub freeze_render_camera: bool,
     /// Diagnostic: override the base VolumetricTerrain block's *water*-clip hull type. Clip type 2 is
     /// the water clip (patches below the cached water level are discarded when the camera is above
     /// water), selected for base-LOD tiles at the high-detail LOD -- it is **not** the LOD clip (that
@@ -632,7 +622,6 @@ impl StereoConfig {
             spotlight_full_res: false,
             symmetrize_eye_frusta: false,
             mirror_eye0_to_both: false,
-            freeze_render_camera: false,
             fix_clustered_light_frustum: true,
             force_terrain_hull_clip: false,
             terrain_hull_clip_value: 1,

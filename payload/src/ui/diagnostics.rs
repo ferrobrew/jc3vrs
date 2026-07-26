@@ -105,15 +105,10 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
                 "Renders both eyes with eye 0's projection and offset (mono), removing all per-eye \
                  divergence while keeping the off-axis projection and its reconstruction.",
             );
-            ui.checkbox(
-                &mut cfg.stereo.freeze_render_camera,
-                "C: Freeze render camera (pins m_TransformF/m_View; splits sun-driven vs camera-idle \
-                 flicker)",
-            )
-            .on_hover_text(
-                "Pins the game render camera to the pose captured when enabled, so the camera holds \
-                 still while the sun keeps moving. Unlike Freeze pose (VR tab), this freezes the actual \
-                 engine camera the shadow cascade fits from. The view locks in place -- diagnostic only.",
+            ui.label(
+                "C: Freeze render camera -- moved to the Camera tab's \"Frozen pose (diagnostic)\" \
+                 section, as the \"Full camera (world)\" freeze mode. It pins the same \
+                 m_TransformF/m_View, and the held pose can be driven by hand from there.",
             );
             ui.checkbox(
                 &mut cfg.stereo.shadow_update_every_frame,
