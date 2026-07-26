@@ -913,6 +913,17 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      reflections, post) keeps its odd-numbered instances instead of routing them into \
                      the other eye's half. Slot 0 is never changed.",
                 );
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_clear_range_on_dispatch,
+                    "Close a leaked G-buffer range on the draw thread",
+                )
+                .on_hover_text(
+                    "Moves the safety clear for a range left open by an interrupted dispatch from the \
+                     game thread at frame start to the draw thread's dispatch prologue. Off, and with \
+                     the frame tail deferred, the clear can land in the middle of a live range on the \
+                     draw thread -- everything after it loses its eye split and per-eye cb13, so whole \
+                     geometry families blink between frames.",
+                );
             });
         });
 

@@ -46,6 +46,37 @@ black.
 Without the collapse the routed range is just the G-buffer (`..RP_FIRST_SCENE`), which is a
 diagnostic shape rather than a usable one.
 
+#### The range is entered three times per dispatch
+
+`DrawRenderPassRange` is not one call per frame. `CGraphicsEngine::HandleDrawThreadTask` calls it
+three times, with bounds that are compile-time constants at each call site: `DrawGBuffer`
+(`0x2F..0x55`), `Draw` (`0x56..0x96`), and `DrawPosteffects` (`0x96..0x97`). `PreDraw` — the shadow,
+reflection, and vegetation prepasses — runs before all three and does not come through it. So without
+the collapse exactly one call qualifies (the G-buffer), and with it all three do, which means three
+`enter_gbuffer_range` / guard-drop pairs per dispatch.
+
+Anything hung off a range boundary is therefore *not* per-frame under the collapse. The per-frame
+diagnostics (the instanced eye-parity exposure fold) run from `single_pass::begin_frame` instead, and
+the per-range draw-split line is tagged with the `[first, last)` window it covers.
+
+#### The range flag belongs to the draw thread
+
+The flag is raised, read, and lowered entirely on the draw thread, inside one
+`HandleDrawThreadTask`. The safety clear that catches a range left open by an interrupted dispatch
+must run there too — it does, in the `PreDraw` prologue (`single_pass::begin_dispatch`), the one point
+in that thread's sequence where no range can be live.
+
+It used to run on the game thread at the top of `CGame::UpdateRender`, which is safe only while every
+dispatch is drained before `UpdateRender` returns. With `stereo.defer_frame_tail` on (the default) the
+last dispatch is *not* drained: the draw thread keeps walking the previous frame's ~20k draws while
+the game thread runs the next frame's sim and re-enters `UpdateRender`. The clear then lands in the
+middle of a live range, and every draw after it is treated as out of range — no eye split, `cb13`
+mirrored instead of per-eye, the per-eye reprojection matrices dropped. How far the draw thread got by
+then varies frame to frame, so whole geometry families (instanced buildings, bark, foliage) blink in
+and out. `stereo.single_pass_clear_range_on_dispatch` (on by default) picks the draw-thread clear; off
+restores the old game-thread one for A/B. A guard that finds the flag already down when it drops
+counts a "torn" range and warns, which is the direct measurement of this happening.
+
 Why this is tractable at all: the blocker for retrofitting single-pass onto a deferred game is
 normally per-shader bespoke position math. JC3 has **one** scene view-projection —
 `RenderContext::m_OffsetViewProjection`, uploaded to the global VS constant buffer (`cb0`, rows 29–32,
@@ -209,6 +240,7 @@ draw.
 | Patch HS/DS bytecode in-flight | `Graphics::CreateHullProgram` / `CreateDomainProgram` |
 | Mirror/diverge `cb13` per view | `RenderEngine::SetAllGlobalShaderProgramConstants` |
 | Mark the routed pass range | `RenderEngine::DrawRenderPassRange` |
+| Close a leaked range on the draw thread | `RenderEngine::PreDraw` |
 | Rebuild scene RTs at a new size | `GraphicsEngine::CreateRenderSetups`, driven by `ApplyResize` |
 | Per-eye render-block re-issue | `RenderBlockBark::Draw`/`DrawZ`, `RenderBlockFoliage::Draw`, `RenderBlockOccluder::DrawZ`, `RenderBlockTerrainDetail::Draw` |
 | Baked-constant reprojection | `Graphics::SetVertexProgramConstants` |

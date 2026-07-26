@@ -1058,7 +1058,12 @@ fn in_gbuffer_range() -> bool {
 /// three unequal windows and reported each as if it were a frame; the fold belongs here, where a
 /// frame actually begins.
 pub fn begin_frame() {
-    clear_gbuffer_range();
+    // The leaked-range clear belongs to the thread that raises and lowers the flag; [`begin_dispatch`]
+    // does it there. Clearing from here is kept only as the A/B arm, because with the frame tail
+    // deferred this thread runs concurrently with the previous frame's still-walking dispatch.
+    if !Config::lock_query(|c| c.stereo.single_pass_clear_range_on_dispatch) {
+        clear_gbuffer_range();
+    }
     // The frame that just ended owns both the exposure fold and, if it was a diagnostic frame, the
     // trailing exposure line -- so it carries the same ordinal as its own range lines, which were
     // emitted before the ordinal advanced.
@@ -1068,6 +1073,19 @@ pub fn begin_frame() {
         log_instanced_exposure(exposure);
     }
     FRAME_ORDINAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Open a dispatch on the draw thread: close a G-buffer range left open by an interrupted dispatch,
+/// before this one's first range is entered.
+///
+/// This is the only place the flag may be forced down from outside its guard. The flag is written and
+/// read exclusively on the draw thread, and the dispatch prologue is the one point in that thread's
+/// sequence where no range can be live -- so a clear here cannot interleave with a range in progress,
+/// as the former frame-start clear on the game thread could once the frame tail was deferred.
+pub fn begin_dispatch() {
+    if Config::lock_query(|c| c.stereo.single_pass_clear_range_on_dispatch) {
+        clear_gbuffer_range();
+    }
 }
 
 /// Whether this frame is one the per-frame single-pass diagnostics log on.

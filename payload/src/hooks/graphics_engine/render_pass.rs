@@ -514,6 +514,11 @@ fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
     #[cfg(feature = "profiler")]
     // SAFETY: `ctx` is the live immediate context for this dispatch.
     let _gpu = unsafe { crate::profiler::gpu::seam(ctx, crate::profiler::gpu::GpuSeam::PreDraw) };
+    // The first thing this dispatch does on the draw thread, and the one point in its sequence where
+    // no single-pass G-buffer range can be live: close one left open by an interrupted dispatch here,
+    // rather than from the game thread, which runs concurrently with it once the frame tail is
+    // deferred.
+    crate::stereo::single_pass::begin_dispatch();
     let original = PRE_DRAW.get().unwrap();
     let share_cfg =
         Config::lock_query(|c| c.stereo.share_prepasses && c.stereo.restore_frame_counters);

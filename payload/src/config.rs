@@ -300,6 +300,20 @@ pub struct StereoConfig {
     /// then rasterises into the other half. Slot 0 is never touched, so this can only make dropped
     /// instances reappear, never move what already rendered. Requires the collapse. On by default.
     pub single_pass_uniform_viewport_slots: bool,
+    /// Close a leaked G-buffer range from the **draw thread**, in the dispatch prologue
+    /// (`RenderEngine::PreDraw`), instead of from the game thread at frame start.
+    ///
+    /// The range is raised and lowered entirely on the draw thread, but the safety clear that catches
+    /// a range left open by an interrupted dispatch ran on the game thread, at the top of
+    /// `CGame::UpdateRender`. With [`defer_frame_tail`](Self::defer_frame_tail) the last dispatch is
+    /// not drained before `UpdateRender` returns, so the draw thread is still walking the previous
+    /// frame's passes while the game thread runs the sim and enters the next `UpdateRender` -- and the
+    /// clear lands in the middle of a live range. Every draw after it is then treated as out of range:
+    /// no eye split, `cb13` mirrored instead of per-eye, and the per-eye reprojection matrices
+    /// dropped. Whether the clear beats the draw thread depends on how far it got, so entire geometry
+    /// families blink in and out between frames. Clearing in the dispatch prologue puts the write back
+    /// on the thread that owns the flag, where it cannot interleave. On by default.
+    pub single_pass_clear_range_on_dispatch: bool,
     /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
     /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
@@ -565,6 +579,7 @@ impl StereoConfig {
             single_pass_occluder: false,
             single_pass_instanced_per_eye: true,
             single_pass_uniform_viewport_slots: true,
+            single_pass_clear_range_on_dispatch: true,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,
