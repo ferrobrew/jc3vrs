@@ -90,6 +90,10 @@ pub fn egui_debug_vr(ui: &mut egui::Ui) {
 
 /// A human-readable label for the runtime's current session state.
 fn session_label(status: &vr::VrStatus) -> &'static str {
+    if status.busy {
+        // The runtime lock was held by the frame tail; the rest of the snapshot is not meaningful.
+        return "(busy -- the frame tail holds the runtime lock)";
+    }
     if !status.enabled {
         "disabled (flatscreen stereo)"
     } else if status.running {

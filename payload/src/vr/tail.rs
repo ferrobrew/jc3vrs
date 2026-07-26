@@ -69,23 +69,42 @@ pub fn submit(job: Box<TailJob>) -> Result<(), Box<TailJob>> {
     })
 }
 
-/// Stops the worker and waits briefly for it to exit. Called on shutdown before the hooks are
-/// torn down; the in-flight job (if any) finishes first because the channel is drained in order.
-pub fn shutdown() {
-    if let Some(sender) = SENDER.get() {
-        let _ = sender.send(Message::Quit);
-        // The worker acknowledges by closing the ack channel; poll its liveness cheaply instead of
-        // holding a JoinHandle across the OnceLock (the handle is not clonable out of the init
-        // closure). A bounded wait keeps shutdown from hanging on a stuck tail.
-        for _ in 0..100 {
-            if QUIT_ACKED.load(std::sync::atomic::Ordering::Acquire) {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+/// Stops the worker and waits for it to exit. Called on shutdown before the hooks are torn down; the
+/// in-flight job (if any) finishes first because the channel is drained in order.
+///
+/// Returns whether the worker actually acknowledged. **A `false` return means the payload must not
+/// unload**: a thread still executing in an image that then unmaps has no return address, so it
+/// parks forever holding whatever locks it took, and the process wedges with no runnable threads and
+/// nothing in the log. That failure was observed after the tail timed out draining the draw dispatch
+/// signal, and it is unrecoverable -- there is no thread left able to resolve it. Waiting longer is
+/// strictly better than unloading underneath a live thread.
+#[must_use = "a tail that did not stop means the payload must stay mapped"]
+pub fn shutdown() -> bool {
+    let Some(sender) = SENDER.get() else {
+        return true; // never spawned
+    };
+    let _ = sender.send(Message::Quit);
+    // The worker acknowledges by closing the ack channel; poll its liveness cheaply instead of
+    // holding a JoinHandle across the OnceLock (the handle is not clonable out of the init closure).
+    for _ in 0..SHUTDOWN_POLLS {
+        if QUIT_ACKED.load(std::sync::atomic::Ordering::Acquire) {
+            return true;
         }
-        tracing::warn!(target: "vr", "the frame-tail worker did not stop within 1 s");
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    tracing::error!(
+        target: "vr",
+        "the frame-tail worker did not stop within {} s; leaving the payload mapped rather than \
+         unmapping under a live thread",
+        SHUTDOWN_POLLS / 100,
+    );
+    false
 }
+
+/// How long [`shutdown`] waits for the worker, in 10 ms polls. Generous on purpose: the tail can be
+/// mid-submit against a compositor that is itself pacing, and the cost of waiting too long is a
+/// slow eject, while the cost of waiting too little is an unrecoverable wedge.
+const SHUTDOWN_POLLS: u32 = 500;
 
 static QUIT_ACKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

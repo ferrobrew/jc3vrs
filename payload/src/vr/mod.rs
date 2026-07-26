@@ -152,12 +152,28 @@ pub struct VrStatus {
     /// The effective per-eye render resolution (recommended × `resolution_scale`) while a session is
     /// running, or `None` otherwise.
     pub eye_resolution: Option<(u32, u32)>,
+    /// Whether the runtime state was busy and this snapshot is stale (every field but `enabled` is a
+    /// carried-over default). The debug UI says so rather than pretending.
+    pub busy: bool,
 }
 
 /// Snapshot the VR runtime state for the debug UI. Locks the config and the runtime state briefly.
 pub fn status() -> VrStatus {
     let cfg = Config::lock_query(|c| c.vr.clone());
-    let state = VR_STATE.lock();
+    // `try_lock`, never `lock`. The deferred frame tail holds this lock across its drain and submit,
+    // and the debug UI runs on the game thread -- which is also what the tail waits on. Blocking here
+    // puts a diagnostic panel inside that cycle, and opening the VR tab at the wrong moment wedged
+    // the process outright. A stale readout for one frame is not worth a deadlock.
+    let Some(state) = VR_STATE.try_lock() else {
+        return VrStatus {
+            enabled: cfg.enabled,
+            instance_up: false,
+            running: false,
+            runtime_name: None,
+            eye_resolution: None,
+            busy: true,
+        };
+    };
     VrStatus {
         enabled: cfg.enabled,
         instance_up: state.instance.is_some(),
@@ -167,6 +183,7 @@ pub fn status() -> VrStatus {
             .is_running()
             .then(|| state.eye_resolution(&cfg))
             .flatten(),
+        busy: false,
     }
 }
 

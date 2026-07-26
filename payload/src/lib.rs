@@ -107,7 +107,14 @@ fn shutdown_startup() {
     // Stop the frame-tail worker before anything is torn down: a thread still alive at
     // `module::exit` would be running in an unmapped image. Any in-flight tail finishes first
     // (the VR teardown in `shutdown_from_game` already synchronized on the runtime lock).
-    vr::tail::shutdown();
+    //
+    // If it will not stop, pin the module so the image is never unmapped. A live thread in an
+    // unmapped image parks forever holding whatever it took, and the process wedges with nothing
+    // runnable and nothing logged -- strictly worse than leaking this DLL for the remaining lifetime
+    // of the game, which the player ends by quitting anyway.
+    if !vr::tail::shutdown() {
+        module::pin();
+    }
 
     // The cleanups cleared render-thread-driven config flags (e.g. the HUD redirect). Give the still-
     // live hooks a few frames to tick those changes through -- the per-frame restore runs on the
