@@ -15,7 +15,9 @@ feature off, the hooks and scopes do not exist.
 ## Using it
 
 - **Performance tab → "Profiler (issue #34)"**: a checkbox enables scope collection and shows
-  puffin's live flame graph; a button captures ~5 s of frames.
+  puffin's live flame graph; a button captures ~5 s of frames. A further checkbox
+  controls the GPU per-pass timestamps (on by default, because they are what separates GPU work
+  from GPU starvation), and the rolling GPU busy/starved/submit readout sits under it.
 - **F9** starts the same capture without the overlay (usable in-headset). Progress shows in the
   collapsible; the result is logged.
 - Captures are written next to the payload DLL as `jc3vrs-profile-<timestamp>.json` in Chrome
@@ -31,17 +33,19 @@ CPU scopes, main thread: `CGame::Update` (the frame), `UpdateGame` (each sim tic
 eye and ordinal), and the post-Draw drain (`WaitForCPUDraw + drain`).
 
 CPU scopes, draw thread: `RenderEngine::PreDraw` / `DrawGBuffer` / `Draw (scene)` /
-`DrawPosteffects` / `PostDraw`, `DrawRenderPassRange` (with the pass range as data),
-`RenderPass::DoDraw` (named per pass via the engine's own `GetRenderPassName` table), and — inside
-each pass — one scope per render-block-type run, named by the type (`CRenderPass::
-ChangeRenderBlockType` mirrors the engine's own compiled-out scope markers; see
+`DrawPosteffects` / `PostDraw`, `DrawRenderPassRange` (with the pass range as data), and
+`RenderPass::DoDraw` (named per pass via the engine's own `GetRenderPassName` table).
+
+Inside each pass there is also one scope per render-block-type run, named by the type
+(`CRenderPass::ChangeRenderBlockType` mirrors the engine's own compiled-out scope markers; see
 `docs/engine/profiling.md` §1.5).
 
 GPU lane: a synthetic "GPU" puffin thread built from the engine's own
 `Graphics::CreateTimeStampQuery` / `SetTimeStampQuery` / disjoint-query wrappers. Each dispatch
 wraps its seams (`PreDraw`, `DrawGBuffer`, `Draw (scene)`, `DrawPosteffects`, `PostDraw`) in
 timestamp pairs under one disjoint query, and the resolved results are reported a few frames later
-under a per-dispatch outer scope ("GPU eye 0" / "GPU eye 1" / "GPU far field"). GPU ticks are
+under a per-dispatch outer scope ("GPU eye 0" / "GPU eye 1" / "GPU far field"), which also carries
+the dispatch's busy/starved/submit numbers as its scope data. GPU ticks are
 mapped onto the CPU timeline via a CPU reference taken at the dispatch's start, with consecutive
 dispatches serialized on the lane (the GPU executes them in order), so the lane aligns with — and
 visibly trails — the CPU work that submitted it. Disjoint intervals are dropped rather than
@@ -49,7 +53,34 @@ reported. The lane also carries measured "GPU idle" scopes — the true starvati
 dispatch's last timestamp and the next one's first — so the cost of the serialized dispatch
 pipeline shows up as a number (the analyzer folds them into a GPU-utilization figure) rather than
 an inference. Comparing ticks across disjoint brackets is out of contract for D3D11 but sound
-under DXVK's monotonic timestamp clock; implausible gaps are discarded. One known cosmetic effect: because a dispatch's GPU results land in the puffin frame
+under DXVK's monotonic timestamp clock; implausible gaps are discarded.
+
+### Reading the GPU lane: work, not span
+
+A dispatch's outer scope, and each seam inside it, is a *span*: the GPU's whole execution window
+for that stretch, idle included. If the draw thread cannot record commands as fast as the GPU
+retires them, the GPU drains **inside** the span and the scope still reads its full width — which
+is how an earlier capture produced "the GPU is the ceiling at 13 ms" for a frame that was actually
+waiting on submission.
+
+So each render pass is bracketed with its own timestamp pair inside its seam (from the
+`RenderPass::DoDraw` hook). Summing those gives a **busy** figure; the holes between them are
+reported as explicit **"GPU starved"** scopes and totalled per dispatch. Both are bounds, and it
+matters which way: starvation finer than one pass — the GPU idling between individual draws — is
+invisible to any timestamp granularity the mod can afford, and lands inside busy. **Busy is an
+upper bound on real GPU work; starved is a lower bound on real GPU idle.**
+
+The number to read them against is the **CPU submit span**: the wall time the draw thread spent
+recording the dispatch, measured between the dispatch's begin and end and reported alongside. A GPU
+span that tracks the submit span dispatch after dispatch is a pipeline being fed just in time
+(submission-bound); a GPU span that outruns submission is real shading cost. The per-frame
+averages of all four numbers go to the log every five seconds while collection is on, and to the
+Performance tab, so a session can be read without opening a trace at all.
+
+The per-pass subdivision costs two timestamp queries per pass per dispatch and has its own
+checkbox; turning it off leaves the coarse seams, and busy degenerates to the whole span.
+
+One known cosmetic effect: because a dispatch's GPU results land in the puffin frame
 current at read-back time (~2-3 frames later), the live view's frame bars read wider than the true
 frame time; the Chrome trace, being absolute-time, is unaffected. Trust the lane's durations, not
 the frame bars.
@@ -58,7 +89,8 @@ the frame bars.
 
 - `payload/src/profiler/mod.rs` — the switchboard: the per-frame `new_frame`, the enable state,
   and the dynamic-scope registry for engine-supplied names.
-- `payload/src/profiler/gpu.rs` — the GPU timestamp ring and the puffin GPU-lane reporting.
+- `payload/src/profiler/gpu.rs` — the GPU timestamp ring, the busy/starved decomposition, and the
+  puffin GPU-lane reporting.
 - `payload/src/profiler/capture.rs` — the 5 s capture state machine (a puffin frame sink).
 - `payload/src/profiler/chrome_trace.rs` — puffin frames → Chrome trace-event JSON.
 - `payload/src/profiler/ui.rs` — the Performance-tab collapsible.

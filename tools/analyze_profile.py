@@ -9,7 +9,8 @@ reports where the frame budget goes:
 
   * frame-time statistics and an ASCII histogram against the HMD budgets,
   * the main-thread phase budget (sim, render update, per-dispatch submit vs. draw-thread wait),
-  * the GPU lane per dispatch kind (eyes, far field) and per render seam,
+  * the GPU lane per dispatch kind (eyes, far field), per render seam, and per render pass,
+    with each dispatch's span split into work and starvation,
   * the draw-thread CPU cost per seam, per render pass, and per render-block type,
   * the worst frames with their per-phase and per-GPU-dispatch breakdown.
 
@@ -21,6 +22,9 @@ Reading notes baked into the numbers:
     far-field overhead.
   * GPU results report a few frames late; events are attributed to frames by wall-clock windows,
     so per-frame GPU numbers describe "the GPU work that resolved during that frame".
+  * A dispatch's outer GPU scope is a *span*, not busy time: the GPU can idle inside it. The
+    per-pass subdivision is what separates the two, and even then busy is an upper bound —
+    starvation between individual draws inside one pass is invisible and counted as work.
 
 Usage: uv run tools/analyze_profile.py <jc3vrs-profile-*.json> [--worst N] [--top N] [--csv out.csv]
 """
@@ -218,6 +222,18 @@ def main() -> None:
             print(f"  measured inter-dispatch idle ≈ {idle_frame:.2f} ms/frame -> GPU utilization {util * 100:.0f}% while rendering")
             print(f"  {'GPU idle':16} {stats_line(idle)}")
 
+        # The intra-dispatch decomposition: the holes the per-pass subdivision found inside a
+        # dispatch's span ("GPU starved" scopes). The outer span is work plus these holes, so busy
+        # is the span minus them -- an upper bound on real GPU work, since starvation finer than
+        # one render pass is not visible and lands inside it.
+        starved = [e["dur"] / 1000 for e in gpu if e["name"] == "GPU starved"]
+        if starved:
+            starved_frame = sum(starved) / n
+            busy_frame = gpu_frame_total - starved_frame
+            share = busy_frame / max(gpu_frame_total, 1e-6)
+            print(f"  within dispatches: busy ≤ {busy_frame:.2f} ms/frame, starved ≥ {starved_frame:.2f} ms/frame ({share * 100:.0f}% of the span is work)")
+            print("  (read against the CPU submit cost below: a GPU span that tracks submission is a fed pipeline, not shading)")
+
         print("\n== GPU seams within each dispatch kind (mean ms per dispatch)")
         seam_sum: dict[tuple[str, str], float] = defaultdict(float)
         seam_n: dict[str, int] = defaultdict(int)
@@ -236,6 +252,19 @@ def main() -> None:
             )
             print(f"  {lane_name:16}{row}")
         print("  (far-field PreDraw = the frame's shared prepasses: shadow atlas, reflections, water)")
+
+        # The per-pass GPU intervals nested inside the seams, which is where a seam's span splits
+        # into work and holes.
+        pass_agg: dict[str, tuple[float, int]] = defaultdict(lambda: (0.0, 0))
+        for e in gpu:
+            if e["parent"] is not None and e["parent"]["name"] in SEAMS:
+                total, count = pass_agg[e["name"]]
+                pass_agg[e["name"]] = (total + e["dur"] / 1000, count + 1)
+        if pass_agg:
+            print("\n== GPU per render pass (mean ms per frame, top %d)" % args.top)
+            rows = sorted(pass_agg.items(), key=lambda kv: -kv[1][0])[: args.top]
+            for name, (total, count) in rows:
+                print(f"  {total / n:7.2f}  n={count:6}  {name}")
 
     # -- draw thread ----------------------------------------------------------------------------
     if draw:

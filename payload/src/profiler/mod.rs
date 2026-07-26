@@ -144,12 +144,15 @@ pub fn scope_for_name(name: &str) -> Option<EngineScope> {
     EngineScope::begin(id, "")
 }
 
-/// Opens a scope named for the render pass `pass` is drawing, resolved through the engine's own
-/// pass-name table. Returns `None` while scope collection is off or the name is unavailable.
+/// Opens the CPU scope *and* the GPU timestamp interval for the render pass `pass` is drawing,
+/// both named after it through the engine's own pass-name table. The pair is what makes a
+/// dispatch's GPU span decomposable into work and starvation (see [`gpu`]).
+///
+/// Returns `None` while scope collection is off or the name is unavailable.
 ///
 /// # Safety
 /// `pass` must be null or a live [`RenderPass`] whose `m_Index` is its render-pass id.
-pub unsafe fn pass_scope(pass: *mut RenderPass) -> Option<EngineScope> {
+pub unsafe fn pass_scope(pass: *mut RenderPass) -> Option<PassScope> {
     if !are_scopes_on() || pass.is_null() {
         return None;
     }
@@ -167,7 +170,22 @@ pub unsafe fn pass_scope(pass: *mut RenderPass) -> Option<EngineScope> {
         }
         CStr::from_ptr(ptr.cast()).to_str().ok()?
     };
-    scope_for_name(name)
+    let id = named_scope_id(name)?;
+    Some(PassScope {
+        gpu: gpu::pass_interval(id),
+        cpu: EngineScope::begin(id, ""),
+    })
+}
+
+/// A render pass's paired CPU scope and GPU interval. The GPU end timestamp is recorded first on
+/// drop (field order), so it lands inside the CPU scope rather than straddling its close.
+#[expect(
+    dead_code,
+    reason = "both fields are held only for the timestamps and stream records their drops write"
+)]
+pub struct PassScope {
+    gpu: Option<gpu::IntervalGuard>,
+    cpu: Option<EngineScope>,
 }
 
 fn named_scope_id(name: &str) -> Option<ScopeId> {

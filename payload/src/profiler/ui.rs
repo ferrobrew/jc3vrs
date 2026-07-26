@@ -18,7 +18,22 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
             super::set_ui_enabled(enabled);
         }
 
+        let mut pass_timestamps = super::gpu::pass_timestamps_enabled();
+        if ui
+            .checkbox(&mut pass_timestamps, "GPU per-pass timestamps")
+            .on_hover_text(
+                "Brackets every render pass with a GPU timestamp pair, so a dispatch's GPU span \
+                 splits into work and starvation instead of reading as one opaque block. On by \
+                 default; turning it off leaves only the coarse per-seam brackets, and the busy \
+                 figure degenerates to the whole span.",
+            )
+            .changed()
+        {
+            super::gpu::set_pass_timestamps_enabled(pass_timestamps);
+        }
+
         capture_controls(ui);
+        gpu_summary(ui);
 
         if super::ui_enabled() {
             ui.separator();
@@ -28,6 +43,31 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
             ui.label("Capturing… (flame graph hidden; enable collection to watch live)");
         }
     });
+}
+
+/// The last completed GPU summary window: the busy/starved decomposition and the CPU submit span
+/// it has to be read against. Mirrors the periodic log line, for reading in-headset.
+fn gpu_summary(ui: &mut egui::Ui) {
+    let Some(summary) = super::gpu::summary() else {
+        return;
+    };
+    ui.separator();
+    ui.label(format!(
+        "GPU/frame over {} frames ({:.1} dispatches): busy \u{2264} {:.2} ms, starved \u{2265} \
+         {:.2} ms, idle between {:.2} ms",
+        summary.frames,
+        summary.dispatches_per_frame,
+        summary.busy_ms,
+        summary.starved_ms,
+        summary.idle_ms,
+    ))
+    .on_hover_text(
+        "Busy sums the per-pass GPU intervals and starved is the time between them, so busy is an \
+         upper bound on real GPU work and starved a lower bound on real idle: starvation between \
+         individual draws inside one pass is counted as busy. Read them against the CPU submit \
+         span -- a GPU span that tracks submit is a fed-just-in-time pipeline, not shading cost.",
+    );
+    ui.label(format!("CPU submit/frame: {:.2} ms", summary.submit_ms));
 }
 
 /// The capture button, a live progress readout while recording, and the last dump's outcome.
