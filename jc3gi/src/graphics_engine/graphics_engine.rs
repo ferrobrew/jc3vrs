@@ -727,7 +727,16 @@ impl std::convert::AsMut<OccluderCollectionManager> for OccluderCollectionManage
 /// translation-free offset view-projection, and the separate camera world position), shadow data, and
 /// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera).
 pub struct RenderContext {
-    _field_0: [u8; 88],
+    _field_0: [u8; 24],
+    /// The world→view matrix for this dispatch, copied from [`Camera::m_View`](crate::camera::camera::Camera::m_View) by
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera). Row 3 carries the camera
+    /// translation; [`CalculateOffsetViewProjectionMatrix`](crate::graphics_engine::render_pass::CalculateOffsetViewProjectionMatrix) zeroes it before
+    /// multiplying by [`m_ProjectionF`](crate::graphics_engine::graphics_engine::RenderContext::m_ProjectionF) to produce
+    /// [`m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection). The clustered deferred-lighting
+    /// pass uploads rows 0..2 with a `(0, 0, 0, 1)` fourth row as the light-assignment vertex
+    /// shader's `ViewMatrix`, which transforms light proxy vertices the CPU has already made
+    /// relative to [`m_RenderCameraPosition`](crate::graphics_engine::graphics_engine::RenderContext::m_RenderCameraPosition) into view space.
+    pub m_View: crate::types::math::Matrix4,
     /// The projection matrix for this dispatch, copied from [`Camera::m_ProjectionF`](crate::camera::camera::Camera::m_ProjectionF) by
     /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera). The deferred-lighting
     /// clustered pass reads it to build the geometry proxy transform (cb0) and the froxel tile
@@ -745,7 +754,16 @@ pub struct RenderContext {
     /// subtracts it per object, and [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) hands it to
     /// [`SortList`](crate::graphics_engine::render_pass::RenderPass::SortList) as the sort camera position.
     pub m_CameraPosition: crate::types::math::Vector3,
-    _field_224: [u8; 216],
+    _field_224: [u8; 100],
+    /// The world position of the camera manager's render camera — the translation row of
+    /// `CCameraManager::GetRenderCamera()`'s `m_TransformF` — written each pass by
+    /// `CRenderPass::SetupRenderContext`. Distinct from
+    /// [`m_CameraPosition`](crate::graphics_engine::graphics_engine::RenderContext::m_CameraPosition), which follows whichever camera the pass draws
+    /// with (a light camera during the shadow passes); this always holds the main scene camera's
+    /// position. `CLightManager::SetupLightingData` and the clustered deferred-lighting pass
+    /// subtract it from each light's world position to build the camera-relative light proxies.
+    pub m_RenderCameraPosition: crate::types::math::Vector3,
+    _field_294: [u8; 104],
     /// The vertical field of view in radians, copied from [`Camera::m_FOV`](crate::camera::camera::Camera::m_FOV) by
     /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera).
     pub CameraFOV: f32,
@@ -767,7 +785,21 @@ pub struct RenderContext {
     /// The graphics context this dispatch draws through. The render blocks' draw paths and the
     /// scope markers ([`BeginScopeMarker`](crate::graphics_engine::graphics_engine::BeginScopeMarker) / [`EndScopeMarker`](crate::graphics_engine::graphics_engine::EndScopeMarker)) read it off the render context.
     pub m_Context: *mut crate::graphics_engine::graphics_engine::HContext_t,
-    _field_320: [u8; 280],
+    _field_320: [u8; 200],
+    /// The number of point lights active for this render frame, copied by
+    /// `CRenderPass::SetupRenderContext` from
+    /// `CLightManager::GetActiveRenderPointLightCount`. The clustered deferred-lighting pass uses it
+    /// as the instance count of its sphere-proxy draw, and skips the whole light-assignment phase
+    /// (including its render-target clear) when it and
+    /// [`m_ActiveSpotLightCount`](crate::graphics_engine::graphics_engine::RenderContext::m_ActiveSpotLightCount) are both zero.
+    pub m_ActivePointLightCount: i32,
+    _field_3ec: [u8; 12],
+    /// The number of spot lights active for this render frame, copied by
+    /// `CRenderPass::SetupRenderContext` from
+    /// `CLightManager::GetActiveRenderSpotLightCount`. The clustered deferred-lighting pass uses it
+    /// as the instance count of its cone-proxy draw.
+    pub m_ActiveSpotLightCount: i32,
+    _field_3fc: [u8; 60],
     /// The id (`ERenderPass`, see `render_engine::RenderPassId`) of the pass currently drawing
     /// through this context, written by `SetupRenderContext` from the pass's index. `RP_NONE` (0)
     /// outside a pass body.

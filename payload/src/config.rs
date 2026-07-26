@@ -320,6 +320,38 @@ pub struct StereoConfig {
     /// collapse and `reconstruct_offaxis_inverse`. On by default: sliding shadows are a worse defect
     /// than the extra light-assignment pass is a cost, and the flag remains for an A/B in the headset.
     pub single_pass_reconstruct_per_eye: bool,
+    /// Requires [`single_pass_reconstruct_per_eye`](Self::single_pass_reconstruct_per_eye) and
+    /// [`fix_clustered_light_frustum`](Self::fix_clustered_light_frustum): build the clustered
+    /// (froxel) light grid **per eye** as well, instead of building it once with eye 0's projection
+    /// against the double-wide tile count.
+    ///
+    /// The grid is a 64-pixel tile lattice over the framebuffer; collapsed, it is twice as wide as
+    /// the frustum whose projection fills it, so every local light lands in the wrong tiles and the
+    /// forward-lit families that sample it (foliage, glass, particles, blended materials -- ~20
+    /// render-block types) are lit wrongly in both eyes. The resolve re-issue already runs the whole
+    /// block once per eye; this makes each run's light assignment cover only that eye's half of the
+    /// tile grid, with that eye's projection and tile bounds.
+    ///
+    /// The two halves compose because the assignment blend is commutative, the halves are disjoint,
+    /// and the compaction phase is per-tile-local -- so long as the second run's whole-target clear
+    /// is suppressed, which is what makes the grid end the frame valid for **both** eyes. That
+    /// matters well outside the block: foliage samples the grid a frame early, in the G-buffer range.
+    ///
+    /// Declines itself (leaving the un-split behaviour) when the double-wide render width is not a
+    /// multiple of 128, i.e. when the eye seam does not fall on a tile boundary.
+    pub single_pass_clustered_per_eye: bool,
+    /// Requires [`single_pass_clustered_per_eye`](Self::single_pass_clustered_per_eye): also assign
+    /// each eye's lights from **that eye's** position rather than from the collapsed (cyclopean)
+    /// camera's.
+    ///
+    /// The light-assignment vertex shader transforms proxies that the CPU has already made relative
+    /// to the render camera's world position, and under the collapse that is the centre head pose --
+    /// the per-eye offset lives in the patched vertex shaders, not in the render context. Folding the
+    /// eye's world offset into the translation row of the uploaded view matrix restores it. Whether
+    /// it is visible at 64-pixel tile granularity is a judgement call, so it is its own flag: A/B it
+    /// against [`single_pass_clustered_per_eye`](Self::single_pass_clustered_per_eye) alone. The
+    /// per-eye display canting is *not* applied, only the positional offset.
+    pub single_pass_clustered_per_eye_light_view: bool,
     /// Keep both viewport slots bound to the same region outside the G-buffer range, so a patched
     /// vertex shader's `SV_ViewportArrayIndex = SV_InstanceID & 1` resolves to the same place whichever
     /// parity it computes. The rewrite writes that index unconditionally -- the bytecode cannot tell
@@ -599,6 +631,8 @@ impl StereoConfig {
             single_pass_instanced_per_eye: true,
             single_pass_indirect_per_eye: true,
             single_pass_reconstruct_per_eye: true,
+            single_pass_clustered_per_eye: false,
+            single_pass_clustered_per_eye_light_view: false,
             single_pass_uniform_viewport_slots: true,
             single_pass_clear_range_on_dispatch: true,
             disable_sun_shadows: false,

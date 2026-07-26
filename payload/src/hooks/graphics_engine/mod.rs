@@ -32,9 +32,10 @@ mod single_pass;
 // history-index restore.
 pub(crate) mod ssao;
 mod tone_mapping;
-// The clustered-lighting froxel tile-bounds fix for off-axis VR projections (issue #35); private,
-// reached only through `hook_library` below.
-mod clustered_lighting;
+// The clustered-lighting froxel tile-bounds fix for off-axis VR projections (issue #35); crate-visible
+// so the shared `Graphics::Clear` / `SetRenderSetup` / `SetVertexProgramConstants` detours (which the
+// trace and single-pass modules own) can consult the per-eye froxel split.
+pub(crate) mod clustered_lighting;
 // Diagnostic override of the base VolumetricTerrain color-pass hull-clip type (black cliff-wall tiles);
 // private, reached only through `hook_library` below.
 pub mod terrain;

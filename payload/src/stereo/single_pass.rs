@@ -956,6 +956,23 @@ unsafe extern "system" fn set_vertex_program_constants_detour(
     let detour = SET_VERTEX_PROGRAM_CONSTANTS
         .get()
         .expect("set before enable");
+    // The clustered light-assignment view matrix, when the per-eye froxel split is assigning this
+    // eye's lights from this eye's position. Checked first because it is scoped to a single call
+    // inside `DrawClustered` and cannot overlap a baked-cb re-issue, which only arms in the G-buffer
+    // range.
+    if let Some(rows) =
+        crate::hooks::graphics_engine::clustered_lighting::substitute_assignment_view(
+            cb_index,
+            start_offset,
+            data,
+            count,
+        )
+    {
+        // SAFETY: `rows` holds the 4 float4 rows the call stages and outlives it; `detour.call` is the
+        // trampoline.
+        unsafe { detour.call(ctx, cb_index, start_offset, rows.as_ptr(), count) };
+        return;
+    }
     if REPROJECT_ARMED.load(Ordering::Acquire)
         && !data.is_null()
         && let Some(up) = *REPROJECT_UPLOAD.lock()

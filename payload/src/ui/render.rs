@@ -926,6 +926,31 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      screen. Needs the off-axis reconstruction override on.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.single_pass_clustered_per_eye,
+                    "Clustered light grid per eye (local lights on forward materials)",
+                )
+                .on_hover_text(
+                    "Builds the 64-pixel froxel light grid once per eye, each run masked to that \
+                     eye's half of the tile grid with that eye's projection and tile bounds, and the \
+                     second run's clear suppressed so the halves compose. Off, the grid is built with \
+                     eye 0's projection against the double-wide tile count, so local lights land in \
+                     the wrong tiles for both eyes -- on the ~20 forward-lit families that sample it \
+                     (foliage, glass, particles, blended materials) as well as the deferred resolve. \
+                     Needs the per-eye resolve and the off-axis tile-bounds fix on. Declines itself \
+                     if the eye seam does not fall on a tile boundary.",
+                );
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_clustered_per_eye_light_view,
+                    "...and assign its lights from each eye's position",
+                )
+                .on_hover_text(
+                    "Folds the eye's world offset into the translation row of the light-assignment \
+                     view matrix, so each eye's half is assigned from that eye rather than from the \
+                     collapsed centre camera. Sub-option of the above, on its own flag because the \
+                     difference may be below the 64-pixel tile granularity. Positional offset only; \
+                     per-eye display canting is not applied.",
+                );
+                ui.checkbox(
                     &mut cfg.stereo.single_pass_uniform_viewport_slots,
                     "Uniform viewport slots outside the G-buffer",
                 )

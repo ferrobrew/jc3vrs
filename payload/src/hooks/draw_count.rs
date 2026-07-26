@@ -189,6 +189,10 @@ fn set_render_setup(ctx: *mut c_void, setup: *mut c_void, restore: bool) {
     // in the shadow passes -- so mirror it into viewport slot 1 for the patched shaders' viewport
     // routing. A no-op unless single-pass is active.
     crate::stereo::single_pass::duplicate_current_viewport();
+    // Per-eye clustered lighting: the light-assignment target's bind is the seam the froxel split
+    // narrows the viewport at, and the later binds are what put it back. A no-op unless a per-eye
+    // froxel run is in flight on this thread.
+    crate::hooks::graphics_engine::clustered_lighting::on_render_setup_bound();
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::Clear_ADDRESS)]
@@ -202,6 +206,12 @@ fn clear(ctx: *mut c_void, flags: u32, color: *mut c_void, depth: f32, stencil: 
         }
     };
     TraceState::record_eye(TraceEvent::Clear { color: color_rgba });
+    // The clustered light-assignment phase's whole-target clear would wipe the first eye's half of the
+    // froxel grid on the second eye's run, which is the one thing that stops the two halves composing.
+    // A no-op unless that second run is in flight on this thread.
+    if crate::hooks::graphics_engine::clustered_lighting::suppress_clear() {
+        return;
+    }
     CLEAR.get().unwrap().call(ctx, flags, color, depth, stencil);
 }
 

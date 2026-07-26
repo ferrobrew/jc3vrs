@@ -544,3 +544,27 @@ pub unsafe fn SetVertexProgramConstants(
         f(ctx, cb_index, start_offset, data, count)
     }
 }
+pub const SetGeometryProgramConstants_ADDRESS: usize = 0x141964A40;
+/// Stages `count` float4 constants into the given **geometry** constant buffer slot, starting at
+/// `start_offset` (in float4 rows), writing to the context's per-slot staging buffer and setting the
+/// dirty flag; the GPU upload happens at the next state flush. The geometry analogue of
+/// [`SetFragmentProgramConstants`](crate::graphics_engine::draw::SetFragmentProgramConstants). The clustered deferred-lighting pass is the volume user: it
+/// stages the light-assignment geometry shader's `ProjMatrix` here as four rows on `cb0`.
+pub unsafe fn SetGeometryProgramConstants(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    data: *const f32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            data: *const f32,
+            count: u32,
+        ) = ::std::mem::transmute(SetGeometryProgramConstants_ADDRESS);
+        f(ctx, cb_index, start_offset, data, count)
+    }
+}

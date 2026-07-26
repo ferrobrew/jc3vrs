@@ -340,7 +340,7 @@ static UNMASKED_WARNED: AtomicBool = AtomicBool::new(false);
 ///
 /// The context is borrowed rather than cloned: an `AddRef`/`Release` pair per call would be wasted on
 /// a path that runs a handful of times per frame and never outlives the engine.
-fn with_immediate_context<R>(f: impl FnOnce(&ID3D11DeviceContext) -> R) -> Option<R> {
+pub(super) fn with_immediate_context<R>(f: impl FnOnce(&ID3D11DeviceContext) -> R) -> Option<R> {
     // SAFETY: called on the render thread, where the engine's device/context pointers are stable.
     unsafe {
         let context = GraphicsEngine::get()?
