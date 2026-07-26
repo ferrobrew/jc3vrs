@@ -291,6 +291,7 @@ All under `stereo`, all off by default.
 | `single_pass_foliage` | Per-eye re-issue of `RenderBlockFoliage`'s draw. |
 | `single_pass_occluder` | Per-eye re-issue of `RenderBlockOccluder`'s depth prime. |
 | `single_pass_instanced_per_eye` | Per-eye re-issue of an already-instanced `DrawIndexedInstanced` with a patched shader bound. Requires the collapse. **On by default.** |
+| `single_pass_uniform_viewport_slots` | Puts both viewport slots back to one region once the G-buffer range ends, so a patched shader's instance parity is a no-op in the passes that are not eye-split. Requires the collapse. **On by default.** |
 
 ## Known gaps
 
@@ -353,6 +354,32 @@ one (the re-acquire path does not, and those show as `<unnamed 0x…>`). The Ren
 frame plus a mean over the measured frames with a per-shader breakdown, and `single_pass`-target log
 lines carry the same figures every 120 frames. The counters reset with the patched-shader set (a shader
 reload), since both are keyed by shader pointer.
+
+Every instanced draw is also bucketed by whether a patched shader was bound and whether the draw was
+inside the G-buffer range, so the log distinguishes the draws the re-issue covers from the ones it
+never sees. Only the in-range patched draws are eye-split; the ~10x larger out-of-range population is
+the shadow, reflection and post work, where the parity has to be neutralised a different way (below).
+The per-shader table carries the same in/out split, so a family that only draws outside the range is
+visible rather than absent.
+
+## Viewport slots outside the G-buffer range
+
+A patched vertex shader writes `SV_ViewportArrayIndex = SV_InstanceID & 1` **unconditionally** — the
+bytecode cannot tell which pass it is in. Only the G-buffer geometry ever binds an eye-half pair, so
+everywhere else slot 1 has to be a duplicate of slot 0 for the odd-parity instances to rasterise at
+all. `rs_set_viewports_detour` keeps that true for every viewport the engine binds, but the collapse's
+own per-draw split (`ensure_collapse_viewport(Split)`) leaves the slots holding *different* halves, and
+that state outlives the range: until the next engine bind, an already-instanced draw's odd instances go
+to the other eye's half.
+
+`single_pass_uniform_viewport_slots` (default **on**) closes that window. `VIEWPORT_SLOTS_UNIFORM`
+tracks whether the two slots hold the same region — every path that binds them records what it left
+behind, and anything unknown counts as non-uniform — and `unify_viewport_slots` re-binds slot 0's
+region to both slots when they do not. It runs when the G-buffer range guard drops (which also covers
+the GPU-indirect draws nothing detours) and, behind the flag, on an out-of-range `DrawIndexedInstanced`
+with a patched shader bound. **Slot 0 is never touched**, so the repair can only make dropped instances
+reappear; it cannot move what already rendered. The log reports how many repairs a window needed as
+`slot-1 repairs`.
 
 ## The non-`cb0` shader census
 

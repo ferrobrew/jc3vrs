@@ -291,6 +291,15 @@ pub struct StereoConfig {
     /// viewport slots pinned to that eye. Requires the collapse. On by default: it fixes a visible
     /// artifact (the buildings flickering), and costs ~130 extra draw submissions of ~20k per frame.
     pub single_pass_instanced_per_eye: bool,
+    /// Keep both viewport slots bound to the same region outside the G-buffer range, so a patched
+    /// vertex shader's `SV_ViewportArrayIndex = SV_InstanceID & 1` resolves to the same place whichever
+    /// parity it computes. The rewrite writes that index unconditionally -- the bytecode cannot tell
+    /// which pass it is in -- but only the G-buffer geometry ever binds an eye-half pair, and the
+    /// collapse's per-draw split leaves the two slots holding *different* halves after the range ends.
+    /// Until the next engine viewport bind, every odd-numbered instance of an already-instanced draw
+    /// then rasterises into the other half. Slot 0 is never touched, so this can only make dropped
+    /// instances reappear, never move what already rendered. Requires the collapse. On by default.
+    pub single_pass_uniform_viewport_slots: bool,
     /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
     /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
@@ -555,6 +564,7 @@ impl StereoConfig {
             single_pass_foliage: false,
             single_pass_occluder: false,
             single_pass_instanced_per_eye: true,
+            single_pass_uniform_viewport_slots: true,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,

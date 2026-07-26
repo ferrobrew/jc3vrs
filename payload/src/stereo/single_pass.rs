@@ -439,6 +439,7 @@ enum Flag {
     Foliage,
     Occluder,
     InstancedPerEye,
+    UniformViewportSlots,
 }
 
 /// The single-pass config flags, sampled once per frame.
@@ -489,6 +490,10 @@ fn store_config_flags() -> u32 {
             | bit(s.single_pass_foliage, Flag::Foliage)
             | bit(s.single_pass_occluder, Flag::Occluder)
             | bit(s.single_pass_instanced_per_eye, Flag::InstancedPerEye)
+            | bit(
+                s.single_pass_uniform_viewport_slots,
+                Flag::UniformViewportSlots,
+            )
     }) | CONFIG_FLAGS_VALID;
     CONFIG_FLAGS.store(snapshot, Ordering::Relaxed);
     snapshot
@@ -534,6 +539,8 @@ pub fn collapse_ui_eye_override() -> Option<(D3D11_VIEWPORT, Matrix4)> {
 /// dup'ing it to full width. `context` is the raw `ID3D11DeviceContext` pointer.
 pub fn set_ui_viewport_raw(context: *mut c_void, viewport: &D3D11_VIEWPORT) {
     if let Some(detour) = RS_SET_VIEWPORTS.get() {
+        // One slot: slot 1 is left unbound, so the slots are no longer uniform.
+        set_viewport_slots_uniform(false);
         // SAFETY: `context` is the live immediate context; the trampoline is the original function.
         unsafe { detour.call(context, 1, std::slice::from_ref(viewport).as_ptr()) };
     }
@@ -685,6 +692,9 @@ fn restore_viewport_slots(d3d: EngineContext, saved: ViewportSlots) {
     let Some(detour) = RS_SET_VIEWPORTS.get() else {
         return;
     };
+    // A single restored slot leaves slot 1 unbound, which is exactly the state a patched shader cannot
+    // survive; flag it so the next out-of-range patched draw repairs it.
+    set_viewport_slots_uniform(saved.count == 2 && saved.slots[0] == saved.slots[1]);
     // SAFETY: the context is the live immediate context and `slots` holds `count` viewports.
     d3d.with_lock(|ctx| unsafe {
         detour.call(ctx.as_raw(), saved.count, saved.slots.as_ptr());
@@ -1006,6 +1016,14 @@ pub struct GBufferRange(());
 impl Drop for GBufferRange {
     fn drop(&mut self) {
         clear_gbuffer_range();
+        // The collapse's per-draw split ([`ensure_collapse_viewport`]) leaves the two slots holding
+        // different eye halves, and that state outlives the range: everything drawn between here and
+        // the next engine viewport bind would route its odd-parity instances into the other eye's half.
+        // Put the slots back to a single region now, which also covers the draws nothing detours (the
+        // GPU-indirect ones) -- the per-draw repair cannot see those.
+        if collapse_active() {
+            unify_viewport_slots();
+        }
     }
 }
 
@@ -1502,6 +1520,61 @@ pub fn apply_eye_split_viewport() {
     }
 }
 
+/// Whether both viewport slots are known to be bound to the **same** region, so a patched shader's
+/// `SV_ViewportArrayIndex = SV_InstanceID & 1` rasterises identically whichever parity it computes.
+///
+/// A patched vertex shader writes the viewport index unconditionally -- the bytecode has no idea which
+/// pass it is in -- but the eye-half pair is only ever bound for the G-buffer geometry. Everywhere else
+/// (the shadow cascades, the reflection prepass, the post and UI passes) slot 1 must be a duplicate of
+/// slot 0, or the odd-parity instances of an already-instanced draw rasterise into a region that pass
+/// never meant to write. [`rs_set_viewports_detour`] keeps that true for every viewport the engine
+/// binds, but the collapse's own per-draw split ([`ensure_collapse_viewport`]) leaves the two slots
+/// holding *different* halves, and that state outlives the G-buffer range until the next engine bind.
+/// This flag tracks which of the two the slots are in, so [`unify_viewport_slots`] can repair the
+/// split state without reading the device on every draw.
+///
+/// Conservative: anything that leaves the slots in an unknown state clears it, costing at most one
+/// redundant repair.
+static VIEWPORT_SLOTS_UNIFORM: AtomicBool = AtomicBool::new(false);
+
+/// Record what the two viewport slots now hold. Called by every path that binds them.
+fn set_viewport_slots_uniform(uniform: bool) {
+    VIEWPORT_SLOTS_UNIFORM.store(uniform, Ordering::Relaxed);
+}
+
+/// Re-bind viewport slot 0's region to **both** slots, if they are not already known to hold the same
+/// one. Restores the invariant [`VIEWPORT_SLOTS_UNIFORM`] describes outside the G-buffer range.
+///
+/// Slot 0 is left exactly as it was found, so this cannot change where an even-parity primitive lands
+/// -- the only difference it makes is that the odd-parity ones stop being routed somewhere else. The
+/// device read is behind the flag, so the common (already uniform) case costs a relaxed load.
+fn unify_viewport_slots() {
+    if VIEWPORT_SLOTS_UNIFORM.load(Ordering::Relaxed)
+        || !config_flags().has(Flag::UniformViewportSlots)
+    {
+        return;
+    }
+    let (Some(d3d), Some(detour)) = (EngineContext::get(), RS_SET_VIEWPORTS.get()) else {
+        return;
+    };
+    d3d.with_lock(|ctx| {
+        // SAFETY: `count` is the length of `slots`; `detour.call` is the original RSSetViewports, so
+        // the re-bind does not re-enter the detour and re-record a full viewport.
+        unsafe {
+            let mut count = 1u32;
+            let mut slots = [D3D11_VIEWPORT::default(); 1];
+            ctx.RSGetViewports(&mut count, Some(slots.as_mut_ptr()));
+            // A zero-width slot 0 means no viewport is bound at all; duplicating it would clip
+            // everything to nothing.
+            if slots[0].Width > 0.0 {
+                detour.call(ctx.as_raw(), 2, [slots[0], slots[0]].as_ptr());
+                set_viewport_slots_uniform(true);
+                VIEWPORT_UNIFIED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    });
+}
+
 /// Duplicate the current (single) viewport into viewport slots 0 **and** 1, both covering the same
 /// region.
 ///
@@ -1613,6 +1686,7 @@ unsafe extern "system" fn rs_set_viewports_detour(
             // requested region but keep it pinned to this eye's half, and leave `COLLAPSE_FULL_VIEWPORT`
             // alone so the re-issue cannot redefine what "full" means for the draws that follow it.
             let half = eye_half_viewport(vp, eye);
+            set_viewport_slots_uniform(true);
             unsafe { detour.call(context, 2, [half, half].as_ptr()) };
             return;
         }
@@ -1631,6 +1705,7 @@ unsafe extern "system" fn rs_set_viewports_detour(
                 *COLLAPSE_FULL_VIEWPORT.lock() = Some(vp);
             }
             VIEWPORT_DUP.fetch_add(1, Ordering::Relaxed);
+            set_viewport_slots_uniform(true);
             unsafe { detour.call(context, 2, [vp, vp].as_ptr()) };
             return;
         }
@@ -1649,8 +1724,16 @@ unsafe extern "system" fn rs_set_viewports_detour(
             VIEWPORT_DUP.fetch_add(1, Ordering::Relaxed);
             (vp, vp)
         };
+        set_viewport_slots_uniform(slot0 == slot1);
         unsafe { detour.call(context, 2, [slot0, slot1].as_ptr()) };
     } else {
+        // A multi-slot set passes straight through, so the slots become whatever the caller asked for:
+        // uniform only for the mod's own two-identical-slot binds. Anything else (including a set that
+        // leaves slot 1 unbound) is taken as non-uniform, so the next patched draw outside the range
+        // repairs it.
+        let uniform =
+            count == 2 && !viewports.is_null() && unsafe { *viewports == *viewports.add(1) };
+        set_viewport_slots_uniform(uniform);
         unsafe { detour.call(context, count, viewports) };
     }
 }
@@ -1690,6 +1773,7 @@ fn ensure_collapse_viewport(context: *mut c_void, target: CollapseViewport) {
         }
         CollapseViewport::Full => [full, full],
     };
+    set_viewport_slots_uniform(viewports[0] == viewports[1]);
     // SAFETY: `context` is the live immediate context; `detour.call` invokes the original
     // RSSetViewports (the trampoline), so this does not re-enter the detour. Bound unconditionally
     // (no split-state skip): the engine can change the viewport underneath us via a path we do not
@@ -1843,6 +1927,12 @@ unsafe extern "system" fn draw_indexed_instanced_detour(
             }
         } else {
             record_instanced_bystander(patched, in_range, instance_count);
+            if patched && !in_range && collapse_active() {
+                // The shader writes `SV_ViewportArrayIndex` from instance parity whatever pass it is
+                // in, but this one binds no eye-half pair -- so the odd instances need slot 1 to hold
+                // the same region as slot 0 to appear at all.
+                unify_viewport_slots();
+            }
         }
     }
     submit();
@@ -2312,7 +2402,7 @@ fn log_instanced_exposure(frame: InstancedExposure) {
         target: "single_pass",
         "instanced by range: in-range {} patched ({} handled + {} exposed) + {} unpatched ({} \
          instances) | out-of-range {} patched ({} instances) + {} unpatched ({} instances) | mean \
-         out-of-range patched over {} frames: {:.1} draws, {:.1} instances",
+         out-of-range patched over {} frames: {:.1} draws, {:.1} instances | slot-1 repairs: {}",
         frame.handled + frame.affected,
         frame.handled,
         frame.affected,
@@ -2325,6 +2415,7 @@ fn log_instanced_exposure(frame: InstancedExposure) {
         report.frames,
         report.mean_out_of_range_patched,
         report.mean_out_of_range_patched_instances,
+        VIEWPORT_UNIFIED.swap(0, Ordering::Relaxed),
     );
 }
 
@@ -2865,6 +2956,9 @@ static UNPATCHED_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static DRAW_SPLIT_LOG: AtomicUsize = AtomicUsize::new(0);
 static VIEWPORT_SPLIT: AtomicUsize = AtomicUsize::new(0);
 static VIEWPORT_DUP: AtomicUsize = AtomicUsize::new(0);
+/// How often [`unify_viewport_slots`] had to put a split slot pair back to one region: the number of
+/// windows in which an out-of-range patched draw would otherwise have lost its odd-parity instances.
+static VIEWPORT_UNIFIED: AtomicUsize = AtomicUsize::new(0);
 
 /// `CreateVertexShader`-detour outcome tallies (cumulative since injection), to diagnose what the
 /// shader re-create path -- which bypasses `CreateVertexProgram` -- feeds through the D3D-level

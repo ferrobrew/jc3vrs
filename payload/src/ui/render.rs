@@ -897,6 +897,16 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      game's own instance ids stop being read as an eye parity. Off, the batch is \
                      split alternately between the eyes -- the building flicker.",
                 );
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_uniform_viewport_slots,
+                    "Uniform viewport slots outside the G-buffer",
+                )
+                .on_hover_text(
+                    "Puts both viewport slots back to one region once the G-buffer range ends, so an \
+                     instanced draw with a patched shader in a pass that is not eye-split (shadows, \
+                     reflections, post) keeps its odd-numbered instances instead of routing them into \
+                     the other eye's half. Slot 0 is never changed.",
+                );
             });
         });
 
