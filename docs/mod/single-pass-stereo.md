@@ -290,17 +290,10 @@ All under `stereo`, all off by default.
 | `single_pass_bark` | Per-eye re-issue of `RenderBlockBark`'s colour and depth draws. |
 | `single_pass_foliage` | Per-eye re-issue of `RenderBlockFoliage`'s draw. |
 | `single_pass_occluder` | Per-eye re-issue of `RenderBlockOccluder`'s depth prime. |
+| `single_pass_instanced_per_eye` | Per-eye re-issue of an already-instanced `DrawIndexedInstanced` with a patched shader bound. Requires the collapse. **On by default.** |
 
 ## Known gaps
 
-- **Already-instanced draws are unhandled** (measured, not fixed). A draw whose patched VS takes its
-  per-instance data through a vertex-buffer slot (rather than `SV_InstanceID`, which would have
-  deferred the shader) sends instance `i` to eye `i & 1` — half the instances per eye, or the left eye
-  alone at one instance. Promoting the instance count cannot fix it, because the per-instance
-  vertex-buffer stepping is indexed by the instance id; it needs a per-eye re-issue with both `cb13`
-  eye slots pinned to one eye. `DrawIndexedInstanced` **is** detoured, but purely as a pass-through
-  that counts how many draws the fix would change and which shaders they belong to — see
-  "Instanced exposure" below.
 - **Unpatched geometry has no parallax.** It is re-issued per eye so it is present and correctly
   sized in both, but it still reads the centred `cb0`. Patching more of the geometry is what removes
   this.
@@ -318,30 +311,48 @@ All under `stereo`, all off by default.
   `cb1[5..8]` stays centred, so bark's motion vectors are slightly wrong for SMAA and FSR.
 - **The occluder intercept assumes `gfx.occluders.use_instancing = 0`** and nothing forces that cvar.
 
-## Instanced exposure
+## Already-instanced draws
 
-The measurement behind the first known gap, so the decision to build the per-eye re-issue for
-already-instanced draws can be made from a session capture rather than a guess.
-`draw_indexed_instanced_detour` sits on the same context vtable as the other single-pass detours (slot
-20) and forwards every call verbatim; it only counts. A call is **affected** when a patched vertex
-shader is bound, the render thread is inside the G-buffer range, and the collapse is on — the exact
-predicate under which `SV_InstanceID & 1` becomes an eye parity the shader never asked for. The mod's
-own draws are excluded: a promoted `DrawIndexed` is re-issued through the trampoline, and a per-eye
-re-issue is excluded by the `PER_EYE_REISSUE` marker, so a bark/foliage/occluder draw counts only when
-its flag is off.
+A draw whose patched VS takes its per-instance data through a vertex-buffer slot (rather than
+`SV_InstanceID`, which would have deferred the shader) arrives at `DrawIndexedInstanced` with the
+game's own instance ids. `SV_InstanceID & 1` then reads them as an eye parity nobody asked for, so
+instance `i` goes to eye `i & 1` — half the batch per eye, or the left eye alone at one instance. This
+is what made the buildings flicker: head motion re-sorts which instances are odd.
 
-Affected draws are split by instance count — one instance means the geometry is simply missing from
-the right eye, more than one means the batch is halved between the eyes — and summed, so a large count
-of tiny batches is distinguishable from a few large ones. Each is attributed to the bound
-`ID3D11VertexShader`, named where the `CreateVertexProgram` path supplied a name (the re-acquire path
-does not, and those show as `<unnamed 0x…>`).
+**Promoting the instance count cannot fix it.** Per-instance vertex-buffer stepping is indexed by the
+instance id, so a doubled count reads past the batch's per-instance data. Instead `instanced_per_eye`
+makes the parity irrelevant: for each eye it fills **both** `cb13` eye slots with that eye's
+view-projection, camera position and `M_eye`, binds **both** viewport slots to that eye's half of the
+double-wide target, and calls the original `DrawIndexedInstanced` with the caller's arguments
+unchanged. Whichever parity the shader computes, and whichever `SV_ViewportArrayIndex` it writes, it
+resolves to the same eye. Afterwards `cb13`'s dual-eye contents and the exact viewport slots that were
+bound on entry are restored — `cb13` unconditionally, since every patched shader in the pass reads it
+and a pinned one would collapse the frame to mono.
 
-The Render tab reports the last frame plus a mean over the measured frames, with a per-shader
-breakdown; `single_pass`-target log lines carry the same figures every 120 frames, so `jc3vrs.log`
-alone is enough. A mean affected count near zero says the fix would change nothing worth the code; a
-list dominated by bark/foliage/occluder shaders says to turn their existing flags on rather than build
-anything. The counters reset with the patched-shader set (a shader reload), since both are keyed by
-shader pointer.
+The `cb13` pin writes through a `WRITE_DISCARD` map of the already-bound buffer rather than
+`upload_and_bind`, so a handled draw costs three maps and no COM ref-counting. The rows it pins and
+restores are the ones `mirror_and_bind_cb13` last uploaded, cached in `Cb13Buffer::rows` — the draw
+detour has no `RenderEngine` to recompute them from.
+
+The gate is exactly the case's predicate: a patched vertex shader bound, the render thread inside the
+G-buffer range, the collapse on, and `single_pass_instanced_per_eye` (default **on**). The mod's own
+draws are excluded — a promoted `DrawIndexed` is re-issued through the trampoline, and a
+bark/foliage/occluder per-eye re-issue by the `PER_EYE_REISSUE` marker, which this re-issue raises too.
+Everything else is forwarded once, unchanged.
+
+Cost is one extra submission per such draw: measured at a mean of ~131 draws per frame against ~20k
+total, dominated by `generalmkiiihwinstanced` (the buildings), then the `vegetationfoliage*hwinstanced`
+and `vegetationbark*hwinstanced` families.
+
+The counters that measured the case still run, now splitting it into **handled** (re-issued per eye)
+and **exposed** (the flag off, or the re-issue declined for want of a recorded full viewport, a live
+context, or `cb13` contents). Exposed draws are further split by instance count — one instance means
+the geometry is simply missing from the right eye, more than one means the batch is halved. Each draw
+is attributed to the bound `ID3D11VertexShader`, named where the `CreateVertexProgram` path supplied
+one (the re-acquire path does not, and those show as `<unnamed 0x…>`). The Render tab reports the last
+frame plus a mean over the measured frames with a per-shader breakdown, and `single_pass`-target log
+lines carry the same figures every 120 frames. The counters reset with the patched-shader set (a shader
+reload), since both are keyed by shader pointer.
 
 ## The non-`cb0` shader census
 

@@ -887,6 +887,16 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      view-projection reprojected by M_eye, priming each eye's depth with its own \
                      projection.",
                 );
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_instanced_per_eye,
+                    "Already-instanced draws per eye (buildings, vegetation)",
+                )
+                .on_hover_text(
+                    "Re-issues a DrawIndexedInstanced whose patched shader is bound once per eye, \
+                     with both cb13 eye slots and both viewport slots pinned to that eye, so the \
+                     game's own instance ids stop being read as an eye parity. Off, the batch is \
+                     split alternately between the eyes -- the building flicker.",
+                );
             });
         });
 
@@ -1047,42 +1057,46 @@ fn collapse_configured(cfg: &config::Config) -> bool {
     cfg.stereo.single_pass && cfg.stereo.single_pass_dual_eye && cfg.stereo.single_pass_collapse
 }
 
-/// How exposed the collapse is to an already-instanced `DrawIndexedInstanced`, which single-pass does
-/// not handle: its instance ids are the game's own, so the patched shader's `SV_InstanceID & 1` reads
-/// them as an eye parity and the batch is split between the eyes (or, at one instance, lands in the
-/// left eye alone). The counts say how much of the frame a fix would actually change, and the
-/// per-shader list says whether those draws are already covered by a per-block re-issue.
+/// How much of the collapse's frame the already-instanced eye-parity case covers, and how much of that
+/// the per-eye re-issue is handling. The case: an instanced draw's instance ids are the game's own, so
+/// the patched shader's `SV_InstanceID & 1` reads them as an eye parity and the batch would be split
+/// between the eyes (or, at one instance, land in the left eye alone). *Handled* draws were re-issued
+/// once per eye; *exposed* ones still carry the artifact. The per-shader list says which families are
+/// paying the extra submissions.
 fn instanced_exposure_readout(ui: &mut egui::Ui) {
     let report = single_pass::instanced_exposure();
     if report.frames == 0 {
-        ui.label("Instanced exposure: no single-pass geometry frames measured yet.");
+        ui.label("Instanced eye-parity: no single-pass geometry frames measured yet.");
         return;
     }
     let last = report.last_frame;
     ui.label(format!(
-        "Instanced exposure: {} of {} DrawIndexedInstanced affected last frame | mean over {} frames: \
-         {:.1} affected of {:.1} ({:.1} single-instance, {:.1} split batches), {:.1} instances/frame, \
-         peak {} instances",
+        "Instanced eye-parity: {} handled, {} exposed of {} DrawIndexedInstanced last frame | mean \
+         over {} frames: {:.1} handled ({:.1} instances) + {:.1} exposed ({:.1} single-instance, \
+         {:.1} split batches) of {:.1}, peak {} instances",
+        last.handled,
         last.affected,
         last.total,
         report.frames,
+        report.mean_handled,
+        report.mean_handled_instances,
         report.mean_affected,
-        report.mean_total,
         report.mean_affected_single_instance,
         report.mean_affected_multi_instance,
-        report.mean_affected_instances,
+        report.mean_total,
         report.peak_instances,
     ))
     .on_hover_text(
         "Draws where a patched vertex shader was bound inside the G-buffer range under the collapse, \
-         excluding the mod's own promoted and per-eye re-issued draws. A mean affected count near \
-         zero means the un-detoured DrawIndexedInstanced case costs nothing in practice.",
+         excluding the mod's own promoted and per-eye re-issued draws. Handled = re-issued once per \
+         eye with cb13 and the viewport pinned to that eye; exposed = still split by instance parity, \
+         which is what the toggle above turns into handled.",
     );
     let offenders = single_pass::instanced_offenders(8);
     if offenders.is_empty() {
         return;
     }
-    ui.collapsing("Instanced exposure by shader", |ui| {
+    ui.collapsing("Instanced eye-parity draws by shader", |ui| {
         for offender in offenders {
             let name = offender
                 .name

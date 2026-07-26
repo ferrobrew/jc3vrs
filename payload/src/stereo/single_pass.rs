@@ -438,6 +438,7 @@ enum Flag {
     Bark,
     Foliage,
     Occluder,
+    InstancedPerEye,
 }
 
 /// The single-pass config flags, sampled once per frame.
@@ -487,6 +488,7 @@ fn store_config_flags() -> u32 {
             | bit(s.single_pass_bark, Flag::Bark)
             | bit(s.single_pass_foliage, Flag::Foliage)
             | bit(s.single_pass_occluder, Flag::Occluder)
+            | bit(s.single_pass_instanced_per_eye, Flag::InstancedPerEye)
     }) | CONFIG_FLAGS_VALID;
     CONFIG_FLAGS.store(snapshot, Ordering::Relaxed);
     snapshot
@@ -645,6 +647,48 @@ impl EngineContext {
 fn bind_both_viewport_slots(d3d: EngineContext, viewport: D3D11_VIEWPORT) {
     // SAFETY: a two-element slice is a valid viewport array.
     d3d.with_lock(|ctx| unsafe { ctx.RSSetViewports(Some(&[viewport, viewport])) });
+}
+
+/// The immediate context's currently-bound viewport slots, captured so a per-eye re-issue can put back
+/// exactly what the surrounding pass had rather than assume it was the collapse's full viewport. Only
+/// the two slots single-pass uses are captured.
+#[derive(Clone, Copy)]
+struct ViewportSlots {
+    slots: [D3D11_VIEWPORT; 2],
+    count: u32,
+}
+
+fn capture_viewport_slots(d3d: EngineContext) -> ViewportSlots {
+    let mut count = 2u32;
+    let mut slots = [D3D11_VIEWPORT::default(); 2];
+    // SAFETY: `count` is the length of `slots`, as `RSGetViewports` requires.
+    d3d.with_lock(|ctx| unsafe { ctx.RSGetViewports(&mut count, Some(slots.as_mut_ptr())) });
+    // Trailing zero-width slots are what a runtime writes for the elements it had nothing bound for,
+    // and whether it also writes the count back is implementation-defined -- so take the width, not the
+    // count, as the authority on how many slots there really are. Restoring a zero-width slot 1 would
+    // clip every later right-eye primitive to nothing.
+    let count = slots
+        .iter()
+        .take(count.min(2) as usize)
+        .take_while(|v| v.Width > 0.0)
+        .count() as u32;
+    ViewportSlots { slots, count }
+}
+
+/// Re-bind the slots [`capture_viewport_slots`] recorded. Goes through the trampoline rather than the
+/// vtable entry: a restored single-slot set would otherwise be re-recorded by
+/// [`rs_set_viewports_detour`] as the collapse's full viewport.
+fn restore_viewport_slots(d3d: EngineContext, saved: ViewportSlots) {
+    if saved.count == 0 {
+        return;
+    }
+    let Some(detour) = RS_SET_VIEWPORTS.get() else {
+        return;
+    };
+    // SAFETY: the context is the live immediate context and `slots` holds `count` viewports.
+    d3d.with_lock(|ctx| unsafe {
+        detour.call(ctx.as_raw(), saved.count, saved.slots.as_ptr());
+    });
 }
 
 /// Re-issue a terrain-detail `Draw` once per eye with a per-eye `cb1` and the eye's half-viewport,
@@ -1300,9 +1344,45 @@ pub fn last_frame_diagnostics() -> Option<FrameDiagnostics> {
 /// The mod-owned `cb13` constant buffer, lazily created and updated per view.
 struct Cb13Buffer {
     buffer: Option<ID3D11Buffer>,
+    /// The rows last uploaded through [`upload_and_bind`](Self::upload_and_bind) -- the dual-eye state
+    /// every patched shader in the pass reads. Kept so the already-instanced per-eye re-issue can pin
+    /// `cb13` to one eye for a single submission and put this back afterwards; the re-issue runs from a
+    /// draw detour, which has no `RenderEngine` to recompute the rows from.
+    rows: Option<[Vector4; STEREO_CB_TOTAL_ROWS]>,
 }
 
 impl Cb13Buffer {
+    /// The dual-eye rows currently in the live buffer, or `None` before the first upload -- the state a
+    /// per-eye pin must be able to restore before it is allowed to pin at all.
+    fn live_rows(&self) -> Option<[Vector4; STEREO_CB_TOTAL_ROWS]> {
+        self.buffer.as_ref()?;
+        self.rows
+    }
+
+    /// Overwrite the live buffer's contents without re-binding it.
+    ///
+    /// The already-instanced per-eye re-issue pins and restores `cb13` around every handled draw, so
+    /// this runs three times per such draw: a `WRITE_DISCARD` map is all it needs (the buffer stays
+    /// bound at `b13`, and renaming a bound dynamic buffer is precisely what that usage is for), where
+    /// [`upload_and_bind`](Self::upload_and_bind)'s re-bind would cost an `AddRef`/`Release` pair per
+    /// shader stage per call. A no-op before the buffer exists.
+    unsafe fn write(
+        &self,
+        context: &ID3D11DeviceContext,
+        rows: &[Vector4; STEREO_CB_TOTAL_ROWS],
+    ) -> Result<(), windows::core::Error> {
+        let Some(buffer) = &self.buffer else {
+            return Ok(());
+        };
+        unsafe {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            context.Map(buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))?;
+            std::ptr::copy_nonoverlapping(rows.as_ptr(), mapped.pData.cast(), STEREO_CB_TOTAL_ROWS);
+            context.Unmap(buffer, 0);
+        }
+        Ok(())
+    }
+
     /// Ensure the dynamic `cb13` buffer exists, write `rows` into it, and bind it at `b13`.
     unsafe fn upload_and_bind(
         &mut self,
@@ -1347,6 +1427,7 @@ impl Cb13Buffer {
             // lane and reads nothing from `cb13`, so it needs no binding.
             context.DSSetConstantBuffers(STEREO_CB_REGISTER, Some(&[Some(buffer.clone())]));
         }
+        self.rows = Some(*rows);
         Ok(())
     }
 }
@@ -1644,18 +1725,18 @@ type DrawIndexedInstancedFn = unsafe extern "system" fn(*mut c_void, u32, u32, u
 
 static DRAW_INDEXED: DetourSlot<DrawIndexedFn> = DetourSlot::new();
 static DRAW: DetourSlot<DrawFn> = DetourSlot::new();
-/// `DrawIndexedInstanced`, detoured **only to measure** (see [`draw_indexed_instanced_detour`]); its
-/// trampoline also serves as the raw entry a promoted [`draw_indexed_detour`] draw is re-issued through.
+/// `DrawIndexedInstanced` (see [`draw_indexed_instanced_detour`]); its trampoline also serves as the
+/// raw entry a promoted [`draw_indexed_detour`] draw is re-issued through.
 ///
-/// The behaviour it measures is a known gap: an already-instanced draw whose patched vertex shader
-/// takes its per-instance data through a vertex-buffer slot (rather than through `SV_InstanceID`,
-/// which would have deferred the shader with `InstanceIdAlreadyDeclared`) sends instance `i` to eye
-/// `i & 1` -- half the instances in each eye, and a 1-instance draw to the left eye only. Promoting
-/// the instance count cannot fix it: the per-instance vertex-buffer stepping is indexed by the
-/// instance id, so doubling the count reads past the instance data. The correct handling is a per-eye
-/// re-issue with `cb13`'s two eye slots temporarily set to the same eye, so `SV_InstanceID & 1` picks
-/// that one eye whichever instance it lands on -- the bucket-(d) mechanism in
-/// `docs/mod/single-pass-render-blocks.md`, not yet built for the general case.
+/// An already-instanced draw whose patched vertex shader takes its per-instance data through a
+/// vertex-buffer slot (rather than through `SV_InstanceID`, which would have deferred the shader with
+/// `InstanceIdAlreadyDeclared`) has instance ids that are the game's own, so `SV_InstanceID & 1` sends
+/// instance `i` to eye `i & 1` -- half the instances in each eye, and a 1-instance draw to the left eye
+/// only. Promoting the instance count cannot fix it: the per-instance vertex-buffer stepping is indexed
+/// by the instance id, so doubling the count reads past the instance data. Instead [`instanced_per_eye`]
+/// makes the parity irrelevant, re-issuing the draw once per eye with both `cb13` eye slots and both
+/// viewport slots pinned to that eye -- the bucket-(d) mechanism in
+/// `docs/mod/single-pass-render-blocks.md`.
 static DRAW_INDEXED_INSTANCED: DetourSlot<DrawIndexedInstancedFn> = DetourSlot::new();
 
 /// Handle a `DrawIndexed` while the dual-eye G-buffer geometry is drawing. A **patched** shader is
@@ -1718,18 +1799,16 @@ unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, s
     unsafe { detour.call(context, vertex_count, start_vertex) };
 }
 
-// ---- Already-instanced draw exposure (measurement only) ----------------------------------------
+// ---- Already-instanced draws ---------------------------------------------------------------------
 
-/// Pass-through detour on `DrawIndexedInstanced`, measuring how much of the frame the un-handled
-/// already-instanced case (see [`DRAW_INDEXED_INSTANCED`]) actually covers, so the cost of building
-/// the per-eye re-issue for it can be weighed against what it would buy.
+/// Detour on `DrawIndexedInstanced`, handling the already-instanced case (see
+/// [`DRAW_INDEXED_INSTANCED`]) with a per-eye re-issue and measuring how much of the frame it covers.
 ///
-/// It changes nothing: every call is forwarded to the trampoline verbatim, on every path. The
-/// classification is the exposed set's exact predicate -- a patched vertex shader (so the shader reads
-/// `SV_InstanceID` as an eye parity it did not ask for), inside the G-buffer range, under the collapse
-/// -- minus the mod's own draws. Promoted draws come through the trampoline and never reach here;
-/// draws a per-eye re-issue re-drives are excluded by [`per_eye_reissue_eye`], since those already
-/// land in one eye deliberately.
+/// A call is in that case when a patched vertex shader is bound (so the shader reads `SV_InstanceID` as
+/// an eye parity it did not ask for), the render thread is inside the G-buffer range, and the collapse
+/// is on -- minus the mod's own draws. Promoted `DrawIndexed`es come through the trampoline and never
+/// reach here; draws a per-eye re-issue re-drives are excluded by [`per_eye_reissue_eye`], since those
+/// already land in one eye deliberately. Everything else is forwarded verbatim, once.
 unsafe extern "system" fn draw_indexed_instanced_detour(
     context: *mut c_void,
     index_count_per_instance: u32,
@@ -1739,40 +1818,140 @@ unsafe extern "system" fn draw_indexed_instanced_detour(
     start_instance: u32,
 ) {
     let detour = DRAW_INDEXED_INSTANCED.get().expect("set before enable");
+    let submit = || {
+        // SAFETY: forwards the caller's arguments unchanged to the trampoline.
+        unsafe {
+            detour.call(
+                context,
+                index_count_per_instance,
+                instance_count,
+                start_index,
+                base_vertex,
+                start_instance,
+            );
+        }
+    };
     if active() && per_eye_reissue_eye().is_none() {
         INSTANCED_TOTAL.fetch_add(1, Ordering::Relaxed);
         if BOUND_VS_PATCHED.load(Ordering::Relaxed) && in_gbuffer_range() && collapse_active() {
-            record_instanced_exposure(instance_count);
+            let handled = config_flags().has(Flag::InstancedPerEye) && instanced_per_eye(&submit);
+            record_instanced_case(instance_count, handled);
+            if handled {
+                return;
+            }
         }
     }
-    // SAFETY: forwards the original arguments to the trampoline.
-    unsafe {
-        detour.call(
-            context,
-            index_count_per_instance,
-            instance_count,
-            start_index,
-            base_vertex,
-            start_instance,
-        );
-    }
+    submit();
 }
 
-/// Tally one exposed already-instanced draw, and attribute it to the bound vertex shader.
-fn record_instanced_exposure(instance_count: u32) {
-    INSTANCED_AFFECTED.fetch_add(1, Ordering::Relaxed);
-    // A 1-instance draw has no odd instance at all, so it lands in the left eye and is simply missing
-    // from the right; a multi-instance draw is split alternately, so each eye gets half the batch.
-    // The two look different on screen and are worth separating.
-    if instance_count <= 1 {
-        INSTANCED_AFFECTED_SINGLE.fetch_add(1, Ordering::Relaxed);
-    } else {
-        INSTANCED_AFFECTED_MULTI.fetch_add(1, Ordering::Relaxed);
+/// Re-issue an already-instanced draw once per eye, so the game's own instance ids stop being read as
+/// an eye parity. Returns `false` when the re-issue cannot run (no full viewport recorded yet, no live
+/// context, or no `cb13` contents to pin and restore), in which case the caller submits once and the
+/// draw is counted as exposure.
+///
+/// For each eye, **both** `cb13` eye slots are filled with that eye's transforms and **both** viewport
+/// slots with that eye's half of the double-wide target, so whichever parity `SV_InstanceID & 1`
+/// produces -- and therefore whichever `SV_ViewportArrayIndex` the shader writes -- resolves to the
+/// same eye. The instance count is left alone: per-instance vertex-buffer stepping is indexed by the
+/// instance id, so doubling it would read past the batch's per-instance data.
+///
+/// `cb13` is shared by every patched shader in the pass, so its restore is unconditional: leaving it
+/// pinned would collapse the rest of the frame's geometry to one eye. The viewport is put back exactly
+/// as it was found rather than to the recorded full width, so a following draw that inherits the
+/// viewport (an indirect draw, which nothing detours) sees no trace of the pin.
+fn instanced_per_eye(submit: &dyn Fn()) -> bool {
+    let Some(full) = *COLLAPSE_FULL_VIEWPORT.lock() else {
+        return false;
+    };
+    let Some(d3d) = EngineContext::get() else {
+        return false;
+    };
+    let Some(rows) = CB13.lock().live_rows() else {
+        return false;
+    };
+    let saved = capture_viewport_slots(d3d);
+
+    let mut submitted = 0;
+    for eye in 0..2 {
+        // The same marker the baked-cb re-issues raise: it keeps this module's own detours -- and any
+        // block-level re-issue reached from here -- from compounding the split this loop sets up.
+        let _reissue = PerEyeReissue::enter(eye);
+        if !write_cb13_rows(d3d, &pin_rows_to_eye(&rows, eye)) {
+            break;
+        }
+        bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
+        submit();
+        submitted += 1;
     }
-    INSTANCED_AFFECTED_INSTANCES.fetch_add(instance_count as usize, Ordering::Relaxed);
+
+    write_cb13_rows(d3d, &rows);
+    restore_viewport_slots(d3d, saved);
+    // A map failure before the first submission leaves the draw undrawn, so the caller must still
+    // submit it; one after leaves it partially drawn, where a further submission would only duplicate
+    // geometry in an eye that already has it.
+    submitted > 0
+}
+
+/// Copy eye `eye`'s view-projection rows, camera position, and `M_eye` block over **both** eye slots of
+/// a `cb13` row set. A patched shader then reads the same eye whichever parity it computes.
+fn pin_rows_to_eye(
+    rows: &[Vector4; STEREO_CB_TOTAL_ROWS],
+    eye: usize,
+) -> [Vector4; STEREO_CB_TOTAL_ROWS] {
+    let stride = PER_EYE_SOURCE_ROWS.len();
+    let mut pinned = *rows;
+    for slot in 0..2 {
+        pinned[slot * stride..(slot + 1) * stride]
+            .copy_from_slice(&rows[eye * stride..(eye + 1) * stride]);
+        pinned[MEYE_ROW_BASE + slot * 4..MEYE_ROW_BASE + slot * 4 + 4]
+            .copy_from_slice(&rows[MEYE_ROW_BASE + eye * 4..MEYE_ROW_BASE + eye * 4 + 4]);
+    }
+    pinned
+}
+
+/// Write `rows` into the live `cb13` buffer, reporting whether it landed. Takes the engine context
+/// mutex before [`CB13`], the same order as [`mirror_and_bind_cb13`].
+fn write_cb13_rows(d3d: EngineContext, rows: &[Vector4; STEREO_CB_TOTAL_ROWS]) -> bool {
+    // SAFETY: runs on the render thread under the engine's context mutex, as every other `cb13` write.
+    let result = d3d.with_lock(|ctx| unsafe { CB13.lock().write(ctx, rows) });
+    if let Err(e) = result {
+        if !CB13_PIN_WARNED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                target: "single_pass",
+                "per-eye re-issue of an already-instanced draw could not map cb13 ({e}); those draws \
+                 stay split between the eyes"
+            );
+        }
+        return false;
+    }
+    true
+}
+
+/// Whether [`write_cb13_rows`] has already reported a map failure, so a per-draw path cannot flood the
+/// log with the same warning.
+static CB13_PIN_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Tally one already-instanced draw the eye-parity case applies to, and attribute it to the bound
+/// vertex shader. `handled` distinguishes a per-eye re-issue from a draw left exposed.
+fn record_instanced_case(instance_count: u32, handled: bool) {
+    if handled {
+        INSTANCED_HANDLED.fetch_add(1, Ordering::Relaxed);
+        INSTANCED_HANDLED_INSTANCES.fetch_add(instance_count as usize, Ordering::Relaxed);
+    } else {
+        INSTANCED_AFFECTED.fetch_add(1, Ordering::Relaxed);
+        // A 1-instance draw has no odd instance at all, so it lands in the left eye and is simply
+        // missing from the right; a multi-instance draw is split alternately, so each eye gets half the
+        // batch. The two look different on screen and are worth separating.
+        if instance_count <= 1 {
+            INSTANCED_AFFECTED_SINGLE.fetch_add(1, Ordering::Relaxed);
+        } else {
+            INSTANCED_AFFECTED_MULTI.fetch_add(1, Ordering::Relaxed);
+        }
+        INSTANCED_AFFECTED_INSTANCES.fetch_add(instance_count as usize, Ordering::Relaxed);
+    }
     INSTANCED_MAX_INSTANCES.fetch_max(instance_count, Ordering::Relaxed);
-    // The mutex is only reached on an exposed draw -- the set being measured, expected to be a small
-    // fraction of the frame. An un-exposed draw pays the atomics alone.
+    // The mutex is only reached on a draw the case applies to -- a small fraction of the frame. Every
+    // other draw pays the atomics alone.
     INSTANCED_OFFENDERS
         .lock()
         .entry(BOUND_VS.load(Ordering::Relaxed))
@@ -1780,7 +1959,7 @@ fn record_instanced_exposure(instance_count: u32) {
         .accumulate(instance_count);
 }
 
-/// One vertex shader's cumulative share of the exposed already-instanced draws.
+/// One vertex shader's cumulative share of the already-instanced draws the eye-parity case applies to.
 #[derive(Clone, Copy, Default)]
 struct InstancedOffender {
     draws: u64,
@@ -1794,7 +1973,8 @@ impl InstancedOffender {
     }
 }
 
-/// The exposed already-instanced draws attributed to the vertex shader that was bound, keyed by its
+/// The already-instanced draws the eye-parity case applies to, attributed to the vertex shader that
+/// was bound and keyed by its
 /// `ID3D11VertexShader` pointer. Cumulative, and cleared alongside [`PATCHED_VS`] (whose released
 /// pointers can be recycled).
 static INSTANCED_OFFENDERS: Mutex<BTreeMap<usize, InstancedOffender>> = Mutex::new(BTreeMap::new());
@@ -1804,7 +1984,13 @@ static INSTANCED_OFFENDERS: Mutex<BTreeMap<usize, InstancedOffender>> = Mutex::n
 pub struct InstancedExposure {
     /// Every `DrawIndexedInstanced` the game issued, anywhere in the frame.
     pub total: u32,
-    /// Those the un-handled case actually applies to: a patched VS, in the G-buffer range, collapsed.
+    /// Those the eye-parity case applies to (a patched VS, in the G-buffer range, collapsed) that were
+    /// re-issued once per eye, so the parity no longer decides which eye they land in.
+    pub handled: u32,
+    /// The instances summed over the handled draws.
+    pub handled_instances: u64,
+    /// Those the case applies to that were **not** re-issued -- the flag is off, or the re-issue could
+    /// not run -- and so are still split between the eyes by their instance parity.
     pub affected: u32,
     /// Affected draws with a single instance -- rendered into the left eye only.
     pub affected_single_instance: u32,
@@ -1812,7 +1998,7 @@ pub struct InstancedExposure {
     pub affected_multi_instance: u32,
     /// The instances summed over the affected draws: how much geometry the split actually moves.
     pub affected_instances: u64,
-    /// The largest instance count seen on an affected draw.
+    /// The largest instance count seen on a draw the case applies to, handled or not.
     pub max_instances: u32,
 }
 
@@ -1824,6 +2010,8 @@ pub struct InstancedExposureReport {
     /// Frames accumulated into the means (only frames that entered the single-pass geometry range).
     pub frames: u32,
     pub mean_total: f32,
+    pub mean_handled: f32,
+    pub mean_handled_instances: f32,
     pub mean_affected: f32,
     pub mean_affected_single_instance: f32,
     pub mean_affected_multi_instance: f32,
@@ -1838,6 +2026,8 @@ struct ExposureHistory {
     last: InstancedExposure,
     frames: u32,
     total: u64,
+    handled: u64,
+    handled_instances: u64,
     affected: u64,
     affected_single: u64,
     affected_multi: u64,
@@ -1850,6 +2040,8 @@ impl ExposureHistory {
         self.last = frame;
         self.frames += 1;
         self.total += u64::from(frame.total);
+        self.handled += u64::from(frame.handled);
+        self.handled_instances += frame.handled_instances;
         self.affected += u64::from(frame.affected);
         self.affected_single += u64::from(frame.affected_single_instance);
         self.affected_multi += u64::from(frame.affected_multi_instance);
@@ -1869,6 +2061,8 @@ impl ExposureHistory {
             last_frame: self.last,
             frames: self.frames,
             mean_total: mean(self.total),
+            mean_handled: mean(self.handled),
+            mean_handled_instances: mean(self.handled_instances),
             mean_affected: mean(self.affected),
             mean_affected_single_instance: mean(self.affected_single),
             mean_affected_multi_instance: mean(self.affected_multi),
@@ -1881,6 +2075,8 @@ impl ExposureHistory {
 static INSTANCED_HISTORY: Mutex<ExposureHistory> = Mutex::new(ExposureHistory {
     last: InstancedExposure {
         total: 0,
+        handled: 0,
+        handled_instances: 0,
         affected: 0,
         affected_single_instance: 0,
         affected_multi_instance: 0,
@@ -1889,6 +2085,8 @@ static INSTANCED_HISTORY: Mutex<ExposureHistory> = Mutex::new(ExposureHistory {
     },
     frames: 0,
     total: 0,
+    handled: 0,
+    handled_instances: 0,
     affected: 0,
     affected_single: 0,
     affected_multi: 0,
@@ -1901,6 +2099,8 @@ static INSTANCED_HISTORY: Mutex<ExposureHistory> = Mutex::new(ExposureHistory {
 fn accumulate_instanced_exposure() -> InstancedExposure {
     let frame = InstancedExposure {
         total: INSTANCED_TOTAL.swap(0, Ordering::Relaxed) as u32,
+        handled: INSTANCED_HANDLED.swap(0, Ordering::Relaxed) as u32,
+        handled_instances: INSTANCED_HANDLED_INSTANCES.swap(0, Ordering::Relaxed) as u64,
         affected: INSTANCED_AFFECTED.swap(0, Ordering::Relaxed) as u32,
         affected_single_instance: INSTANCED_AFFECTED_SINGLE.swap(0, Ordering::Relaxed) as u32,
         affected_multi_instance: INSTANCED_AFFECTED_MULTI.swap(0, Ordering::Relaxed) as u32,
@@ -1923,8 +2123,8 @@ fn reset_instanced_exposure() {
     INSTANCED_OFFENDERS.lock().clear();
 }
 
-/// One entry of [`instanced_offenders`]: a vertex shader and the exposed already-instanced draws
-/// attributed to it.
+/// One entry of [`instanced_offenders`]: a vertex shader and the already-instanced draws of its that
+/// the eye-parity case applies to, whether they were re-issued per eye or left exposed.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct InstancedOffenderReport {
     /// The shader's engine name (`CreateVertexProgramParams.m_Name`), or `None` when the shader was
@@ -1936,9 +2136,10 @@ pub struct InstancedOffenderReport {
     pub instances: u64,
 }
 
-/// The vertex shaders responsible for the exposed already-instanced draws, the busiest first, capped
-/// at `limit`. Which shaders these are is what says whether the exposure is already covered by a
-/// per-block re-issue (bark, foliage, occluder) or needs the general fix.
+/// The vertex shaders responsible for the already-instanced draws the eye-parity case applies to, the
+/// busiest first, capped at `limit`. Which shaders these are is what says how much of the extra
+/// submission cost each family is carrying, and which of them a per-block re-issue (bark, foliage,
+/// occluder) already covers.
 pub fn instanced_offenders(limit: usize) -> Vec<InstancedOffenderReport> {
     let names = PATCHED_VS_NAMES.lock();
     let mut offenders: Vec<InstancedOffenderReport> = INSTANCED_OFFENDERS
@@ -1956,10 +2157,10 @@ pub fn instanced_offenders(limit: usize) -> Vec<InstancedOffenderReport> {
     offenders
 }
 
-/// Log the already-instanced draw exposure, at the same 120-frame cadence as the draw split. Emitted
-/// only once there is something to report, so a session with no exposure stays quiet.
+/// Log the already-instanced draw handling, at the same 120-frame cadence as the draw split. Emitted
+/// only once there is something to report, so a session where the case never arises stays quiet.
 fn log_instanced_exposure(frame: InstancedExposure) {
-    if frame.affected == 0 {
+    if frame.handled == 0 && frame.affected == 0 {
         return;
     }
     let report = instanced_exposure();
@@ -1974,25 +2175,31 @@ fn log_instanced_exposure(frame: InstancedExposure) {
         .collect();
     tracing::info!(
         target: "single_pass",
-        "instanced exposure: {} of {} DrawIndexedInstanced affected this frame ({} single-instance, \
-         {} multi-instance, {} instances, max {}) | mean over {} frames: {:.1} affected of {:.1}, \
-         {:.1} instances, peak {} | top: {}",
+        "instanced eye-parity: {} re-issued per eye ({} instances) and {} still exposed ({} \
+         single-instance, {} multi-instance, {} instances) of {} DrawIndexedInstanced this frame, max \
+         {} instances | mean over {} frames: {:.1} handled + {:.1} exposed of {:.1}, {:.1} handled \
+         instances, peak {} | top: {}",
+        frame.handled,
+        frame.handled_instances,
         frame.affected,
-        frame.total,
         frame.affected_single_instance,
         frame.affected_multi_instance,
         frame.affected_instances,
+        frame.total,
         frame.max_instances,
         report.frames,
+        report.mean_handled,
         report.mean_affected,
         report.mean_total,
-        report.mean_affected_instances,
+        report.mean_handled_instances,
         report.peak_instances,
         if offenders.is_empty() { "-".to_string() } else { offenders.join(", ") },
     );
 }
 
 static INSTANCED_TOTAL: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_HANDLED: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_HANDLED_INSTANCES: AtomicUsize = AtomicUsize::new(0);
 static INSTANCED_AFFECTED: AtomicUsize = AtomicUsize::new(0);
 static INSTANCED_AFFECTED_SINGLE: AtomicUsize = AtomicUsize::new(0);
 static INSTANCED_AFFECTED_MULTI: AtomicUsize = AtomicUsize::new(0);
@@ -2322,7 +2529,9 @@ fn release_cb13() {
             LeaveCriticalSection(context.m_Mutex);
         }
     }
-    CB13.lock().buffer = None;
+    let mut cb13 = CB13.lock();
+    cb13.buffer = None;
+    cb13.rows = None;
 }
 
 /// Install the single-pass COM-vtable detours on the immediate-context (and device) vtables, once.
@@ -2440,7 +2649,10 @@ pub(crate) fn ensure_viewport_detours() {
 /// other and hang the process.
 static DETOUR_INSTALL: Mutex<()> = Mutex::new(());
 
-static CB13: Mutex<Cb13Buffer> = Mutex::new(Cb13Buffer { buffer: None });
+static CB13: Mutex<Cb13Buffer> = Mutex::new(Cb13Buffer {
+    buffer: None,
+    rows: None,
+});
 static IN_GBUFFER_RANGE: AtomicBool = AtomicBool::new(false);
 
 thread_local! {

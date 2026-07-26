@@ -282,6 +282,15 @@ pub struct StereoConfig {
     /// reprojected by `M_eye`, so each eye's depth is primed with its own projection. Requires the
     /// collapse. **Blind-implemented, unvalidated.**
     pub single_pass_occluder: bool,
+    /// Re-issue an **already-instanced** draw once per eye under the collapse, instead of letting the
+    /// patched vertex shader read the game's own instance ids as an eye parity. A `DrawIndexedInstanced`
+    /// with a patched shader bound in the G-buffer range sends instance `i` to eye `i & 1` -- half the
+    /// batch per eye, or the left eye alone at one instance. The instance count cannot simply be
+    /// promoted (per-instance vertex-buffer stepping is indexed by the instance id, so doubling it reads
+    /// past the instance data), so each eye gets its own submission with both `cb13` eye slots and both
+    /// viewport slots pinned to that eye. Requires the collapse. On by default: it fixes a visible
+    /// artifact (the buildings flickering), and costs ~130 extra draw submissions of ~20k per frame.
+    pub single_pass_instanced_per_eye: bool,
     /// Diagnostic: disable the sun-shadow system entirely through the engine's own settings path
     /// (`CShadowManager` enabled flag, synced by the sim-side `UpdateRender` via `SetEnabled`). The
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
@@ -545,6 +554,7 @@ impl StereoConfig {
             single_pass_bark: false,
             single_pass_foliage: false,
             single_pass_occluder: false,
+            single_pass_instanced_per_eye: true,
             disable_sun_shadows: false,
             freeze_shadow_maps: false,
             dedupe_post_block: true,
