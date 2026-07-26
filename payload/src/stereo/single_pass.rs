@@ -439,6 +439,7 @@ enum Flag {
     Foliage,
     Occluder,
     InstancedPerEye,
+    IndirectPerEye,
     UniformViewportSlots,
 }
 
@@ -490,6 +491,7 @@ fn store_config_flags() -> u32 {
             | bit(s.single_pass_foliage, Flag::Foliage)
             | bit(s.single_pass_occluder, Flag::Occluder)
             | bit(s.single_pass_instanced_per_eye, Flag::InstancedPerEye)
+            | bit(s.single_pass_indirect_per_eye, Flag::IndirectPerEye)
             | bit(
                 s.single_pass_uniform_viewport_slots,
                 Flag::UniformViewportSlots,
@@ -1942,6 +1944,104 @@ unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, s
     unsafe { detour.call(context, vertex_count, start_vertex) };
 }
 
+// ---- GPU-indirect draws --------------------------------------------------------------------------
+
+/// `ID3D11DeviceContext` vtable slots for the two GPU-indirect draw entry points (field 33 → slot 39,
+/// field 34 → slot 40, verified against `windows`'s `ID3D11DeviceContext_Vtbl`). The engine reaches
+/// them through `Graphics::DrawInstanced` (slot 39) and `Graphics::DrawIndexedInstancedIndirectNoMutex`
+/// (slot 40); the terrain-patch block's near tessellating passes and the foliage block's dominant path
+/// are the volume users.
+const DRAW_INDEXED_INSTANCED_INDIRECT_SLOT: usize = 39;
+const DRAW_INSTANCED_INDIRECT_SLOT: usize = 40;
+
+/// Both indirect entry points take `(ID3D11Buffer* pBufferForArgs, UINT AlignedByteOffsetForArgs)`.
+type DrawIndirectFn = unsafe extern "system" fn(*mut c_void, *mut c_void, u32);
+
+static DRAW_INDEXED_INSTANCED_INDIRECT: DetourSlot<DrawIndirectFn> = DetourSlot::new();
+static DRAW_INSTANCED_INDIRECT: DetourSlot<DrawIndirectFn> = DetourSlot::new();
+
+unsafe extern "system" fn draw_indexed_instanced_indirect_detour(
+    context: *mut c_void,
+    buffer_for_args: *mut c_void,
+    aligned_byte_offset: u32,
+) {
+    let detour = DRAW_INDEXED_INSTANCED_INDIRECT
+        .get()
+        .expect("set before enable");
+    // SAFETY: forwards the caller's arguments unchanged to the trampoline.
+    let submit = || unsafe { detour.call(context, buffer_for_args, aligned_byte_offset) };
+    if !indirect_per_eye(context, &submit) {
+        submit();
+    }
+}
+
+unsafe extern "system" fn draw_instanced_indirect_detour(
+    context: *mut c_void,
+    buffer_for_args: *mut c_void,
+    aligned_byte_offset: u32,
+) {
+    let detour = DRAW_INSTANCED_INDIRECT.get().expect("set before enable");
+    // SAFETY: forwards the caller's arguments unchanged to the trampoline.
+    let submit = || unsafe { detour.call(context, buffer_for_args, aligned_byte_offset) };
+    if !indirect_per_eye(context, &submit) {
+        submit();
+    }
+}
+
+/// Re-issue a GPU-indirect draw once per eye with both viewport slots pinned to that eye's half,
+/// reporting whether it did; `false` means the caller must submit the draw itself, once, unchanged.
+///
+/// An indirect draw carries its vertex/instance counts in a GPU buffer, so it can be neither
+/// instance-doubled (the promotion [`draw_indexed_detour`] applies to a patched shader) nor rewritten
+/// -- the arguments are submitted verbatim, twice. What the mod controls is the viewport, and that is
+/// the whole defect: nothing detoured these entry points, so the draw inherited whatever the previous
+/// draw left bound, which under the collapse is dominated by [`CollapseViewport::Full`]. Rasterising
+/// `cb0`'s per-eye off-axis projection into the full double-wide viewport stretches the geometry 2x
+/// horizontally about the target centre, and a 2x horizontal stretch is a 2x horizontal *motion* gain
+/// -- the near terrain patches and foliage sliding across the screen as the camera turns. Pinning each
+/// submission to its eye's half is the same deal the unpatched `DrawIndexed` path already takes:
+/// present and correctly sized in both eyes, with no parallax, since `cb0` stays eye 0's.
+///
+/// Declines outside the collapse and the G-buffer range (elsewhere there is no eye split to inherit),
+/// inside a block-level per-eye re-issue (which has already pinned the viewport for this eye
+/// deliberately -- the [`PER_EYE_REISSUE`] marker), and when the bound vertex shader is patched (it
+/// writes `SV_ViewportArrayIndex` itself and would have to be routed, not pinned; that includes the
+/// tessellated terrain families once `single_pass_terrain` transforms them). `cb13` needs no pinning
+/// here for the same reason: no pristine game shader declares it, so an unpatched draw cannot read it.
+///
+/// The re-issue does not raise [`PER_EYE_REISSUE`] itself -- it drives no engine code, only the
+/// trampolines, so nothing it calls can re-enter this module's detours.
+fn indirect_per_eye(context: *mut c_void, submit: &dyn Fn()) -> bool {
+    if !collapse_active() || !in_gbuffer_range() || per_eye_reissue_eye().is_some() {
+        return false;
+    }
+    if !config_flags().has(Flag::IndirectPerEye) || BOUND_VS_PATCHED.load(Ordering::Relaxed) {
+        INDIRECT_FORWARDED.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    // Without a recorded full viewport `ensure_collapse_viewport` is a no-op, so the loop would submit
+    // the draw twice into one region -- doubled geometry rather than a split.
+    if COLLAPSE_FULL_VIEWPORT.lock().is_none() {
+        INDIRECT_FORWARDED.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    for eye in 0..2 {
+        ensure_collapse_viewport(context, CollapseViewport::Eye(eye));
+        submit();
+    }
+    // Unconditional, as on every other path that pins a viewport: a leaked eye-half would clip the
+    // rest of the frame -- including the fullscreen passes -- to half the target.
+    ensure_collapse_viewport(context, CollapseViewport::Full);
+    INDIRECT_REISSUED.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// GPU-indirect draws [`indirect_per_eye`] re-issued, and those it saw in a collapsed G-buffer range
+/// but forwarded once (the flag off, or a patched shader bound). Reset per pass range by
+/// [`log_draw_split`], which reports them.
+static INDIRECT_REISSUED: AtomicUsize = AtomicUsize::new(0);
+static INDIRECT_FORWARDED: AtomicUsize = AtomicUsize::new(0);
+
 // ---- Already-instanced draws ---------------------------------------------------------------------
 
 /// Detour on `DrawIndexedInstanced`, handling the already-instanced case (see
@@ -2697,6 +2797,8 @@ pub fn log_draw_split(first: u32, last: u32) {
     let dup = VIEWPORT_DUP.swap(0, Ordering::Relaxed);
     let in_patched = INSTANCED_RANGE_PATCHED.swap(0, Ordering::Relaxed);
     let out_patched = INSTANCED_RANGE_OUT_PATCHED.swap(0, Ordering::Relaxed);
+    let indirect_reissued = INDIRECT_REISSUED.swap(0, Ordering::Relaxed);
+    let indirect_forwarded = INDIRECT_FORWARDED.swap(0, Ordering::Relaxed);
     let torn = RANGE_TORN.swap(0, Ordering::Relaxed);
     let torn_total = RANGE_TORN_TOTAL.fetch_add(torn, Ordering::Relaxed) + torn;
     if torn > 0 {
@@ -2714,6 +2816,7 @@ pub fn log_draw_split(first: u32, last: u32) {
         target: "single_pass",
         "pass range [{first:#x}, {last:#x}): {patched} patched, {unpatched} unpatched draws | \
          instanced while it ran: {in_patched} patched in-range, {out_patched} patched out-of-range | \
+         indirect: {indirect_reissued} re-issued per eye, {indirect_forwarded} forwarded | \
          torn {torn} ({torn_total} this session) | viewports: {split} split, {dup} identical-dup | \
          recorded VS={} | CreateVertexShader: pending={} reacq[patched={} cb13={} no-refs={} err={}] | \
          census[patched={} no-refs={} deferred={} errored={}]",
@@ -2754,7 +2857,7 @@ pub fn uninstall_com_detours() {
     //
     // So: disable under suspension with the slots intact, resume, and only then reclaim and drop.
     // Between the two, the functions are unpatched, so nothing can enter a detour at all.
-    let mut failed: [Option<&'static str>; 8] = [None; 8];
+    let mut failed: [Option<&'static str>; 10] = [None; 10];
     let mut failures = 0usize;
 
     let _ = ThreadSuspender::for_block(|| {
@@ -2782,6 +2885,11 @@ pub fn uninstall_com_detours() {
         disable_detour!(DRAW_INDEXED, "DrawIndexed");
         disable_detour!(DRAW, "Draw");
         disable_detour!(DRAW_INDEXED_INSTANCED, "DrawIndexedInstanced");
+        disable_detour!(
+            DRAW_INDEXED_INSTANCED_INDIRECT,
+            "DrawIndexedInstancedIndirect"
+        );
+        disable_detour!(DRAW_INSTANCED_INDIRECT, "DrawInstancedIndirect");
         disable_detour!(VS_SET_SHADER, "VSSetShader");
         disable_detour!(CREATE_VERTEX_SHADER, "CreateVertexShader");
         disable_detour!(SET_VERTEX_PROGRAM_CONSTANTS, "SetVertexProgramConstants");
@@ -2801,6 +2909,8 @@ pub fn uninstall_com_detours() {
     drop(DRAW_INDEXED.take());
     drop(DRAW.take());
     drop(DRAW_INDEXED_INSTANCED.take());
+    drop(DRAW_INDEXED_INSTANCED_INDIRECT.take());
+    drop(DRAW_INSTANCED_INDIRECT.take());
     drop(VS_SET_SHADER.take());
     drop(CREATE_VERTEX_SHADER.take());
     drop(SET_VERTEX_PROGRAM_CONSTANTS.take());
@@ -2886,6 +2996,10 @@ pub(crate) fn ensure_viewport_detours() {
         let draw_target: DrawFn = std::mem::transmute(*vtable.add(DRAW_SLOT));
         let draw_indexed_instanced_target: DrawIndexedInstancedFn =
             std::mem::transmute(*vtable.add(DRAW_INDEXED_INSTANCED_SLOT));
+        let draw_indexed_instanced_indirect_target: DrawIndirectFn =
+            std::mem::transmute(*vtable.add(DRAW_INDEXED_INSTANCED_INDIRECT_SLOT));
+        let draw_instanced_indirect_target: DrawIndirectFn =
+            std::mem::transmute(*vtable.add(DRAW_INSTANCED_INDIRECT_SLOT));
         let vs_set_shader_target: VsSetShaderFn =
             std::mem::transmute(*vtable.add(VS_SET_SHADER_SLOT));
         let create_vertex_shader_target: CreateVertexShaderFn =
@@ -2902,6 +3016,8 @@ pub(crate) fn ensure_viewport_detours() {
             Ok(draw_indexed_detour_handle),
             Ok(draw_detour_handle),
             Ok(draw_indexed_instanced_detour_handle),
+            Ok(draw_indexed_instanced_indirect_detour_handle),
+            Ok(draw_instanced_indirect_detour_handle),
             Ok(vs_set_shader_detour_handle),
             Ok(create_vertex_shader_detour_handle),
             Ok(set_vs_consts_detour_handle),
@@ -2911,6 +3027,14 @@ pub(crate) fn ensure_viewport_detours() {
             GenericDetour::new(draw_indexed_target, draw_indexed_detour),
             GenericDetour::new(draw_target, draw_detour),
             GenericDetour::new(draw_indexed_instanced_target, draw_indexed_instanced_detour),
+            GenericDetour::new(
+                draw_indexed_instanced_indirect_target,
+                draw_indexed_instanced_indirect_detour,
+            ),
+            GenericDetour::new(
+                draw_instanced_indirect_target,
+                draw_instanced_indirect_detour,
+            ),
             GenericDetour::new(vs_set_shader_target, vs_set_shader_detour),
             GenericDetour::new(create_vertex_shader_target, create_vertex_shader_detour),
             GenericDetour::new(set_vs_consts_target, set_vertex_program_constants_detour),
@@ -2927,6 +3051,8 @@ pub(crate) fn ensure_viewport_detours() {
         DRAW_INDEXED.set(draw_indexed_detour_handle);
         DRAW.set(draw_detour_handle);
         DRAW_INDEXED_INSTANCED.set(draw_indexed_instanced_detour_handle);
+        DRAW_INDEXED_INSTANCED_INDIRECT.set(draw_indexed_instanced_indirect_detour_handle);
+        DRAW_INSTANCED_INDIRECT.set(draw_instanced_indirect_detour_handle);
         VS_SET_SHADER.set(vs_set_shader_detour_handle);
         CREATE_VERTEX_SHADER.set(create_vertex_shader_detour_handle);
         SET_VERTEX_PROGRAM_CONSTANTS.set(set_vs_consts_detour_handle);
@@ -2936,6 +3062,16 @@ pub(crate) fn ensure_viewport_detours() {
             DRAW_INDEXED.get().expect("just set").enable().ok();
             DRAW.get().expect("just set").enable().ok();
             DRAW_INDEXED_INSTANCED
+                .get()
+                .expect("just set")
+                .enable()
+                .ok();
+            DRAW_INDEXED_INSTANCED_INDIRECT
+                .get()
+                .expect("just set")
+                .enable()
+                .ok();
+            DRAW_INSTANCED_INDIRECT
                 .get()
                 .expect("just set")
                 .enable()

@@ -291,6 +291,17 @@ pub struct StereoConfig {
     /// viewport slots pinned to that eye. Requires the collapse. On by default: it fixes a visible
     /// artifact (the buildings flickering), and costs ~130 extra draw submissions of ~20k per frame.
     pub single_pass_instanced_per_eye: bool,
+    /// Re-issue a **GPU-indirect** draw once per eye under the collapse, so it stops inheriting
+    /// whatever viewport the previous draw left bound. `DrawIndexedInstancedIndirect` and
+    /// `DrawInstancedIndirect` are how the near tessellating terrain patches
+    /// (`CRenderBlockTerrainPatch` passes 56-57) and the foliage block submit, and neither entry point
+    /// was detoured -- so those draws rasterised eye 0's per-eye projection into the full double-wide
+    /// viewport, a 2x horizontal stretch that reads as the geometry sliding across the screen at twice
+    /// the camera's rate. The counts live in a GPU buffer and cannot be doubled, so each eye gets its
+    /// own submission with both viewport slots pinned to that eye's half. Like the unpatched
+    /// `DrawIndexed` re-issue, the geometry is then present and correctly sized in both eyes but has no
+    /// parallax. Requires the collapse. On by default: it fixes a confirmed visible artifact.
+    pub single_pass_indirect_per_eye: bool,
     /// Keep both viewport slots bound to the same region outside the G-buffer range, so a patched
     /// vertex shader's `SV_ViewportArrayIndex = SV_InstanceID & 1` resolves to the same place whichever
     /// parity it computes. The rewrite writes that index unconditionally -- the bytecode cannot tell
@@ -578,6 +589,7 @@ impl StereoConfig {
             single_pass_foliage: false,
             single_pass_occluder: false,
             single_pass_instanced_per_eye: true,
+            single_pass_indirect_per_eye: true,
             single_pass_uniform_viewport_slots: true,
             single_pass_clear_range_on_dispatch: true,
             disable_sun_shadows: false,

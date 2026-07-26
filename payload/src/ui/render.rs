@@ -904,6 +904,17 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      split alternately between the eyes -- the building flicker.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.single_pass_indirect_per_eye,
+                    "GPU-indirect draws per eye (near terrain patches, foliage)",
+                )
+                .on_hover_text(
+                    "Re-issues a DrawIndexedInstancedIndirect / DrawInstancedIndirect once per eye \
+                     with both viewport slots pinned to that eye's half. Nothing detoured these entry \
+                     points, so the near tessellating terrain patches and the foliage inherited the \
+                     full double-wide viewport and were stretched 2x horizontally -- which reads as \
+                     them sliding across the screen at twice the camera's rate.",
+                );
+                ui.checkbox(
                     &mut cfg.stereo.single_pass_uniform_viewport_slots,
                     "Uniform viewport slots outside the G-buffer",
                 )
