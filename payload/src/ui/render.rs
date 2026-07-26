@@ -1092,18 +1092,39 @@ fn instanced_exposure_readout(ui: &mut egui::Ui) {
          eye with cb13 and the viewport pinned to that eye; exposed = still split by instance parity, \
          which is what the toggle above turns into handled.",
     );
+    ui.label(format!(
+        "By range: in-range {} patched + {} unpatched | out-of-range {} patched ({} instances) + {} \
+         unpatched | mean out-of-range patched over {} frames: {:.1} draws, {:.1} instances",
+        last.handled + last.affected,
+        last.in_range_unpatched,
+        last.out_of_range_patched,
+        last.out_of_range_patched_instances,
+        last.out_of_range_unpatched,
+        report.frames,
+        report.mean_out_of_range_patched,
+        report.mean_out_of_range_patched_instances,
+    ))
+    .on_hover_text(
+        "Every DrawIndexedInstanced of the frame, split by whether a patched vertex shader was bound \
+         and whether the draw was inside the G-buffer range. Only the in-range patched draws are \
+         eye-split; the out-of-range patched ones still write SV_ViewportArrayIndex from instance \
+         parity, so they need both viewport slots to hold the same region.",
+    );
     let offenders = single_pass::instanced_offenders(8);
     if offenders.is_empty() {
         return;
     }
-    ui.collapsing("Instanced eye-parity draws by shader", |ui| {
+    ui.collapsing("Instanced patched-shader draws by shader", |ui| {
         for offender in offenders {
             let name = offender
                 .name
                 .unwrap_or_else(|| format!("<unnamed {:#x}>", offender.shader));
             ui.label(format!(
-                "{name}: {} draws, {} instances",
-                offender.draws, offender.instances
+                "{name}: in-range {} draws / {} instances, out-of-range {} draws / {} instances",
+                offender.draws,
+                offender.instances,
+                offender.out_of_range_draws,
+                offender.out_of_range_instances
             ));
         }
     });

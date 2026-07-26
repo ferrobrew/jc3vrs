@@ -1833,12 +1833,16 @@ unsafe extern "system" fn draw_indexed_instanced_detour(
     };
     if active() && per_eye_reissue_eye().is_none() {
         INSTANCED_TOTAL.fetch_add(1, Ordering::Relaxed);
-        if BOUND_VS_PATCHED.load(Ordering::Relaxed) && in_gbuffer_range() && collapse_active() {
+        let patched = BOUND_VS_PATCHED.load(Ordering::Relaxed);
+        let in_range = in_gbuffer_range();
+        if patched && in_range && collapse_active() {
             let handled = config_flags().has(Flag::InstancedPerEye) && instanced_per_eye(&submit);
             record_instanced_case(instance_count, handled);
             if handled {
                 return;
             }
+        } else {
+            record_instanced_bystander(patched, in_range, instance_count);
         }
     }
     submit();
@@ -1950,33 +1954,87 @@ fn record_instanced_case(instance_count: u32, handled: bool) {
         INSTANCED_AFFECTED_INSTANCES.fetch_add(instance_count as usize, Ordering::Relaxed);
     }
     INSTANCED_MAX_INSTANCES.fetch_max(instance_count, Ordering::Relaxed);
-    // The mutex is only reached on a draw the case applies to -- a small fraction of the frame. Every
-    // other draw pays the atomics alone.
+    attribute_instanced_draw(true, instance_count);
+}
+
+/// Tally one already-instanced draw the per-eye re-issue does **not** apply to, split by why: whether a
+/// patched vertex shader was bound (the only shaders that read `SV_InstanceID` as an eye parity) and
+/// whether the render thread was inside the G-buffer range (the only place the eye-half viewport pair
+/// is bound).
+///
+/// The out-of-range patched bucket is the one that matters: those draws route their odd-parity
+/// instances through viewport slot 1 in a pass that was never eye-split, so they depend entirely on
+/// slot 1 being a valid duplicate of slot 0 (see [`unify_viewport_slots`]).
+fn record_instanced_bystander(patched: bool, in_range: bool, instance_count: u32) {
+    let (draws, instances) = match (patched, in_range) {
+        (true, false) => (
+            &INSTANCED_OUT_OF_RANGE_PATCHED,
+            &INSTANCED_OUT_OF_RANGE_PATCHED_INSTANCES,
+        ),
+        (false, true) => (
+            &INSTANCED_IN_RANGE_UNPATCHED,
+            &INSTANCED_IN_RANGE_UNPATCHED_INSTANCES,
+        ),
+        (false, false) => (
+            &INSTANCED_OUT_OF_RANGE_UNPATCHED,
+            &INSTANCED_OUT_OF_RANGE_UNPATCHED_INSTANCES,
+        ),
+        // A patched, in-range draw only reaches here with the collapse off, where nothing is eye-split
+        // and the parity is harmless. Counted with the other in-range work rather than silently.
+        (true, true) => (
+            &INSTANCED_IN_RANGE_UNPATCHED,
+            &INSTANCED_IN_RANGE_UNPATCHED_INSTANCES,
+        ),
+    };
+    draws.fetch_add(1, Ordering::Relaxed);
+    instances.fetch_add(instance_count as usize, Ordering::Relaxed);
+    if patched {
+        attribute_instanced_draw(in_range, instance_count);
+    }
+}
+
+/// Attribute one already-instanced draw with a patched vertex shader bound to that shader, splitting
+/// in-range from out-of-range so the per-shader table says whether the geometry families losing
+/// instances outside the G-buffer range are the same ones the in-range re-issue covers.
+///
+/// Only patched shaders are attributed: the eye parity is theirs alone, and it keeps the mutex off the
+/// draws that cannot be affected by it.
+fn attribute_instanced_draw(in_range: bool, instance_count: u32) {
     INSTANCED_OFFENDERS
         .lock()
         .entry(BOUND_VS.load(Ordering::Relaxed))
         .or_default()
-        .accumulate(instance_count);
+        .accumulate(in_range, instance_count);
 }
 
-/// One vertex shader's cumulative share of the already-instanced draws the eye-parity case applies to.
+/// One vertex shader's cumulative share of the already-instanced draws that a patched shader issued,
+/// split by whether the draw was inside the G-buffer range.
 #[derive(Clone, Copy, Default)]
 struct InstancedOffender {
     draws: u64,
     instances: u64,
+    out_of_range_draws: u64,
+    out_of_range_instances: u64,
 }
 
 impl InstancedOffender {
-    fn accumulate(&mut self, instance_count: u32) {
-        self.draws += 1;
-        self.instances += u64::from(instance_count);
+    fn accumulate(&mut self, in_range: bool, instance_count: u32) {
+        let (draws, instances) = if in_range {
+            (&mut self.draws, &mut self.instances)
+        } else {
+            (
+                &mut self.out_of_range_draws,
+                &mut self.out_of_range_instances,
+            )
+        };
+        *draws += 1;
+        *instances += u64::from(instance_count);
     }
 }
 
-/// The already-instanced draws the eye-parity case applies to, attributed to the vertex shader that
-/// was bound and keyed by its
-/// `ID3D11VertexShader` pointer. Cumulative, and cleared alongside [`PATCHED_VS`] (whose released
-/// pointers can be recycled).
+/// The already-instanced draws issued with a patched vertex shader bound, attributed to that shader
+/// and keyed by its `ID3D11VertexShader` pointer. Cumulative, and cleared alongside [`PATCHED_VS`]
+/// (whose released pointers can be recycled).
 static INSTANCED_OFFENDERS: Mutex<BTreeMap<usize, InstancedOffender>> = Mutex::new(BTreeMap::new());
 
 /// One frame's already-instanced draw exposure. See [`draw_indexed_instanced_detour`].
@@ -2000,6 +2058,19 @@ pub struct InstancedExposure {
     pub affected_instances: u64,
     /// The largest instance count seen on a draw the case applies to, handled or not.
     pub max_instances: u32,
+    /// Draws with a patched vertex shader bound **outside** the G-buffer range (the shadow, reflection
+    /// and post passes). Their `SV_InstanceID & 1` still writes `SV_ViewportArrayIndex`, but the pass
+    /// binds no eye-half pair, so they depend on viewport slot 1 duplicating slot 0.
+    pub out_of_range_patched: u32,
+    pub out_of_range_patched_instances: u64,
+    /// Draws with an unpatched vertex shader inside the range: no viewport index is written, so they
+    /// rasterise to slot 0 -- the left eye's half while the split is bound.
+    pub in_range_unpatched: u32,
+    pub in_range_unpatched_instances: u64,
+    /// Draws with an unpatched vertex shader outside the range: unaffected by any of this, and the
+    /// remainder that makes the four buckets sum to [`total`](Self::total).
+    pub out_of_range_unpatched: u32,
+    pub out_of_range_unpatched_instances: u64,
 }
 
 /// The already-instanced draw exposure, as the debug UI and the diagnostic log report it: the most
@@ -2016,6 +2087,8 @@ pub struct InstancedExposureReport {
     pub mean_affected_single_instance: f32,
     pub mean_affected_multi_instance: f32,
     pub mean_affected_instances: f32,
+    pub mean_out_of_range_patched: f32,
+    pub mean_out_of_range_patched_instances: f32,
     /// The largest instance count seen on an affected draw across all accumulated frames.
     pub peak_instances: u32,
 }
@@ -2032,6 +2105,8 @@ struct ExposureHistory {
     affected_single: u64,
     affected_multi: u64,
     affected_instances: u64,
+    out_of_range_patched: u64,
+    out_of_range_patched_instances: u64,
     peak_instances: u32,
 }
 
@@ -2046,6 +2121,8 @@ impl ExposureHistory {
         self.affected_single += u64::from(frame.affected_single_instance);
         self.affected_multi += u64::from(frame.affected_multi_instance);
         self.affected_instances += frame.affected_instances;
+        self.out_of_range_patched += u64::from(frame.out_of_range_patched);
+        self.out_of_range_patched_instances += frame.out_of_range_patched_instances;
         self.peak_instances = self.peak_instances.max(frame.max_instances);
     }
 
@@ -2067,6 +2144,8 @@ impl ExposureHistory {
             mean_affected_single_instance: mean(self.affected_single),
             mean_affected_multi_instance: mean(self.affected_multi),
             mean_affected_instances: mean(self.affected_instances),
+            mean_out_of_range_patched: mean(self.out_of_range_patched),
+            mean_out_of_range_patched_instances: mean(self.out_of_range_patched_instances),
             peak_instances: self.peak_instances,
         }
     }
@@ -2082,6 +2161,12 @@ static INSTANCED_HISTORY: Mutex<ExposureHistory> = Mutex::new(ExposureHistory {
         affected_multi_instance: 0,
         affected_instances: 0,
         max_instances: 0,
+        out_of_range_patched: 0,
+        out_of_range_patched_instances: 0,
+        in_range_unpatched: 0,
+        in_range_unpatched_instances: 0,
+        out_of_range_unpatched: 0,
+        out_of_range_unpatched_instances: 0,
     },
     frames: 0,
     total: 0,
@@ -2091,11 +2176,16 @@ static INSTANCED_HISTORY: Mutex<ExposureHistory> = Mutex::new(ExposureHistory {
     affected_single: 0,
     affected_multi: 0,
     affected_instances: 0,
+    out_of_range_patched: 0,
+    out_of_range_patched_instances: 0,
     peak_instances: 0,
 });
 
 /// Fold the frame's exposure counters into the history and clear them. Called once per frame from
-/// [`log_draw_split`], at the end of the G-buffer range.
+/// [`log_draw_split`], at the end of the G-buffer range -- so the out-of-range buckets carry the
+/// passes that ran *before* the range this frame (shadow, reflection) together with the ones that ran
+/// *after* it last frame (scene tail, post, UI). In steady state the totals are the frame's; a
+/// single frame's split is only approximately aligned with it.
 fn accumulate_instanced_exposure() -> InstancedExposure {
     let frame = InstancedExposure {
         total: INSTANCED_TOTAL.swap(0, Ordering::Relaxed) as u32,
@@ -2106,6 +2196,15 @@ fn accumulate_instanced_exposure() -> InstancedExposure {
         affected_multi_instance: INSTANCED_AFFECTED_MULTI.swap(0, Ordering::Relaxed) as u32,
         affected_instances: INSTANCED_AFFECTED_INSTANCES.swap(0, Ordering::Relaxed) as u64,
         max_instances: INSTANCED_MAX_INSTANCES.swap(0, Ordering::Relaxed),
+        out_of_range_patched: INSTANCED_OUT_OF_RANGE_PATCHED.swap(0, Ordering::Relaxed) as u32,
+        out_of_range_patched_instances: INSTANCED_OUT_OF_RANGE_PATCHED_INSTANCES
+            .swap(0, Ordering::Relaxed) as u64,
+        in_range_unpatched: INSTANCED_IN_RANGE_UNPATCHED.swap(0, Ordering::Relaxed) as u32,
+        in_range_unpatched_instances: INSTANCED_IN_RANGE_UNPATCHED_INSTANCES
+            .swap(0, Ordering::Relaxed) as u64,
+        out_of_range_unpatched: INSTANCED_OUT_OF_RANGE_UNPATCHED.swap(0, Ordering::Relaxed) as u32,
+        out_of_range_unpatched_instances: INSTANCED_OUT_OF_RANGE_UNPATCHED_INSTANCES
+            .swap(0, Ordering::Relaxed) as u64,
     };
     INSTANCED_HISTORY.lock().push(frame);
     frame
@@ -2132,8 +2231,13 @@ pub struct InstancedOffenderReport {
     pub name: Option<String>,
     /// The `ID3D11VertexShader` pointer -- the only identity an unnamed shader has.
     pub shader: usize,
+    /// Draws inside the G-buffer range: the ones the per-eye re-issue handles.
     pub draws: u64,
     pub instances: u64,
+    /// Draws outside it: the shadow, reflection and post passes, where nothing eye-splits and the
+    /// parity must be neutralised by the viewport slots being identical instead.
+    pub out_of_range_draws: u64,
+    pub out_of_range_instances: u64,
 }
 
 /// The vertex shaders responsible for the already-instanced draws the eye-parity case applies to, the
@@ -2150,9 +2254,15 @@ pub fn instanced_offenders(limit: usize) -> Vec<InstancedOffenderReport> {
             shader,
             draws: tally.draws,
             instances: tally.instances,
+            out_of_range_draws: tally.out_of_range_draws,
+            out_of_range_instances: tally.out_of_range_instances,
         })
         .collect();
-    offenders.sort_by(|a, b| b.draws.cmp(&a.draws).then(b.instances.cmp(&a.instances)));
+    // Ranked by the shader's whole instanced load, so a family that only draws outside the range --
+    // the case the split was added to expose -- cannot be ranked off the end of the list.
+    let load = |o: &InstancedOffenderReport| o.draws + o.out_of_range_draws;
+    let weight = |o: &InstancedOffenderReport| o.instances + o.out_of_range_instances;
+    offenders.sort_by(|a, b| load(b).cmp(&load(a)).then(weight(b).cmp(&weight(a))));
     offenders.truncate(limit);
     offenders
 }
@@ -2160,17 +2270,20 @@ pub fn instanced_offenders(limit: usize) -> Vec<InstancedOffenderReport> {
 /// Log the already-instanced draw handling, at the same 120-frame cadence as the draw split. Emitted
 /// only once there is something to report, so a session where the case never arises stays quiet.
 fn log_instanced_exposure(frame: InstancedExposure) {
-    if frame.handled == 0 && frame.affected == 0 {
+    if frame.handled == 0 && frame.affected == 0 && frame.out_of_range_patched == 0 {
         return;
     }
     let report = instanced_exposure();
-    let offenders: Vec<String> = instanced_offenders(5)
+    let offenders: Vec<String> = instanced_offenders(6)
         .into_iter()
         .map(|o| {
             let name = o
                 .name
                 .unwrap_or_else(|| format!("<unnamed {:#x}>", o.shader));
-            format!("{name} ({} draws, {} inst)", o.draws, o.instances)
+            format!(
+                "{name} (in {} draws/{} inst, out {} draws/{} inst)",
+                o.draws, o.instances, o.out_of_range_draws, o.out_of_range_instances
+            )
         })
         .collect();
     tracing::info!(
@@ -2195,6 +2308,24 @@ fn log_instanced_exposure(frame: InstancedExposure) {
         report.peak_instances,
         if offenders.is_empty() { "-".to_string() } else { offenders.join(", ") },
     );
+    tracing::info!(
+        target: "single_pass",
+        "instanced by range: in-range {} patched ({} handled + {} exposed) + {} unpatched ({} \
+         instances) | out-of-range {} patched ({} instances) + {} unpatched ({} instances) | mean \
+         out-of-range patched over {} frames: {:.1} draws, {:.1} instances",
+        frame.handled + frame.affected,
+        frame.handled,
+        frame.affected,
+        frame.in_range_unpatched,
+        frame.in_range_unpatched_instances,
+        frame.out_of_range_patched,
+        frame.out_of_range_patched_instances,
+        frame.out_of_range_unpatched,
+        frame.out_of_range_unpatched_instances,
+        report.frames,
+        report.mean_out_of_range_patched,
+        report.mean_out_of_range_patched_instances,
+    );
 }
 
 static INSTANCED_TOTAL: AtomicUsize = AtomicUsize::new(0);
@@ -2205,6 +2336,12 @@ static INSTANCED_AFFECTED_SINGLE: AtomicUsize = AtomicUsize::new(0);
 static INSTANCED_AFFECTED_MULTI: AtomicUsize = AtomicUsize::new(0);
 static INSTANCED_AFFECTED_INSTANCES: AtomicUsize = AtomicUsize::new(0);
 static INSTANCED_MAX_INSTANCES: AtomicU32 = AtomicU32::new(0);
+static INSTANCED_OUT_OF_RANGE_PATCHED: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_OUT_OF_RANGE_PATCHED_INSTANCES: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_IN_RANGE_UNPATCHED: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_IN_RANGE_UNPATCHED_INSTANCES: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_OUT_OF_RANGE_UNPATCHED: AtomicUsize = AtomicUsize::new(0);
+static INSTANCED_OUT_OF_RANGE_UNPATCHED_INSTANCES: AtomicUsize = AtomicUsize::new(0);
 
 /// `ID3D11Device::CreateVertexShader` (device vtable slot 12) and `ID3D11DeviceContext::VSSetShader`
 /// (context vtable slot 11), verified against the `windows` vtable structs.
