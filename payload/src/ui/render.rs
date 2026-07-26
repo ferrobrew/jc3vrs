@@ -745,8 +745,10 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
         if ui
             .button(toggle_label)
             .on_hover_text(
-                "Flips single-pass, dual-eye, collapse, double-wide, and native resolution on or off \
-                 together, clears the census dry-run, and reloads the shaders.",
+                "Flips the whole feature -- single-pass, dual-eye, collapse, double-wide, the \
+                 reprojected scene families, terrain, tree impostors, and the bark/foliage/occluder \
+                 re-issue -- on or off together, along with native resolution. Clears the census \
+                 dry-run and reloads the shaders.",
             )
             .clicked()
         {
@@ -757,6 +759,10 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             cfg.stereo.single_pass_double_wide = on;
             cfg.stereo.single_pass_reproject = on;
             cfg.stereo.single_pass_terrain = on;
+            cfg.stereo.single_pass_tree_impostors = on;
+            cfg.stereo.single_pass_bark = on;
+            cfg.stereo.single_pass_foliage = on;
+            cfg.stereo.single_pass_occluder = on;
             cfg.stereo.single_pass_patch_dryrun = false;
             cfg.vr.native_resolution = on;
             if on && cfg.far_field.mode == crate::config::FarFieldMode::Share {
@@ -862,7 +868,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 {
                     shader::request_reload();
                 }
-                ui.label("Render-block re-issue (blind-implemented, unvalidated -- no shader reload):");
+                ui.label("Render-block re-issue (no shader reload):");
                 ui.checkbox(
                     &mut cfg.stereo.single_pass_bark,
                     "Bark (tree trunks/branches)",
