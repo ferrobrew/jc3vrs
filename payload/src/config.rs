@@ -364,7 +364,8 @@ pub struct StereoConfig {
     /// from a baked model-view-projection in its own constant buffer rather than from the render
     /// context, so the collapse's per-eye machinery never reaches it and both eyes see the collapsed
     /// centre view. Flat water at the wrong depth reads as correct in a screenshot and wrong in a
-    /// headset, which is why it survived this long. Off by default.
+    /// headset, which is why it survived this long. On by default -- the flag stays so a suspected regression can be
+    /// isolated without rebuilding.
     pub single_pass_nvwater_per_eye: bool,
     /// Reproject the screen-space decal *box geometry* per eye, on top of
     /// [`single_pass_ssdecal_per_eye`](Self::single_pass_ssdecal_per_eye), which fixes only where the
@@ -373,7 +374,7 @@ pub struct StereoConfig {
     /// The block bakes a world-view-projection into its vertex constants, so like the water blocks its
     /// geometry never sees the collapse's per-eye transform: the decal lands on the right surface in
     /// both eyes but its screen coverage has no parallax. Separate flag because the reconstruction fix
-    /// is the one that stops the sliding, and this one only adds depth to it. Off by default.
+    /// is the one that stops the sliding, and this one only adds depth to it. On by default.
     pub single_pass_ssdecal_geometry_per_eye: bool,
     /// Give **geometry** drawn through the non-indexed `Draw` entry point (D3D11 context vtable slot
     /// 13) the same per-eye re-issue the indexed path gives its draws.
@@ -387,10 +388,11 @@ pub struct StereoConfig {
     ///
     /// Unlike the indirect and indexed paths this cannot be decided from the draw alone, since a
     /// fullscreen triangle and a decal box arrive identically; it is decided by an allowlist of passes
-    /// known to carry geometry, fed by the per-pass slot-13 census in the diagnostic log. Off by
-    /// default until the allowlist has been confirmed in the headset, because misclassifying a
-    /// fullscreen pass as geometry is a visibly wrong frame while missing a geometry pass is only the
-    /// status quo.
+    /// known to carry geometry, derived by enumerating every caller of the two engine wrappers that
+    /// reach the slot and taking pass membership from the pass-creation sites. On by default. The
+    /// list stays an allowlist rather than a heuristic because misclassifying a fullscreen pass as
+    /// geometry is a visibly wrong frame, while missing a geometry pass is only the status quo -- so
+    /// a pass is added when it is evidenced, never on suspicion.
     pub single_pass_slot13_per_eye: bool,
     /// Derive the collapse's eye-half viewports from the render target the engine currently has
     /// bound, rather than always from the scene's double-wide viewport.
@@ -409,8 +411,8 @@ pub struct StereoConfig {
     /// lands as a left-half/right-half screen image on its own — and they must **not** be re-issued
     /// per eye, since both blend rather than overwrite.
     ///
-    /// Off by default: everywhere except those passes the two records hold the same viewport and this
-    /// is a no-op, which makes it a clean A/B.
+    /// On by default. Everywhere except those passes the two records hold the same viewport and this is
+    /// a no-op, so turning it off isolates it cleanly.
     pub collapse_viewport_follows_target: bool,
     /// Run the **SSAO** pass once per eye under the collapse, like the deferred resolve and the
     /// atmospheric scattering.
@@ -419,25 +421,29 @@ pub struct StereoConfig {
     /// `CMatrix4f::PerspectiveFovInverse`; the set is closed), so collapsed it reconstructs the whole
     /// double-wide target from one eye's basis. **Hazard:** unlike the two already split, it carries a
     /// temporal history it advances per invocation, so re-issuing the whole block double-advances
-    /// state that is not idempotent. Off by default and expected to need its own handling of that
-    /// history; the flag exists so the reconstruction half can be tested at all.
+    /// state that is not idempotent, so the split saves and restores the history indices around the second
+    /// run. On by default; turn it off if ambient occlusion looks wrong.
     pub single_pass_ssao_per_eye: bool,
     /// Run the **screen-space reflection** pass once per eye under the collapse.
     ///
     /// Same reconstruction defect as [`single_pass_ssao_per_eye`](Self::single_pass_ssao_per_eye).
     /// **Hazard:** SSR ray-marches a scene-colour capture taken earlier in the frame, so a second run
-    /// consumes state the first already consumed. Off by default.
+    /// would consume state the first already consumed -- which it does not: the block copies scene colour
+    /// into its own target and writes nothing back, so a second run reproduces the capture. On by
+    /// default.
     pub single_pass_ssr_per_eye: bool,
     /// Run the **screen-space subsurface-scattering** (skin) pass once per eye under the collapse.
     ///
     /// Same reconstruction defect. This block calls the inverse **twice**, once per blur axis, so a
-    /// per-eye split has to mask both. Off by default.
+    /// per-eye split would have to mask both -- but they are in mutually exclusive branches, so exactly one
+    /// fires per draw. On by default.
     pub single_pass_subsurface_per_eye: bool,
     /// Apply the per-eye reconstruction basis to the **depth-of-field** post pass under the collapse.
     ///
     /// `DOFUtil::GetViewProjInverse` is the seventh and last consumer of the reconstruction basis. DoF
     /// is a post pass rather than a render block, so it may want the basis substituted rather than the
-    /// pass re-issued. Off by default.
+    /// pass re-issued: its compute prologue is basis-independent, so it runs once whole-target while the
+    /// closing draw is split. On by default.
     pub single_pass_dof_per_eye: bool,
     /// Give **screen-space decals** a per-eye block intercept under the collapse.
     ///
@@ -450,7 +456,7 @@ pub struct StereoConfig {
     /// Both halves need fixing together: re-upload that eye's basis per eye, **and** bias the shader's
     /// projective UV into that eye's half of the buffer. Note the same `uv` feeds the reconstruction
     /// matrix (which wants the per-eye value) and the depth fetch (which wants the double-wide one), so
-    /// they must stay separate. Off by default.
+    /// they must stay separate. On by default.
     pub single_pass_ssdecal_per_eye: bool,
     /// Requires [`single_pass_reconstruct_per_eye`](Self::single_pass_reconstruct_per_eye) and
     /// [`fix_clustered_light_frustum`](Self::fix_clustered_light_frustum): build the clustered
@@ -783,16 +789,16 @@ impl StereoConfig {
             single_pass_indirect_per_eye: true,
             single_pass_reconstruct_per_eye: true,
             single_pass_atmospheric_per_eye: true,
-            single_pass_water_uv_per_eye: false,
-            single_pass_nvwater_per_eye: false,
-            single_pass_ssdecal_geometry_per_eye: false,
-            single_pass_slot13_per_eye: false,
-            collapse_viewport_follows_target: false,
-            single_pass_ssao_per_eye: false,
-            single_pass_ssr_per_eye: false,
-            single_pass_subsurface_per_eye: false,
-            single_pass_dof_per_eye: false,
-            single_pass_ssdecal_per_eye: false,
+            single_pass_water_uv_per_eye: true,
+            single_pass_nvwater_per_eye: true,
+            single_pass_ssdecal_geometry_per_eye: true,
+            single_pass_slot13_per_eye: true,
+            collapse_viewport_follows_target: true,
+            single_pass_ssao_per_eye: true,
+            single_pass_ssr_per_eye: true,
+            single_pass_subsurface_per_eye: true,
+            single_pass_dof_per_eye: true,
+            single_pass_ssdecal_per_eye: true,
             single_pass_clustered_per_eye: true,
             single_pass_clustered_per_eye_light_view: true,
             single_pass_uniform_viewport_slots: true,
