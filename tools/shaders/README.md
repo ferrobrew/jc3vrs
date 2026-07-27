@@ -9,10 +9,14 @@ the disassembly, how to find a specific effect, and how the mod patches shaders 
 python3 extract_dxbc.py "$HOME/.steam/steam/steamapps/common/Just Cause 3/Shaders_F.shader_bundle"
 #    -> ./Shaders_F.shaders/sh_0000_xxxxxxxx.dxbc ...
 
-# 2. Disassemble one to SM5 assembly.
+# 2. Name them, from the bundle's own ADF name table (index/offset match the carved filenames).
+python3 shader_names.py "$HOME/.steam/steam/steamapps/common/Just Cause 3/Shaders_F.shader_bundle"
+#    -> 0000 00004810 vertex   2dtex1 ...   (--json for machine-readable, --scan for the fallback)
+
+# 3. Disassemble one to SM5 assembly.
 ../../scripts/dxbc.sh disasm Shaders_F.shaders/sh_0467_0016b270.dxbc | less
 
-# 3. Or compile an HLSL reference shader to DXBC (e.g. to learn what fxc emits for a transform).
+# 4. Or compile an HLSL reference shader to DXBC (e.g. to learn what fxc emits for a transform).
 ../../scripts/dxbc.sh compile ref.hlsl main vs_5_0 > ref.dxbc
 ```
 

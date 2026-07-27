@@ -36,6 +36,62 @@ Repacking the bundle is **not** needed (and not implemented): the mod patches sh
 load (see [the patch seam](#how-the-engine-creates-shaders-the-patch-seam)), so the on-disk bundles are
 left untouched.
 
+## Naming the blobs
+
+The bundle carries a name table, so nothing has to be guessed. `shader_names.py` reads it and prints
+one row per blob, in the same order and with the same index and offset as the carved files:
+
+```sh
+python3 tools/shaders/shader_names.py "$HOME/.steam/steam/steamapps/common/Just Cause 3/Shaders_F.shader_bundle"
+# 1551/1551 named via the name-table            (on stderr)
+# 0000 00004810 vertex   2dtex1
+# ...
+# 1512 00a8d600 domain   nvwaterhighend
+```
+
+`--json` emits the same records (plus the name and data hashes) for scripting. Measured on the 2026
+Steam build: 1551 blobs in `Shaders_F` and `ShadersLowShadows_F`, 1552 in the two `ConstMath` bundles,
+all named.
+
+### The name table
+
+The ADF header lists a single instance, `ShaderLibrary`, at file offset `0x50`. **Every pointer inside
+an ADF instance is relative to that instance's own offset**, not to the start of the file — the single
+most common way to get lost here. The file's own typedef table spells out both structs:
+
+```
+ShaderLibrary (112 bytes)          Shader (40 bytes)
+  +0   Name*                         +0   NameHash   u32 (8-byte slot)
+  +8   BuildTime*                    +8   Name*
+  +16  VertexShaders    {ptr,count}  +16  DataHash   u32 (8-byte slot)
+  +32  FragmentShaders  {ptr,count}  +24  BinaryData {ptr,count}   -> the DXBC container
+  +48  ComputeShaders   {ptr,count}
+  +64  GeometryShaders  {ptr,count}
+  +80  HullShaders      {ptr,count}
+  +96  DomainShaders    {ptr,count}
+```
+
+Because a shader lives in the array for its stage, the table also hands you each blob's **program
+type** for free (it agrees with the type in the blob's own `SHEX` chunk for all 1551). In `Shaders_F`:
+455 vertex, 961 fragment, 65 compute, 10 geometry, 21 hull, 39 domain.
+
+Names are **not** unique on their own — 1551 shaders share 1326 distinct names, e.g. `nvwaterhighend`
+appears as a vertex, fragment, hull, and domain shader. The `(type, name)` pair is unique; key on that.
+
+### Fallback: the backwards scan
+
+Each blob's name usually sits as null-padded ASCII immediately *before* its `DXBC` magic, so walking
+backwards from the magic recovers most names without touching the ADF structure. `shader_names.py
+--scan` does this, and it runs automatically (with a warning naming the mode) when the ADF header does
+not parse.
+
+Treat it as a last resort. On `Shaders_F` it names **1330 of 1551**: it leaves 221 blank and reports a
+stray printable byte as the name for 4 more (`lightglow` comes out as `B`, `nvwaterhighend` as `2`).
+Its gaps are not random — whole runs of hull and domain shaders fall in them — and that is exactly how
+an earlier investigation concluded that the WaveWorks hull and domain shaders were "unnamed". They are
+named; the scan simply could not see it. If a shader looks nameless, check the name table before
+believing it.
+
 ## Disassembling a blob
 
 `dxbc.sh disasm` cross-builds the `dxbc-tool` crate (a `D3DDisassemble` wrapper over the `windows`
