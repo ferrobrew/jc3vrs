@@ -593,6 +593,20 @@ pub struct StereoConfig {
     /// (`Camera::UpdateFrustum`), so the terrain patch set covers everything either eye can see. Once
     /// per frame; only terrain visibility reads that camera. VR only.
     pub widen_terrain_cull: bool,
+    /// Relax the volumetric-patch terrain's two view-dependent *hull* culls in stereo (issue #40).
+    /// The tessellated terrain discards whole patches inside its hull shader: a back-patch cull that
+    /// tests every patch's facing against a single direction (the render camera's forward axis, with
+    /// only ~17.5 deg of slack), and a frustum cull against the render camera's view-projection baked
+    /// once per frame -- so one frustum, and one view axis, serve both eyes. Neither approximation
+    /// survives a headset's field of view: patches 45+ deg off-axis that squarely face an eye fall
+    /// beyond the facing threshold, and under the single-pass collapse the baked frustum is the
+    /// centred camera's 90 deg-vertical one, which an eye can see past vertically (and, with display
+    /// cant, laterally). A discarded patch is drawn in no pass and the coarser tile over the same
+    /// footprint is separately LOD-clipped, so the gap resolves as a world-locked black patch that
+    /// flips with head rotation. This clears the type's two enable flags around its own constant bake
+    /// (restoring them immediately after), so only the uploaded constants change. Costs the
+    /// tessellation of the margin patches, bounded by the CPU-side patch cull. VR only.
+    pub relax_terrain_patch_hull_culls: bool,
     /// Widen the *active camera's* cull frustum to cover both eyes. Model instances re-cull each render
     /// block against the camera manager's active-camera frustum planes (`CModelInstance::AddToRender` ->
     /// `CCamera::IsBoxVisible`), a second gate the scene-cull widen above does not touch -- so large
@@ -793,6 +807,7 @@ impl StereoConfig {
             cull_size_fov_deg: 50.0,
             disable_bfbc_occlusion: true,
             widen_terrain_cull: true,
+            relax_terrain_patch_hull_culls: true,
             widen_model_cull: true,
             widen_spawn_cull: true,
             spawn_budget_scale: 2.0,

@@ -612,9 +612,11 @@ impl std::convert::AsMut<RenderEngine> for RenderEngine {
 /// post-effects at `RP_POSTEFFECTS`. Named [`RenderPassId`](crate::graphics_engine::render_engine::RenderPassId) to avoid clashing with the [`RenderPass`](crate::graphics_engine::render_pass::RenderPass)
 /// type.
 ///
-/// Verified against the retail pass-name switch ([`GetRenderPassName`](crate::graphics_engine::render_engine::GetRenderPassName)): relative to the 2016 dump,
-/// retail inserts `RP_VEGETATION_TRANSPARENT_AOIT` at `0x74` (shifting everything above by one) and
-/// removes the dump-era `RP_PARTICLE_RIBBON`, leaving `0x82` unnamed.
+/// Verified against the retail pass-name switch ([`GetRenderPassName`](crate::graphics_engine::render_engine::GetRenderPassName)): relative to the 2016 dump's
+/// `ERenderPass` header, retail inserts `RP_VEGETATION_TRANSPARENT_AOIT` at `0x74`, shifting
+/// everything above by one. `RP_PARTICLE_RIBBON` (`0x82`) is the one id the name switch does not
+/// name — it returns `"NONE"` for it — but the pass itself is live: the effect system creates it and
+/// the ribbon instantiator enqueues onto it, so the id is not a hole.
 pub enum RenderPassId {
     RP_NONE = 0isize as _,
     RP_TERRAINPATCH_CLEAR = 1isize as _,
@@ -746,6 +748,7 @@ pub enum RenderPassId {
     RP_BULLETS = 127isize as _,
     RP_CONTRAILS = 128isize as _,
     RP_GROUNDHAZE = 129isize as _,
+    RP_PARTICLE_RIBBON = 130isize as _,
     RP_MODEL_HALO_POST = 131isize as _,
     RP_PARTICLE_LOWRES = 132isize as _,
     RP_SPOTLIGHT_VOLUMETRICS = 133isize as _,

@@ -202,6 +202,30 @@ impl std::convert::AsMut<DepthOfFieldEffect> for DepthOfFieldEffect {
 pub struct DownScale2x2PackFocus {}
 impl DownScale2x2PackFocus {
     pub const Apply_ADDRESS: usize = 0x1400C82E0;
+    /// Runs the prepass: a near-field circle-of-confusion prologue built entirely out of compute
+    /// dispatches, then the packing draw.
+    ///
+    /// The prologue works on a quarter-resolution pair of single-channel textures (the effect's own
+    /// `m_Width`/`m_Height` at `+0xC0`/`+0xC4` divided by four in each dimension), and every
+    /// [`Dispatch`](crate::graphics_engine::draw::Dispatch) in it is sized `ceil(width / 4 / 32)` by
+    /// `ceil(height / 4 / 8)` groups of 32x8 threads, covering that whole texture:
+    ///
+    /// 1. `bokehextractneardof` reads the depth texture and the manager's focal parameters and writes
+    ///    the near-field coverage into the first of the two textures. It takes no view or projection
+    ///    matrix -- only the depth-to-linear terms and the focal tuning -- so its result does not
+    ///    depend on the camera's projection shape.
+    /// 2. `bokehblurneardof` runs four times, two horizontal-then-vertical rounds ping-ponging the two
+    ///    textures, so the blurred coverage ends up back in the first. Compute constant 0's `xy` is the
+    ///    integer step direction for the round ((1, 0) or (0, 1)) and is the program's only input
+    ///    besides the source texture. The kernel is a fixed 7-tap Gaussian, `-3..+3` texels along the
+    ///    step, so two rounds reach 6 texels along each axis. Like the extract, the program addresses
+    ///    its source and destination directly by `SV_DispatchThreadID`, with no origin or offset term
+    ///    and no bounds clamp -- taps outside the texture read zero.
+    ///
+    /// The packing draw then downsamples the scene into the effect's own render setup with the blurred
+    /// near-field coverage bound as a texture, colouring it with the time-of-day haze terms. That draw
+    /// is the sole consumer of [`GetViewProjInverse`](crate::graphics_engine::post_effects::GetViewProjInverse), which it uploads as vertex constants 1..4; no
+    /// part of the compute prologue reads it.
     pub unsafe fn Apply(
         &mut self,
         ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,

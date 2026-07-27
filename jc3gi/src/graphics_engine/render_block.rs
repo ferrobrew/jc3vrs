@@ -697,6 +697,35 @@ pub struct RenderBlockScreenSpaceReflection {}
 impl RenderBlockScreenSpaceReflection {
     pub const Draw_ADDRESS: usize = 0x140191E10;
     /// Draws the screen-space reflection pass.
+    ///
+    /// One call runs, in order: a scene-colour capture draw; the ray-march draw, which is the only
+    /// phase that calls [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) (uploaded as vertex
+    /// constants 1..4) and which writes the block's reflection-colour and reflection-alpha targets
+    /// through a stencil test; and then a separable blur of those two targets, on one of two mutually
+    /// exclusive paths selected by the block's compute-blur flag at `+0xA74`.
+    ///
+    /// The pixel-shader path is two fullscreen draws ping-ponging the colour/alpha pair against a
+    /// second pair, so the blurred result lands back in the first pair. The compute path is two
+    /// [`Dispatch`](crate::graphics_engine::draw::Dispatch) calls over the same two pairs, running the
+    /// `screenspacereflectionblur` compute program (thread group 256x1x1):
+    ///
+    /// - The first blurs horizontally, dispatched `ceil(width / 256)` by `height` groups.
+    /// - The second blurs vertically, dispatched `ceil(height / 256)` by `width` groups, with the
+    ///   source and destination pairs exchanged so the result again ends up in the first pair.
+    ///
+    /// `width` and `height` are the block's own working resolution at `+0xA68` and `+0xA6C`. They are
+    /// also uploaded as `x` and `y` of compute constant 0, whose `w` is the axis flag that tells the
+    /// program which way to blur (1.0 horizontal, 0.0 vertical) by transposing its thread-id-to-texel
+    /// mapping; there is no origin or offset term in either constant buffer, and the program addresses
+    /// its textures directly by `SV_DispatchThreadID`, so the region it covers is always the whole
+    /// texture from texel zero. `z` of that constant is the gloss threshold below which a texel is
+    /// copied through unblurred.
+    ///
+    /// The blur kernel is a bilateral one over up to 13 taps, `-6..+6` texels along the blur axis,
+    /// weighted down by the linear-depth difference to the centre texel and truncated to as few as 3
+    /// taps as gloss rises. Its reach across the texture is therefore 6 texels, and the compute path
+    /// stages that halo through group-shared memory (a 256-wide tile plus a 6-texel skirt on each
+    /// side, clamped to the texture bounds).
     pub unsafe fn Draw(
         &self,
         rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -1556,6 +1585,45 @@ impl RenderBlockTypeTerrainPatch {
                 this: *mut Self,
                 render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
             ) = ::std::mem::transmute(Self::Setup_ADDRESS);
+            f(self as *mut Self as _, render_context)
+        }
+    }
+    pub const SetupConstantBuffers_ADDRESS: usize = 0x14032D010;
+    /// Binds the type-level constant buffers for a tessellating pass and, once per frame per
+    /// constant-buffer slot (the slot comes from the render status and active pass; the stamp is
+    /// [`m_WasCBApplied`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_WasCBApplied)), bakes the hull/domain constants that the terrain
+    /// hull and domain programs read at `cb1`:
+    ///
+    /// - `float4` 0: `xyz` = the normalized forward vector of the camera manager's *render* camera
+    ///   (its `m_TransformF` third basis vector), `w` = `1.0` when the pass carries the color-pass
+    ///   render-status bit and [`m_EnableBackPatchCulling`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_EnableBackPatchCulling) is set,
+    ///   else `0.0`. The hull program discards a patch when all three of its control-point normals
+    ///   are beyond [`m_BackPatchCullThreshold`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_BackPatchCullThreshold) relative to that one
+    ///   direction, so the test approximates the view vector for the whole patch by the camera axis.
+    /// - `float4` 1..4: `rc->m_OffsetViewProjection`, the camera-relative view-projection the hull
+    ///   program's frustum test projects each control point (expanded by the patch radius along its
+    ///   normal) through; a patch whose expanded bounds fall entirely outside one clip plane is
+    ///   discarded.
+    /// - `float4` 5: `rc->CameraPosition` in `xyz`, with
+    ///   [`m_EnableCullByDetail`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_EnableCullByDetail) converted to a float in `w`.
+    /// - `float4` 6: the camera position again, with the type's tessellation distance in `w`.
+    /// - `float4` 7..8: the tessellation factors (inner, edge, `1 / min-spacing`, sphere, normal
+    ///   difference), then `m_BackPatchCullThreshold`, then the frustum-cull flag — `1.0` unless the
+    ///   active pass is a shadow cascade or one of passes 57..=60, and `0.0` whenever
+    ///   [`m_EnableFrustumPatchCulling`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_EnableFrustumPatchCulling) is clear — and a
+    ///   half-resolution flag fixed at `1.0`.
+    ///
+    /// The buffer is then bound at hull and domain `cb1`, and the global view-projection constants at
+    /// vertex `cb0`.
+    pub unsafe fn SetupConstantBuffers(
+        &mut self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+            ) = ::std::mem::transmute(Self::SetupConstantBuffers_ADDRESS);
             f(self as *mut Self as _, render_context)
         }
     }

@@ -251,25 +251,31 @@ pub unsafe fn DrawIndexedInstancedIndirect(
     }
 }
 pub const Dispatch_ADDRESS: usize = 0x141962AD0;
-/// A compute dispatch.
+/// A compute dispatch of `x` by `y` by `z` thread groups.
+///
+/// Unlike its neighbours above, this one's demangled symbol agrees with the disassembly: the body
+/// takes exactly four arguments in `rcx`/`edx`/`r8d`/`r9d`, flushes the pending render state through
+/// `Graphics::SetupRenderStates`, and forwards the three group counts to the backend's dispatch entry
+/// under the context's critical section.
+///
+/// A dispatch is not rasterization, so none of the rasterizer state applies to it: neither the
+/// viewport nor the scissor rectangle ([`SetScissorEnable`](crate::graphics_engine::draw::SetScissorEnable)) restricts which texels a dispatch's
+/// threads address. The addressed region is decided entirely by the group counts passed here and by
+/// the compute program's own mapping from `SV_DispatchThreadID` to texel.
 pub unsafe fn Dispatch(
-    a1: *mut ::std::ffi::c_void,
-    a2: *mut ::std::ffi::c_void,
-    a3: *mut ::std::ffi::c_void,
-    a4: *mut ::std::ffi::c_void,
-    a5: *mut ::std::ffi::c_void,
-    a6: *mut ::std::ffi::c_void,
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    x: u32,
+    y: u32,
+    z: u32,
 ) {
     unsafe {
         let f: unsafe extern "system" fn(
-            a1: *mut ::std::ffi::c_void,
-            a2: *mut ::std::ffi::c_void,
-            a3: *mut ::std::ffi::c_void,
-            a4: *mut ::std::ffi::c_void,
-            a5: *mut ::std::ffi::c_void,
-            a6: *mut ::std::ffi::c_void,
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            x: u32,
+            y: u32,
+            z: u32,
         ) = ::std::mem::transmute(Dispatch_ADDRESS);
-        f(a1, a2, a3, a4, a5, a6)
+        f(ctx, x, y, z)
     }
 }
 pub const DispatchIndirect_ADDRESS: usize = 0x141962B60;

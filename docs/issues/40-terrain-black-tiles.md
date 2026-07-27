@@ -52,8 +52,10 @@ earlier assumption ("2 = the color-pass LOD clip"):
 - **0 = no clip.**
 
 The GPU hull culls (back-patch, frustum, cull-by-detail) are separate, flag-gated constants in the
-hull/domain CB; the in-headset tests already disabled them at verified offsets with no effect, and
-they are per-eye anyway — inconsistent with the eye-identical symptom.
+hull/domain CB; the in-headset tests already disabled them at verified offsets with no effect on the
+*detail-skin* black tiles, and they were assumed per-eye. That assumption was wrong — the constants
+are baked once per frame per slot, so both eyes share them; see "Recurrence under the single-pass
+collapse" below.
 
 ## The mechanism that fits every observation
 
@@ -224,7 +226,7 @@ debug-UI "Apply" button — patches the five buffer-size immediates
 render engine's resource context (`RenderEngine::m_ResourceContext`, `+0x18D0`) — the engine's own
 settings-change path — processed at frame start alongside the shader-reload request.
 
-## Outcome
+## Outcome (the detail skin)
 
 **Confirmed in-headset: scaling the detail budget fixes the black tiles** (even 2× sufficed in the
 test scene; the shipping default is 4× for headroom, ~20 MB of VRAM). The shipping change is the
@@ -233,3 +235,78 @@ injection and re-appliable from the debug UI) plus the render-block-type registr
 found the owning block. The full diagnostic state used along the way — the LOD-clip/visibility/
 terrain-cull forces, the heartbeat instrumentation, and the base-terrain probes — is preserved on
 the `issue-40-investigation` branch.
+
+## Recurrence under the single-pass collapse: the hull's view-dependent culls
+
+The budget fix stands, but black gaps came back with the single-pass collapse — reported as
+diamond/rhombus-shaped holes in the landscape at middle distance, "where one terrain render block
+hands over to another". That is a *different* discard, one stage later: the terrain patch's own hull
+shader.
+
+### What the hull actually does (shader-verified)
+
+Disassembling the terrain hulls out of `Shaders_F.shader_bundle` (`volumetricterrainpow2hullclip`,
+blob 1498 — the family is 1492..1504) settles the mechanism. The patch-constant phase runs three
+independent discards, all from `cb1`, and zeroes the tessellation factors when any fires:
+
+1. **Back-patch cull**, when `cb1[0].w > 0`: `dot(n_i, ViewDir) < BackPatchCullThreshold` for all
+   three control-point normals.
+2. **Frustum cull**, when `FrustumCull > 0`: each control point, expanded `±radius` along its normal,
+   is projected through `m_OffsetViewProjection`; the patch dies if all six results are outside the
+   same clip plane (`x > w`, `x < -w`, likewise `y`, or `z < 0`).
+3. **LOD clip** (the `*hullclip` variants only, and only for `Patch_LOD > 9`): four `VisibilityMask`
+   taps at the patch corners, discard when all four read `< 0.05`. This is the "HullClipType"
+   mechanism from the earlier pass — **residency-driven and view-independent**, so it is not the
+   FOV-sensitive stage and no camera change can move it.
+
+`cb1` is `SHullDomainTypeConsts`, baked by
+`CRenderBlockTypeTerrainPatch::SetupConstantBuffers` (**release `0x14032D010`**, now in the pyxis
+defs) once per frame per constant-buffer slot: `ViewDir` = the *render* camera's normalized forward
+axis, `.w` = the back-patch enable (color-pass bit ∧ `m_EnableBackPatchCulling`);
+`m_OffsetViewProjection` = `rc->m_OffsetViewProjection`; `FrustumCull` = 1.0 unless the pass is a
+shadow cascade or one of 57..=60, and gated on `m_EnableFrustumPatchCulling`. Both flags live on the
+type singleton (`0x142EED238`) at `+0x44D`/`+0x44E`, with the threshold (shipped `-0.3`) at `+0x478`.
+
+### Why a wide FOV breaks them
+
+- The **back-patch** test approximates the view vector for a whole patch by a single camera axis,
+  with `-0.3` ≈ 17.5° of slack. At 45–55° off-axis — most of a headset's field of view — a patch that
+  squarely faces the eye is still beyond that threshold from the axis, and is discarded while
+  visible. This is FOV-sensitive in *any* VR mode, not just the collapse.
+- The **frustum** test uses one baked matrix for both eyes (the CB is stamped once per frame per
+  slot; that same caching is what `invalidate_terrain_cb` works around). Under the collapse the mod
+  deliberately leaves the render camera centred, so that matrix is the engine's own projection built
+  from the injected **90° vertical** FOV and the *double-wide* aspect —
+  `Camera::RecalcProjection` → `CMatrix4f::PerspectiveFov(fov, aspect, …)` writes
+  `m[1][1] = cot(fov/2)` and `m[0][0] = m[1][1] / aspect`, so `m_FOV` is vertical and the aspect only
+  stretches the horizontal. Session logs confirm the aspect: the engine is resized to 4030×2240
+  (`aspect_ratio=1.799`) when the collapse engages, versus 2015×2240 (`0.8996`) per eye. Horizontally
+  that frustum is generous (~121°); **vertically it stays 90°**, while an eye's vertical FOV is
+  larger and the ±5° display cant rotates it off-axis besides. Patches out there are discarded in the
+  one walk, for both eyes.
+
+A patch the hull discards is drawn in no pass, and the coarser tile over the same footprint is
+independently removed by the LOD clip, so nothing backfills: far depth, dark resolve, patch-shaped
+world-locked gaps that flip with head rotation — exactly the reported shape.
+
+### The fix
+
+`relax_terrain_patch_hull_culls` (config + a "Culling & geometry" checkbox, **on by default**, VR
+only), in `payload/src/hooks/graphics_engine/terrain_cull.rs`: a detour on `SetupConstantBuffers`
+clears `m_EnableBackPatchCulling`/`m_EnableFrustumPatchCulling` around the type's own bake and
+restores them immediately after, so only the uploaded constants change — the engine's settings, and
+the debug UI's view of them, are untouched. The LOD clip and the cull-by-detail term are left alone
+(neither is view-dependent). Cost: the margin patches are tessellated and rasterized instead of
+dropped, bounded by the CPU-side patch cull (already widened to the binocular union); back-facing and
+off-screen triangles still die at the rasterizer and clipper.
+
+**Falsifiable prediction.** With the checkbox off, the black patch gaps are present and shift in
+discrete steps as the head turns; toggling it on refills them in the same frame, with no other change
+in the scene (the terrain silhouette and LOD boundaries stay put) and a small drop in terrain
+tessellation throughput. If the gaps survive with it on, the hull culls are exonerated and the
+remaining suspect is the LOD clip's other half — a finer tile whose draw is missing for a non-hull
+reason — which the "Show debug culling" flag (`m_ShowDebugCulling`, rasterizes culled patches with
+`CULLFACE_NONE`) can then discriminate.
+
+*(Not confirmed in-headset: the mechanism is established statically from the shader, the engine bake,
+and the session logs; the repair is inferred from it.)*

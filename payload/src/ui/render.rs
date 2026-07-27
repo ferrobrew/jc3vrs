@@ -682,6 +682,11 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
              at the edges when flying)",
         );
         ui.checkbox(
+            &mut cfg.stereo.relax_terrain_patch_hull_culls,
+            "Relax terrain hull culls (drops the per-patch back-facing + frustum discards baked for \
+             one camera; fixes black terrain patch gaps)",
+        );
+        ui.checkbox(
             &mut cfg.stereo.widen_model_cull,
             "Widen model cull (active-camera frustum; fixes buildings popping at the edges)",
         );
