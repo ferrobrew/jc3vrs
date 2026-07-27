@@ -99,6 +99,13 @@ pub unsafe fn begin_dispatch(ctx: *mut HContext_t) {
     if !enabled() {
         return;
     }
+    // [`teardown`] runs from the cleanups, which fire while these hooks are still installed and the
+    // game thread keeps ticking for a few more frames. Without this the next dispatch would rebuild
+    // the state and allocate a fresh pool that nothing is left to destroy -- reintroducing, in that
+    // window, the exact leak the teardown exists to close.
+    if crate::is_shutting_down() {
+        return;
+    }
     // SAFETY: reads the live graphics-engine singleton's device pointer on the draw thread.
     let device = unsafe {
         GraphicsEngine::get()
@@ -240,6 +247,41 @@ impl Drop for IntervalGuard {
         };
         state.push_interval(self.label, self.begin.0, end);
     }
+}
+
+/// Destroys every query the profiler owns — the pools, anything pending read-back, and the
+/// in-flight dispatch, if any — through the device the pools were allocated from, and drops the
+/// state. A subsequent [`begin_dispatch`] finds `STATE` empty and builds a fresh [`GpuProfiler`],
+/// so the profiler works normally across an eject/reinject cycle rather than reusing handles that
+/// died with the device.
+///
+/// Registered with [`crate::lifecycle::on_cleanup`]; see `profiler::ensure_gpu_cleanup_registered`
+/// for why that call site runs exactly once.
+pub fn teardown() {
+    let mut guard = STATE.lock();
+    let Some(mut state) = guard.take() else {
+        return;
+    };
+    if let Some(dispatch) = state.current.take() {
+        state.recycle_dispatch(dispatch);
+    }
+    while let Some(dispatch) = state.pending.pop_front() {
+        state.recycle_dispatch(dispatch);
+    }
+    if !state.device.0.is_null() {
+        // SAFETY: `state.device` is the device the pooled queries were created from (see
+        // `alloc_timestamp`/`alloc_disjoint`), and no other thread touches these handles (see the
+        // module docs' `Send` note).
+        unsafe {
+            for query in state.ts_pool.drain(..) {
+                graphics_engine::DestroyTimeStampQuery(state.device.0, query);
+            }
+            for disjoint in state.disjoint_pool.drain(..) {
+                graphics_engine::DestroyTimeStampDisjointQuery(state.device.0, disjoint);
+            }
+        }
+    }
+    HAS_WORK.store(false, Ordering::Relaxed);
 }
 
 static STATE: Mutex<Option<GpuProfiler>> = Mutex::new(None);

@@ -77,6 +77,7 @@ pub(crate) fn apply_scopes_on() {
 pub fn new_frame() {
     label_thread("game");
     install_details_sink();
+    ensure_gpu_cleanup_registered();
     // Advance the frame even while collection is off: a stream flushed just as collection was
     // toggled off would otherwise sit parked in the profiler and be glued onto the front of the
     // next enabled frame, minutes later, ruining its range (and a capture's timestamp base).
@@ -145,6 +146,18 @@ fn install_details_sink() {
             }
         }));
         profiler.emit_scope_snapshot();
+    });
+}
+
+/// Registers the GPU layer's shutdown cleanup once. The module has no dedicated `install` entry
+/// point that the payload's startup path calls, so this piggybacks on [`new_frame`], which already
+/// runs exactly once per real frame from the very first frame on; a `Once` still guards it in case
+/// a future caller invokes `new_frame` from more than one place.
+fn ensure_gpu_cleanup_registered() {
+    use std::sync::Once;
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        crate::lifecycle::on_cleanup(|_renderer| gpu::teardown());
     });
 }
 
