@@ -330,6 +330,23 @@ pub struct StereoConfig {
     /// splitting only the deferred resolve leaves this pass painting the same sliding error back over
     /// it. Requires `reconstruct_offaxis_inverse`; on by default, for the same reason.
     pub single_pass_atmospheric_per_eye: bool,
+    /// Give **geometry** drawn through the non-indexed `Draw` entry point (D3D11 context vtable slot
+    /// 13) the same per-eye re-issue the indexed path gives its draws.
+    ///
+    /// Slot 13 is overwhelmingly how the fullscreen passes submit their triangle, so the collapse
+    /// resets the viewport to the whole double-wide target for it. But the four decal blocks, the road
+    /// layers, and the skidmarks submit ordinary world geometry non-indexed, and pinning the full
+    /// viewport rasterises them across both eye halves, stretched 2x horizontally about the target
+    /// centre. A 2x horizontal stretch is also a 2x horizontal *motion* gain, so they sweep across the
+    /// screen at twice the camera's rate -- decals sliding over the world.
+    ///
+    /// Unlike the indirect and indexed paths this cannot be decided from the draw alone, since a
+    /// fullscreen triangle and a decal box arrive identically; it is decided by an allowlist of passes
+    /// known to carry geometry, fed by the per-pass slot-13 census in the diagnostic log. Off by
+    /// default until the allowlist has been confirmed in the headset, because misclassifying a
+    /// fullscreen pass as geometry is a visibly wrong frame while missing a geometry pass is only the
+    /// status quo.
+    pub single_pass_slot13_per_eye: bool,
     /// Requires [`single_pass_reconstruct_per_eye`](Self::single_pass_reconstruct_per_eye) and
     /// [`fix_clustered_light_frustum`](Self::fix_clustered_light_frustum): build the clustered
     /// (froxel) light grid **per eye** as well, instead of building it once with eye 0's projection
@@ -647,6 +664,7 @@ impl StereoConfig {
             single_pass_indirect_per_eye: true,
             single_pass_reconstruct_per_eye: true,
             single_pass_atmospheric_per_eye: true,
+            single_pass_slot13_per_eye: false,
             single_pass_clustered_per_eye: true,
             single_pass_clustered_per_eye_light_view: true,
             single_pass_uniform_viewport_slots: true,

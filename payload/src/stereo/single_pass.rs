@@ -1067,6 +1067,56 @@ fn in_gbuffer_range() -> bool {
     IN_GBUFFER_RANGE.load(Ordering::Relaxed)
 }
 
+/// The render pass currently being walked, published by the `RenderPass::DoDraw` detour so the draw
+/// detours -- which see only a D3D context -- can tell which pass a draw belongs to. [`NO_PASS`]
+/// stands for "outside any pass"; no real id collides with it (`m_Index` is a byte and the engine's
+/// highest pass is `0x96`).
+static CURRENT_PASS: AtomicU8 = AtomicU8::new(NO_PASS);
+
+const NO_PASS: u8 = 0xFF;
+
+/// Publish the pass being drawn for the duration of one `DoDraw`. Returns the previous value so the
+/// caller restores it rather than clearing, since a block-level re-issue can nest one pass inside
+/// another.
+///
+/// Takes the engine's `m_Index` in its own `i16` form; an id outside the byte range is not a pass this
+/// module can classify, so it reads as [`NO_PASS`] rather than truncating into a real pass's slot.
+pub fn set_current_pass(pass: i16) -> u8 {
+    let pass = u8::try_from(pass).unwrap_or(NO_PASS);
+    CURRENT_PASS.swap(pass, Ordering::Relaxed)
+}
+
+/// Restore a pass id previously returned by [`set_current_pass`].
+pub fn restore_current_pass(pass: u8) {
+    CURRENT_PASS.store(pass, Ordering::Relaxed);
+}
+
+fn current_pass_id() -> u8 {
+    CURRENT_PASS.load(Ordering::Relaxed)
+}
+
+/// Per-pass tally of non-indexed (`Draw`, slot 13) submissions seen inside a range while collapsed.
+///
+/// This exists to replace inference with measurement. Which passes actually reach slot 13 is the fact
+/// that decides whether a family is being rasterised across the whole double-wide target instead of
+/// one eye's half, and it is otherwise only obtainable from a frame capture. Indexed by pass id.
+static SLOT13_BY_PASS: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
+
+/// Drain the per-pass slot-13 census as `(pass_id, count)` for the passes that saw any, most frequent
+/// first. Reported in the per-range diagnostic line.
+fn drain_slot13_census() -> Vec<(u8, u32)> {
+    let mut seen: Vec<(u8, u32)> = SLOT13_BY_PASS
+        .iter()
+        .enumerate()
+        .filter_map(|(pass, count)| {
+            let count = count.swap(0, Ordering::Relaxed);
+            (count > 0).then_some((pass as u8, count))
+        })
+        .collect();
+    seen.sort_unstable_by_key(|&(_, count)| std::cmp::Reverse(count));
+    seen
+}
+
 /// Open a new real frame: advance the frame ordinal the diagnostics are keyed to, and fold the
 /// previous frame's already-instanced exposure into the history.
 ///
@@ -1954,11 +2004,48 @@ unsafe extern "system" fn draw_indexed_detour(
 /// left the viewport split to. Reset the viewport to full before the draw. Outside collapse (or the
 /// camera scene) this is a straight pass-through.
 unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, start_vertex: u32) {
+    let detour = DRAW.get().expect("set before enable");
+    // SAFETY: forwards the caller's arguments unchanged to the trampoline.
+    let submit = || unsafe { detour.call(context, vertex_count, start_vertex) };
+
     if collapse_active() && in_gbuffer_range() && per_eye_reissue_eye().is_none() {
+        let pass = current_pass_id();
+        SLOT13_BY_PASS[usize::from(pass)].fetch_add(1, Ordering::Relaxed);
+        // A geometry pass on this entry point is not the fullscreen triangle the `Full` reset below
+        // exists for, so give it the same per-eye treatment the indexed path gives its draws.
+        if is_geometry_slot13_pass(pass)
+            && Config::lock_query(|c| c.stereo.single_pass_slot13_per_eye)
+            && instanced_per_eye(&submit)
+        {
+            return;
+        }
         ensure_collapse_viewport(context, CollapseViewport::Full);
     }
-    let detour = DRAW.get().expect("set before enable");
-    unsafe { detour.call(context, vertex_count, start_vertex) };
+    submit();
+}
+
+/// Render passes whose non-indexed draws are **geometry**, not a fullscreen triangle.
+///
+/// `Draw` (slot 13) is overwhelmingly the fullscreen-pass entry point, which is why the default is to
+/// reset the viewport to full for it. But several render blocks submit ordinary world geometry
+/// non-indexed -- the four decal blocks, the road and skidmark layers -- and pinning `Full` for those
+/// rasterises them across the whole double-wide target, stretched 2x horizontally about its centre. A
+/// 2x horizontal stretch is also a 2x horizontal *motion* gain, which is what makes decals appear to
+/// slide across the world at twice the camera's rate.
+///
+/// An allowlist rather than a heuristic: the cost of misclassifying a fullscreen pass as geometry is a
+/// visibly wrong frame, while the cost of missing a geometry pass is only the status quo. Entries are
+/// added as they are evidenced, not guessed -- the per-pass slot-13 census in the diagnostic log names
+/// the candidates.
+const GEOMETRY_SLOT13_PASSES: [u8; 4] = [
+    0x4F, // RP_ROAD_LAYERS -- CRenderBlockSplineRoad
+    0x52, // RP_DECALS -- the four CRenderBlockDecal* blocks
+    0x6F, // RP_SKIDMARKS -- CRenderBlockSkidmarks
+    0x86, // RP_WINDOW_DECALS
+];
+
+fn is_geometry_slot13_pass(pass: u8) -> bool {
+    GEOMETRY_SLOT13_PASSES.contains(&pass)
 }
 
 // ---- GPU-indirect draws --------------------------------------------------------------------------
@@ -2816,6 +2903,7 @@ pub fn log_draw_split(first: u32, last: u32) {
     let out_patched = INSTANCED_RANGE_OUT_PATCHED.swap(0, Ordering::Relaxed);
     let indirect_reissued = INDIRECT_REISSUED.swap(0, Ordering::Relaxed);
     let indirect_forwarded = INDIRECT_FORWARDED.swap(0, Ordering::Relaxed);
+    let slot13 = drain_slot13_census();
     let torn = RANGE_TORN.swap(0, Ordering::Relaxed);
     let torn_total = RANGE_TORN_TOTAL.fetch_add(torn, Ordering::Relaxed) + torn;
     if torn > 0 {
@@ -2829,6 +2917,19 @@ pub fn log_draw_split(first: u32, last: u32) {
         return;
     }
     let s = substitution_stats();
+    // Named per pass, since the whole point is to say *which* passes submit geometry this way.
+    let slot13 = slot13
+        .iter()
+        .map(|(pass, count)| {
+            let kind = if is_geometry_slot13_pass(*pass) {
+                "geom"
+            } else {
+                "full"
+            };
+            format!("{pass:#04x}:{count}:{kind}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
     tracing::info!(
         target: "single_pass",
         "pass range [{first:#x}, {last:#x}): {patched} patched, {unpatched} unpatched draws | \
@@ -2836,7 +2937,7 @@ pub fn log_draw_split(first: u32, last: u32) {
          indirect: {indirect_reissued} re-issued per eye, {indirect_forwarded} forwarded | \
          torn {torn} ({torn_total} this session) | viewports: {split} split, {dup} identical-dup | \
          recorded VS={} | CreateVertexShader: pending={} reacq[patched={} cb13={} no-refs={} err={}] | \
-         census[patched={} no-refs={} deferred={} errored={}]",
+         census[patched={} no-refs={} deferred={} errored={}] | slot-13 by pass: [{slot13}]",
         s.recorded_vs,
         s.cvs_pending,
         s.cvs_reacq_patched,

@@ -926,6 +926,13 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      screen. Needs the off-axis reconstruction override on.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.single_pass_slot13_per_eye,
+                    "Non-indexed geometry per eye (decals, roads, skidmarks)",
+                )
+                .on_hover_text(
+                    "Re-issues a non-indexed Draw once per eye, with both viewport and cb13 eye slots                      pinned to that eye, for the passes known to submit geometry this way. Off, every                      slot-13 draw gets the whole double-wide viewport -- right for a fullscreen                      triangle, but it stretches decals and road layers 2x horizontally, which is a 2x                      motion gain and reads as them sliding over the world. Default off until the pass                      allowlist is confirmed: read the 'slot-13 by pass' census in the log to see which                      passes actually arrive here.",
+                );
+                ui.checkbox(
                     &mut cfg.stereo.single_pass_atmospheric_per_eye,
                     "Atmospheric scattering per eye (sun shadows, aerial perspective)",
                 )

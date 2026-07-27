@@ -90,7 +90,12 @@ fn do_draw(this: *mut RenderPass, ctx: *mut RenderContext, color_mask: u32) -> b
     };
     // SAFETY: `this` and `ctx` are the live pass and render context of this draw call.
     let window = unsafe { crate::far_field::before_do_draw(this, ctx) };
+    // Publish the pass for the duration of the walk: the draw detours see only a D3D context, and
+    // which pass a draw belongs to is what tells a geometry draw apart from a fullscreen one.
+    // SAFETY: `this` is the live render pass; `m_Index` is its render-pass id.
+    let previous_pass = crate::stereo::single_pass::set_current_pass(unsafe { (*this).m_Index });
     let result = DO_DRAW.get().unwrap().call(this, ctx, color_mask);
+    crate::stereo::single_pass::restore_current_pass(previous_pass);
     drop(window);
     if diff {
         let ops = crate::debug::stereo_diff::op_total().wrapping_sub(ops_before);
