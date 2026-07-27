@@ -216,14 +216,39 @@ pub fn engine_render_resolution() -> Option<(u32, u32)> {
     }
 }
 
+/// The alignment the per-eye render width is rounded up to.
+///
+/// The clustered lighting grid is a 64-pixel tile lattice. Under the single-pass collapse the eye seam
+/// falls at the middle of a double-wide target, so it lands on a whole tile column only when each
+/// eye's width is a whole number of tiles -- otherwise a partial tile column straddles the seam, there
+/// is no correct way to split it between the eyes, and the per-eye grid build declines. A runtime's
+/// recommended width is arbitrary (2015 px on the headset this was found with, giving a 4030 px target
+/// that is not a multiple of 128), so left alone the split effectively never engages.
+const EYE_WIDTH_ALIGNMENT: u32 = 64;
+
 /// Scale a raw recommended per-eye view size by `resolution_scale`, clamped to a small positive
-/// minimum (and at least 1 px each axis). Shared by the swapchain and the native-resolution driver so
-/// the engine renders each eye at exactly the swapchain size.
+/// minimum (and at least 1 px each axis), and round the width up to [`EYE_WIDTH_ALIGNMENT`].
+///
+/// Shared by the swapchain and the native-resolution driver so the engine renders each eye at exactly
+/// the swapchain size -- which is why the rounding belongs here and is unconditional rather than
+/// applied only under the collapse. Rounding one of the two would make them disagree, and the collapse
+/// can be toggled at runtime while the swapchain keeps the size it was created at.
+///
+/// The cost is at most 63 extra columns per eye (~1.6% more pixels at the width above), paid whether
+/// or not the collapse is on. That is cheap against a lighting fix that otherwise cannot run at all.
 fn scaled_eye_size(width: u32, height: u32, resolution_scale: f32) -> (u32, u32) {
     let scale = resolution_scale.max(0.1);
     let w = ((width as f32) * scale).round() as u32;
     let h = ((height as f32) * scale).round() as u32;
-    (w.max(1), h.max(1))
+    (align_up(w.max(1), EYE_WIDTH_ALIGNMENT), h.max(1))
+}
+
+/// Round `value` up to the next multiple of `alignment`, saturating rather than wrapping.
+fn align_up(value: u32, alignment: u32) -> u32 {
+    match value % alignment {
+        0 => value,
+        remainder => value.saturating_add(alignment - remainder),
+    }
 }
 
 /// Recenter the cockpit: re-base the stored baseline from the latest located VIEW-space pose, taking
@@ -1596,5 +1621,46 @@ fn mid_pose(a: xr::Posef, b: xr::Posef) -> xr::Posef {
             y: 0.5 * (a.position.y + b.position.y),
             z: 0.5 * (a.position.z + b.position.z),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EYE_WIDTH_ALIGNMENT, align_up, scaled_eye_size};
+
+    /// The whole point of the alignment: whatever the runtime recommends, the doubled width the
+    /// collapse renders into must land on a whole froxel tile column, i.e. be a multiple of twice the
+    /// 64-pixel tile size. 2015 is the width that exposed this -- it produced a 4030 px target and the
+    /// per-eye light grid declined on every frame of every session.
+    #[test]
+    fn double_wide_width_lands_on_a_whole_tile_column() {
+        for recommended in [1, 2015, 2016, 2048, 1080, 1440, 4095] {
+            let (width, _) = scaled_eye_size(recommended, 1000, 1.0);
+            assert_eq!(
+                (width * 2) % (2 * EYE_WIDTH_ALIGNMENT),
+                0,
+                "per-eye width {width} from recommended {recommended} does not double to a whole \
+                 tile column",
+            );
+            assert!(width >= recommended, "alignment must not shrink the render");
+        }
+    }
+
+    /// Rounding never reduces the size and never wraps at the top of the range.
+    #[test]
+    fn align_up_rounds_upward_and_saturates() {
+        assert_eq!(align_up(1, 64), 64);
+        assert_eq!(align_up(64, 64), 64);
+        assert_eq!(align_up(65, 64), 128);
+        assert_eq!(align_up(u32::MAX, 64), u32::MAX);
+    }
+
+    /// A resolution scale still applies; the alignment is on top of it, not instead of it.
+    #[test]
+    fn resolution_scale_still_applies_under_alignment() {
+        let (full, _) = scaled_eye_size(2048, 1000, 1.0);
+        let (half, _) = scaled_eye_size(2048, 1000, 0.5);
+        assert!(half < full, "a 0.5 scale must still render smaller");
+        assert_eq!(half % EYE_WIDTH_ALIGNMENT, 0);
     }
 }
