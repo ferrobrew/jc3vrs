@@ -18,12 +18,16 @@ pub fn init() {
     let _ = root();
 }
 
-/// A fresh local wall-clock timestamp string, `YYYY-MM-DD_HH-MM-SS` -- the one format every session
-/// artifact stamps with. The session root uses it once at startup; callers that disambiguate several
-/// captures within a run (profiler dumps, render traces, screenshot batches, grapple captures) name
-/// their file or subfolder with a fresh one.
+/// A fresh local wall-clock timestamp string, `YYYY-MM-DD_HH-MM-SS_mmm` -- the one format every
+/// session artifact stamps with. The session root uses it once at startup; callers that disambiguate
+/// several captures within a run (profiler dumps, render traces, screenshot batches, grapple captures)
+/// name their file or subfolder with a fresh one. The millisecond suffix keeps two stamps taken within
+/// the same second -- notably an uninject/reinject cycle during development, which routinely lands
+/// inside one wall-clock second -- from resolving to the same path.
 pub fn stamp() -> String {
-    jiff::Zoned::now().strftime("%Y-%m-%d_%H-%M-%S").to_string()
+    jiff::Zoned::now()
+        .strftime("%Y-%m-%d_%H-%M-%S_%3f")
+        .to_string()
 }
 
 /// This session's output root (`sessions/<timestamp>/`), created if missing. For artifacts that live
@@ -57,4 +61,30 @@ fn root() -> Option<&'static PathBuf> {
         Some(dir)
     })
     .as_ref()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stamp;
+
+    /// The format string is parsed at run time, so a directive the version of `jiff` in use does not
+    /// accept would surface as a malformed session path on the startup path rather than as a build
+    /// failure. Pin the shape instead: `YYYY-MM-DD_HH-MM-SS_mmm`, all digits, path-safe.
+    #[test]
+    fn stamp_is_second_and_millisecond_precise() {
+        let stamp = stamp();
+        let (date, rest) = stamp
+            .split_once('_')
+            .expect("date and time are `_`-separated");
+        let (time, millis) = rest
+            .split_once('_')
+            .expect("a millisecond suffix is present");
+
+        assert_eq!(date.len(), 10, "date is `YYYY-MM-DD`: {stamp}");
+        assert_eq!(time.len(), 8, "time is `HH-MM-SS`: {stamp}");
+        assert_eq!(millis.len(), 3, "milliseconds are three digits: {stamp}");
+        assert!(millis.bytes().all(|b| b.is_ascii_digit()), "{stamp}");
+        assert_eq!(date.matches('-').count(), 2, "{stamp}");
+        assert_eq!(time.matches('-').count(), 2, "{stamp}");
+    }
 }
