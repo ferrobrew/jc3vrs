@@ -103,7 +103,8 @@ pub fn install() {
 /// The once-per-frame entry point, called from the game thread by `hooks::game::game_update_render`.
 /// Pumps OpenXR events, drives bring-up/retry/teardown per config, and
 /// returns whether a session is currently running (so the caller can decide whether to submit VR
-/// frames). Never panics on OpenXR failure -- failures degrade to flatscreen stereo and are retried.
+/// frames). OpenXR failures degrade to flatscreen stereo and are retried; the one exception is a
+/// loader that will not load, which aborts the process (see [`LoaderUnavailable`]).
 pub fn update() -> bool {
     // Once eject has begun, do nothing: the shutdown cleanup tears the runtime down (persisting the
     // instance/session handles for the next injection), and an ungated re-entry here would see
@@ -617,7 +618,8 @@ impl VrState {
     }
 
     /// Attempt the full bring-up (loader → instance → system → session → reference spaces) if the
-    /// retry cadence allows. Any failure logs and leaves the state torn down for the next retry.
+    /// retry cadence allows. Any failure logs and leaves the state torn down for the next retry,
+    /// except an unloadable loader ([`LoaderUnavailable`]), which is fatal.
     fn try_bring_up(&mut self, cfg: &VrConfig) {
         let now = Instant::now();
         if let Some(last) = self.last_attempt
@@ -628,6 +630,19 @@ impl VrState {
         self.last_attempt = Some(now);
 
         if let Err(e) = self.bring_up(cfg) {
+            // A missing loader is a deployment fault, not a transient one: retrying cannot conjure
+            // the DLL, and the warn-and-continue path below would leave the game running flat for a
+            // whole session while looking, in the log, exactly like a headset that is merely idle.
+            // Fail loudly at the first attempt instead -- which is during startup, since bring-up is
+            // tried on the first frames.
+            //
+            // Aborting rather than panicking: this runs on the game thread inside a detour, so an
+            // unwind would cross back into the engine's C++ frames. The error above has already
+            // reached the log and stdout, which is the part that has to survive.
+            if e.downcast_ref::<LoaderUnavailable>().is_some() {
+                tracing::error!(target: "vr", "fatal: {e:#}");
+                std::process::abort();
+            }
             tracing::warn!(
                 target: "vr",
                 "OpenXR bring-up failed (staying in flatscreen stereo, retrying in {}s): {e:#}",
@@ -1442,16 +1457,42 @@ fn persist_session(session: Session) {
     std::mem::forget(handle);
 }
 
+/// Marker attached to every [`load_entry`] failure, so the bring-up can tell "there is no OpenXR
+/// loader to call at all" apart from every other reason bring-up can fail.
+///
+/// The distinction matters because the two want opposite responses. A runtime that is not running,
+/// a headset that is unplugged, a system that is not yet ready — those are transient, and retrying
+/// on a cadence is right. A loader that will not load is a build or deployment fault: the DLL is
+/// staged beside the payload by `scripts/fetch_openxr_loader.sh`, and a fresh `target/` directory
+/// does not have it. No retry can fix that, so [`VrState::try_bring_up`] makes it fatal.
+#[derive(Debug)]
+struct LoaderUnavailable;
+
+impl std::fmt::Display for LoaderUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "no OpenXR loader could be loaded (stage one beside the payload with \
+             scripts/fetch_openxr_loader.sh, or point vr.loader_path at one)"
+        )
+    }
+}
+
+impl std::error::Error for LoaderUnavailable {}
+
 /// Load the OpenXR loader (dynamic route). Uses [`VrConfig::loader_path`] if set, else
 /// `openxr_loader.dll` next to the payload DLL, falling back to the platform default search
 /// (`xr::Entry::load`) when no explicit path is configured and the payload-adjacent DLL is
 /// missing or fails to load — a system-wide loader then still works. An explicit
 /// `loader_path` does not fall back: the user asked for that loader specifically.
+///
+/// Every failure carries a [`LoaderUnavailable`] marker in its context chain; see there for why.
 fn load_entry(cfg: &VrConfig) -> anyhow::Result<xr::Entry> {
     if let Some(path) = cfg.loader_path.clone().map(std::path::PathBuf::from) {
         tracing::info!(target: "vr", loader = %path.display(), "loading the configured OpenXR loader");
         return unsafe { xr::Entry::load_from(&path) }
-            .with_context(|| format!("loader at {}", path.display()));
+            .with_context(|| format!("loader at {}", path.display()))
+            .context(LoaderUnavailable);
     }
 
     if let Some(path) =
@@ -1470,7 +1511,9 @@ fn load_entry(cfg: &VrConfig) -> anyhow::Result<xr::Entry> {
     }
 
     tracing::info!(target: "vr", "loading the OpenXR loader from the default search path");
-    unsafe { xr::Entry::load() }.context("loader on the default search path")
+    unsafe { xr::Entry::load() }
+        .context("loader on the default search path")
+        .context(LoaderUnavailable)
 }
 
 /// Negotiate a swapchain color format from the runtime's supported list, preferring an 8-bit sRGB
