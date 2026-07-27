@@ -132,6 +132,13 @@ const REPROJECT_NAME_PREFIXES: &[&str] = &[
     "general",
     "buildingjc3",
     "buildingrsm",
+    // The `landmark` and `layered` model families, structurally identical to `generaljc3`: clip is
+    // `cb1[0..3] · objectPosition` (a baked world-view-projection), and the only `cb0` row they touch
+    // is `cb0[4]`, differenced against the world position to drive a distance fade. `layered` also
+    // covers `layeredblend` and `layeredrsm`; `layeredroad` reads the real `cb0[29..32]` and so keeps
+    // the remap, which already gives it a per-eye clip.
+    "landmark",
+    "layered",
     "window",
     "materialtune",
     "open",
@@ -196,6 +203,13 @@ pub fn should_reproject(name: Option<&str>) -> bool {
 /// falling through to being drawn once. The `cb0[4]` reference is deliberately left un-remapped, which
 /// leaves the fade distance measured from the centre camera -- the same in both eyes, so a LOD does
 /// not pop between them.
+///
+/// The families this reaches in the shipped bundle are `generaljc3`, `landmark`, `layered` and
+/// `layeredblend`, which share one body: `clip = cb1[0..3] · objectPosition`, a distance fade off
+/// `cb0[4]`, and a depth bias applied *after* the projection (`o0.z += cb2[0].x · o0.w`). The
+/// reprojection folds that bias into the clip position it then transforms by `M_eye`; `M_eye` is near
+/// identity so it survives approximately, and it is the first thing to suspect if z-fighting shows up
+/// on any of them.
 pub fn should_reproject_camera_only(name: Option<&str>, code: &[u8]) -> bool {
     config_flags().has(Flag::ReprojectCameraOnly)
         && should_reproject(name)
@@ -514,9 +528,11 @@ enum Flag {
     InstancedPerEye,
     IndirectPerEye,
     UniformViewportSlots,
+    ViewportFollowsTarget,
+    Slot13PerEye,
 }
 
-/// The single-pass config flags, sampled once per frame.
+/// The single-pass config flags, sampled once per frame and pinned for the duration of a dispatch.
 #[derive(Clone, Copy)]
 struct ConfigFlags(u32);
 
@@ -526,16 +542,33 @@ impl ConfigFlags {
     }
 }
 
-/// The frame's config snapshot, or a fresh read if none has been taken yet.
+/// The flags this draw thread's dispatch was opened with, else the game thread's frame snapshot, else
+/// a fresh read if neither has been taken yet.
 ///
 /// Every gate in this module is consulted from the render thread on paths that run per draw -- the
 /// viewport, indexed-draw and render-block detours -- so reading them through `Config`'s mutex made
 /// the feature pay a lock acquisition per draw submission, in a feature whose purpose is to reduce
-/// per-draw cost. The snapshot is refreshed at frame start ([`refresh_config_flags`]), so a change
-/// made in the debug UI takes effect on the next frame rather than mid-frame, which is also the more
-/// coherent behaviour: a flag flipping between two draws of one pass cannot leave the frame
-/// half-transformed.
+/// per-draw cost.
+///
+/// There are two snapshots because the two consumers want different things, and one snapshot cannot
+/// give both. The **draw thread** wants a value that does not move for the whole dispatch: nearly
+/// every gate here brackets something (a pass range, an eye-half viewport, an armed reprojection,
+/// a per-eye re-issue loop), and a flag that changes between the arm and the restore leaks that state
+/// into the rest of the frame -- so it pins its own copy in [`DISPATCH_FLAGS`] at
+/// [`begin_dispatch`]. Everything else -- the game thread's resolution and camera decisions, and the
+/// shader-creation hooks, which must see a toggle in the *same* frame the debug UI turns it on,
+/// because that frame's shader reload is what applies it -- reads [`CONFIG_FLAGS`], resampled at frame
+/// start ([`refresh_config_flags`]).
+///
+/// The frame snapshot deliberately does **not** reach the draw thread mid-dispatch. It is written on
+/// the game thread, which with `stereo.defer_frame_tail` on runs concurrently with the previous
+/// frame's still-walking dispatch -- the same interleaving that made the game-thread G-buffer range
+/// clear tear a live range (see [`begin_dispatch`]). A flag changing there would land between an arm
+/// and its restore, which is why the draw thread reads a pinned copy instead.
 fn config_flags() -> ConfigFlags {
+    if let Some(flags) = DISPATCH_FLAGS.get() {
+        return flags;
+    }
     let snapshot = CONFIG_FLAGS.load(Ordering::Relaxed);
     if snapshot & CONFIG_FLAGS_VALID != 0 {
         return ConfigFlags(snapshot);
@@ -543,9 +576,17 @@ fn config_flags() -> ConfigFlags {
     ConfigFlags(store_config_flags())
 }
 
-/// Re-read the single-pass config flags into the frame snapshot. Called at frame start.
+/// Re-read the single-pass config flags into the frame snapshot. Called at frame start, on the game
+/// thread, and read by everything that is not inside a draw-thread dispatch -- see [`config_flags`]
+/// for why the draw thread pins its own copy instead of reading this one.
 pub fn refresh_config_flags() {
     store_config_flags();
+}
+
+/// Pin the config flags for the dispatch this thread is opening, so every gate it consults answers
+/// the same for the whole of it. Called from [`begin_dispatch`].
+fn pin_dispatch_config_flags() {
+    DISPATCH_FLAGS.set(Some(ConfigFlags(store_config_flags())));
 }
 
 fn store_config_flags() -> u32 {
@@ -573,6 +614,11 @@ fn store_config_flags() -> u32 {
                 s.single_pass_uniform_viewport_slots,
                 Flag::UniformViewportSlots,
             )
+            | bit(
+                s.collapse_viewport_follows_target,
+                Flag::ViewportFollowsTarget,
+            )
+            | bit(s.single_pass_slot13_per_eye, Flag::Slot13PerEye)
     }) | CONFIG_FLAGS_VALID;
     CONFIG_FLAGS.store(snapshot, Ordering::Relaxed);
     snapshot
@@ -582,6 +628,13 @@ fn store_config_flags() -> u32 {
 /// frame is not mistaken for "everything off".
 const CONFIG_FLAGS_VALID: u32 = 1 << 31;
 static CONFIG_FLAGS: AtomicU32 = AtomicU32::new(0);
+
+thread_local! {
+    /// The flags [`begin_dispatch`] pinned for the dispatch in flight on this thread, or `None` on a
+    /// thread that has never opened one. Thread-local rather than global because the point is to keep
+    /// the draw thread's view of the config still while the game thread is free to resample its own.
+    static DISPATCH_FLAGS: Cell<Option<ConfigFlags>> = const { Cell::new(None) };
+}
 
 /// The eye whose viewport + view-projection the collapse UI overlays (HUD panel, egui panel) should
 /// currently draw with, so a head/world-locked quad lands at the correct 3D spot in each eye instead
@@ -1378,14 +1431,23 @@ pub fn begin_frame() {
     FRAME_ORDINAL.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Open a dispatch on the draw thread: close a G-buffer range left open by an interrupted dispatch,
-/// before this one's first range is entered.
+/// Open a dispatch on the draw thread: pin this dispatch's config flags, and close a G-buffer range
+/// left open by an interrupted dispatch, before this one's first range is entered.
 ///
-/// This is the only place the flag may be forced down from outside its guard. The flag is written and
-/// read exclusively on the draw thread, and the dispatch prologue is the one point in that thread's
-/// sequence where no range can be live -- so a clear here cannot interleave with a range in progress,
-/// as the former frame-start clear on the game thread could once the frame tail was deferred.
+/// This is the only place the range flag may be forced down from outside its guard. The flag is
+/// written and read exclusively on the draw thread, and the dispatch prologue is the one point in
+/// that thread's sequence where no range can be live -- so a clear here cannot interleave with a range
+/// in progress, as the former frame-start clear on the game thread could once the frame tail was
+/// deferred.
+///
+/// The config flags are pinned here for the same reason and at the same point. They gate state this
+/// thread arms and restores in pairs -- the eye-half viewport, the armed constant reprojection, the
+/// per-eye re-issue loops, the range guard's own viewport repair -- and a flag that moved between an
+/// arm and its restore would leave that state raised for the rest of the frame. Sampled per dispatch
+/// rather than per frame because a dispatch is the unit the draw thread actually walks: under the
+/// collapse the game thread is already a frame ahead of it.
 pub fn begin_dispatch() {
+    pin_dispatch_config_flags();
     if Config::lock_query(|c| c.stereo.single_pass_clear_range_on_dispatch) {
         clear_gbuffer_range();
     }
@@ -2122,7 +2184,9 @@ enum CollapseViewport {
 fn ensure_collapse_viewport(context: *mut c_void, target: CollapseViewport) {
     // Split the viewport of whatever target is actually bound, not the scene's. They are the same
     // everywhere except the reduced-resolution off-screen passes -- see [`CURRENT_ENGINE_VIEWPORT`].
-    let base = if Config::lock_query(|c| c.stereo.collapse_viewport_follows_target) {
+    // From the dispatch snapshot, not live: this function both pins an eye half and puts the full
+    // viewport back, and the two calls have to agree on which "full" they mean.
+    let base = if config_flags().has(Flag::ViewportFollowsTarget) {
         (*CURRENT_ENGINE_VIEWPORT.lock()).or(*COLLAPSE_FULL_VIEWPORT.lock())
     } else {
         *COLLAPSE_FULL_VIEWPORT.lock()
@@ -2258,7 +2322,7 @@ unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, s
         // A geometry pass on this entry point is not the fullscreen triangle the `Full` reset below
         // exists for, so give it the same per-eye treatment the indexed path gives its draws.
         if is_geometry_slot13_pass(pass)
-            && Config::lock_query(|c| c.stereo.single_pass_slot13_per_eye)
+            && config_flags().has(Flag::Slot13PerEye)
             && instanced_per_eye(&submit)
         {
             return;

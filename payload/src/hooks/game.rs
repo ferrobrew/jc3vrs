@@ -64,8 +64,12 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // session, a dispatch that never returned) could otherwise leave it up and have every shadow
         // and reflection draw of this frame instance-doubled and eye-split.
         crate::stereo::single_pass::begin_frame();
-        // Sample the single-pass config once for the whole frame, so the per-draw detours read a
-        // relaxed atomic rather than taking the config mutex.
+        // Sample the single-pass config for this frame's game-thread consumers: the render-resolution
+        // and camera decisions below, and the shader-creation hooks the reload a few lines down drives
+        // (a toggle has to reach them in the frame the debug UI made it, since that reload is what
+        // applies it). The draw thread does *not* read this snapshot mid-dispatch -- it pins its own in
+        // `single_pass::begin_dispatch` -- because this write runs concurrently with the previous
+        // frame's dispatch once the frame tail is deferred.
         crate::stereo::single_pass::refresh_config_flags();
 
         // Apply the sun-shadow diagnostic override before the original runs, so this frame's
