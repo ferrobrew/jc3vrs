@@ -19,6 +19,9 @@ mod culling;
 // The per-eye off-axis clip-to-view reconstruction fix (`PerspectiveFovInverse`); private, reached
 // only through `hook_library` below.
 mod reconstruction;
+// The atmospheric-scattering pass's per-eye re-issue under the collapse; private, reached only
+// through `hook_library` below.
+mod atmospheric_scattering;
 mod render_pass;
 // The three VR resolution levers (`ResizeTextures`, LR-particle, spot-light cone) for issue #8's
 // pixelation; private, reached only through `hook_library` below.
@@ -56,5 +59,6 @@ pub(crate) fn hook_library() -> HookLibrary {
         .with_hook_library(shader::hook_library())
         .with_hook_library(single_pass::hook_library())
         .with_hook_library(clustered_lighting::hook_library())
+        .with_hook_library(atmospheric_scattering::hook_library())
         .with_hook_library(terrain::hook_library())
 }

@@ -333,6 +333,26 @@ impl std::convert::AsMut<RenderBlockCharacterSkin> for RenderBlockCharacterSkin 
 /// lighting pass or a pass-through fallback.
 pub struct RenderBlockDeferredLighting {}
 impl RenderBlockDeferredLighting {
+    pub const Draw_ADDRESS: usize = 0x14013E1E0;
+    /// Selects between the block's two lighting paths on a single condition:
+    /// [`DrawPassThrough`](crate::graphics_engine::render_block::RenderBlockDeferredLighting::DrawPassThrough) when
+    /// [`RenderEngine::IsWireframeEnabled`](crate::graphics_engine::render_engine::RenderEngine) reports
+    /// wireframe, [`DrawClustered`](crate::graphics_engine::render_block::RenderBlockDeferredLighting::DrawClustered) otherwise. Normal shaded rendering therefore
+    /// always takes the clustered path.
+    pub unsafe fn Draw(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, rc, info)
+        }
+    }
     pub const DrawClustered_ADDRESS: usize = 0x14013CFD0;
     /// The clustered-lighting entry point: runs the "LightAssignment" pass (rasterizing light proxy
     /// geometry into the froxel light-lookup target) and the "ClusteredLighting" pass (shading from
@@ -351,6 +371,23 @@ impl RenderBlockDeferredLighting {
                 a4: *mut crate::graphics_engine::graphics_engine::HTexture_t,
             ) = ::std::mem::transmute(Self::DrawClustered_ADDRESS);
             f(self as *const Self as _, rc, a3, a4)
+        }
+    }
+    pub const DrawPassThrough_ADDRESS: usize = 0x14013CD00;
+    /// The wireframe-only lighting path, reached from [`Draw`](crate::graphics_engine::render_block::RenderBlockDeferredLighting::Draw) exclusively when
+    /// [`RenderEngine::IsWireframeEnabled`](crate::graphics_engine::render_engine::RenderEngine) is set, so
+    /// it does not run during normal shaded rendering. Like the clustered path it recovers a
+    /// clip-to-view basis via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4).
+    pub unsafe fn DrawPassThrough(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+            ) = ::std::mem::transmute(Self::DrawPassThrough_ADDRESS);
+            f(self as *const Self as _, rc)
         }
     }
 }
@@ -447,6 +484,110 @@ impl std::convert::AsRef<RenderBlockOccluder> for RenderBlockOccluder {
 }
 impl std::convert::AsMut<RenderBlockOccluder> for RenderBlockOccluder {
     fn as_mut(&mut self) -> &mut RenderBlockOccluder {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The screen-space ambient-occlusion render block. Its `Draw` reconstructs view-space position from
+/// depth via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) and carries a temporal history
+/// across frames, indexed by a counter the block advances per invocation.
+pub struct RenderBlockSSAO {}
+impl RenderBlockSSAO {
+    pub const Draw_ADDRESS: usize = 0x140190E80;
+    /// Draws the ambient-occlusion pass, reconstructing from depth and accumulating into the
+    /// temporal history.
+    pub unsafe fn Draw(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, rc, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockSSAO> for RenderBlockSSAO {
+    fn as_ref(&self) -> &RenderBlockSSAO {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockSSAO> for RenderBlockSSAO {
+    fn as_mut(&mut self) -> &mut RenderBlockSSAO {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The screen-space reflection render block. Its `Draw` reconstructs world position from depth via
+/// [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) and ray-marches a scene colour capture
+/// taken earlier in the frame.
+pub struct RenderBlockScreenSpaceReflection {}
+impl RenderBlockScreenSpaceReflection {
+    pub const Draw_ADDRESS: usize = 0x140191E10;
+    /// Draws the screen-space reflection pass.
+    pub unsafe fn Draw(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, rc, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockScreenSpaceReflection>
+for RenderBlockScreenSpaceReflection {
+    fn as_ref(&self) -> &RenderBlockScreenSpaceReflection {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockScreenSpaceReflection>
+for RenderBlockScreenSpaceReflection {
+    fn as_mut(&mut self) -> &mut RenderBlockScreenSpaceReflection {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The screen-space subsurface-scattering render block for skin. Its `Draw` reconstructs from depth
+/// via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) -- twice, once per blur axis -- and
+/// blurs the lit skin in screen space.
+pub struct RenderBlockScreenSpaceSubSurfaceSkin {}
+impl RenderBlockScreenSpaceSubSurfaceSkin {
+    pub const Draw_ADDRESS: usize = 0x140192D60;
+    /// Draws the subsurface-scattering pass.
+    pub unsafe fn Draw(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, rc, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockScreenSpaceSubSurfaceSkin>
+for RenderBlockScreenSpaceSubSurfaceSkin {
+    fn as_ref(&self) -> &RenderBlockScreenSpaceSubSurfaceSkin {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockScreenSpaceSubSurfaceSkin>
+for RenderBlockScreenSpaceSubSurfaceSkin {
+    fn as_mut(&mut self) -> &mut RenderBlockScreenSpaceSubSurfaceSkin {
         self
     }
 }

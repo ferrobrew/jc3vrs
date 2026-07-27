@@ -372,6 +372,31 @@ GBuffer fill (MainDepth + GBuffer0..3 + Velocity)
   -> graphics_flip (present; suppressed by BLOCK_FLIP in VR)
 ```
 
+### 4.1 The depth-reconstruction passes (a closed set)
+
+Some passes recover world or view position from the depth buffer rather than from interpolated vertex
+data. They all do it the same way: rebuild a clip-to-view inverse with
+`CMatrix4f::PerspectiveFovInverse` (`0x1400390E0`), then multiply by the render context's camera
+transform. Cross-referencing that one function enumerates every such pass in the engine — the set is
+closed, and there are seven call sites:
+
+| Pass | Address | Notes |
+|---|---|---|
+| `CRenderBlockDeferredLighting::DrawClustered` | `0x14013CFD0` | the shaded lighting path |
+| `CRenderBlockDeferredLighting::DrawPassThrough` | `0x14013CD00` | **wireframe only** — `Draw` (`0x14013E1E0`) branches on `IsWireframeEnabled` |
+| `CRenderBlockAtmosphericScattering::Draw` | `0x14036A820` | reconstructs the whole screen, sky included; ray-marches the sun cascade and aerial perspective |
+| `CRenderBlockSSAO::Draw` | `0x140190E80` | carries a temporal history advanced per invocation |
+| `CRenderBlockScreenSpaceReflection::Draw` | `0x140191E10` | ray-marches an earlier scene-colour capture |
+| `CRenderBlockScreenSpaceSubSurfaceSkin::Draw` | `0x140192D60` | calls it twice, once per blur axis |
+| `DOFUtil::GetViewProjInverse` | `0x1400C77E0` | post-effect utility, not a render block |
+
+The rebuild encodes only a *symmetric* frustum (see the `PerspectiveFovInverse` def for the exact
+matrix), so any consumer that needs an asymmetric one has to substitute the matrix rather than adjust
+its inputs. Two of the seven sample the sun shadow cascade over the reconstructed positions —
+`DrawClustered` and `AtmosphericScattering::Draw` — so shadow behaviour that depends on the
+reconstruction basis is governed by those two together, and fixing one alone leaves the other
+painting over it.
+
 ---
 
 ## 5. Per-frame-once / single-use state (double-dispatch hazards)

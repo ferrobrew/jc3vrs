@@ -926,6 +926,17 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      screen. Needs the off-axis reconstruction override on.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.single_pass_atmospheric_per_eye,
+                    "Atmospheric scattering per eye (sun shadows, aerial perspective)",
+                )
+                .on_hover_text(
+                    "The same split for the atmospheric-scattering pass, which reconstructs the \
+                     whole screen -- sky included -- and ray-marches the sun cascade and aerial \
+                     perspective over it. It is the second consumer of the reconstruction basis, so \
+                     with only the deferred resolve split this pass paints the sliding error back \
+                     over the fixed one. Needs the off-axis reconstruction override on.",
+                );
+                ui.checkbox(
                     &mut cfg.stereo.single_pass_clustered_per_eye,
                     "Clustered light grid per eye (local lights on forward materials)",
                 )

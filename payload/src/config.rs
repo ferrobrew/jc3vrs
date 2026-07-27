@@ -320,6 +320,16 @@ pub struct StereoConfig {
     /// collapse and `reconstruct_offaxis_inverse`. On by default: sliding shadows are a worse defect
     /// than the extra light-assignment pass is a cost, and the flag remains for an A/B in the headset.
     pub single_pass_reconstruct_per_eye: bool,
+    /// The same per-eye split for the **atmospheric-scattering / aerial-perspective** pass, the other
+    /// fullscreen consumer of the reconstruction basis.
+    ///
+    /// That pass reconstructs the whole screen from depth -- sky included -- and ray-marches the sun
+    /// shadow cascade and aerial perspective over the reconstructed positions, so under the collapse it
+    /// carries exactly the defect
+    /// [`single_pass_reconstruct_per_eye`](Self::single_pass_reconstruct_per_eye) describes, and
+    /// splitting only the deferred resolve leaves this pass painting the same sliding error back over
+    /// it. Requires `reconstruct_offaxis_inverse`; on by default, for the same reason.
+    pub single_pass_atmospheric_per_eye: bool,
     /// Requires [`single_pass_reconstruct_per_eye`](Self::single_pass_reconstruct_per_eye) and
     /// [`fix_clustered_light_frustum`](Self::fix_clustered_light_frustum): build the clustered
     /// (froxel) light grid **per eye** as well, instead of building it once with eye 0's projection
@@ -636,6 +646,7 @@ impl StereoConfig {
             single_pass_instanced_per_eye: true,
             single_pass_indirect_per_eye: true,
             single_pass_reconstruct_per_eye: true,
+            single_pass_atmospheric_per_eye: true,
             single_pass_clustered_per_eye: true,
             single_pass_clustered_per_eye_light_view: true,
             single_pass_uniform_viewport_slots: true,

@@ -90,6 +90,51 @@ pub(super) fn enter_per_eye_half(eye: usize, ctx: *mut HContext_t) -> PerEyeHalf
     PerEyeHalf(())
 }
 
+/// Run a fullscreen reconstruction pass once per eye half under the single-pass collapse, each run
+/// masked to that eye and handed that eye's basis.
+///
+/// Returns whether `draw` was issued. `false` means the preconditions failed before anything ran and
+/// the caller must issue the pass itself, exactly once, as it always did. It does **not** mean the
+/// split was abandoned partway: a run that starts and then demotes has already drawn the whole
+/// target, so it reports `true` and the caller must not issue it again.
+///
+/// This is [`enter_per_eye_half`] plus the preconditions and the demotion rule that every consumer
+/// needs, so a block's detour is the call and nothing else. The demotion matters: a run that was
+/// never masked drew the whole target, so issuing the second eye would draw the same full-width image
+/// twice — dimming everything the pass accumulates. That case stops after one run, which is precisely
+/// the un-split behaviour.
+///
+/// `enabled` is the caller's own flag; the shared preconditions (a live collapse, a context, and a
+/// second eye to render) are checked here.
+pub(super) fn split_fullscreen_pass(
+    enabled: bool,
+    ctx: Option<*mut HContext_t>,
+    mut draw: impl FnMut(),
+) -> bool {
+    if !enabled || !crate::stereo::single_pass::collapse_active() {
+        return false;
+    }
+    let Some(ctx) = ctx else {
+        return false;
+    };
+    if crate::vr::render_params(1).is_none() {
+        return false;
+    }
+
+    for eye in 0..2 {
+        let half = enter_per_eye_half(eye, ctx);
+        draw();
+        if !half.masked() {
+            // Nothing was masked, so this run covered the whole target -- which is exactly what the
+            // un-split pass does. Stop, and report the pass as issued: `draw` has already run, so a
+            // caller that fell back to issuing it itself would draw it a second time. The `false`
+            // return is reserved for the precondition failures above, where `draw` has *not* run.
+            return true;
+        }
+    }
+    true
+}
+
 /// The scope opened by [`enter_per_eye_half`].
 pub(super) struct PerEyeHalf(());
 
