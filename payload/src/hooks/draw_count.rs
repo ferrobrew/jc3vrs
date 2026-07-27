@@ -193,6 +193,10 @@ fn set_render_setup(ctx: *mut c_void, setup: *mut c_void, restore: bool) {
     // narrows the viewport at, and the later binds are what put it back. A no-op unless a per-eye
     // froxel run is in flight on this thread.
     crate::hooks::graphics_engine::clustered_lighting::on_render_setup_bound();
+    // Per-eye fullscreen reconstruction: a scissor mask is in the bound target's pixels, so an at-entry
+    // per-eye run has to re-derive its eye half from the target this bind just made current. A no-op
+    // unless such a run is in flight on this thread.
+    crate::hooks::graphics_engine::reconstruction::on_render_setup_bound();
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::Clear_ADDRESS)]

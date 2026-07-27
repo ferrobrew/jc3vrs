@@ -24,6 +24,16 @@
 //! [`enter_per_eye_half`] is the seam for running such a pass once per eye instead --
 //! [`super::clustered_lighting`] drives it for the deferred resolve, which is where the sun shadow is
 //! sampled.
+//!
+//! A per-eye half raises its mask under one of two [`MaskArming`] rules. The original one,
+//! [`MaskArming::OnReconstruction`], waits for the pass's own `PerspectiveFovInverse` call, so a pass
+//! that turns out not to reconstruct leaves the frame exactly as it found it; the price is that
+//! whatever the block draws *before* that call runs unmasked, twice. The other,
+//! [`MaskArming::AtEntry`], raises the mask before the block runs at all and follows it onto its own
+//! render targets ([`on_render_setup_bound`]), so the two runs are disjoint over the whole block --
+//! which is what a block whose early phases are non-idempotent (a separable blur ping-pong reading and
+//! writing the same textures) needs, and what a block that draws through several differently-sized
+//! targets needs, since a scissor rectangle is in the bound target's pixels and nothing else's.
 
 use std::{
     cell::Cell,
@@ -74,6 +84,19 @@ pub(super) fn hook_library() -> HookLibrary {
 /// (an auxiliary camera, or the override disabled) leaves the frame exactly as it found it -- see
 /// [`PerEyeHalf::masked`].
 pub(super) fn enter_per_eye_half(eye: usize, ctx: *mut HContext_t) -> PerEyeHalf {
+    enter_per_eye_half_with(MaskArming::OnReconstruction, eye, ctx)
+}
+
+/// [`enter_per_eye_half`] with the mask-arming rule named explicitly.
+///
+/// Under [`MaskArming::AtEntry`] the mask goes up here, before the pass has drawn anything, and the
+/// returned guard's [`PerEyeHalf::masked`] answers immediately: `false` means the mask could not be
+/// raised at all (no readable viewport), so the caller has drawn nothing yet and can still fall back.
+pub(super) fn enter_per_eye_half_with(
+    arming: MaskArming,
+    eye: usize,
+    ctx: *mut HContext_t,
+) -> PerEyeHalf {
     let saved = with_immediate_context(|d3d| {
         let mut count = 2u32;
         let mut rects = [RECT::default(); 2];
@@ -81,13 +104,53 @@ pub(super) fn enter_per_eye_half(eye: usize, ctx: *mut HContext_t) -> PerEyeHalf
         unsafe { d3d.RSGetScissorRects(&mut count, Some(rects.as_mut_ptr())) };
         rects
     });
-    PER_EYE.set(Some(PerEyeState {
+    let state = PerEyeState {
         eye,
         ctx,
+        arming,
         masked: false,
         saved_scissor: saved,
-    }));
+    };
+    PER_EYE.set(Some(state));
+    if arming == MaskArming::AtEntry && !arm_eye_half_scissor(&state) {
+        warn_entry_unmasked();
+    }
     PerEyeHalf(())
+}
+
+/// When a per-eye half raises its scissor mask.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MaskArming {
+    /// At the pass's own [`Matrix4::PerspectiveFovInverse`] call, which is the proof that the pass
+    /// reconstructs at all: one that does not never gets masked and so is left byte-identical to its
+    /// un-split self. Everything the pass draws before that call runs unmasked, on both runs.
+    OnReconstruction,
+    /// Before the pass runs, and re-derived from every render target it binds thereafter
+    /// ([`on_render_setup_bound`]), so the two runs are disjoint across the whole pass. The pass
+    /// identity is the proof that it reconstructs; there is no observation to wait for, and no way to
+    /// retract the mask once the first run's draws have been clipped by it.
+    AtEntry,
+}
+
+/// Re-derive an [`MaskArming::AtEntry`] mask from the render target that was just bound on this
+/// thread, whose viewport the bind has already applied.
+///
+/// Called from the shared `Graphics::SetRenderSetup` detour in [`crate::hooks::draw_count`]. A scissor
+/// rectangle is expressed in the bound target's pixels, so a mask derived from the target the pass
+/// started on stops meaning anything the moment the pass binds a target of a different size -- and the
+/// blocks this covers do exactly that (the ambient-occlusion block draws through a full-resolution
+/// linear-depth target, half-resolution occlusion and history targets, and the full-resolution scene
+/// target, in one `Draw`). A no-op unless an at-entry per-eye half is in flight on this thread.
+pub(crate) fn on_render_setup_bound() {
+    let Some(state) = PER_EYE.get() else {
+        return;
+    };
+    if state.arming != MaskArming::AtEntry || !state.masked {
+        return;
+    }
+    if let Some(viewport) = current_viewport() {
+        set_eye_half_scissor(viewport, state.eye);
+    }
 }
 
 /// Run a fullscreen reconstruction pass once per eye half under the single-pass collapse, each run
@@ -109,6 +172,22 @@ pub(super) fn enter_per_eye_half(eye: usize, ctx: *mut HContext_t) -> PerEyeHalf
 pub(super) fn split_fullscreen_pass(
     enabled: bool,
     ctx: Option<*mut HContext_t>,
+    draw: impl FnMut(),
+) -> bool {
+    split_fullscreen_pass_with(MaskArming::OnReconstruction, enabled, ctx, draw)
+}
+
+/// [`split_fullscreen_pass`] with the mask-arming rule named explicitly.
+///
+/// Under [`MaskArming::AtEntry`] the two runs are disjoint by construction, so the demotion rule below
+/// cannot fire between them: the mask either goes up before the first run draws anything -- in which
+/// case both runs happen and each covers exactly its own half -- or it never goes up at all and the
+/// call returns `false` having drawn nothing, leaving the caller to issue the pass once as it always
+/// did.
+pub(super) fn split_fullscreen_pass_with(
+    arming: MaskArming,
+    enabled: bool,
+    ctx: Option<*mut HContext_t>,
     mut draw: impl FnMut(),
 ) -> bool {
     if !enabled || !crate::stereo::single_pass::collapse_active() {
@@ -122,7 +201,20 @@ pub(super) fn split_fullscreen_pass(
     }
 
     for eye in 0..2 {
-        let half = enter_per_eye_half(eye, ctx);
+        let half = enter_per_eye_half_with(arming, eye, ctx);
+        if arming == MaskArming::AtEntry && !half.masked() {
+            // The mask never went up, so this run would cover the whole target. Before the first run
+            // that is recoverable: nothing has been drawn, so report the split as not taken and let the
+            // caller issue the pass once. Before the second it is not -- eye 0 drew only its half -- so
+            // cover the rest the only way left, by running whole-target and accepting that eye 0's half
+            // is drawn a second time.
+            drop(half);
+            if eye == 0 {
+                return false;
+            }
+            draw();
+            return true;
+        }
         draw();
         if !half.masked() {
             // Nothing was masked, so this run covered the whole target -- which is exactly what the
@@ -268,6 +360,8 @@ struct PerEyeState {
     /// The graphics context the run's draws are issued on, whose rasterizer-state key carries the
     /// scissor-enable bit.
     ctx: *mut HContext_t,
+    /// When this run raises its mask, and whether the mask follows the pass onto its own targets.
+    arming: MaskArming,
     /// Whether the mask was actually applied; see [`PerEyeHalf::masked`].
     masked: bool,
     /// The scissor rectangles found bound before the run, put back when the guard drops. `None` when
@@ -297,11 +391,18 @@ fn half_target_remap(eye: usize) -> glam::Mat4 {
     )
 }
 
-/// Clip the rest of this per-eye run to `state.eye`'s half of the double-wide target, by setting both
+/// Clip the rest of this per-eye run to `state.eye`'s half of the bound target, by setting both
 /// scissor rectangles to that half and raising the context's scissor-enable bit. Reports whether the
-/// mask was applied; it is not when the immediate context is unreachable, when no render size is known
-/// yet, or when the bound viewport is not the double-wide scene target (a reduced-resolution or
-/// auxiliary pass, which must be left alone).
+/// mask was applied; it is not when the immediate context is unreachable, nor -- under
+/// [`MaskArming::OnReconstruction`] -- when the bound viewport is not the double-wide scene target
+/// (a reduced-resolution or auxiliary pass, which must be left alone).
+///
+/// [`MaskArming::AtEntry`] keeps no such size condition. It arms before the pass has bound anything,
+/// on whatever viewport the previous pass left, and every target the pass then binds re-derives the
+/// rectangle through [`on_render_setup_bound`]; every one of those targets is sized from the collapse's
+/// double-wide scene, so halving whichever is bound is the eye split at that target's resolution. This
+/// mirrors what the collapse already does for viewports inside a per-eye re-issue, which likewise
+/// halves the requested viewport rather than requiring a particular one.
 ///
 /// Idempotent within a run: the second call finds the mask already up and reports success without
 /// touching the device.
@@ -309,41 +410,23 @@ fn arm_eye_half_scissor(state: &PerEyeState) -> bool {
     if state.masked {
         return true;
     }
-    let Some((width, _)) = crate::stereo::render_size() else {
+    let Some(full) = current_viewport() else {
         return false;
     };
-    let Some(full) = with_immediate_context(|d3d| {
-        let mut count = 1u32;
-        let mut viewports = [D3D11_VIEWPORT::default(); 1];
-        // SAFETY: `count` is the length of `viewports`, as `RSGetViewports` requires.
-        unsafe { d3d.RSGetViewports(&mut count, Some(viewports.as_mut_ptr())) };
-        viewports[0]
-    }) else {
-        return false;
-    };
-    // The eye halves are derived from this viewport, so it has to be the collapse's full double-wide
-    // one -- a pass that binds anything else is not the one we can split. A pixel of slack for the
-    // engine's own rounding, matching the scene-size check the collapse's viewport routing uses.
-    if (full.Width - width as f32).abs() > 1.0 {
-        warn_unmasked(full.Width, width);
-        return false;
+    if state.arming == MaskArming::OnReconstruction {
+        // The eye halves are derived from this viewport, so it has to be the collapse's full
+        // double-wide one -- a pass that binds anything else is not the one we can split. A pixel of
+        // slack for the engine's own rounding, matching the scene-size check the collapse's viewport
+        // routing uses.
+        let Some((width, _)) = crate::stereo::render_size() else {
+            return false;
+        };
+        if (full.Width - width as f32).abs() > 1.0 {
+            warn_unmasked(full.Width, width);
+            return false;
+        }
     }
-    let half = full.Width / 2.0;
-    let left = full.TopLeftX + state.eye as f32 * half;
-    let rect = RECT {
-        left: left as i32,
-        top: full.TopLeftY as i32,
-        right: (left + half) as i32,
-        bottom: (full.TopLeftY + full.Height) as i32,
-    };
-    // Both slots: a viewport-routed shader picks its scissor rectangle by the same index it picks its
-    // viewport with, and the fullscreen quad's shader writes no index at all, so the two must agree.
-    let bound = with_immediate_context(|d3d| {
-        // SAFETY: a two-element slice is a valid scissor-rect array.
-        unsafe { d3d.RSSetScissorRects(Some(&[rect, rect])) };
-    })
-    .is_some();
-    if !bound {
+    if set_eye_half_scissor(full, state.eye).is_none() {
         return false;
     }
     // SAFETY: `ctx` is the graphics context the bracketed pass draws on, live for the guard's scope.
@@ -353,13 +436,46 @@ fn arm_eye_half_scissor(state: &PerEyeState) -> bool {
         ..*state
     }));
     if !ENGAGED.swap(true, Ordering::Relaxed) {
+        let width = full.Width;
         tracing::info!(
             target: "single_pass",
             "per-eye reconstruction engaged: fullscreen reconstruction passes now run once per eye, \
-             scissor-masked to each half of the {width}px-wide collapse target",
+             scissor-masked to each half of the {width}px-wide bound target",
         );
     }
     true
+}
+
+/// Set both scissor rectangles to `eye`'s half of `viewport`. `None` when the immediate context could
+/// not be reached, in which case nothing was changed.
+///
+/// Both slots: a viewport-routed shader picks its scissor rectangle by the same index it picks its
+/// viewport with, and the fullscreen quad's shader writes no index at all, so the two must agree.
+fn set_eye_half_scissor(viewport: D3D11_VIEWPORT, eye: usize) -> Option<()> {
+    let half = viewport.Width / 2.0;
+    let left = viewport.TopLeftX + eye as f32 * half;
+    let rect = RECT {
+        left: left as i32,
+        top: viewport.TopLeftY as i32,
+        right: (left + half) as i32,
+        bottom: (viewport.TopLeftY + viewport.Height) as i32,
+    };
+    with_immediate_context(|d3d| {
+        // SAFETY: a two-element slice is a valid scissor-rect array.
+        unsafe { d3d.RSSetScissorRects(Some(&[rect, rect])) };
+    })
+}
+
+/// The viewport bound on the immediate context, which is the space a scissor rectangle set now would
+/// be interpreted in.
+fn current_viewport() -> Option<D3D11_VIEWPORT> {
+    with_immediate_context(|d3d| {
+        let mut count = 1u32;
+        let mut viewports = [D3D11_VIEWPORT::default(); 1];
+        // SAFETY: `count` is the length of `viewports`, as `RSGetViewports` requires.
+        unsafe { d3d.RSGetViewports(&mut count, Some(viewports.as_mut_ptr())) };
+        viewports[0]
+    })
 }
 
 /// Warn, once, that a per-eye reconstruction run found a viewport it could not split, so the pass ran
@@ -375,10 +491,23 @@ fn warn_unmasked(viewport_width: f32, render_width: u32) {
     }
 }
 
-/// One-shot latches for the two coverage log lines above: the split is either working for the whole
+/// Warn, once, that an at-entry per-eye run could not read a viewport to derive its mask from, so the
+/// pass was left to run whole-target exactly as it does with the split off.
+fn warn_entry_unmasked() {
+    if !ENTRY_UNMASKED_WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            target: "single_pass",
+            "per-eye reconstruction declined at block entry: no viewport could be read from the \
+             immediate context, so the pass ran once across the whole target with one eye's basis",
+        );
+    }
+}
+
+/// One-shot latches for the three coverage log lines above: the split is either working for the whole
 /// session or not, so reporting it once is the whole signal and a per-frame line would be noise.
 static ENGAGED: AtomicBool = AtomicBool::new(false);
 static UNMASKED_WARNED: AtomicBool = AtomicBool::new(false);
+static ENTRY_UNMASKED_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Run `f` on the engine's immediate D3D context under the context mutex every other path in the mod
 /// that touches it also takes. `None` when the device or context is not live yet.

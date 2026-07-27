@@ -16,9 +16,10 @@ pub(crate) mod render_block;
 // The VR two-eye cull-frustum widening (`GetBFBCFrustumParamsForCameraAndTime`); private, reached
 // only through `hook_library` below.
 mod culling;
-// The per-eye off-axis clip-to-view reconstruction fix (`PerspectiveFovInverse`); private, reached
-// only through `hook_library` below.
-mod reconstruction;
+// The per-eye off-axis clip-to-view reconstruction fix (`PerspectiveFovInverse`); crate-visible so the
+// shared `SetRenderSetup` detour can re-derive an at-entry per-eye scissor mask from the target the
+// bind just made current.
+pub(crate) mod reconstruction;
 // The atmospheric-scattering pass's per-eye re-issue under the collapse; private, reached only
 // through `hook_library` below.
 mod atmospheric_scattering;
