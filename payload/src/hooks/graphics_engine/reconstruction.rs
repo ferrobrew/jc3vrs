@@ -89,8 +89,8 @@ pub(super) fn hook_library() -> HookLibrary {
 ///
 /// Returns a guard that puts the scissor state back on every path. Only the pass's own
 /// [`Matrix4::PerspectiveFovInverse`] call arms the mask, so a pass that turns out not to reconstruct
-/// (an auxiliary camera, or the override disabled) leaves the frame exactly as it found it -- see
-/// [`PerEyeHalf::masked`].
+/// (an auxiliary camera, whose near/far are not the main view's) leaves the frame exactly as it found
+/// it -- see [`PerEyeHalf::masked`].
 pub(super) fn enter_per_eye_half(eye: usize, ctx: *mut HContext_t) -> PerEyeHalf {
     enter_per_eye_half_with(MaskArming::OnReconstruction, eye, ctx)
 }
@@ -132,6 +132,13 @@ pub(super) enum MaskArming {
     /// At the pass's own [`Matrix4::PerspectiveFovInverse`] call, which is the proof that the pass
     /// reconstructs at all: one that does not never gets masked and so is left byte-identical to its
     /// un-split self. Everything the pass draws before that call runs unmasked, on both runs.
+    ///
+    /// What that call is tested against is a property of the *pass* -- its near/far planes being the
+    /// live main camera's, and the bound viewport being the collapse's double-wide one -- and not of
+    /// the run or of anything the debug UI can move underneath it, so a split whose first run masks
+    /// has every run mask. That is what makes the demotion in [`split_fullscreen_pass_policy`] a
+    /// first-run property rather than something that can strike between the runs and leave them
+    /// overlapping.
     OnReconstruction,
     /// Before the pass runs, and re-derived from every render target it binds thereafter
     /// ([`on_render_setup_bound`]), so the two runs are disjoint across the whole pass. The pass
@@ -318,6 +325,11 @@ pub(super) fn split_fullscreen_pass_policy(
             // un-split pass does. Stop, and report the pass as issued: `draw` has already run, so a
             // caller that fell back to issuing it itself would draw it a second time. The `false`
             // return is reserved for the precondition failures above, where `draw` has *not* run.
+            //
+            // This is sound for the second run as well as the first only because the arming condition
+            // is a property of the pass rather than of the run (see [`MaskArming::OnReconstruction`]):
+            // a first run that masked means the second one masks too, so the whole-target case is the
+            // first run's, where stopping leaves the frame with exactly one whole-target pass on it.
             return true;
         }
     }
@@ -381,7 +393,7 @@ fn perspective_fov_inverse(
 /// main-camera planes (an auxiliary camera -- e.g. a reflection -- whose own symmetric rebuild is
 /// already correct).
 fn offaxis_inverse(near: f32, far: f32) -> Option<Matrix4> {
-    let (enabled, near_fallback, far_fallback) = Config::lock_query(|c| {
+    let (toggle, near_fallback, far_fallback) = Config::lock_query(|c| {
         (
             c.stereo.reconstruct_offaxis_inverse,
             c.vr.near_clip,
@@ -391,6 +403,14 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<Matrix4> {
     // A per-eye half run reconstructs for *its* eye, not for the collapse's single dispatch index
     // (which is always eye 0); everything else keeps reading the dispatch's own eye.
     let half = PER_EYE.get();
+    // Inside a per-eye half the toggle is not consulted: every caller that opens one sampled it once,
+    // at block entry, and only opened the split because it was on, so the split's own runs must all
+    // answer the way that sample did. Re-reading it here would let the debug UI flip it *between* the
+    // two runs -- and this read is what arms the eye mask, so eye 0's run would mask to its half and
+    // eye 1's would draw across the whole target, compositing eye 0's half twice into an accumulating
+    // pass. Outside a split the live read stands: that is the plain detour path, with no second run to
+    // disagree with.
+    let enabled = toggle || half.is_some();
     let eye = half.map_or_else(crate::stereo::draw_index, |state| state.eye);
     let params = crate::vr::render_params(eye);
     // Recognize the main-view depth passes by the engine's ACTUAL active-camera planes, the single
@@ -416,19 +436,27 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<Matrix4> {
     // shear -- so specular/SSR looked fixed -- but sign-flipped and mis-scaled the depth basis, so the
     // sun shadow sampled over the reconstructed positions swam with the off-axis shear as the camera
     // rotated (issue #31).
+    // A per-eye half run masks the pass to this eye's half of the double-wide target and folds the
+    // full-target-NDC -> eye-NDC remap into the inverse, so the half reconstructs exactly. If the mask
+    // cannot be applied (the bound target is not the collapse's double-wide scene target), the run is
+    // indistinguishable from the un-split pass, which is what [`PerEyeHalf::masked`] reports.
+    //
+    // The mask arms on `applies` -- the pass's identity -- and deliberately not on the per-eye
+    // projections being available: `render_params` is read live too, and a run that armed while the
+    // other did not would leave the two runs overlapping. A masked half that gets no substituted
+    // inverse still draws exactly what the un-split whole-target pass would draw over those pixels
+    // (the shaders derive their UV from their own NDC, which clipping does not move), so the split's
+    // two runs tile the target exactly once whatever the live reads do mid-split.
+    let masked_eye = match half {
+        Some(state) if applies && arm_eye_half_scissor(&state) => Some(state.eye),
+        _ => None,
+    };
     let result = applies
         .then(|| params.map(|vr| glam::Mat4::from(vr.projection_reverse_z).inverse()))
         .flatten()
-        .map(|inverse| match half {
-            // A per-eye half run masks the pass to this eye's half of the double-wide target and folds
-            // the full-target-NDC -> eye-NDC remap into the inverse, so the half reconstructs exactly.
-            // If the mask cannot be applied (the bound target is not the collapse's double-wide scene
-            // target), fall through to the plain inverse: the run is then indistinguishable from the
-            // un-split pass, which is what [`PerEyeHalf::masked`] reports to the caller.
-            Some(state) if arm_eye_half_scissor(&state) => {
-                Matrix4::from(inverse * half_target_remap(state.eye))
-            }
-            _ => Matrix4::from(inverse),
+        .map(|inverse| match masked_eye {
+            Some(eye) => Matrix4::from(inverse * half_target_remap(eye)),
+            None => Matrix4::from(inverse),
         });
 
     // Record the reconstruction's live inputs so the trace can show whether the matrix (and hence the

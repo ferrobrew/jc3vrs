@@ -31,9 +31,14 @@
 //! target -- which is also why both viewport slots are pinned, so a permutation that routed to either
 //! slot still lands in this eye.
 //!
-//! Behind [`StereoConfig::single_pass_ssdecal_per_eye`](crate::config::StereoConfig). Because the
-//! shader half is applied at shader-creation time, flipping the flag needs a shader reload before the
-//! rewrite reaches the permutations.
+//! Behind [`StereoConfig::single_pass_ssdecal_per_eye`](crate::config::StereoConfig). The two halves
+//! are decided at different points in the frame -- the rewrite when a shader is created, the staging
+//! when a decal is drawn -- so the flag cannot switch them together: flipping it off leaves
+//! already-rewritten permutations bound, fetching depth through an offset the draw path has stopped
+//! staging. The debug UI therefore requests a shader reload when it changes, which is what actually
+//! retracts (or applies) the rewrite, and [`shader_rewrite_enabled`] narrows the rewrite to the
+//! configuration it can be right in. What is left is the interval between the toggle and the reload,
+//! and [`neutralize_eye_bias`] holds the offset at a definite value across it.
 //!
 //! # The box geometry
 //!
@@ -76,8 +81,19 @@ pub(super) fn hook_library() -> HookLibrary {
 /// Whether the decal permutations should be rewritten as they are created, so their depth fetch reads
 /// the offset this module stages. Read by the `CreateFragmentProgram` hook, which owns every
 /// fragment-shader rewrite.
+///
+/// Gated on the collapse as well as on the block's own flag, because the rewrite is only ever right
+/// for a draw the per-eye re-issue below covers: the spliced instruction halves the depth-fetch UV
+/// unconditionally, which addresses one eye's half of a *double-wide* buffer and nothing else. In any
+/// other configuration -- the collapse off, or single-pass off entirely -- a rewritten permutation
+/// would sample the left half of a normal-width depth buffer stretched across the decal, so leaving
+/// those permutations pristine is what keeps decals correct there. Both halves of this gate are
+/// sampled at shader-creation time, so a toggle only reaches the permutations at the next shader
+/// reload; the debug UI requests one when the flag changes, and [`ss_decal_draw`] keeps the interval
+/// in between bounded.
 pub(super) fn shader_rewrite_enabled() -> bool {
-    Config::lock_query(|c| c.stereo.single_pass_ssdecal_per_eye)
+    crate::stereo::single_pass::collapse_active()
+        && Config::lock_query(|c| c.stereo.single_pass_ssdecal_per_eye)
 }
 
 #[detour(address = jc3gi::graphics_engine::render_block::RenderBlockSSDecal::Draw_ADDRESS)]
@@ -91,8 +107,43 @@ fn ss_decal_draw(this: *const RenderBlockSSDecal, rc: *mut RenderContext, info: 
         })
     };
     if !handled {
+        // SAFETY: `rc` is the live render context the engine passed into `Draw`.
+        unsafe { neutralize_eye_bias(rc) };
         detour.call(this, rc, info);
     }
+}
+
+/// Stage the left-half offset for a decal draw the per-eye re-issue declined, so a permutation that
+/// *was* rewritten cannot read a stale value out of [`EYE_BIAS_REGISTER`].
+///
+/// The rewrite is decided at shader-creation time and the offset is staged at draw time, and the two
+/// can disagree: the flag goes off (or the collapse does, or the VR frame the per-eye bases come from
+/// is skipped) while permutations rewritten under the old answer are still bound. Those permutations
+/// keep fetching depth through `cb1[13]`, and `cb1[13]` is a slack row of a pooled constant buffer
+/// shared with every other block type in the frame, so with nothing staging it they read whatever the
+/// last block happened to leave there -- an arbitrary offset, out of the texture as often as not, and
+/// changing from draw to draw. Writing zero turns that into one definite, bounded outcome: the fetch
+/// addresses the left half, which is what the pass did before this module existed. It cannot be made
+/// *correct* here -- the spliced `· 0.5` has no neutral value -- so the shader reload the debug UI
+/// requests on the toggle is still what retracts the rewrite; this only keeps the meantime stable.
+///
+/// A permutation that was never rewritten is unaffected: the row sits past the registers it declares
+/// and no shader in the pass reads it.
+///
+/// # Safety
+///
+/// `rc` must be the live [`RenderContext`] the detoured `Draw` received.
+unsafe fn neutralize_eye_bias(rc: *mut RenderContext) {
+    // SAFETY: `rc` is live per the caller contract.
+    let Some(rc_ref) = (unsafe { rc.as_ref() }) else {
+        return;
+    };
+    let ctx = rc_ref.m_Context;
+    if ctx.is_null() {
+        return;
+    }
+    // SAFETY: `ctx` is the render context's live graphics context, and the offset is one float4 row.
+    unsafe { stage(ctx, EYE_BIAS_REGISTER, &eye_bias(0), 1) };
 }
 
 /// The fragment constant-buffer slot the decal permutations read (`cbInstanceConsts`).

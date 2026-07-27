@@ -813,7 +813,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                     "Renders the scene targets at 2x per-eye width so each eye-half is full \
                      resolution instead of squished. Needs Collapse and native resolution on.",
                 );
-                if ui
+                let collapse_changed = ui
                     .checkbox(
                         &mut cfg.stereo.single_pass_collapse,
                         "Collapse to a single game.Draw walk (the actual perf win; riskiest)",
@@ -822,9 +822,18 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                         "One walk renders both eyes: centered camera, no between-eye restore, the \
                          back buffer split into the two eye textures. Without double-wide each eye \
                          is squished/half-filled; unpatched geometry and the HUD reach the left eye \
-                         only. Turns the far-field Share mode off -- the two are exclusive.",
+                         only. Turns the far-field Share mode off -- the two are exclusive. \
+                         Reloads shaders, since some rewrites only apply while the collapse is on.",
                     )
-                    .changed()
+                    .changed();
+                if collapse_changed {
+                    // Some shader rewrites are gated on the collapse being active -- the screen-space
+                    // decal depth-UV bias is only correct against a double-wide target -- so a shader
+                    // created under one setting is wrong under the other. Only the reload retracts or
+                    // applies them.
+                    shader::request_reload();
+                }
+                if collapse_changed
                     && cfg.stereo.single_pass_collapse
                     && cfg.far_field.mode == crate::config::FarFieldMode::Share
                 {
@@ -851,11 +860,11 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                     )
                     .on_hover_text(
                         "Extends the reprojection to allowlisted families the cb0 remap claims on a \
-                         camera-position reference that is not their position path (generaljc3 reads \
-                         cb0[4] for a LOD fade and builds clip from a baked cb1). Without it they get \
-                         viewport routing but no per-eye clip, so both eye halves are drawn from the \
-                         collapsed centre viewpoint. Requires the reprojection above. Reloads shaders \
-                         to apply.",
+                         camera-position reference that is not their position path: generaljc3, \
+                         landmark, layered and layeredblend all read cb0[4] for a LOD fade and build \
+                         clip from a baked cb1. Without it they get viewport routing but no per-eye \
+                         clip, so both eye halves are drawn from the collapsed centre viewpoint. \
+                         Requires the reprojection above. Reloads shaders to apply.",
                     )
                     .changed()
                 {
@@ -981,16 +990,23 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      so its screen coverage has parallax too. The reconstruction fix alone stops the \
                      sliding; this adds depth to it.",
                 );
-                ui.checkbox(
-                    &mut cfg.stereo.single_pass_ssdecal_per_eye,
-                    "Screen-space decals per eye",
-                )
-                .on_hover_text(
-                    "Re-uploads each eye's reconstruction basis for the SSDecal block and biases its \
-                     projective depth-fetch UV into that eye's half of the double-wide buffer. Off, \
-                     the decal reconstructs its surface from the wrong part of the depth buffer and \
-                     the error moves with the camera.",
-                );
+                if ui
+                    .checkbox(
+                        &mut cfg.stereo.single_pass_ssdecal_per_eye,
+                        "Screen-space decals per eye",
+                    )
+                    .on_hover_text(
+                        "Re-uploads each eye's reconstruction basis for the SSDecal block and biases \
+                         its projective depth-fetch UV into that eye's half of the double-wide \
+                         buffer. Off, the decal reconstructs its surface from the wrong part of the \
+                         depth buffer and the error moves with the camera. Reloads shaders to apply: \
+                         the depth-fetch bias is a shader rewrite, and until the reload the already \
+                         rewritten permutations keep reading it.",
+                    )
+                    .changed()
+                {
+                    shader::request_reload();
+                }
                 ui.checkbox(&mut cfg.stereo.single_pass_ssao_per_eye, "SSAO per eye")
                     .on_hover_text(
                         "Another of the seven depth-reconstruction passes. Hazardous: SSAO advances a \
