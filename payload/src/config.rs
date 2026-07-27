@@ -391,6 +391,46 @@ pub struct StereoConfig {
     /// Off by default: everywhere except those passes the two records hold the same viewport and this
     /// is a no-op, which makes it a clean A/B.
     pub collapse_viewport_follows_target: bool,
+    /// Run the **SSAO** pass once per eye under the collapse, like the deferred resolve and the
+    /// atmospheric scattering.
+    ///
+    /// SSAO is one of the seven depth-reconstruction passes (cross-reference
+    /// `CMatrix4f::PerspectiveFovInverse`; the set is closed), so collapsed it reconstructs the whole
+    /// double-wide target from one eye's basis. **Hazard:** unlike the two already split, it carries a
+    /// temporal history it advances per invocation, so re-issuing the whole block double-advances
+    /// state that is not idempotent. Off by default and expected to need its own handling of that
+    /// history; the flag exists so the reconstruction half can be tested at all.
+    pub single_pass_ssao_per_eye: bool,
+    /// Run the **screen-space reflection** pass once per eye under the collapse.
+    ///
+    /// Same reconstruction defect as [`single_pass_ssao_per_eye`](Self::single_pass_ssao_per_eye).
+    /// **Hazard:** SSR ray-marches a scene-colour capture taken earlier in the frame, so a second run
+    /// consumes state the first already consumed. Off by default.
+    pub single_pass_ssr_per_eye: bool,
+    /// Run the **screen-space subsurface-scattering** (skin) pass once per eye under the collapse.
+    ///
+    /// Same reconstruction defect. This block calls the inverse **twice**, once per blur axis, so a
+    /// per-eye split has to mask both. Off by default.
+    pub single_pass_subsurface_per_eye: bool,
+    /// Apply the per-eye reconstruction basis to the **depth-of-field** post pass under the collapse.
+    ///
+    /// `DOFUtil::GetViewProjInverse` is the seventh and last consumer of the reconstruction basis. DoF
+    /// is a post pass rather than a render block, so it may want the basis substituted rather than the
+    /// pass re-issued. Off by default.
+    pub single_pass_dof_per_eye: bool,
+    /// Give **screen-space decals** a per-eye block intercept under the collapse.
+    ///
+    /// `CRenderBlockSSDecal` is not a `PerspectiveFovInverse` consumer: its type-level `Setup` builds
+    /// its own reconstruction basis inline and uploads it to fragment `cb1[0..3]`, and its pixel shader
+    /// derives the depth-fetch UV *projectively* from its own clip position — normalized over one eye
+    /// while the depth buffer is double-wide. So the decal reconstructs from the wrong surface, and the
+    /// error moves with the camera.
+    ///
+    /// Both halves need fixing together: re-upload that eye's basis per eye, **and** bias the shader's
+    /// projective UV into that eye's half of the buffer. Note the same `uv` feeds the reconstruction
+    /// matrix (which wants the per-eye value) and the depth fetch (which wants the double-wide one), so
+    /// they must stay separate. Off by default.
+    pub single_pass_ssdecal_per_eye: bool,
     /// Requires [`single_pass_reconstruct_per_eye`](Self::single_pass_reconstruct_per_eye) and
     /// [`fix_clustered_light_frustum`](Self::fix_clustered_light_frustum): build the clustered
     /// (froxel) light grid **per eye** as well, instead of building it once with eye 0's projection
@@ -711,6 +751,11 @@ impl StereoConfig {
             single_pass_water_uv_per_eye: false,
             single_pass_slot13_per_eye: false,
             collapse_viewport_follows_target: false,
+            single_pass_ssao_per_eye: false,
+            single_pass_ssr_per_eye: false,
+            single_pass_subsurface_per_eye: false,
+            single_pass_dof_per_eye: false,
+            single_pass_ssdecal_per_eye: false,
             single_pass_clustered_per_eye: true,
             single_pass_clustered_per_eye_light_view: true,
             single_pass_uniform_viewport_slots: true,

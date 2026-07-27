@@ -926,6 +926,40 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      screen. Needs the off-axis reconstruction override on.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.single_pass_ssdecal_per_eye,
+                    "Screen-space decals per eye",
+                )
+                .on_hover_text(
+                    "Re-uploads each eye's reconstruction basis for the SSDecal block and biases its \
+                     projective depth-fetch UV into that eye's half of the double-wide buffer. Off, \
+                     the decal reconstructs its surface from the wrong part of the depth buffer and \
+                     the error moves with the camera.",
+                );
+                ui.checkbox(&mut cfg.stereo.single_pass_ssao_per_eye, "SSAO per eye")
+                    .on_hover_text(
+                        "Another of the seven depth-reconstruction passes. Hazardous: SSAO advances a \
+                         temporal history per invocation, so a per-eye re-issue double-advances it.",
+                    );
+                ui.checkbox(&mut cfg.stereo.single_pass_ssr_per_eye, "SSR per eye")
+                    .on_hover_text(
+                        "Same reconstruction defect. Hazardous: SSR ray-marches a scene capture taken \
+                         earlier in the frame, so a second run consumes what the first did.",
+                    );
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_subsurface_per_eye,
+                    "Subsurface skin per eye",
+                )
+                .on_hover_text(
+                    "Same reconstruction defect. This block rebuilds the inverse twice, once per blur \
+                     axis, so both runs have to be masked.",
+                );
+                ui.checkbox(&mut cfg.stereo.single_pass_dof_per_eye, "Depth of field per eye")
+                    .on_hover_text(
+                        "The last consumer of the reconstruction basis. A post pass rather than a \
+                         render block, so it may want the basis substituted rather than the pass \
+                         re-issued.",
+                    );
+                ui.checkbox(
                     &mut cfg.stereo.collapse_viewport_follows_target,
                     "Eye viewports follow the bound target (clouds, smoke, spotlight volumetrics)",
                 )

@@ -22,6 +22,10 @@ mod reconstruction;
 // The atmospheric-scattering pass's per-eye re-issue under the collapse; private, reached only
 // through `hook_library` below.
 mod atmospheric_scattering;
+// The remaining fullscreen depth-reconstruction passes' per-eye re-issue under the collapse (SSAO,
+// SSR, subsurface skin, and the unreachable depth-of-field basis); private, reached only through
+// `hook_library` below.
+mod fullscreen_reconstruction;
 mod render_pass;
 // The three VR resolution levers (`ResizeTextures`, LR-particle, spot-light cone) for issue #8's
 // pixelation; private, reached only through `hook_library` below.
@@ -45,6 +49,9 @@ pub mod terrain;
 // The legacy water blocks' per-eye screen-UV bias under the collapse; private, reached only through
 // `hook_library` below.
 mod water;
+// The screen-space decal blocks' per-eye depth reconstruction under the collapse; private, reached
+// through `hook_library` below and by `shader` for the paired permutation rewrite.
+mod ss_decal;
 
 /// Bundle every CGraphicsEngine-area detour into one hook library, mirroring how the game groups
 /// these classes.
@@ -62,7 +69,9 @@ pub(crate) fn hook_library() -> HookLibrary {
         .with_hook_library(shader::hook_library())
         .with_hook_library(single_pass::hook_library())
         .with_hook_library(clustered_lighting::hook_library())
+        .with_hook_library(ss_decal::hook_library())
         .with_hook_library(atmospheric_scattering::hook_library())
+        .with_hook_library(fullscreen_reconstruction::hook_library())
         .with_hook_library(terrain::hook_library())
         .with_hook_library(water::hook_library())
 }
