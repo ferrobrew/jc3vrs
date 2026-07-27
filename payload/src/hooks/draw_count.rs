@@ -146,16 +146,12 @@ fn draw_indexed_instanced_indirect(
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::Dispatch_ADDRESS)]
-fn dispatch(
-    a1: *mut c_void,
-    a2: *mut c_void,
-    a3: *mut c_void,
-    a4: *mut c_void,
-    a5: *mut c_void,
-    a6: *mut c_void,
-) {
+fn dispatch(ctx: *mut c_void, x: u32, y: u32, z: u32) {
+    if dispatch_suppressed() {
+        return;
+    }
     bump_dispatch();
-    DISPATCH.get().unwrap().call(a1, a2, a3, a4, a5, a6);
+    DISPATCH.get().unwrap().call(ctx, x, y, z);
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::DispatchIndirect_ADDRESS)]
@@ -167,11 +163,26 @@ fn dispatch_indirect(
     a5: *mut c_void,
     a6: *mut c_void,
 ) {
+    if dispatch_suppressed() {
+        return;
+    }
     bump_dispatch();
     DISPATCH_INDIRECT
         .get()
         .unwrap()
         .call(a1, a2, a3, a4, a5, a6);
+}
+
+/// Whether a per-eye fullscreen-reconstruction run is in flight on this thread that must not issue the
+/// compute work its block is asking for.
+///
+/// A scissor rectangle clips rasterization and nothing else, so a block split per eye would otherwise
+/// redo its whole-texture compute on the second run, over the first run's output. The split names one
+/// run to issue it on instead; this is where the other run's dispatches are dropped. A suppressed
+/// dispatch is not counted either -- the tally is of work submitted, and none was. Always `false`
+/// outside such a run, which is every dispatch in the engine that has nothing to do with a split.
+fn dispatch_suppressed() -> bool {
+    crate::hooks::graphics_engine::reconstruction::dispatch_suppressed()
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::SetRenderSetup_ADDRESS)]

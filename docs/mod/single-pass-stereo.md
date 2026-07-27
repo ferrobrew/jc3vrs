@@ -357,8 +357,20 @@ The consumer set is closed at seven (engine `rendering.md` §4.1), and each is n
 `single_pass_reconstruct_per_eye` and `single_pass_atmospheric_per_eye` (both **on** — splitting only
 the deferred resolve leaves atmospheric scattering painting the mistake back over it),
 `single_pass_ssao_per_eye`, `single_pass_ssr_per_eye`, `single_pass_subsurface_per_eye`, and
-`single_pass_dof_per_eye` (all off, each with its own hazard; DoF logs that it declines rather than
-silently doing nothing). `DrawPassThrough` needs nothing — it is reached only under wireframe.
+`single_pass_dof_per_eye` (all off, each with its own hazard). `DrawPassThrough` needs nothing — it is
+reached only under wireframe.
+
+Two of those blocks do part of their work in **compute**, which no mask can reach: a dispatch ignores
+the scissor as thoroughly as it ignores the viewport, its reach is fixed by its thread-group counts,
+and both blocks size those from the target's full width and address their textures straight off
+`SV_DispatchThreadID` with no origin term in any constant buffer (nor could a UAV supply one — a D3D11
+texture UAV picks a mip and an array slice, never a sub-rectangle). So that work is *scheduled* rather
+than masked: `reconstruction::DispatchPhase` issues it whole-target on exactly one run of the split —
+the **first** for a prologue the masked draws consume (the bokeh near-field coverage), the **last** for
+an epilogue that consumes what they produced (the SSR blur). That is the same single whole-target pass
+the un-split block makes, so the eye-seam bleed from the horizontal half of each separable blur (six
+texels of the block's own working resolution) is inherent to the collapse, not introduced by the split,
+and is there with the flags off too.
 
 The shared machinery is `reconstruction::split_fullscreen_pass`, which holds the preconditions and the
 demotion rule. Each run is masked with a **scissor**, not a half viewport, so the quad keeps its
@@ -496,9 +508,9 @@ All under `stereo`. Off by default unless marked.
 | `single_pass_reconstruct_per_eye` | **On.** Deferred clustered-lighting resolve (mechanism 2). |
 | `single_pass_atmospheric_per_eye` | **On.** Atmospheric scattering / aerial perspective (mechanism 2). |
 | `single_pass_ssao_per_eye` | SSAO. Hazard: a temporal history advanced per invocation, snapshotted and restored across the split — but the AO generation and blur ahead of the mask still re-run unmasked. |
-| `single_pass_ssr_per_eye` | Screen-space reflections. |
+| `single_pass_ssr_per_eye` | Screen-space reflections. The `m_UseComputeBlur` epilogue's two dispatches are issued on the second run only, once, over both halves. |
 | `single_pass_subsurface_per_eye` | Screen-space subsurface skin. |
-| `single_pass_dof_per_eye` | Depth of field. Logs that it declines: its target is the quarter-resolution packed texture, and its prepass opens with non-idempotent compute dispatches that ignore the scissor. |
+| `single_pass_dof_per_eye` | Depth of field: splits `CDownScale2x2PackFocus::Apply`, whose closing pack draw is the sole consumer of the DoF basis. Its five-dispatch near-field prologue reads no view or projection matrix, so it runs whole-target on the first run only and the second run reads the same coverage. |
 | `single_pass_ssdecal_per_eye` | Screen-space decals: per-eye basis plus a spliced depth-UV bias in the 12 `ssdecal` pixel shaders (mechanism 2). |
 | `single_pass_water_uv_per_eye` | Legacy water's projective screen UV (mechanism 3). |
 | `single_pass_clustered_per_eye` | **On.** Per-eye clustered froxel light grid. |

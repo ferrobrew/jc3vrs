@@ -34,6 +34,14 @@
 //! which is what a block whose early phases are non-idempotent (a separable blur ping-pong reading and
 //! writing the same textures) needs, and what a block that draws through several differently-sized
 //! targets needs, since a scissor rectangle is in the bound target's pixels and nothing else's.
+//!
+//! A mask cannot reach a block's *compute* work at all: a dispatch is not rasterization, so neither
+//! the viewport nor the scissor rectangle restricts the texels its threads address
+//! ([`Dispatch`](jc3gi::graphics_engine::draw::Dispatch)). A block that dispatches would therefore
+//! redo its whole-texture compute work on the second run, over the first run's output. [`DispatchPhase`]
+//! is the answer: it names *which single run* of the split issues the block's dispatches, leaving the
+//! compute work done exactly once across the whole target -- which is what the un-split block does too,
+//! so it introduces no error the collapse does not already have.
 
 use std::{
     cell::Cell,
@@ -132,6 +140,67 @@ pub(super) enum MaskArming {
     AtEntry,
 }
 
+/// Which single run of a two-run per-eye split issues the block's compute dispatches.
+///
+/// A scissor rectangle clips rasterization; it does nothing to a dispatch, whose reach is fixed by its
+/// thread-group counts and by its program's mapping from thread id to texel. Both blocks this matters
+/// for -- the screen-space reflection blur and the bokeh near-field prologue -- size their groups from
+/// the target's full width and address their textures directly by `SV_DispatchThreadID` with no origin
+/// term in any constant buffer, so there is no way to aim a dispatch at one eye's half. What there is
+/// instead: run the compute work **once**, whole-target, on the one run of the split where the data it
+/// needs is already there and the data it produces is still wanted.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum DispatchPhase {
+    /// Both runs issue their dispatches, exactly as the un-split block does. The default, and the only
+    /// correct choice for a block that issues none.
+    Both,
+    /// Only the first run. For a compute *prologue*, whose output the block's masked draws then
+    /// consume: the first run computes it over the whole target, and the second run's masked draw reads
+    /// the same result rather than recomputing it on top of itself.
+    FirstRun,
+    /// Only the last run. For a compute *epilogue*, which consumes what the block's masked draws
+    /// produce: by the last run both halves have been drawn, so one whole-target pass over them is both
+    /// complete and singular.
+    LastRun,
+}
+
+/// The rule a [`split_fullscreen_pass_policy`] run follows: when its mask goes up, and which run issues
+/// the block's dispatches.
+#[derive(Clone, Copy)]
+pub(super) struct SplitPolicy {
+    arming: MaskArming,
+    dispatches: DispatchPhase,
+}
+
+impl SplitPolicy {
+    /// A split that masks at block entry and issues the block's dispatches on `dispatches`.
+    ///
+    /// Only [`MaskArming::AtEntry`] is offered: a [`DispatchPhase`] other than [`DispatchPhase::Both`]
+    /// commits one run to *not* issuing the compute work before that run has drawn anything, and only
+    /// an at-entry mask can promise that the run in question really is one half of a split rather than
+    /// the whole pass in disguise.
+    pub(super) fn at_entry(dispatches: DispatchPhase) -> Self {
+        Self {
+            arming: MaskArming::AtEntry,
+            dispatches,
+        }
+    }
+}
+
+/// Whether the compute dispatch about to be issued on this thread belongs to a per-eye run that must
+/// not issue it -- see [`DispatchPhase`].
+///
+/// Called from the shared `Graphics::Dispatch` / `Graphics::DispatchIndirect` detours in
+/// [`crate::hooks::draw_count`]. Always `false` unless a per-eye run with a non-default
+/// [`DispatchPhase`] is in flight on this thread, so every other dispatch in the engine is untouched.
+pub(crate) fn dispatch_suppressed() -> bool {
+    DISPATCH_GATE.get().is_some_and(|gate| match gate.phase {
+        DispatchPhase::Both => false,
+        DispatchPhase::FirstRun => gate.run != 0,
+        DispatchPhase::LastRun => gate.run + 1 != gate.runs,
+    })
+}
+
 /// Re-derive an [`MaskArming::AtEntry`] mask from the render target that was just bound on this
 /// thread, whose viewport the bind has already applied.
 ///
@@ -188,6 +257,29 @@ pub(super) fn split_fullscreen_pass_with(
     arming: MaskArming,
     enabled: bool,
     ctx: Option<*mut HContext_t>,
+    draw: impl FnMut(),
+) -> bool {
+    split_fullscreen_pass_policy(
+        SplitPolicy {
+            arming,
+            dispatches: DispatchPhase::Both,
+        },
+        enabled,
+        ctx,
+        draw,
+    )
+}
+
+/// [`split_fullscreen_pass_with`] for a block that dispatches, whose compute work must be issued on one
+/// run of the split only -- see [`DispatchPhase`].
+///
+/// The gate covers every issue of `draw` this function makes, including the degenerate second-run one
+/// below, and nothing outside them: a caller that falls back to issuing the pass itself does so
+/// ungated, so the block dispatches exactly as it does with the split off.
+pub(super) fn split_fullscreen_pass_policy(
+    policy: SplitPolicy,
+    enabled: bool,
+    ctx: Option<*mut HContext_t>,
     mut draw: impl FnMut(),
 ) -> bool {
     if !enabled || !crate::stereo::single_pass::collapse_active() {
@@ -200,22 +292,27 @@ pub(super) fn split_fullscreen_pass_with(
         return false;
     }
 
-    for eye in 0..2 {
-        let half = enter_per_eye_half_with(arming, eye, ctx);
-        if arming == MaskArming::AtEntry && !half.masked() {
+    for eye in 0..RUNS {
+        let half = enter_per_eye_half_with(policy.arming, eye, ctx);
+        if policy.arming == MaskArming::AtEntry && !half.masked() {
             // The mask never went up, so this run would cover the whole target. Before the first run
             // that is recoverable: nothing has been drawn, so report the split as not taken and let the
             // caller issue the pass once. Before the second it is not -- eye 0 drew only its half -- so
             // cover the rest the only way left, by running whole-target and accepting that eye 0's half
-            // is drawn a second time.
+            // is drawn a second time. The dispatch gate stays on for it, because the compute work's
+            // "once" is counted over the runs of the split and this is still the last of them.
             drop(half);
             if eye == 0 {
                 return false;
             }
+            let _gate = DispatchGate::enter(policy.dispatches, eye);
             draw();
             return true;
         }
-        draw();
+        {
+            let _gate = DispatchGate::enter(policy.dispatches, eye);
+            draw();
+        }
         if !half.masked() {
             // Nothing was masked, so this run covered the whole target -- which is exactly what the
             // un-split pass does. Stop, and report the pass as issued: `draw` has already run, so a
@@ -369,11 +466,56 @@ struct PerEyeState {
     saved_scissor: Option<[RECT; 2]>,
 }
 
+/// How many runs a per-eye split makes: one per eye half of the double-wide collapse target.
+const RUNS: usize = 2;
+
+/// Which run of a split is issuing draws right now, and under which [`DispatchPhase`]. Held only while
+/// a run's `draw` closure is executing, so [`dispatch_suppressed`] answers for that run and nothing
+/// else.
+#[derive(Clone, Copy)]
+struct DispatchGate {
+    phase: DispatchPhase,
+    run: usize,
+    runs: usize,
+}
+
+impl DispatchGate {
+    /// Open the gate for `run`, unless the phase is [`DispatchPhase::Both`] -- which suppresses nothing,
+    /// so leaving the thread-local clear keeps [`dispatch_suppressed`] on the same branch it takes for
+    /// every dispatch in the engine that has nothing to do with a split.
+    ///
+    /// Returns a guard that closes the gate on every path.
+    fn enter(phase: DispatchPhase, run: usize) -> DispatchGateGuard {
+        if phase != DispatchPhase::Both {
+            DISPATCH_GATE.set(Some(Self {
+                phase,
+                run,
+                runs: RUNS,
+            }));
+        }
+        DispatchGateGuard(())
+    }
+}
+
+/// The scope opened by [`DispatchGate::enter`].
+struct DispatchGateGuard(());
+
+impl Drop for DispatchGateGuard {
+    fn drop(&mut self) {
+        DISPATCH_GATE.set(None);
+    }
+}
+
 thread_local! {
     /// The per-eye half in flight on this thread, or `None` outside one. Thread-local because the
     /// re-issue and the `PerspectiveFovInverse` call it brackets both run on the render thread, and a
     /// reconstruction on any other thread must not pick up the mask.
     static PER_EYE: Cell<Option<PerEyeState>> = const { Cell::new(None) };
+
+    /// The [`DispatchGate`] in flight on this thread, or `None` outside one. Thread-local for the same
+    /// reason [`PER_EYE`] is, and separate from it because the gate must also cover the one run that
+    /// draws with the mask down.
+    static DISPATCH_GATE: Cell<Option<DispatchGate>> = const { Cell::new(None) };
 }
 
 /// The full-target-NDC → eye-NDC remap for `eye`'s half of the double-wide collapse target.

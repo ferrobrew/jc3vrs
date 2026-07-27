@@ -1,7 +1,6 @@
 //! The remaining fullscreen depth-reconstruction passes, run once per eye under the single-pass
-//! collapse: SSAO, screen-space reflections, and screen-space subsurface skin -- plus the
-//! depth-of-field basis, which is the one consumer of the reconstruction that a per-eye split cannot
-//! reach (see [`dof_get_view_proj_inverse`]).
+//! collapse: SSAO, screen-space reflections, screen-space subsurface skin, and the bokeh
+//! depth-of-field prepass.
 //!
 //! Cross-referencing `CMatrix4f::PerspectiveFovInverse` gives a closed set of seven consumers. The
 //! deferred resolve ([`super::clustered_lighting`]) and the aerial perspective
@@ -36,29 +35,37 @@
 //! full-resolution linear-depth targets, the half-resolution occlusion/history targets, and the
 //! full-resolution scene target.)
 //!
-//! What remains imperfect -- and is the reason these stay default-off -- is the compute work.
-//! Dispatches ignore the scissor, so SSR's compute blur (its `m_UseComputeBlur` path, two dispatches
-//! ping-ponging a pair of UAVs after the ray-march) still runs whole-target twice and blurs its own
-//! output twice; only SSR's pixel-shader blur path is covered. The ambient-occlusion block issues no
-//! dispatches and is fully covered, apart from its mip generation, which regenerates the whole linear
-//! depth chain per run (idempotent, but the first run's chain is built while the second eye's half of
-//! the depth target still holds the previous frame's values, so the coarse mips are stale across the
-//! seam for the first run's occlusion draw).
-
-use std::sync::atomic::{AtomicBool, Ordering};
+//! The compute work is not maskable at all -- a dispatch ignores the scissor as thoroughly as it
+//! ignores the viewport -- and neither of the two blocks that dispatch offers any way to aim one: both
+//! size their thread groups from the target's full width and address their textures straight off
+//! `SV_DispatchThreadID`, with no origin term anywhere in their constant buffers. Nor can a UAV supply
+//! one, since a D3D11 texture UAV selects a mip and an array slice and never a sub-rectangle. So the
+//! compute work is *scheduled* rather than masked: [`reconstruction::DispatchPhase`] issues it
+//! whole-target on exactly one run of the split -- the first for a prologue the masked draws consume
+//! (the bokeh near-field coverage), the last for an epilogue that consumes what they produced (the SSR
+//! blur). That is the same single whole-target pass the un-split block makes, so the eye-seam bleed
+//! from the horizontal half of each separable blur (six texels of the block's own working resolution)
+//! is inherent to the collapse rather than introduced here, and is present with these flags off.
+//!
+//! The ambient-occlusion block issues no dispatches and is fully covered by the mask, apart from its
+//! mip generation, which regenerates the whole linear depth chain per run. That is idempotent, but the
+//! first run builds it from a linear-depth target whose other half is still the previous frame's, so
+//! the first run's occlusion draw reads stale coarse mips near the seam. The reach is bounded: the
+//! chain is five levels, so a level-4 texel spans sixteen source texels and no texel outside sixteen of
+//! the seam can see the stale half at all. That band is also the band in which a masked occlusion draw
+//! is already wrong for a different reason -- a sample crossing the seam lands in the *other* eye's
+//! view whatever the mips hold -- so the staleness adds no new class of error, and the split remains a
+//! strict improvement on running the block once with one eye's basis.
 
 use detours_macro::detour;
-use jc3gi::{
-    graphics_engine::{
-        graphics_engine::{HContext_t, RenderContext},
-        post_effects::PostEffectContext,
-        render_block::{
-            RBIInfo, RenderBlockSSAO, RenderBlockScreenSpaceReflection,
-            RenderBlockScreenSpaceSubSurfaceSkin,
-        },
-        ssao::SSAOPass,
+use jc3gi::graphics_engine::{
+    graphics_engine::{HContext_t, RenderContext},
+    post_effects::{DownScale2x2PackFocus, PostEffectContext, PostEffectsManager},
+    render_block::{
+        RBIInfo, RenderBlockSSAO, RenderBlockScreenSpaceReflection,
+        RenderBlockScreenSpaceSubSurfaceSkin,
     },
-    types::math::Matrix4,
+    ssao::SSAOPass,
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -70,7 +77,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&SSAO_BLOCK_DRAW_BINDER)
         .with_static_binder(&SSR_DRAW_BINDER)
         .with_static_binder(&SUBSURFACE_DRAW_BINDER)
-        .with_static_binder(&DOF_GET_VIEW_PROJ_INVERSE_BINDER)
+        .with_static_binder(&DOF_DOWNSCALE_APPLY_BINDER)
 }
 
 /// `CRenderBlockSSAO::Draw`, split per eye with its temporal history pinned across the two runs.
@@ -98,14 +105,23 @@ fn ssao_block_draw(this: *mut RenderBlockSSAO, rc: *mut RenderContext, info: *co
     });
 }
 
-/// `CRenderBlockScreenSpaceReflection::Draw`, split per eye.
+/// `CRenderBlockScreenSpaceReflection::Draw`, split per eye, with its compute blur left to the second
+/// run.
 ///
 /// The block's scene-colour capture is the first thing it does, before the basis is built; under the
 /// at-entry mask each run captures only its own half, and in any case the capture is a copy out of the
 /// scene colour into the block's own target -- the block writes nothing back into the scene colour --
 /// so it is reproducible rather than consumed. The ray-march and the pixel-shader resolve that follow
-/// are masked too. The `m_UseComputeBlur` path is not: dispatches ignore the scissor, so its two
-/// UAV-ping-pong dispatches run whole-target on both runs and blur their own output twice.
+/// are masked too.
+///
+/// The `m_UseComputeBlur` path cannot be masked, so it is *scheduled* instead:
+/// [`reconstruction::DispatchPhase::LastRun`] suppresses its two dispatches on eye 0's run and lets
+/// eye 1's issue them. The blur is the block's epilogue -- it consumes the ray-march's two targets and
+/// writes the result back over them -- so by eye 1's run both halves have been ray-marched and one
+/// whole-target blur is exactly the work the un-split block does. What that leaves is the horizontal
+/// pass mixing across the eye seam, six of the block's texels either side of it; that is a property of
+/// the collapse itself, present with this flag off and with the pixel-shader blur path too, and not
+/// something the split introduces.
 #[detour(
     address = jc3gi::graphics_engine::render_block::RenderBlockScreenSpaceReflection::Draw_ADDRESS
 )]
@@ -118,7 +134,12 @@ fn ssr_draw(
         c.stereo.single_pass_ssr_per_eye && c.stereo.reconstruct_offaxis_inverse
     });
     let call = || SSR_DRAW.get().unwrap().call(this, rc, info);
-    split_or_issue(enabled, render_context_ctx(rc), call);
+    split_or_issue_with(
+        reconstruction::DispatchPhase::LastRun,
+        enabled,
+        render_context_ctx(rc),
+        call,
+    );
 }
 
 /// `CRenderBlockScreenSpaceSubSurfaceSkin::Draw`, split per eye.
@@ -142,45 +163,64 @@ fn subsurface_draw(
     split_or_issue(enabled, render_context_ctx(rc), call);
 }
 
-/// `DOFUtil::GetViewProjInverse`, passed straight through -- the depth-of-field basis is the one
-/// consumer of the reconstruction that this seam cannot fix, and the detour exists to say so out loud
-/// when the flag is turned on.
+/// `CDownScale2x2PackFocus::Apply`, the bokeh downscale prepass, split per eye with its compute
+/// prologue left to the first run.
 ///
-/// Its only caller is `CDownScale2x2PackFocus::Apply`, the bokeh downscale prepass, which uploads the
-/// matrix as vertex constants 1..4 of the fullscreen draw that ends the prepass. The prepass opens
-/// with five compute dispatches -- the near-CoC pack plus four separable blur passes ping-ponging two
-/// UAVs -- and dispatches ignore the scissor, so a second run would blur the near field a second time
-/// no matter how the mask is expressed. That is the blocker, and it is not one a mask can lift: only
-/// suppressing the second run's dispatches, or splitting inside them, would.
+/// This is the depth-of-field basis's home: the prepass's closing fullscreen draw is the sole consumer
+/// of `DOFUtil::GetViewProjInverse`, which it uploads as vertex constants 1..4 and which the shared
+/// `PerspectiveFovInverse` detour already substitutes the off-axis inverse into. Under the collapse
+/// that one draw spans both halves with one eye's basis, so the haze the pack folds into the
+/// downscaled colour is derived from the wrong world ray over most of the frame.
 ///
-/// Substituting one eye's basis instead of re-issuing is not a fix either: that is exactly the defect
-/// under the collapse, where one draw covers both halves.
-#[detour(address = jc3gi::graphics_engine::post_effects::GetViewProjInverse_ADDRESS)]
-fn dof_get_view_proj_inverse(out: *mut Matrix4, ctx: *mut PostEffectContext) -> *mut Matrix4 {
-    if Config::lock_query(|c| c.stereo.single_pass_dof_per_eye)
-        && crate::stereo::single_pass::collapse_active()
-        && !DOF_WARNED.swap(true, Ordering::Relaxed)
-    {
-        tracing::warn!(
-            target: "single_pass",
-            "the per-eye depth-of-field flag has no effect: the bokeh downscale prepass draws into a \
-             quarter-resolution packed target and opens with non-idempotent compute blur passes, so \
-             neither the scissor mask nor a re-issue applies to it",
-        );
-    }
-    DOF_GET_VIEW_PROJ_INVERSE.get().unwrap().call(out, ctx)
+/// The prepass's five compute dispatches -- the near-field circle-of-confusion extract plus four
+/// separable blur passes ping-ponging two quarter-resolution textures -- were the reason this was
+/// previously reported as unsplittable, and they are still unmaskable. But they do not need a mask:
+/// none of them reads a view or projection matrix (the extract takes the depth texture and the focal
+/// tuning; the blur takes a step direction and its source texture), so their whole-target result is
+/// already right for both eyes. [`reconstruction::DispatchPhase::FirstRun`] therefore issues them on
+/// eye 0's run and suppresses them on eye 1's, which then reads the same blurred coverage instead of
+/// blurring it a second time -- while both runs draw the pack masked to their own half with their own
+/// basis. The blur's six-texel reach across the eye seam is left as it is: the un-split prepass has it
+/// too, because the collapse hands the dispatch one double-wide texture either way.
+#[detour(address = jc3gi::graphics_engine::post_effects::DownScale2x2PackFocus::Apply_ADDRESS)]
+fn dof_downscale_apply(
+    this: *mut DownScale2x2PackFocus,
+    ctx: *mut HContext_t,
+    pec: *mut PostEffectContext,
+    mgr: *mut PostEffectsManager,
+) {
+    let enabled = Config::lock_query(|c| {
+        c.stereo.single_pass_dof_per_eye && c.stereo.reconstruct_offaxis_inverse
+    });
+    let call = || DOF_DOWNSCALE_APPLY.get().unwrap().call(this, ctx, pec, mgr);
+    split_or_issue_with(
+        reconstruction::DispatchPhase::FirstRun,
+        enabled,
+        Some(ctx),
+        call,
+    );
+}
+
+/// [`split_or_issue_with`] for a block that issues no dispatches.
+fn split_or_issue(enabled: bool, ctx: Option<*mut HContext_t>, draw: impl FnMut()) {
+    split_or_issue_with(reconstruction::DispatchPhase::Both, enabled, ctx, draw);
 }
 
 /// Run `draw` once per eye half under the collapse, falling back to issuing it exactly once.
 ///
-/// [`reconstruction::split_fullscreen_pass_with`] returns `false` both when the split never started
+/// [`reconstruction::split_fullscreen_pass_policy`] returns `false` both when the split never started
 /// and when it started and then demoted (a run turned out not to mask, so it *was* the un-split pass).
 /// Only the first case wants the caller's own issue; tracking whether the closure ran keeps the second
 /// from drawing the pass twice.
-fn split_or_issue(enabled: bool, ctx: Option<*mut HContext_t>, mut draw: impl FnMut()) {
+fn split_or_issue_with(
+    dispatches: reconstruction::DispatchPhase,
+    enabled: bool,
+    ctx: Option<*mut HContext_t>,
+    mut draw: impl FnMut(),
+) {
     let mut ran = false;
-    let split = reconstruction::split_fullscreen_pass_with(
-        reconstruction::MaskArming::AtEntry,
+    let split = reconstruction::split_fullscreen_pass_policy(
+        reconstruction::SplitPolicy::at_entry(dispatches),
         enabled,
         ctx,
         || {
@@ -231,6 +271,3 @@ fn restore_ssao_history(history: SsaoHistory) {
 fn ssao_pass() -> *mut SSAOPass {
     super::ssao::ssao_pass()
 }
-
-/// One-shot latch for the depth-of-field line above: the answer is the same every frame.
-static DOF_WARNED: AtomicBool = AtomicBool::new(false);
