@@ -926,6 +926,25 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      screen. Needs the off-axis reconstruction override on.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.single_pass_nvwater_per_eye,
+                    "WaveWorks water per eye (parallax)",
+                )
+                .on_hover_text(
+                    "Gives the NvWater* blocks a per-eye view. Their screen-space reads were always \
+                     fine; what is missing is parallax -- the vertex shader transforms from a baked \
+                     matrix in its own constant buffer, so both eyes get the collapsed centre view. \
+                     Flat water at the wrong depth looks right on the mirror and wrong in the headset.",
+                );
+                ui.checkbox(
+                    &mut cfg.stereo.single_pass_ssdecal_geometry_per_eye,
+                    "...and reproject the decal box geometry",
+                )
+                .on_hover_text(
+                    "Sub-option of the decal fix: reprojects the decal box's baked transform per eye \
+                     so its screen coverage has parallax too. The reconstruction fix alone stops the \
+                     sliding; this adds depth to it.",
+                );
+                ui.checkbox(
                     &mut cfg.stereo.single_pass_ssdecal_per_eye,
                     "Screen-space decals per eye",
                 )

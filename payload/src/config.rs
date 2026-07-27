@@ -354,6 +354,27 @@ pub struct StereoConfig {
     /// and unlike the other re-issues this one recomputes a constant the engine staged rather than
     /// transforming it in flight.
     pub single_pass_water_uv_per_eye: bool,
+    /// Give the WaveWorks water blocks (`NvWater*`) a per-eye view under the collapse, so the water
+    /// surface has parallax instead of being one eye's view shown to both.
+    ///
+    /// These blocks are not affected by the projective-UV defect
+    /// ([`single_pass_water_uv_per_eye`](Self::single_pass_water_uv_per_eye)): their shaders derive
+    /// the screen UV from `SV_Position` and the inverse screen size, which is already consistent with
+    /// a double-wide target. Their defect is the other one — the vertex shader writes clip position
+    /// from a baked model-view-projection in its own constant buffer rather than from the render
+    /// context, so the collapse's per-eye machinery never reaches it and both eyes see the collapsed
+    /// centre view. Flat water at the wrong depth reads as correct in a screenshot and wrong in a
+    /// headset, which is why it survived this long. Off by default.
+    pub single_pass_nvwater_per_eye: bool,
+    /// Reproject the screen-space decal *box geometry* per eye, on top of
+    /// [`single_pass_ssdecal_per_eye`](Self::single_pass_ssdecal_per_eye), which fixes only where the
+    /// decal reconstructs from.
+    ///
+    /// The block bakes a world-view-projection into its vertex constants, so like the water blocks its
+    /// geometry never sees the collapse's per-eye transform: the decal lands on the right surface in
+    /// both eyes but its screen coverage has no parallax. Separate flag because the reconstruction fix
+    /// is the one that stops the sliding, and this one only adds depth to it. Off by default.
+    pub single_pass_ssdecal_geometry_per_eye: bool,
     /// Give **geometry** drawn through the non-indexed `Draw` entry point (D3D11 context vtable slot
     /// 13) the same per-eye re-issue the indexed path gives its draws.
     ///
@@ -749,6 +770,8 @@ impl StereoConfig {
             single_pass_reconstruct_per_eye: true,
             single_pass_atmospheric_per_eye: true,
             single_pass_water_uv_per_eye: false,
+            single_pass_nvwater_per_eye: false,
+            single_pass_ssdecal_geometry_per_eye: false,
             single_pass_slot13_per_eye: false,
             collapse_viewport_follows_target: false,
             single_pass_ssao_per_eye: false,
