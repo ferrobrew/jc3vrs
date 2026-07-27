@@ -339,6 +339,9 @@ pub struct StereoConfig {
     ///
     /// Declines itself (leaving the un-split behaviour) when the double-wide render width is not a
     /// multiple of 128, i.e. when the eye seam does not fall on a tile boundary.
+    ///
+    /// On by default: the un-split grid mislights every forward-lit family, and the flag remains so
+    /// the two can be compared in the headset.
     pub single_pass_clustered_per_eye: bool,
     /// Requires [`single_pass_clustered_per_eye`](Self::single_pass_clustered_per_eye): also assign
     /// each eye's lights from **that eye's** position rather than from the collapsed (cyclopean)
@@ -347,10 +350,12 @@ pub struct StereoConfig {
     /// The light-assignment vertex shader transforms proxies that the CPU has already made relative
     /// to the render camera's world position, and under the collapse that is the centre head pose --
     /// the per-eye offset lives in the patched vertex shaders, not in the render context. Folding the
-    /// eye's world offset into the translation row of the uploaded view matrix restores it. Whether
-    /// it is visible at 64-pixel tile granularity is a judgement call, so it is its own flag: A/B it
-    /// against [`single_pass_clustered_per_eye`](Self::single_pass_clustered_per_eye) alone. The
+    /// eye's world offset into the translation row of the uploaded view matrix restores it. The
     /// per-eye display canting is *not* applied, only the positional offset.
+    ///
+    /// On by default, as the more faithful assignment. Whether the difference is visible at 64-pixel
+    /// tile granularity is a judgement call, which is why it stays its own flag: turn it off to A/B
+    /// against [`single_pass_clustered_per_eye`](Self::single_pass_clustered_per_eye) alone.
     pub single_pass_clustered_per_eye_light_view: bool,
     /// Keep both viewport slots bound to the same region outside the G-buffer range, so a patched
     /// vertex shader's `SV_ViewportArrayIndex = SV_InstanceID & 1` resolves to the same place whichever
@@ -631,8 +636,8 @@ impl StereoConfig {
             single_pass_instanced_per_eye: true,
             single_pass_indirect_per_eye: true,
             single_pass_reconstruct_per_eye: true,
-            single_pass_clustered_per_eye: false,
-            single_pass_clustered_per_eye_light_view: false,
+            single_pass_clustered_per_eye: true,
+            single_pass_clustered_per_eye_light_view: true,
             single_pass_uniform_viewport_slots: true,
             single_pass_clear_range_on_dispatch: true,
             disable_sun_shadows: false,
