@@ -3328,6 +3328,10 @@ pub fn uninstall_com_detours() {
     //
     // So: disable under suspension with the slots intact, resume, and only then reclaim and drop.
     // Between the two, the functions are unpatched, so nothing can enter a detour at all.
+    // Fixed-size and not a `Vec`: growing it would allocate, and allocation is exactly what must
+    // not happen while other threads are suspended below. `disable_detour!` writes through a
+    // checked accessor, so a slot count that falls behind the number of call sites drops the
+    // overflowing name from the log instead of indexing out of bounds in this `nounwind` context.
     let mut failed: [Option<&'static str>; 10] = [None; 10];
     let mut failures = 0usize;
 
@@ -3345,7 +3349,11 @@ pub fn uninstall_com_detours() {
                         Ok(()) => detour.is_enabled(),
                     };
                     if bad {
-                        failed[failures] = Some($name);
+                        // `failures` still increments past the end of the array so the count
+                        // stays truthful even when a name gets dropped for lack of a slot.
+                        if let Some(slot) = failed.get_mut(failures) {
+                            *slot = Some($name);
+                        }
                         failures += 1;
                     }
                 }
