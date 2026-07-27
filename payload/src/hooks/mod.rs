@@ -76,6 +76,24 @@ pub(super) fn uninstall() {
             .hook_library
             .set_enabled(&mut state.patcher.lock(), false)?)
     });
+
+    // `HookLibrary::set_enabled(false)` unpatches only the addresses it owns. Everything applied
+    // through [`patcher`] shares the same `Patcher` but belongs to no hook library -- the
+    // render-block-type kill switch, the far-field `IsEnabled` gates, the culling and terrain budget
+    // scalars, the debug UI's config pokes -- and the `Patcher` lives in a `static` that
+    // `FreeLibrary` never drops. Left standing, a gated vtable slot goes on pointing into the
+    // unmapped payload and the game dies on its next dispatch.
+    //
+    // Dropping a `Patcher` restores every patch it still holds, so swapping in a fresh one reverts
+    // the lot. Deliberately outside the suspender, for two reasons: the writes restore the game's
+    // own original bytes, which needs no quiescence (a thread already inside a stub the slot pointed
+    // at is unaffected, and the payload stays mapped until `module::exit`), while the drop frees the
+    // patch map -- and a heap free under suspension can deadlock against a suspended thread holding
+    // the heap lock, which is the hazard `uninstall_com_detours` is structured around.
+    drop(std::mem::replace(
+        &mut *state.patcher.lock(),
+        re_utilities::Patcher::new(),
+    ));
 }
 
 pub(super) fn patcher() -> Option<MutexGuard<'static, re_utilities::Patcher>> {
