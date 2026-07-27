@@ -96,6 +96,16 @@ pub fn owned() -> bool {
     OWNED.load(Ordering::Acquire)
 }
 
+/// Whether the mod's substitute objects are currently installed in the engine's fields.
+///
+/// Distinct from [`owned`]: ownership can be released while a substitution is still installed, and
+/// only the next `CreateRenderSetups` (driven by an `ApplyResize`) clears this. Callers that need the
+/// engine's own aliases rebuilt -- for instance a shutdown restore -- must force that resize whenever
+/// this is true, not just when the display size actually changes.
+pub fn installed() -> bool {
+    INSTALLED.load(Ordering::Acquire)
+}
+
 /// Whether the `Graphics::ResizeBuffers` substitute should stand aside for this call, letting the
 /// real function resize the DXGI buffers. Only true inside [`sync_swapchain_to_window`].
 pub fn resize_substitute_bypassed() -> bool {
@@ -247,7 +257,9 @@ pub unsafe fn release_backing_texture(engine: &mut GraphicsEngine) {
         // and `Graphics::DestroySurface` has no already-freed guard to catch what follows.
         tracing::warn!(
             target: "vr",
-            "back buffer: the substitution is still installed; retaining the backing texture",
+            "back buffer: the substitution is still installed; retaining the backing texture. The \
+             engine's m_BackBufferLinear, m_PostEffectRenderSetup, and m_BackBufferRenderSetup still \
+             point at it, so the desktop view stays dead until the engine next resizes on its own",
         );
         return;
     }

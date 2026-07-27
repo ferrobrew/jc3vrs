@@ -262,13 +262,39 @@ fn restore_display_size() {
 
     // SAFETY: game thread during eject; every hop is null-guarded.
     let Some(ge) = (unsafe { GraphicsEngine::get() }) else {
+        // No engine to resize means no way to rebuild its aliases either: if a substitution is still
+        // installed, it is about to become permanent (see `back_buffer::release_backing_texture`).
+        if super::back_buffer::installed() {
+            tracing::error!(
+                target: "vr",
+                "native resolution: shutdown restore found no graphics engine while a back-buffer \
+                 substitution is installed; the engine's aliases will stay pointed at the mod's \
+                 texture and the desktop view will stay dead until the engine resizes on its own",
+            );
+        }
         return;
     };
     if !ge.m_HasBeenInitialized {
+        if super::back_buffer::installed() {
+            tracing::error!(
+                target: "vr",
+                "native resolution: shutdown restore found an uninitialized graphics engine while a \
+                 back-buffer substitution is installed; the engine's aliases will stay pointed at the \
+                 mod's texture and the desktop view will stay dead until the engine resizes on its own",
+            );
+        }
         return;
     }
     let current = {
         let Some(device) = (unsafe { ge.m_Device.as_ref() }) else {
+            if super::back_buffer::installed() {
+                tracing::error!(
+                    target: "vr",
+                    "native resolution: shutdown restore found no graphics device while a back-buffer \
+                     substitution is installed; the engine's aliases will stay pointed at the mod's \
+                     texture and the desktop view will stay dead until the engine resizes on its own",
+                );
+            }
             return;
         };
         (
@@ -276,7 +302,14 @@ fn restore_display_size() {
             device.m_DeviceInfo.m_DisplayHeight,
         )
     };
-    if current == original {
+    // A substitution installed means the engine's `m_BackBufferLinear`/render setups still point at
+    // the mod's texture; only an `ApplyResize` rebuilds them (`CreateRenderSetups`' epilogue is what
+    // clears `INSTALLED`). So the resize below is forced even when the size already matches `original`
+    // -- it is not being issued to change the size, but to make the engine rebuild its own aliases and
+    // hand the swapchain back. Skipping it because "nothing to resize" is exactly what leaves the
+    // substitution installed after the DLL unloads.
+    let force_for_installed_substitution = super::back_buffer::installed();
+    if current == original && !force_for_installed_substitution {
         return;
     }
 
@@ -286,6 +319,7 @@ fn restore_display_size() {
         from_height = current.1,
         to_width = original.0,
         to_height = original.1,
+        forced_for_installed_substitution = force_for_installed_substitution,
         "native resolution: synchronous shutdown restore (eject renders no further frames)",
     );
     // Clear the engine's deferred mode-change request too, so a stray frame cannot re-apply the mod's
