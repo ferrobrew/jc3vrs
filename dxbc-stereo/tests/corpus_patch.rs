@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use dxbc_stereo::{
     Dxbc, DxbcError, OperandKind, SSDECAL_EYE_BIAS_REGISTER, ShaderStage, TokenStream,
-    bias_ssdecal_depth_uv, patch_vertex_shader, per_eye_refs,
+    bias_ssdecal_depth_uv, patch_vertex_shader, per_eye_refs, reads_global_view_projection,
 };
 
 mod common;
@@ -159,6 +159,109 @@ fn corpus_patch_is_sound() {
         patched + no_refs + instance_id,
         455,
         "every VS is patched, has no per-eye refs, or is an instance-id deferral"
+    );
+}
+
+/// The vegetation vertex shaders that read `cb0` read **only** `cb0[4]`, never the view-projection
+/// rows -- so the `cb0` remap claims them on the strength of a reference that is not a clip-position
+/// input, and remapping it moves a wind-noise origin (foliage) or a camera-relative offset paired with
+/// a *baked* view-projection (bark) rather than giving the shader a per-eye clip position.
+///
+/// This is the fact the payload's baked-cb block intercepts depend on: they own the vegetation blocks'
+/// draws and reproject the baked matrix themselves, which only works while the rewriter leaves those
+/// shaders alone. If a future bundle gives one of them a real `cb0[29..32]` clip path, the decline is
+/// wrong for it and this test says so.
+///
+/// The blobs are named by their index and offset in the bundle, which are stable for the shipped
+/// bundle; `tools/shaders/shader_names.py` maps them to the engine's own names.
+#[test]
+fn corpus_vegetation_reads_the_camera_position_but_never_the_view_projection() {
+    let Some(dir) = shader_dir() else {
+        return;
+    };
+
+    /// Every `vegetationfoliage*` / `vegetationbark*` vertex shader that references `cb0` at all.
+    const VEGETATION: &[&str] = &[
+        "sh_0238_00093d90.dxbc", // vegetationbarkhwinstanced
+        "sh_0239_000949b0.dxbc", // vegetationbarkinstanced
+        "sh_0241_00095e30.dxbc", // vegetationbarkprezhwinstanced
+        "sh_0242_00096530.dxbc", // vegetationbarkprezinstanced
+        "sh_0244_000973e0.dxbc", // vegetationbarkshadowhwinstanced
+        "sh_0245_00097ae0.dxbc", // vegetationbarkshadowinstanced
+        "sh_0247_00098ad0.dxbc", // vegetationbarkvelocityhwinstanced
+        "sh_0248_00099300.dxbc", // vegetationbarkvelocityinstanced
+        "sh_0249_00099e00.dxbc", // vegetationfoliage
+        "sh_0251_0009bdb0.dxbc", // vegetationfoliagehwinstanced
+        "sh_0252_0009d960.dxbc", // vegetationfoliagehwinstanced_osnormalmap
+        "sh_0253_0009f330.dxbc", // vegetationfoliageinstanced
+        "sh_0254_000a1270.dxbc", // vegetationfoliageinstanced_osnormalmap
+        "sh_0255_000a2f00.dxbc", // vegetationfoliageprez
+        "sh_0256_000a3d00.dxbc", // vegetationfoliageprezhwinstanced
+        "sh_0257_000a5160.dxbc", // vegetationfoliageprezinstanced
+        "sh_0261_000a86c0.dxbc", // vegetationfoliageshadow
+        "sh_0262_000a8f60.dxbc", // vegetationfoliageshadowhwinstanced
+        "sh_0263_000a9e80.dxbc", // vegetationfoliageshadowinstanced
+        "sh_0264_000ab050.dxbc", // vegetationfoliagevelocity
+        "sh_0265_000abf90.dxbc", // vegetationfoliagevelocityhwinstanced
+        "sh_0266_000ad540.dxbc", // vegetationfoliagevelocityinstanced
+        "sh_0267_000aeda0.dxbc", // vegetationfoliage_osnormalmap
+    ];
+
+    for name in VEGETATION {
+        let blob = std::fs::read(dir.join(name)).expect("read vegetation blob");
+        let rows: Vec<u32> = per_eye_refs(&blob)
+            .expect("parse vegetation blob")
+            .iter()
+            .map(|r| r.row)
+            .collect();
+        assert!(
+            !rows.is_empty(),
+            "{name} has no per-eye cb0 reference at all, so the rewriter never claimed it"
+        );
+        assert!(
+            rows.iter().all(|&r| r == 4),
+            "{name} references cb0 rows {rows:?}, not the camera position alone"
+        );
+        assert!(
+            !reads_global_view_projection(&blob).expect("parse vegetation blob"),
+            "{name} reads the global view-projection"
+        );
+        // A permutation that consumes `SV_InstanceID` for its own instancing is deferred by the
+        // rewriter rather than claimed, so the decline is a no-op for it -- but it is still declined,
+        // because whether a permutation is claimed is not something the name prefix can tell.
+        assert!(
+            matches!(
+                patch_vertex_shader(&blob),
+                Ok(_) | Err(DxbcError::InstanceIdAlreadyDeclared)
+            ),
+            "{name} is neither claimed nor deferred by the cb0 remap: {:?}",
+            patch_vertex_shader(&blob).err(),
+        );
+    }
+
+    // The corpus-wide population the decline is drawn from: shaders the remap claims purely on a
+    // `cb0[4]` reference. The payload declines only the vegetation ones, whose draws a block intercept
+    // owns; the rest (water, clouds, particles, and a handful of model families) keep the remap, since
+    // nothing else re-issues their draws per eye.
+    let mut camera_only = 0usize;
+    for entry in std::fs::read_dir(&dir).expect("read shader dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().is_none_or(|e| e != "dxbc") {
+            continue;
+        }
+        let blob = std::fs::read(&path).expect("read blob");
+        if !is_vertex_shader(&blob) {
+            continue;
+        }
+        if !per_eye_refs(&blob).expect("parse blob").is_empty()
+            && !reads_global_view_projection(&blob).expect("parse blob")
+        {
+            camera_only += 1;
+        }
+    }
+    assert_eq!(
+        camera_only, 50,
+        "vertex shaders the cb0 remap claims on a camera-position reference alone",
     );
 }
 

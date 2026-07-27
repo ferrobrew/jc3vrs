@@ -534,6 +534,30 @@ impl RenderBlockFoliage {
             f(self as *const Self as _, render_context, info)
         }
     }
+    pub const DrawZ_ADDRESS: usize = 0x14012D9B0;
+    /// Issues the depth-prepass, shadow, velocity, and reflective-shadow geometry. Stages the same
+    /// `cb2` transform as [`Draw`](crate::graphics_engine::render_block::RenderBlockFoliage::Draw) — register 0 the camera-relative world matrix, registers
+    /// 4..7 a copy of
+    /// [`m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
+    /// — plus the fade/detail scalars at registers 8..10; on the velocity pass (pass id 50) it
+    /// additionally stages the previous frame's offset view-projection at registers 11..14, which the
+    /// vertex shader differences against the current one to produce the motion vector. Selects between a
+    /// CPU-instanced `DrawIndexedInstancedNoMutex` and a `DrawInstanced` fed by two vertex texture
+    /// buffers, on the same instance-data flags [`Draw`](crate::graphics_engine::render_block::RenderBlockFoliage::Draw) routes on.
+    pub unsafe fn DrawZ(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::DrawZ_ADDRESS);
+            f(self as *const Self as _, render_context, info)
+        }
+    }
 }
 impl std::convert::AsRef<RenderBlockFoliage> for RenderBlockFoliage {
     fn as_ref(&self) -> &RenderBlockFoliage {

@@ -269,13 +269,20 @@ pub struct StereoConfig {
     /// shader reads a CPU-baked world-view-projection from `cb1` (not `cb0`) and draws via one of three
     /// kinds (plain, CPU-instanced, or GPU-indirect), so it can't ride the reprojection rewrite; instead
     /// the block's `Draw`/`DrawZ` is re-issued once per eye with the baked `cb1` reprojected by that eye's
-    /// `M_eye`. Requires the collapse; independent so it can be A/B'd. **Blind-implemented, unvalidated.**
+    /// `M_eye`. While this is on, the `vegetationbark*` vertex shaders are also declined by the `cb0`
+    /// remap, which would otherwise claim them on a `cb0[4]` camera-position reference that is not their
+    /// position path. Requires the collapse; independent so it can be A/B'd. On by default: without it
+    /// the trunks render at the centre view in both eyes, i.e. at zero disparity, which reads as them
+    /// drifting in world space as the camera moves.
     pub single_pass_bark: bool,
     /// Single-pass the grass/foliage render block (`CRenderBlockFoliage`, "VegetationFoliage"). Its vertex
-    /// shader reads a baked view-projection from `cb2` (registers 4..7); the block's `Draw` is re-issued
-    /// once per eye with that `cb2` copy reprojected by `M_eye`. The dominant grass path is GPU-indirect,
-    /// so re-issue (not instance-doubling) is the only option. Does not address the separate forward-
-    /// clustered-lighting black-in-VR issue. Requires the collapse. **Blind-implemented, unvalidated.**
+    /// shader reads a baked view-projection from `cb2` (registers 4..7); the block's `Draw` and `DrawZ`
+    /// are re-issued once per eye with that `cb2` copy reprojected by `M_eye`. The dominant grass path is
+    /// GPU-indirect, so re-issue (not instance-doubling) is the only option. While this is on, the
+    /// `vegetationfoliage*` vertex shaders are also declined by the `cb0` remap, which would otherwise
+    /// claim them on the `cb0[4]` reference their wind-noise lookup makes. Does not address the separate
+    /// forward-clustered-lighting black-in-VR issue. Requires the collapse. On by default, for the same
+    /// reason as [`single_pass_bark`](Self::single_pass_bark).
     pub single_pass_foliage: bool,
     /// Single-pass the occluder depth-prime render block (`CRenderBlockOccluder`). Its non-instanced path
     /// bakes a world-view-projection into `cb1`; the block's `DrawZ` is re-issued once per eye with `cb1`
@@ -782,8 +789,8 @@ impl StereoConfig {
             single_pass_reproject: false,
             single_pass_terrain: false,
             single_pass_tree_impostors: false,
-            single_pass_bark: false,
-            single_pass_foliage: false,
+            single_pass_bark: true,
+            single_pass_foliage: true,
             single_pass_occluder: false,
             single_pass_instanced_per_eye: true,
             single_pass_indirect_per_eye: true,

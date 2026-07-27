@@ -13,7 +13,14 @@
 //! instance-doubled. When the block's flag is on and the collapse is active, the block's `Draw` is
 //! re-issued once per eye with that baked constant reprojected by the eye's `M_eye`
 //! ([`reproject_baked_cb_per_eye`](crate::stereo::single_pass::reproject_baked_cb_per_eye)); otherwise
-//! it draws once, unchanged. Each is gated by its own default-off config flag.
+//! it draws once, unchanged. Each is gated by its own config flag.
+//!
+//! The two vegetation flags do double duty: while one is on, its family's vertex shaders are also
+//! declined by the `cb0` remap at creation
+//! ([`baked_cb_block_owns_vs`](crate::stereo::single_pass::baked_cb_block_owns_vs)), because the remap
+//! would claim them on a `cb0[4]` reference that is not their position path and then leave both eyes
+//! on the collapsed centre view. The decline and the intercept only make sense together, so they share
+//! a flag.
 
 use std::ffi::c_void;
 
@@ -25,7 +32,7 @@ use jc3gi::graphics_engine::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::stereo::single_pass::BlockIntercept;
+use crate::stereo::single_pass::{BlockIntercept, BoundVsGate};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -33,6 +40,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&RENDER_BLOCK_BARK_DRAW_BINDER)
         .with_static_binder(&RENDER_BLOCK_BARK_DRAW_Z_BINDER)
         .with_static_binder(&RENDER_BLOCK_FOLIAGE_DRAW_BINDER)
+        .with_static_binder(&RENDER_BLOCK_FOLIAGE_DRAW_Z_BINDER)
         .with_static_binder(&RENDER_BLOCK_OCCLUDER_DRAW_Z_BINDER)
 }
 
@@ -50,9 +58,15 @@ fn render_block_bark_draw(
     // original `Draw` trampoline.
     let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Bark)
         && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
-                detour.call(this, rc, info);
-            })
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(
+                rc,
+                1,
+                0,
+                BoundVsGate::Owned,
+                || {
+                    detour.call(this, rc, info);
+                },
+            )
         };
     if !handled {
         detour.call(this, rc, info);
@@ -78,9 +92,15 @@ fn render_block_bark_draw_z(
     // SAFETY: as above.
     let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Bark)
         && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
-                detour.call(this, rc, info);
-            })
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(
+                rc,
+                1,
+                0,
+                BoundVsGate::Owned,
+                || {
+                    detour.call(this, rc, info);
+                },
+            )
         };
     if !handled {
         detour.call(this, rc, info);
@@ -99,9 +119,52 @@ fn render_block_foliage_draw(
     // SAFETY: as above.
     let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Foliage)
         && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 2, 4, || {
-                detour.call(this, rc, info);
-            })
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(
+                rc,
+                2,
+                4,
+                BoundVsGate::Owned,
+                || {
+                    detour.call(this, rc, info);
+                },
+            )
+        };
+    if !handled {
+        detour.call(this, rc, info);
+    }
+}
+
+/// The grass/foliage depth, shadow, and velocity pass stages the same `cb2[4..7]` view-projection as
+/// [`render_block_foliage_draw`], so it takes the same reprojection.
+///
+/// It has to: the depth prepass and the colour pass must agree on where a blade of grass is, and the
+/// colour pass is now per-eye. A prepass left at the centre view primes depth for geometry neither eye
+/// draws there, and the colour fragments that follow are rejected against it.
+///
+/// The velocity permutation additionally stages the previous frame's offset view-projection at
+/// `cb2[11..14]`, which is **not** reprojected -- the same deferral bark's `DrawZ` takes, and for the
+/// same reason (it would need the previous frame's `M_eye` retained and a second armed range). The
+/// shadow and reflective-shadow permutations render from a light view outside the G-buffer range,
+/// where the intercept stands down and the draw is issued once, as it must be.
+#[detour(address = jc3gi::graphics_engine::render_block::RenderBlockFoliage::DrawZ_ADDRESS)]
+fn render_block_foliage_draw_z(
+    this: *const RenderBlockFoliage,
+    rc: *mut RenderContext,
+    info: *const RBIInfo,
+) {
+    let detour = RENDER_BLOCK_FOLIAGE_DRAW_Z.get().unwrap();
+    // SAFETY: as above.
+    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Foliage)
+        && unsafe {
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(
+                rc,
+                2,
+                4,
+                BoundVsGate::Owned,
+                || {
+                    detour.call(this, rc, info);
+                },
+            )
         };
     if !handled {
         detour.call(this, rc, info);
@@ -127,9 +190,18 @@ fn render_block_occluder_draw_z(
     // SAFETY: as above.
     let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Occluder)
         && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(rc, 1, 0, || {
-                detour.call(this, rc, info);
-            })
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(
+                rc,
+                1,
+                0,
+                // The occluder's shaders read no `cb0[4]`, so the remap never claims them and nothing
+                // declines them at creation; the bound-shader check stays as the guard against a
+                // patched neighbour's geometry being re-issued.
+                BoundVsGate::Checked,
+                || {
+                    detour.call(this, rc, info);
+                },
+            )
         };
     if !handled {
         detour.call(this, rc, info);

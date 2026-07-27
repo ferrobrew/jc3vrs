@@ -157,6 +157,7 @@ unsafe fn per_eye(rc: *mut RenderContext, mut draw: impl FnMut()) -> bool {
                 rc,
                 VERTEX_INSTANCE_CB,
                 WORLD_VIEW_PROJECTION_REGISTER,
+                crate::stereo::single_pass::BoundVsGate::Checked,
                 &mut render,
             )
         }

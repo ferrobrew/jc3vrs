@@ -87,7 +87,16 @@ has a per-pass correctness oracle to diff against.
 ## The vertex-shader transform
 
 The per-eye data in the position path is exactly five `cb0` rows: `cb0[4]` (camera position) and
-`cb0[29..32]` (the view-projection). The transform binds a mod-owned constant buffer at the free slot
+`cb0[29..32]` (the view-projection).
+
+> **Referencing one of those rows is not the same as taking your position from them.** `cb0[29..32]`
+> can only be a clip transform, but `cb0[4]` is a camera *position*, and shaders read it for shading
+> and for world-space lookups while getting their clip position from a baked matrix elsewhere. The
+> whole vegetation set does exactly that, and being claimed by the remap left it drawing both eyes from
+> the collapsed centre view — see "The vegetation `cb0[4]` misclassification" in
+> [single-pass-render-blocks.md](single-pass-render-blocks.md).
+
+The transform binds a mod-owned constant buffer at the free slot
 **cb13** holding *both* eyes' five rows, laid out `[eye0: 0..4][eye1: 5..9]`, and rewrites the shader
 to index it per eye:
 
@@ -485,8 +494,8 @@ All under `stereo`. Off by default unless marked.
 
 | Flag | Effect |
 |---|---|
-| `single_pass_bark` | `RenderBlockBark`'s colour and depth draws. |
-| `single_pass_foliage` | `RenderBlockFoliage`'s draw. |
+| `single_pass_bark` | `RenderBlockBark`'s colour and depth draws. Also declines the `cb0` remap on `vegetationbark*` (see below). |
+| `single_pass_foliage` | `RenderBlockFoliage`'s colour and depth draws. Also declines the `cb0` remap on `vegetationfoliage*` (see below). |
 | `single_pass_occluder` | `RenderBlockOccluder`'s depth prime. |
 | `single_pass_nvwater_per_eye` | The WaveWorks water blocks, whose baked model-view-projection leaves both eyes on the centre view. |
 | `single_pass_ssdecal_geometry_per_eye` | The screen-space decal box geometry, same shape. On top of `single_pass_ssdecal_per_eye`. |

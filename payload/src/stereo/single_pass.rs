@@ -248,7 +248,8 @@ pub fn terrain_counts() -> (usize, usize) {
 
 /// Record the outcome of running [`dxbc_stereo::patch_vertex_shader`] on one vertex shader, for the
 /// census the debug UI reports. Classifies into four buckets: successfully patched; no per-eye
-/// references (the baked-WVP / no-position families left double-drawn -- expected); the
+/// references (the baked-WVP / no-position families -- expected; this also covers the families
+/// declined in favour of a block intercept, see [`baked_cb_block_owns_vs`]); the
 /// `SV_InstanceID`-already-declared deferral (shaders that instance themselves, whose `>> 1` consumer
 /// rewrite is a later phase -- also expected, left double-drawn); and genuinely errored (an
 /// unexpected shape the rewriter could not handle -- worth investigating, should be zero).
@@ -416,6 +417,47 @@ pub fn block_intercept_enabled(block: BlockIntercept) -> bool {
     })
 }
 
+/// Vertex-shader name prefixes whose draws a baked-view-projection block intercept owns end to end,
+/// with the intercept's own flag. Names come from `CreateVertexProgramParams.m_Name`; matched by
+/// prefix to cover each family's permutations, all of which are issued by the block's `Draw`/`DrawZ`.
+///
+/// The occluder is deliberately absent: its shader has no `cb0[4]` reference, so the remap never
+/// claims it and there is nothing to decline.
+const BAKED_CB_VS_NAME_PREFIXES: &[(&str, BlockIntercept)] = &[
+    ("vegetationbark", BlockIntercept::Bark),
+    ("vegetationfoliage", BlockIntercept::Foliage),
+];
+
+/// Whether a baked-view-projection block intercept owns this vertex shader, so the `cb0` remap must
+/// leave it pristine.
+///
+/// Every vegetation vertex shader that reads `cb0` reads **only** `cb0[4]`, the camera world position
+/// -- the foliage family as the world-space origin of its wind-noise lookup, the bark family as the
+/// offset paired with a view-projection baked into `cb1`. Neither takes its clip position from `cb0`
+/// (`dcl_constantbuffer CB0[5]` cannot even address the view-projection rows), so the remap gives them
+/// no per-eye clip: both eyes keep the collapsed centre view, and near geometry rendered at zero
+/// disparity reads as swimming against the parallaxed world around it. Being remapped also costs them
+/// the fix: the intercept that *does* reproject their baked matrix stands down for a patched shader
+/// ([`reproject_baked_cb_per_eye`]), because a patched shader is supposed to be producing both eyes
+/// already.
+///
+/// So the two go together, exactly as they are gated: while the block's flag is on, its `Draw`/`DrawZ`
+/// is re-issued per eye with the baked matrix reprojected, and its shaders are declined here. With the
+/// flag off both halves revert and the family is remapped as before.
+///
+/// The bytecode is the final say, not the name: a permutation that really does read the global
+/// view-projection is left to the remap, so a future bundle that moves one of these families onto
+/// `cb0` does not silently lose its position path.
+pub fn baked_cb_block_owns_vs(name: Option<&str>, code: &[u8]) -> bool {
+    let Some(name) = name else {
+        return false;
+    };
+    BAKED_CB_VS_NAME_PREFIXES
+        .iter()
+        .any(|(prefix, block)| name.starts_with(prefix) && block_intercept_enabled(*block))
+        && dxbc_stereo::reads_global_view_projection(code).is_ok_and(|reads| !reads)
+}
+
 /// A render block with a baked-view-projection per-eye intercept.
 #[derive(Clone, Copy)]
 pub enum BlockIntercept {
@@ -578,7 +620,7 @@ unsafe fn terrain_detail_eye_passes(
     if !terrain_active() {
         return None;
     }
-    let (m_eye, full, d3d) = baked_cb_intercept_ready()?;
+    let (m_eye, full, d3d) = baked_cb_intercept_ready(BoundVsGate::Checked)?;
 
     // SAFETY: caller guarantees live pointers.
     let ovp = unsafe { (*rc).m_OffsetViewProjection.data };
@@ -844,17 +886,32 @@ fn eye_half_viewport(full: D3D11_VIEWPORT, eye: usize) -> D3D11_VIEWPORT {
     }
 }
 
+/// Whether a baked-cb per-eye re-issue has to satisfy itself that the block's vertex shader was not
+/// claimed by the `cb0` remap.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BoundVsGate {
+    /// Stand down if a patched vertex shader is bound. For a block whose shaders the remap may claim
+    /// (patching is by operand detection, not by name), a patched shader already renders both eyes from
+    /// one draw: re-issuing would draw the geometry twice per eye, from `cb13`'s eye slot rather than
+    /// the reprojected constant.
+    Checked,
+    /// Run regardless. For a block whose shaders are declined at creation while its own flag is on
+    /// ([`baked_cb_block_owns_vs`]), so none of them can be patched — and where the check would be
+    /// wrong anyway: it reads the shader bound by the *previous* draw, since the block binds its own
+    /// inside the `Draw` being wrapped. A bark block drawn between two patched model draws would stand
+    /// down on the neighbour's shader and lose its parallax.
+    Owned,
+}
+
 /// The state a baked-cb per-eye re-issue needs, or `None` when it must not run: the two per-eye `M_eye`
 /// matrices, the collapse full viewport, and the immediate context. Requires the collapse (a single
 /// centered walk) and the G-buffer pass range -- outside the range the eye-half split does not apply
 /// (the shadow-cascade and reflection passes reuse these blocks' `DrawZ`, and eye-splitting a
 /// shadow-atlas draw would corrupt it), and outside the collapse re-issuing per eye is wrong.
-fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, EngineContext)> {
-    // A block whose vertex shader the rewriter happened to patch (patching is by operand detection,
-    // not by name, so any permutation touching `cb0[4]`/`cb0[29..32]` gets it) already renders both
-    // eyes from one draw. Re-issuing it would draw the geometry twice per eye, and its position would
-    // come from `cb13`'s eye slot rather than the reprojected constant. Leave it to the patched path.
-    if BOUND_VS_PATCHED.load(Ordering::Relaxed) {
+fn baked_cb_intercept_ready(
+    gate: BoundVsGate,
+) -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, EngineContext)> {
+    if gate == BoundVsGate::Checked && BOUND_VS_PATCHED.load(Ordering::Relaxed) {
         return None;
     }
     eye_split_state()
@@ -887,7 +944,7 @@ fn eye_split_state() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, EngineContext)>
 /// CPU-instanced, GPU-indirect) uniformly, since it re-drives the block's whole `Draw`, and each of the
 /// two re-issues renders into its eye's viewport half. The re-issue raises [`PER_EYE_REISSUE`] so the
 /// draw and viewport detours leave the block's own calls alone rather than compounding the split, and
-/// [`baked_cb_intercept_ready`] declines outright if the bound vertex shader turns out to be patched.
+/// `gate` decides whether it also stands down for a patched bound vertex shader (see [`BoundVsGate`]).
 ///
 /// # Safety
 ///
@@ -897,10 +954,11 @@ pub unsafe fn reproject_baked_cb_per_eye(
     rc: *const RenderContext,
     cb_index: i32,
     reg_offset: u32,
+    gate: BoundVsGate,
     mut draw: impl FnMut(),
 ) -> bool {
     // SAFETY: forwarded unchanged from this function's own contract.
-    unsafe { reproject_baked_cb_per_eye_staged(rc, cb_index, reg_offset, |_| draw()) }
+    unsafe { reproject_baked_cb_per_eye_staged(rc, cb_index, reg_offset, gate, |_| draw()) }
 }
 
 /// [`reproject_baked_cb_per_eye`] for a block that *also* has per-eye state of its own to stage:
@@ -920,9 +978,10 @@ pub unsafe fn reproject_baked_cb_per_eye_staged(
     rc: *const RenderContext,
     cb_index: i32,
     reg_offset: u32,
+    gate: BoundVsGate,
     mut render: impl FnMut(usize),
 ) -> bool {
-    let Some((m_eye, full, d3d)) = baked_cb_intercept_ready() else {
+    let Some((m_eye, full, d3d)) = baked_cb_intercept_ready(gate) else {
         return false;
     };
     // SAFETY: `rc` is the live render context the detoured `Draw` received.
@@ -978,7 +1037,7 @@ pub unsafe fn screen_uv_cb_per_eye(
     base: [f32; 16],
     mut draw: impl FnMut(),
 ) -> bool {
-    let Some((_, full, d3d)) = baked_cb_intercept_ready() else {
+    let Some((_, full, d3d)) = baked_cb_intercept_ready(BoundVsGate::Checked) else {
         return false;
     };
     // SAFETY: `rc` is live per the caller contract.
@@ -1013,7 +1072,7 @@ pub unsafe fn screen_uv_cb_per_eye(
 /// bracketed by [`PER_EYE_REISSUE`], so the draw and viewport detours leave the block's own
 /// submissions alone instead of splitting them a second time.
 pub fn draw_per_eye_half(mut render: impl FnMut(usize)) -> bool {
-    let Some((_, full, d3d)) = baked_cb_intercept_ready() else {
+    let Some((_, full, d3d)) = baked_cb_intercept_ready(BoundVsGate::Checked) else {
         return false;
     };
     per_eye_halves(full, d3d, &mut render);
@@ -1028,9 +1087,12 @@ pub fn draw_per_eye_half(mut render: impl FnMut(usize)) -> bool {
 /// patched path, and it reads the shader that `VSSetShader` last saw. For a block whose type binds
 /// its programs in a per-pass setup that is a fair proxy; for one that binds them per draw it is a
 /// coin flip on whatever drew before it, which would make the re-issue fire intermittently. Callers
-/// take this variant only when the block's own vertex programs are provably outside the rewrite --
-/// the rewriter only patches shaders that reference the per-eye `cb0` entries, so a family that
-/// builds clip position from a constant buffer of its own never qualifies.
+/// take this variant only when the block's own vertex programs are provably outside the rewrite.
+///
+/// "Builds clip from a constant buffer of its own" is *not* on its own enough to establish that: the
+/// rewrite claims any shader referencing the per-eye `cb0` entries, and `cb0[4]` is a camera position
+/// that such a family may still read for shading. Where a family reads it, the shader has to be
+/// declined at creation instead ([`baked_cb_block_owns_vs`]).
 pub fn draw_per_eye_half_ignoring_bound_vs(mut render: impl FnMut(usize)) -> bool {
     let Some((_, full, d3d)) = eye_split_state() else {
         return false;

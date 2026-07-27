@@ -873,22 +873,36 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 {
                     shader::request_reload();
                 }
-                ui.label("Render-block re-issue (no shader reload):");
-                ui.checkbox(
-                    &mut cfg.stereo.single_pass_bark,
-                    "Bark (tree trunks/branches)",
-                )
-                .on_hover_text(
-                    "Re-issues CRenderBlockBark's Draw/DrawZ once per eye with its baked cb1 \
-                     view-projection reprojected by M_eye. Covers its plain/instanced/GPU-indirect \
-                     draw kinds.",
-                );
-                ui.checkbox(&mut cfg.stereo.single_pass_foliage, "Foliage (grass)")
+                ui.label("Render-block re-issue:");
+                if ui
+                    .checkbox(
+                        &mut cfg.stereo.single_pass_bark,
+                        "Bark (tree trunks/branches)",
+                    )
                     .on_hover_text(
-                        "Re-issues CRenderBlockFoliage's Draw once per eye with its baked cb2 \
-                         view-projection reprojected by M_eye. Does not fix the separate forward-\
-                         lighting black-grass issue.",
-                    );
+                        "Re-issues CRenderBlockBark's Draw/DrawZ once per eye with its baked cb1 \
+                         view-projection reprojected by M_eye. Covers its plain/instanced/\
+                         GPU-indirect draw kinds, and declines the cb0 remap on the vegetationbark* \
+                         shaders (which read cb0[4] for shading, not position). Reloads shaders to \
+                         apply.",
+                    )
+                    .changed()
+                {
+                    shader::request_reload();
+                }
+                if ui
+                    .checkbox(&mut cfg.stereo.single_pass_foliage, "Foliage (grass)")
+                    .on_hover_text(
+                        "Re-issues CRenderBlockFoliage's Draw/DrawZ once per eye with its baked cb2 \
+                         view-projection reprojected by M_eye, and declines the cb0 remap on the \
+                         vegetationfoliage* shaders (which read cb0[4] only as a wind-noise origin). \
+                         Does not fix the separate forward-lighting black-grass issue. Reloads \
+                         shaders to apply.",
+                    )
+                    .changed()
+                {
+                    shader::request_reload();
+                }
                 ui.checkbox(
                     &mut cfg.stereo.single_pass_occluder,
                     "Occluder (depth-prime boxes)",

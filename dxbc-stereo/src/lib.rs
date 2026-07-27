@@ -31,6 +31,26 @@ pub use tokens::{Operand, OperandKind, ShaderStage, TokenStream};
 /// rewrite remaps to the per-eye `cb13`.
 pub const PER_EYE_CB0_ROWS: [u32; 5] = [4, 29, 30, 31, 32];
 
+/// The `cb0` rows holding the global view-projection (`m_OffsetViewProjection`), the subset of
+/// [`PER_EYE_CB0_ROWS`] that can *only* be a clip-space transform.
+pub const VIEW_PROJECTION_CB0_ROWS: [u32; 4] = [29, 30, 31, 32];
+
+/// Whether a vertex shader reads the global view-projection ([`VIEW_PROJECTION_CB0_ROWS`]) -- i.e.
+/// whether its clip position can come from `cb0` at all.
+///
+/// The other per-eye row, `cb0[4]`, is the camera world position, and reading it is *not* evidence of
+/// a `cb0`-driven clip position: shaders read it as a shading input (a world-space view vector) or as
+/// the origin that turns a camera-relative position back into a world-space one for a noise lookup,
+/// while taking their clip position from a CPU-baked matrix in another constant buffer. Telling the
+/// two apart matters because a shader in the second group gains nothing from the `cb0` remap -- its
+/// position still comes from the collapsed centre view -- while being remapped makes it look like a
+/// shader the remap covers.
+pub fn reads_global_view_projection(blob: &[u8]) -> Result<bool, DxbcError> {
+    Ok(per_eye_refs(blob)?
+        .iter()
+        .any(|r| VIEW_PROJECTION_CB0_ROWS.contains(&r.row)))
+}
+
 /// A reference to a per-eye `cb0` operand found in a shader: the `cb0` row and the token index of
 /// the operand within the shader chunk (for the rewrite to target).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

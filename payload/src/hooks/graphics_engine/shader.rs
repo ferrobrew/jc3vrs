@@ -136,9 +136,18 @@ fn create_vertex_program(
         && p.m_Size >= 4
     {
         let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
-        let outcome = dxbc_stereo::patch_vertex_shader(code);
-        // The shader's engine name (a null-terminated C string) drives the reprojection allowlist.
+        // The shader's engine name (a null-terminated C string) drives the reprojection allowlist and
+        // the baked-cb block families' decline.
         name = program_name(p.m_Name);
+        // A family whose draws a baked-view-projection block intercept re-issues per eye must stay
+        // pristine: the remap would claim it on a `cb0[4]` reference that is not its position path,
+        // leaving both eyes on the collapsed centre view *and* standing the intercept down. It is
+        // counted as having no per-eye reference, which is what it has -- no per-eye *clip* reference.
+        let outcome = if crate::stereo::single_pass::baked_cb_block_owns_vs(name.as_deref(), code) {
+            Err(dxbc_stereo::DxbcError::NoPerEyeReferences)
+        } else {
+            dxbc_stereo::patch_vertex_shader(code)
+        };
         crate::stereo::single_pass::record_patch_outcome(&outcome, name.as_deref());
         // Substitute the rewritten bytecode when single-pass is active. The `cb0` remap is the primary
         // path; a shader with no per-eye `cb0` operand instead takes the reprojection rewrite, but only

@@ -105,7 +105,7 @@ block. cb1 also carries opacity/UV (reg 4), the raw model matrix (regs 5–8), a
 non-instanced `DrawIndexed`; CPU-instanced `DrawIndexedInstanced`; GPU-indirect `DrawIndexedNoMutex`.
 All three read the same cb1 regs 0–3, so one reprojection corrects every kind.
 
-**Wiring — `single_pass_bark`, built.** `Draw` and `DrawZ` are detoured and re-issued once per eye
+**Wiring — `single_pass_bark`, built, on by default.** `Draw` and `DrawZ` are detoured and re-issued once per eye
 into the eye's half-viewport, with `cb1[0..3]` reprojected as `cb1[k]_eye = M_eye · cb1[k]_mono` (one
 entry at a time — the same `M_eye` the mod builds for cb13). Because `Draw` itself bakes cb1, the
 intercept reprojects the game's own `SetVertexProgramConstants(slot 1)` during a wrapped
@@ -138,10 +138,15 @@ rewriter applies. cb0 is bound for globals only.
 `DrawIndexedInstancedIndirect` (instance count in the GPU-only `m_InstDrawParams` args, populated by the
 vegetation draw-indirect compute pass); non-instanced `DrawIndexedNoMutex`.
 
-**Wiring — `single_pass_foliage`, built.** Same story as Bark: the non-indirect paths are bucket (b),
-but the dominant grass path is GPU-indirect and shares the VS, so a reproject allowlist entry would
-break the grass. `Draw` is therefore detoured and re-issued per eye with `cb2[4..7]` reprojected, which
-covers every draw kind without touching the VS.
+**Wiring — `single_pass_foliage`, built, on by default.** Same story as Bark: the non-indirect paths
+are bucket (b), but the dominant grass path is GPU-indirect and shares the VS, so a reproject allowlist
+entry would break the grass. `Draw` (colour, `0x14012DDA0`) and `DrawZ` (prez/shadow/velocity/RSM,
+`0x14012D9B0`) are therefore detoured and re-issued per eye with `cb2[4..7]` reprojected, which covers
+every draw kind without touching the VS. Both entry points stage the same `cb2[4..7]` copy of
+`m_OffsetViewProjection`, and both have to be reprojected: a prepass left at the centre view primes
+depth for geometry neither eye draws there, and the per-eye colour fragments are rejected against it.
+`DrawZ`'s velocity permutation also stages the previous frame's offset VP at `cb2[11..14]`, which is
+left centred — the same deferral bark's velocity matrix takes.
 
 The cheaper shape — reproject the VS and double each `m_InstDrawParams` slot's `InstanceCount` (dword
 +1) in an in-place compute pre-pass, since the args buffer has no CPU copy — is not built; it would
@@ -231,15 +236,55 @@ log shows actually running). So "dark and speckled together" is the signature of
 and after that of the G-buffer *normal* (`o1`), which would leave the deferred resolve computing
 `N·L ≈ 0` on foliage while the terrain beside it lights correctly.
 
-The one-toggle experiment that separates them: `single_pass_foliage` is the only lever that changes
-what foliage submits, and it currently **cannot engage at all** — `baked_cb_intercept_ready` declines
-whenever `BOUND_VS_PATCHED` is set, and the foliage VS *is* patched. It is a false positive: the
-rewriter's per-eye set is `cb0[{4, 29..32}]`, and the foliage VS touches `cb0[4]` only as a wind-noise
-world offset (`add r0.w, r1.y, cb0[4].y`) — never for its clip position, which comes from the baked
-`cb2[4..7]`. So the family is classified "patched", routed through the instance-parity path, and locked
-out of its own bucket-(b) intercept. Un-patching it is not a free change: an unpatched
-`DrawIndexedInstanced` is forwarded once at the full viewport, which would stretch the grass 2×
-horizontally, so the exclusion has to land together with the bucket-(b) intercept, not before it.
+The one-toggle experiment that separates them is `single_pass_foliage`, and it used to be unable to
+engage at all — see the next section, which is now fixed.
+
+## The vegetation `cb0[4]` misclassification (fixed)
+
+The rewriter's per-eye set is `cb0[{4, 29..32}]`, and it patches any vertex shader that references one
+of them. But those five rows are not one thing. `cb0[29..32]` is `m_OffsetViewProjection` — it can only
+be a clip-space transform. `cb0[4]` is the camera world position (`RenderContext + 0x260`, the render
+camera's `m_TransformF` translation row, copied by `SetGlobalShaderProgramCameraConstants` at
+`0x140186370`), and shaders read it for several unrelated reasons.
+
+Every `vegetation*` vertex shader that reads `cb0` reads **only** `cb0[4]`, and none of the 32 of them
+references `cb0[29..32]` — most declare `dcl_constantbuffer CB0[5]`, which cannot even address those
+rows. Their roles:
+
+| Family | `cb0[4]` use | Clip position |
+|---|---|---|
+| `vegetationfoliage*` | `add r0.w, r1.y, cb0[4].y` — turns the camera-relative position back into a world one for the wind-noise texture lookup | `cb2[4..7]`, the baked `OffsetVP` |
+| `vegetationbark*instanced` | `add r1.xyz, r0.xyzx, -cb0[4].xyzx` — makes the per-instance world position camera-relative | `cb1[0..3]`, the baked `OffsetVP` |
+
+Neither takes its clip position from `cb0`, so the remap bought them nothing: instance-doubling and
+`SV_ViewportArrayIndex` routing put them in both eye halves, but both halves were drawn from the
+collapsed **centre** camera. Near geometry at zero disparity reads as sitting at infinity while moving
+like near geometry — which in a headset is grass and trunks that are roughly in the right place but
+drift in world space as the camera moves. It also *locked out the fix*: `baked_cb_intercept_ready`
+declines whenever `BOUND_VS_PATCHED` is set, so `single_pass_foliage` and `single_pass_bark` could
+never run.
+
+**The fix, in `stereo::single_pass::baked_cb_block_owns_vs`.** While a family's intercept flag is on,
+its vertex shaders are declined by the `cb0` remap at creation, so the block intercept owns them end to
+end. It is name-prefixed (`vegetationbark`, `vegetationfoliage`) but bytecode-confirmed: a permutation
+that really does read `cb0[29..32]` is left to the remap. The decline and the intercept share a flag
+because either alone is wrong — declining without the intercept forwards an unpatched instanced draw
+once at whatever viewport is bound, which is the 2× horizontal stretch.
+
+**Why this is scoped by name rather than applied to every `cb0[4]`-only shader.** Fifty of the bundle's
+455 vertex shaders are claimed on a `cb0[4]` reference alone (23 vegetation, the rest water, clouds,
+particles, and a few model families — pinned by
+`corpus_vegetation_reads_the_camera_position_but_never_the_view_projection`). The other 27 have no
+per-eye re-issue to fall back on, so un-patching them would move them from "centre view, correctly
+sized in both eyes" to "issued once at whatever viewport is bound". They are wrong the same way and
+worth fixing, but each needs its own bucket-(b) or (d) wiring first.
+
+**The bound-shader gate also had to change.** `baked_cb_intercept_ready`'s `BOUND_VS_PATCHED` check
+reads the shader bound by the *previous* draw, because these blocks bind their own inside the `Draw`
+being wrapped. Bark is drawn interleaved with patched model geometry, so the check would stand its
+intercept down on a neighbour's shader. `BoundVsGate::Owned` skips it for the two families whose
+shaders are declined at creation and therefore provably unpatched; every other caller keeps
+`BoundVsGate::Checked`.
 
 ## TreeImpostor
 
