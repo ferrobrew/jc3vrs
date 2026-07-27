@@ -124,7 +124,7 @@ allowlist entry and takes the whole-`Draw` re-issue instead.
 
 ## VegetationFoliage
 
-Grass and ground cover, `CRenderBlockFoliage` (registered `"VegetationFoliage"`), drawn forward-lit in
+Grass and ground cover, `CRenderBlockFoliage` (registered `"VegetationFoliage"`), drawn in
 `RP_VEGETATION_OPAQUE` (0x46). `Draw` at `0x14012DDA0`; type `SetupConstantBuffers` at `0x14010CB00`,
 type `Setup` at `0x1401847F0`.
 
@@ -148,28 +148,98 @@ The cheaper shape — reproject the VS and double each `m_InstDrawParams` slot's
 also need the `SV_InstanceID >> 1` consumer rewrite on the CPU-instanced path so the doubled instance
 id still indexes the original instance.
 
-**Black-in-VR — the clustered-grid suspect was the right one.** Under the collapse the grid was built
-with one eye's projection against the double-wide tile count, so every light landed in the wrong tiles
-and the forward-lit families were lit from an empty lookup. `single_pass_clustered_per_eye` (on by
-default) fixes it; see [single-pass-stereo.md](single-pass-stereo.md) and engine
-`lighting-shadow-pipeline.md` §4. The original two-suspect analysis follows, kept for the resource
-map.
+### Black-in-VR: the clustered grid is *not* the cause
 
-Foliage is forward-lit with clustered lighting, not deferred — the type `Setup` binds
-the clustered-light constant buffer (FS cb3), the light-cluster index texture (FS t15), GI, reflection,
-and sun-shadow cascades to the fragment stage. From `CRenderBlockType::SetupLightingTextures`
-(`0x140101160`): the sun-shadow cascades bind at **FS t44/t45** (`0x2C`/`0x2D`) from
-`RenderContext+122`/`+123` (falling back to `CShadowManager+25088`), GI/reflection at t12/t31. The
-froxel/cluster grid and the shadow sample are indexed from screen position and view depth; if that
-volume or those resources are built for a projection/resolution that doesn't match the eye being
-rendered (the double-wide/collapse case), the lookup resolves to empty cells and the alpha-blended
-foliage receives no light — rendering black, with no deferred pass to rescue it.
+The earlier version of this section claimed the black grass was the clustered froxel grid and that
+`single_pass_clustered_per_eye` had fixed it. Both halves of that are wrong, and the shader bundle
+says so directly.
 
-Two suspects, one isolation test: (1) the clustered-light grid (cb3/t15), built for the full/center
-projection but sampled per eye-half; (2) the sun-shadow cascades (t44/t45), tied to the "shadows a bit
-broken" report. **Disable the sun shadows** (`single_pass`'s shadow-disable diagnostic) — if the grass
-un-blacks, it's the shadow term (t44/t45); if it stays black, it's the clustered-light grid (cb3/t15).
-The fix in either case is per-eye resource correctness, which needs in-game iteration.
+**The visible grass is deferred, not forward-lit.** The block's colour permutations split cleanly:
+
+| Permutation | Outputs | `LightLookup` (t31) / `LightingFrameConsts` (cb3) |
+|---|---|---|
+| `vegetationfoliage` (`sh_0794`), `…nodiscard`, `…objectspacenormalmap`, `…transmission` | 4 × `SV_Target` | **absent** |
+| `vegetationfoliageblend` (`sh_0796`), `…blendaoit` | 1 × `SV_Target` | present |
+
+The four-target permutations are G-buffer writers; only the `blend` pair is forward-lit. The user's own
+session log settles which one runs: the foliage colour draws are counted inside the collapse's G-buffer
+pass range `[0x2f, 0x55)` (`vegetationfoliagehwinstanced`, ~21k draws/frame in the instanced eye-parity
+census), and `RP_VEGETATION_TRANSPARENT` is outside it. So the grass that renders black writes the
+G-buffer and is lit by the deferred resolve — the same resolve that lights the terrain correctly.
+
+**Even for the forward permutation, an empty grid cannot produce black.** In `sh_0796` the whole
+clustered-light section is guarded and purely additive:
+
+```
+ishr r12.xy, r6.xyxx, l(6, 6, 0, 0)          // absolute tile from ftoi(SV_Position.xy)
+ld_aoffimmi_indexable(0,0,k)(texture3d) …, t31.xyzw   // four chunk bitmasks
+or r2.x, r1.y, r1.x
+if_nz r2.x
+  …                                           // per-light loop
+  mad r9.xyz, r21.xyzx, r17.xyzx, r9.xyzx     // accumulate only
+endif
+```
+
+`r9` (sun + sky SH + GI + reflection) is complete *before* the lookup. A wrong or empty grid removes
+local point/spot light; it cannot zero the sum. The grid is a real correctness problem for local
+lighting — it is not a black-maker.
+
+**And the per-eye split has never engaged at the mod's own render resolution.** `TileGrid::splittable`
+requires the double-wide width to be a multiple of `2 * 64`. The VR render size is `2015 × 2240` per
+eye, so the collapse target is `4030` wide, and every session logs
+
+```
+WARN single_pass: per-eye froxel grid declined: the 4030px double-wide render width is not a
+multiple of 128 …; the clustered light assignment ran whole-grid
+```
+
+That is why toggling `single_pass_clustered_per_eye` changed nothing. Making the split usable means
+rounding the per-eye render width up to a multiple of 64 in `vr::engine_render_resolution` (so the
+double-wide is a multiple of 128) — worth doing for the local-lighting correctness it buys, but it will
+not touch the black grass.
+
+**Corrected resource map.** The old text's slot attributions were wrong; from
+`CRenderBlockType::SetupForwardLightingResources` (`0x140101250`),
+`CRenderBlockType::SetupLightingTextures` (`0x140101160`), and the shader bundle's own binding tables:
+
+| Slot | What it actually is | Source |
+|---|---|---|
+| FS cb3 | `LightingFrameConsts` (point/spot light arrays, `AOLightInfluence`, `SkyAmbientSaturation`) | `RenderContext + 0x3A8` |
+| FS t15 | `GbufDiffuse` — `CGraphicsEngine::m_GBufferTexture[0]`, i.e. GBuffer0 | engine, not the context |
+| FS t31 | `LightLookup`, the froxel grid (`texture3d`, `uint4`) | `RenderContext + 0x3B0` |
+| FS t14 | `ShadowMapTexture`, the sun-shadow cascade atlas (`texture2darray`) | shadow manager |
+| FS t44/t45 | `HorizonMap0`/`HorizonMap1` — world-space horizon maps sampled at `worldXZ * 3.05e-5 + 0.5` | `RenderContext + 122/123`, falling back to `CShadowManager + 25088` |
+
+`m_GBufferTexture[0]` is named in the symbol dump's `CRenderBlockType::SetupForwardLightingResources`;
+the t44/t45 identification comes from the `HorizonMap0`/`HorizonMap1` binding names in `sh_0796`, whose
+sample is world-space, not screen-space. `docs/engine/lighting-shadow-pipeline.md` §4.2 calls t44/t45
+the sun-shadow cascades and should be corrected the same way.
+
+**What is still open.** The deferred permutation's G-buffer albedo is
+
+```
+o0.xyz = DiffuseMap.rgb · AmbientOcclusionMap.x(v1.zw) · cb1[3].xyz · v5.xyz
+```
+
+and its only screen-space input is the LOD-dissolve screen door
+(`dp2 v0.xy, l(0.467944, -0.703648)`, compared against `1 - v5.w`) — which is what produces the
+*speckle* in the screenshots, and which goes fully opaque at `v5.w = 1` and fully discarded at
+`v5.w = 0`. `v5` is `TEXCOORD4`: a constant `(1,1,1, cb2[8].x)` in the non-instanced VS (`sh_0249`),
+but a **per-instance colour + fade** in the instanced ones — a structured-buffer fetch indexed by
+`SV_InstanceID` in `sh_0253`, and the per-instance vertex attribute `v7` in `sh_0251` (the variant the
+log shows actually running). So "dark and speckled together" is the signature of `v5` reading wrong,
+and after that of the G-buffer *normal* (`o1`), which would leave the deferred resolve computing
+`N·L ≈ 0` on foliage while the terrain beside it lights correctly.
+
+The one-toggle experiment that separates them: `single_pass_foliage` is the only lever that changes
+what foliage submits, and it currently **cannot engage at all** — `baked_cb_intercept_ready` declines
+whenever `BOUND_VS_PATCHED` is set, and the foliage VS *is* patched. It is a false positive: the
+rewriter's per-eye set is `cb0[{4, 29..32}]`, and the foliage VS touches `cb0[4]` only as a wind-noise
+world offset (`add r0.w, r1.y, cb0[4].y`) — never for its clip position, which comes from the baked
+`cb2[4..7]`. So the family is classified "patched", routed through the instance-parity path, and locked
+out of its own bucket-(b) intercept. Un-patching it is not a free change: an unpatched
+`DrawIndexedInstanced` is forwarded once at the full viewport, which would stretch the grass 2×
+horizontally, so the exclusion has to land together with the bucket-(b) intercept, not before it.
 
 ## TreeImpostor
 

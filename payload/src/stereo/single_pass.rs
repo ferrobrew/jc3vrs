@@ -27,7 +27,7 @@ use jc3gi::{
         draw::SetVertexProgramConstants,
         graphics_engine::{GraphicsEngine, HContext_t, RenderContext},
         render_block::RenderBlockTerrainDetail,
-        render_engine::RenderEngine,
+        render_engine::{RenderEngine, RenderPassId},
     },
     types::math::{Matrix4, Vector4},
 };
@@ -2171,24 +2171,69 @@ unsafe extern "system" fn draw_detour(context: *mut c_void, vertex_count: u32, s
     submit();
 }
 
-/// Render passes whose non-indexed draws are **geometry**, not a fullscreen triangle.
+/// Render passes whose non-indexed draws are **geometry**, not a viewport-covering triangle.
 ///
-/// `Draw` (slot 13) is overwhelmingly the fullscreen-pass entry point, which is why the default is to
-/// reset the viewport to full for it. But several render blocks submit ordinary world geometry
-/// non-indexed -- the four decal blocks, the road and skidmark layers -- and pinning `Full` for those
-/// rasterises them across the whole double-wide target, stretched 2x horizontally about its centre. A
-/// 2x horizontal stretch is also a 2x horizontal *motion* gain, which is what makes decals appear to
-/// slide across the world at twice the camera's rate.
+/// `Draw` (slot 13) is predominantly the fullscreen-pass entry point, which is why the default is to
+/// reset the viewport to full for it. But a number of render blocks submit ordinary world geometry
+/// non-indexed, and pinning `Full` for those rasterises them across the whole double-wide target,
+/// stretched 2x horizontally about its centre. A 2x horizontal stretch is also a 2x horizontal
+/// *motion* gain, which is what makes decals appear to slide across the world at twice the camera's
+/// rate.
 ///
-/// An allowlist rather than a heuristic: the cost of misclassifying a fullscreen pass as geometry is a
-/// visibly wrong frame, while the cost of missing a geometry pass is only the status quo. Entries are
-/// added as they are evidenced, not guessed -- the per-pass slot-13 census in the diagnostic log names
-/// the candidates.
-const GEOMETRY_SLOT13_PASSES: [u8; 4] = [
-    0x4F, // RP_ROAD_LAYERS -- CRenderBlockSplineRoad
-    0x52, // RP_DECALS -- the four CRenderBlockDecal* blocks
-    0x6F, // RP_SKIDMARKS -- CRenderBlockSkidmarks
-    0x86, // RP_WINDOW_DECALS
+/// # How this list was derived
+///
+/// Statically, from the release binary rather than from a capture. The engine funnels every
+/// non-indexed submission through one wrapper (`Graphics::Draw`), so its call sites are the complete
+/// set of blocks that can reach slot 13 -- 60-odd of them. Each was classified by reading its `Draw`:
+/// a block that binds a vertex stream and submits a world transform is geometry, one that submits a
+/// screen-covering primitive is not. Their passes come from the engine's pass-creation sites
+/// (`CRenderEngine::CreateRenderPass`, whose pass id is a literal at every call), which name the
+/// owning system for each id, plus that system's enqueue site.
+///
+/// The two groups below are the result. Every fullscreen slot-13 block turned out to sit on a pass of
+/// its own that no geometry block is enqueued onto -- including three that fall *inside* the GBuffer
+/// index range and so are live under the collapse ([`RenderPassId::RP_DOWNSAMPLE_DEPTH`],
+/// [`RenderPassId::RP_UNDERWATER_FOG_GRADIENT`], and the fog-volume trio) -- so no pass carries both
+/// kinds and the pass id is a sound discriminator. It stays an allowlist, not a heuristic: the cost of
+/// misclassifying a fullscreen pass as geometry is a visibly wrong frame, while the cost of missing a
+/// geometry pass is only the status quo.
+///
+/// Deliberately absent: [`RenderPassId::RP_MODELS_REFLECTION`], which is model geometry but renders
+/// the reflection camera's view into the reflection target, not into the double-wide scene target --
+/// splitting it per eye would be wrong. The blocks whose passes lie outside the collapsed range
+/// (UI, the reflection prepasses, `POST_RP_FULLSCREEN_VIDEO`) need no entry at all.
+const GEOMETRY_SLOT13_PASSES: &[u8] = &[
+    // Passes whose entire draw list is a block that *always* submits non-indexed.
+    // `CRoadMeshManager` owns both road passes; a road is enqueued onto the stencil one as well when
+    // its visual type has shader type 0.
+    RenderPassId::RP_ROAD_STENCIL as u8,
+    RenderPassId::RP_ROAD_LAYERS as u8,
+    // `CCreatureManager`'s pass: `CCreatureRenderBlock::Draw` has no indexed path at all.
+    RenderPassId::RP_CREATURES as u8,
+    // `CDecalManager`'s two passes, drawing the four `CRenderBlockDecal*` types.
+    RenderPassId::RP_DECALS as u8,
+    RenderPassId::RP_WINDOW_DECALS as u8,
+    // `CSkidmarkManager`'s pass, drawing `CRenderBlockSkidmarks`.
+    RenderPassId::RP_SKIDMARKS as u8,
+    // The model-family passes. General / GeneralJC3 / GeneralMaskedJC3 / BuildingJC3 / Prop /
+    // MaterialTune / Open / FXMeshFire / MeshParticle all end their `Draw` and `DrawZ` with the same
+    // branch -- `DrawIndexed` when the block has an index buffer, plain `Draw` when it does not -- so
+    // any index-buffer-less model in the shipped data lands on slot 13 in whichever of these it was
+    // enqueued onto. The engine owns the two Z passes; `CModelInstanceManager` owns the rest, and
+    // enqueues nothing but model instances onto them.
+    RenderPassId::RP_Z_PASS as u8,
+    RenderPassId::RP_Z_AND_VELOCITY_PASS as u8,
+    RenderPassId::RP_MODELS_DYNAMIC as u8,
+    RenderPassId::RP_MODELS_DYNAMIC_MASK_DAMAGE_POST_EFFECT as u8,
+    RenderPassId::RP_MODELS_STATIC as u8,
+    RenderPassId::RP_MODELS_TRANSPARENT as u8,
+    RenderPassId::RP_MODELS_GLINT as u8,
+    RenderPassId::RP_MODEL_HALO_POST as u8,
+    RenderPassId::RP_MODELS_REFRACT as u8,
+    RenderPassId::RP_Z_FINAL_TRANSPARENT as u8,
+    RenderPassId::RP_GHOST_EFFECT as u8,
+    RenderPassId::RP_OUTLINE_MASK as u8,
+    RenderPassId::RP_FINAL_TRANSPARENT as u8,
 ];
 
 fn is_geometry_slot13_pass(pass: u8) -> bool {
