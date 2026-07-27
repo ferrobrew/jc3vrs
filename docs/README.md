@@ -28,6 +28,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [swapchain-ownership.md](mod/swapchain-ownership.md) — the mod-owned back buffer: substituting the engine's swapchain-derived render setups so the scene renders per-eye while the DXGI buffers stay at the window size.
 - [input.md](mod/input.md) — how the mod taps, consumes, and injects the game's input.
 - [fsr.md](mod/fsr.md) — FSR anti-aliasing and upscaling in the stereo pipeline.
+- [upscaling-evaluation.md](mod/upscaling-evaluation.md) — Intel XeSS assessed against the shipped FSR2 as anti-aliasing and as a VR upscaler: the Arc-only D3D11 backend, the D3D11on12 route that does work and what it costs, XeSS's sub-rectangle API against the eye seam, and why the recommendation is still to finish FSR2 and validate foveation.
 - [single-pass-stereo.md](mod/single-pass-stereo.md) — rendering both eyes in one geometry walk into a double-wide target: the shader rewrites, the routing, the four ways content goes wrong under the collapse and what fixes each, and the configuration.
 - [single-pass-render-blocks.md](mod/single-pass-render-blocks.md) — the per-render-block record of what single-pass stereo needs from each, and what it took to get there.
 - [far-field.md](mod/far-field.md) — the monoscopic far field (issue #32): identifying the far-regime scene work and sharing it between eyes.
