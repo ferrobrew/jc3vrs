@@ -677,6 +677,21 @@ impl std::convert::AsMut<HTimeStampQuery_t> for HTimeStampQuery_t {
         self
     }
 }
+#[repr(C, align(8))]
+/// A vertex-declaration handle: the input layout a render block binds before its draws, passed to the
+/// render block types' `Setup` and on to `Graphics::SetVertexDeclaration`.
+pub struct HVertexDeclaration_t {}
+impl HVertexDeclaration_t {}
+impl std::convert::AsRef<HVertexDeclaration_t> for HVertexDeclaration_t {
+    fn as_ref(&self) -> &HVertexDeclaration_t {
+        self
+    }
+}
+impl std::convert::AsMut<HVertexDeclaration_t> for HVertexDeclaration_t {
+    fn as_mut(&mut self) -> &mut HVertexDeclaration_t {
+        self
+    }
+}
 pub use windows::Win32::Foundation::HWND as HWND;
 #[repr(C, align(8))]
 /// The scene occluder / beam-frustum-based-culling manager. Its cull frustum is built (and cached
@@ -742,7 +757,14 @@ pub struct RenderContext {
     /// clustered pass reads it to build the geometry proxy transform (cb0) and the froxel tile
     /// bounds (cb1).
     pub m_ProjectionF: crate::types::math::Matrix4,
-    _field_98: [u8; 64],
+    /// The world→clip view-projection for this dispatch, copied verbatim from
+    /// [`Camera::m_ViewProjectionF`](crate::camera::camera::Camera::m_ViewProjectionF) by
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera) — the reverse-Z projection
+    /// applied to the translation-bearing view, so it maps absolute world positions to clip space.
+    /// Distinct from [`m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection), which drops the camera
+    /// translation and is what the camera-relative geometry paths bake. The water block types build
+    /// their screen-space reflection/refraction lookup from it.
+    pub m_ViewProjectionF: crate::types::math::Matrix4,
     /// The translation-free view-projection for this dispatch (the rotation and projection without the
     /// camera world translation). The tessellation constant buffers bake it directly (e.g.
     /// [`RenderBlockTypeTerrain::SetupConstantBuffers`](crate::graphics_engine::render_block::RenderBlockTypeTerrain)),

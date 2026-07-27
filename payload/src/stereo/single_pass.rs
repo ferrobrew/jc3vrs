@@ -913,6 +913,63 @@ pub unsafe fn reproject_baked_cb_per_eye(
     true
 }
 
+/// Re-issue a render block's `Draw` once per eye with a *projective screen-UV* constant biased into
+/// that eye's half of the double-wide target, restoring the staged rows afterwards. Returns `false`
+/// when the intercept must not run (the same gate every other per-eye re-issue takes), in which case
+/// the caller draws normally once.
+///
+/// `base` is the four `float4` rows the block's *type* staged at (`cb_index`, `reg_offset`): a
+/// world→screen-UV transform with the NDC→UV `x·0.5 + w·0.5` already folded in, which the vertex
+/// shader applies with a multiply-add chain over the four registers (so they are the matrix's rows in
+/// the row-vector convention) and hands on as a projective `TEXCOORD1` for the pixel shader to divide
+/// by `w`. The resulting UV is normalized over the *viewport*, i.e. over one eye's half, while the
+/// buffers it indexes are the whole double-wide target -- so each eye reads the entire two-eye image
+/// across its surface, and the mismatch slides as the camera moves. Composing one more bias per eye,
+/// `u' = (u + eye) · 0.5`, maps it back into that eye's half; row-wise, and because `u` and `w` are
+/// both per-row sums, that is `row.x ← row.x · 0.5 + row.w · 0.5 · eye`.
+///
+/// Unlike [`reproject_baked_cb_per_eye`] this restages rather than intercepts, because the constant is
+/// staged by the block *type*'s per-pass setup rather than inside the `Draw` being re-issued (the same
+/// reason [`terrain_detail_per_eye`] stages its own rows). It is also deliberately *not* reprojected
+/// by `M_eye`: the geometry these blocks rasterize still comes from the collapsed centre view, so the
+/// UV must describe where that geometry actually landed, not where the eye's own projection would have
+/// put it.
+///
+/// # Safety
+///
+/// `rc` must be the live [`RenderContext`] the detoured `Draw` received, and `draw` must invoke the
+/// block's original `Draw` trampoline.
+pub unsafe fn screen_uv_cb_per_eye(
+    rc: *const RenderContext,
+    cb_index: i32,
+    reg_offset: u32,
+    base: [f32; 16],
+    mut draw: impl FnMut(),
+) -> bool {
+    let Some((_, full, d3d)) = baked_cb_intercept_ready() else {
+        return false;
+    };
+    // SAFETY: `rc` is live per the caller contract.
+    let ctx = unsafe { render_context_graphics_context(rc) };
+    for eye in 0..2 {
+        let _reissue = PerEyeReissue::enter(eye);
+        let mut rows = base;
+        for k in 0..4 {
+            rows[k * 4] = base[k * 4].mul_add(0.5, base[k * 4 + 3] * 0.5 * eye as f32);
+        }
+        // SAFETY: `ctx` is the render context's live graphics context; `rows` is four float4 rows.
+        unsafe { SetVertexProgramConstants(ctx, cb_index, reg_offset, rows.as_ptr(), 4) };
+        bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
+        draw();
+    }
+    // Put the type's own rows back. It stages them once per pass, ahead of every block it covers, so
+    // leaving the second eye's bias behind would hand it to any later draw this intercept declines.
+    // SAFETY: as above; `base` is the four rows the type staged.
+    unsafe { SetVertexProgramConstants(ctx, cb_index, reg_offset, base.as_ptr(), 4) };
+    bind_both_viewport_slots(d3d, full);
+    true
+}
+
 /// Warn, at most once per (`cb_index`, `reg_offset`), that a per-eye re-issue found nothing to
 /// reproject -- see [`REPROJECT_FIRED`].
 fn warn_reproject_never_fired(cb_index: i32, reg_offset: u32) {

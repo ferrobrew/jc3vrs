@@ -330,6 +330,30 @@ pub struct StereoConfig {
     /// splitting only the deferred resolve leaves this pass painting the same sliding error back over
     /// it. Requires `reconstruct_offaxis_inverse`; on by default, for the same reason.
     pub single_pass_atmospheric_per_eye: bool,
+    /// Bias the legacy (non-WaveWorks) water blocks' screen-space reflection/refraction lookup into
+    /// each eye's half of the double-wide target, by re-issuing their `Draw` once per eye.
+    ///
+    /// The `Water*` family -- selected at the lower water-quality settings, in place of the
+    /// `NvWater*` WaveWorks path -- does not sample its reflection, refraction, and depth buffers by
+    /// pixel coordinate. Its block type stages a world→screen-UV matrix on vertex `cb1` once per
+    /// pass (the view-projection with the NDC→UV `x·0.5 + w·0.5` already folded in), the vertex
+    /// shader hands the result on as a projective `TEXCOORD1`, and the pixel shader divides by `w`.
+    /// That UV is normalized over the **viewport**, i.e. over one eye's half, while the buffers it
+    /// indexes are the whole double-wide target -- so each eye reads the entire two-eye image
+    /// stretched across its water, and since the error is a fixed 2x scale it is a 2x motion gain
+    /// too: the reflections slide over the water as the camera moves.
+    ///
+    /// The correction is one more bias per eye, `u' = (u + eye) · 0.5`, composed onto the rows the
+    /// type staged -- no shader change, because the water vertex shaders take their clip position
+    /// from the global `cb0` that the collapse already handles. It needs the per-eye re-issue only to
+    /// know which eye it is for. Deliberately *not* reprojected by `M_eye`: the geometry still
+    /// rasterizes from the collapsed centre view, so the UV must describe where it actually landed.
+    ///
+    /// Requires the collapse. **Default off**: the affected family may not even be on screen at the
+    /// water-quality setting in use, which makes an A/B the only way to tell the fix from a no-op,
+    /// and unlike the other re-issues this one recomputes a constant the engine staged rather than
+    /// transforming it in flight.
+    pub single_pass_water_uv_per_eye: bool,
     /// Give **geometry** drawn through the non-indexed `Draw` entry point (D3D11 context vtable slot
     /// 13) the same per-eye re-issue the indexed path gives its draws.
     ///
@@ -684,6 +708,7 @@ impl StereoConfig {
             single_pass_indirect_per_eye: true,
             single_pass_reconstruct_per_eye: true,
             single_pass_atmospheric_per_eye: true,
+            single_pass_water_uv_per_eye: false,
             single_pass_slot13_per_eye: false,
             collapse_viewport_follows_target: false,
             single_pass_clustered_per_eye: true,

@@ -951,6 +951,19 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      over the fixed one. Needs the off-axis reconstruction override on.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.single_pass_water_uv_per_eye,
+                    "Water reflection UVs per eye (legacy non-WaveWorks water)",
+                )
+                .on_hover_text(
+                    "Re-issues the Water*/WaterBox* blocks' Draw once per eye with their screen-UV \
+                     matrix biased into that eye's half of the double-wide target. Those shaders \
+                     sample reflection/refraction/depth through a projective TEXCOORD1 normalized \
+                     over one eye's viewport while the buffers are double-wide, so each eye reads \
+                     the whole two-eye image across its water -- a 2x stretch, and a 2x motion gain, \
+                     which reads as the reflections sliding. Only affects the lower water-quality \
+                     settings; the NvWater WaveWorks path samples by pixel coordinate and is fine.",
+                );
+                ui.checkbox(
                     &mut cfg.stereo.single_pass_clustered_per_eye,
                     "Clustered light grid per eye (local lights on forward materials)",
                 )

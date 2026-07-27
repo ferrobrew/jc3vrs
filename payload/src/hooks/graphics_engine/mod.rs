@@ -42,6 +42,9 @@ pub(crate) mod clustered_lighting;
 // Diagnostic override of the base VolumetricTerrain color-pass hull-clip type (black cliff-wall tiles);
 // private, reached only through `hook_library` below.
 pub mod terrain;
+// The legacy water blocks' per-eye screen-UV bias under the collapse; private, reached only through
+// `hook_library` below.
+mod water;
 
 /// Bundle every CGraphicsEngine-area detour into one hook library, mirroring how the game groups
 /// these classes.
@@ -61,4 +64,5 @@ pub(crate) fn hook_library() -> HookLibrary {
         .with_hook_library(clustered_lighting::hook_library())
         .with_hook_library(atmospheric_scattering::hook_library())
         .with_hook_library(terrain::hook_library())
+        .with_hook_library(water::hook_library())
 }

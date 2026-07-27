@@ -1253,3 +1253,215 @@ impl std::convert::AsMut<TreeImpostorRB> for TreeImpostorRB {
         self
     }
 }
+#[repr(C, align(8))]
+/// The water-box render block (`NGraphicsEngine::CWaterBoxRenderBlock`): one bounded water volume.
+pub struct WaterBoxRenderBlock {}
+impl WaterBoxRenderBlock {
+    pub const Draw_ADDRESS: usize = 0x14033B090;
+    /// Draws the box volume: the ten-triangle interior hull when the volume-rendering flag is set, and
+    /// then — unless the surface-rendering flag is set — the two-triangle top face with the near or
+    /// far surface permutation chosen by the camera's distance to the box. Both are plain
+    /// [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed) calls over the type's shared geometry, and both consume the screen-lookup
+    /// matrix [`WaterBoxRenderBlockType::Setup`](crate::graphics_engine::render_block::WaterBoxRenderBlockType::Setup) staged for the pass.
+    pub unsafe fn Draw(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, rc, info)
+        }
+    }
+    pub const DrawSurface_ADDRESS: usize = 0x140355800;
+    /// Draws the box's tessellated surface grid (162 triangles) in the surface-rendering mode, staging
+    /// the box's own world transform — a scale by the box half-extents plus a camera-relative
+    /// translation — on **vertex slot 2, registers 0..3** first. It stages no view-projection; the
+    /// screen-lookup matrix is whatever
+    /// [`WaterBoxRenderBlockType::Setup`](crate::graphics_engine::render_block::WaterBoxRenderBlockType::Setup) last left on vertex slot 1.
+    /// `NWater::DrawWaterBoxSurface` (`0x140_368_C70`) runs the same body inline over every visible
+    /// registered water box.
+    pub unsafe fn DrawSurface(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+            ) = ::std::mem::transmute(Self::DrawSurface_ADDRESS);
+            f(self as *const Self as _, rc)
+        }
+    }
+}
+impl std::convert::AsRef<WaterBoxRenderBlock> for WaterBoxRenderBlock {
+    fn as_ref(&self) -> &WaterBoxRenderBlock {
+        self
+    }
+}
+impl std::convert::AsMut<WaterBoxRenderBlock> for WaterBoxRenderBlock {
+    fn as_mut(&mut self) -> &mut WaterBoxRenderBlock {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The water-box render block *type*
+/// (`NGraphicsEngine::CWaterBoxRenderBlock::CWaterBoxRenderBlockType`): the per-pass setup for the
+/// `waterbox`, `waterboxbelow`, `waterboxsurface`, and `waterboxclear` permutations that render the
+/// bounded water volumes (pools, tanks, interiors) placed in the world as `NWater::SWaterBox`.
+pub struct WaterBoxRenderBlockType {}
+impl WaterBoxRenderBlockType {
+    pub const Setup_ADDRESS: usize = 0x140369020;
+    /// Binds the water-box render state, textures, and samplers, stages `cbWaterConsts.WaterConsts` on
+    /// **vertex slot 1, registers 4..7**, and hands the fragment stage the inverse view-projection and
+    /// the water tuning.
+    ///
+    /// The vertex constant is
+    /// [`RenderContext::m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
+    /// post-multiplied by the same NDC→texture bias
+    /// [`WaterHighEndRenderBlockType::Setup`](crate::graphics_engine::render_block::WaterHighEndRenderBlockType::Setup) applies, and it feeds
+    /// the same projective-`TEXCOORD1` screen-lookup idiom in the `waterbox*` shaders.
+    ///
+    /// The whole body is conditional on the water-box manager's mode flags: it runs only when the
+    /// volume-rendering flag is set or the surface-rendering flag is clear, so in surface-only mode it
+    /// stages nothing and the surface path relies on
+    /// [`SetupSurface`](crate::graphics_engine::render_block::WaterBoxRenderBlockType::SetupSurface) instead.
+    pub unsafe fn Setup(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        vertex_declaration: *mut crate::graphics_engine::graphics_engine::HVertexDeclaration_t,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                vertex_declaration: *mut crate::graphics_engine::graphics_engine::HVertexDeclaration_t,
+            ) = ::std::mem::transmute(Self::Setup_ADDRESS);
+            f(self as *const Self as _, rc, vertex_declaration)
+        }
+    }
+    pub const SetupSurface_ADDRESS: usize = 0x14033B210;
+    /// The alternative setup for the surface-rendering mode: binds the tessellated surface grid's
+    /// vertex declaration, stream, and index buffer, sets the stencil test that keeps the surface
+    /// inside the box, and sizes the vertex constant buffer at slot 2. Stages no view-projection of
+    /// its own.
+    pub unsafe fn SetupSurface(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        vertex_declaration: *mut crate::graphics_engine::graphics_engine::HVertexDeclaration_t,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                vertex_declaration: *mut crate::graphics_engine::graphics_engine::HVertexDeclaration_t,
+            ) = ::std::mem::transmute(Self::SetupSurface_ADDRESS);
+            f(self as *const Self as _, rc, vertex_declaration)
+        }
+    }
+}
+impl std::convert::AsRef<WaterBoxRenderBlockType> for WaterBoxRenderBlockType {
+    fn as_ref(&self) -> &WaterBoxRenderBlockType {
+        self
+    }
+}
+impl std::convert::AsMut<WaterBoxRenderBlockType> for WaterBoxRenderBlockType {
+    fn as_mut(&mut self) -> &mut WaterBoxRenderBlockType {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The legacy high-end water render block (`NGraphicsEngine::CWaterHighEndRenderBlock`): one water
+/// patch of the ocean/lake surface grid, drawn with the shader permutations set up by
+/// [`WaterHighEndRenderBlockType`](crate::graphics_engine::render_block::WaterHighEndRenderBlockType).
+pub struct WaterHighEndRenderBlock {}
+impl WaterHighEndRenderBlock {
+    pub const Draw_ADDRESS: usize = 0x140356CC0;
+    /// Selects the vertex/fragment program permutation from the patch's distance to the camera (a far
+    /// pair beyond 1024 m, otherwise one of three LOD pairs), stages the patch's own position and
+    /// scale on vertex slot 2 register 0, binds the shared water vertex stream, and issues the patch's
+    /// quads through the block's internal `DrawQuads` ([`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed) per admitted quad). The
+    /// screen-space lookup matrix it draws with is the one
+    /// [`WaterHighEndRenderBlockType::Setup`](crate::graphics_engine::render_block::WaterHighEndRenderBlockType::Setup) staged for the pass;
+    /// nothing here restages it.
+    pub unsafe fn Draw(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, rc, info)
+        }
+    }
+}
+impl std::convert::AsRef<WaterHighEndRenderBlock> for WaterHighEndRenderBlock {
+    fn as_ref(&self) -> &WaterHighEndRenderBlock {
+        self
+    }
+}
+impl std::convert::AsMut<WaterHighEndRenderBlock> for WaterHighEndRenderBlock {
+    fn as_mut(&mut self) -> &mut WaterHighEndRenderBlock {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The legacy (non-NVIDIA WaveWorks) high-end water render block *type*
+/// (`NGraphicsEngine::CWaterHighEndRenderBlock::CWaterHighEndRenderBlockType`): the shared per-pass
+/// setup for the `waterhighend`, `waterbelow`, and `watershader_lod0/1/2` shader permutations, which
+/// the engine selects at the lower water-quality settings in place of the WaveWorks path.
+pub struct WaterHighEndRenderBlockType {}
+impl WaterHighEndRenderBlockType {
+    pub const Setup_ADDRESS: usize = 0x1403692E0;
+    /// Binds the water render state (alpha blend, depth test and write, back-face cull), the five
+    /// water textures and samplers, the wave-table vertex constants, and the fragment constants for
+    /// the water tuning — then stages the block type's `TypeConstants.ReflectionViewProj` on **vertex
+    /// slot 1, registers 1..4**.
+    ///
+    /// That matrix is
+    /// [`RenderContext::m_ViewProjectionF`](crate::graphics_engine::graphics_engine::RenderContext::m_ViewProjectionF)
+    /// post-multiplied (row-vector convention, so the bias applies to the projected result) by the
+    /// constant NDC→texture bias
+    /// `{0.5,0,0,0 / 0,0.5,0,0 / 0,0,1,0 / 0.5,0.5,0,1}`. The vertex shaders transform the water
+    /// vertex by it with a multiply-add chain over those four registers and pass the `(u·w, v·w, w)`
+    /// components on as a projective `TEXCOORD1`; the pixel shaders divide by `w` to get the
+    /// screen-space UV they sample `ReflectionMap`, `RefractionMap`, and `DepthMap` with. The NDC→UV
+    /// half-scale is therefore already folded into the CPU-side matrix rather than done in the shader,
+    /// and the UV it produces is normalized over the *viewport* the matrix was built for.
+    ///
+    /// The fragment stage separately receives the inverse of
+    /// [`RenderContext::m_ViewProjectionF`](crate::graphics_engine::graphics_engine::RenderContext::m_ViewProjectionF)
+    /// at fragment slot 1 registers 3..6 for its own depth reconstruction.
+    pub unsafe fn Setup(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        vertex_declaration: *mut crate::graphics_engine::graphics_engine::HVertexDeclaration_t,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                vertex_declaration: *mut crate::graphics_engine::graphics_engine::HVertexDeclaration_t,
+            ) = ::std::mem::transmute(Self::Setup_ADDRESS);
+            f(self as *const Self as _, rc, vertex_declaration)
+        }
+    }
+}
+impl std::convert::AsRef<WaterHighEndRenderBlockType> for WaterHighEndRenderBlockType {
+    fn as_ref(&self) -> &WaterHighEndRenderBlockType {
+        self
+    }
+}
+impl std::convert::AsMut<WaterHighEndRenderBlockType> for WaterHighEndRenderBlockType {
+    fn as_mut(&mut self) -> &mut WaterHighEndRenderBlockType {
+        self
+    }
+}
