@@ -522,6 +522,51 @@ impl std::convert::AsMut<RenderBlockSSAO> for RenderBlockSSAO {
     }
 }
 #[repr(C, align(8))]
+/// The screen-space decal render block (`NGraphicsEngine::CRenderBlockSSDecal`): one projected decal
+/// box, drawn with the permutations set up by [`RenderBlockTypeSSDecal`](crate::graphics_engine::render_block::RenderBlockTypeSSDecal).
+pub struct RenderBlockSSDecal {}
+impl RenderBlockSSDecal {
+    pub const Draw_ADDRESS: usize = 0x14017FD40;
+    /// Stages the decal's own constants and issues its box geometry as a single [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed).
+    ///
+    /// On the vertex side it bakes the instance's offset world-view-projection at slot 1 registers
+    /// 0..3 and the decal's orthonormal box basis at registers 4..7. On the fragment side it stages
+    /// the decal's colour, fade, and masking tuning at slot 1 registers 4..11, and at **register 12**
+    /// the screen-space UV scale the render context carries — the factor that maps a `[0, 1]` viewport
+    /// UV onto the used region of the shared scene depth texture, which the permutations multiply
+    /// their reconstruction UV by before sampling it. It also sets the colour mask from the decal's
+    /// own channel flags, so the draw cannot be reproduced by re-issuing the underlying
+    /// [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed) alone.
+    ///
+    /// The depth→view-space basis this consumes is whatever
+    /// [`RenderBlockTypeSSDecal::Setup`](crate::graphics_engine::render_block::RenderBlockTypeSSDecal::Setup) staged for the pass; nothing
+    /// here restages it.
+    pub unsafe fn Draw(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, rc, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockSSDecal> for RenderBlockSSDecal {
+    fn as_ref(&self) -> &RenderBlockSSDecal {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockSSDecal> for RenderBlockSSDecal {
+    fn as_mut(&mut self) -> &mut RenderBlockSSDecal {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The screen-space reflection render block. Its `Draw` reconstructs world position from depth via
 /// [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) and ray-marches a scene colour capture
 /// taken earlier in the frame.
@@ -558,12 +603,17 @@ for RenderBlockScreenSpaceReflection {
 }
 #[repr(C, align(8))]
 /// The screen-space subsurface-scattering render block for skin. Its `Draw` reconstructs from depth
-/// via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) -- twice, once per blur axis -- and
-/// blurs the lit skin in screen space.
+/// via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) and blurs the lit skin in screen
+/// space.
 pub struct RenderBlockScreenSpaceSubSurfaceSkin {}
 impl RenderBlockScreenSpaceSubSurfaceSkin {
     pub const Draw_ADDRESS: usize = 0x140192D60;
-    /// Draws the subsurface-scattering pass.
+    /// Draws the subsurface-scattering pass, on one of two mutually exclusive paths selected by the
+    /// block's own byte at `+0x18`: a single-draw path, and the full diffusion chain (a screen-space
+    /// gather into the SSS targets, then six separable blur draws ping-ponging between them). Each
+    /// path builds the depth-reconstruction basis with exactly one
+    /// [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) call, before its first render-setup
+    /// bind, and uploads it as vertex constants 1..4.
     pub unsafe fn Draw(
         &self,
         rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -785,6 +835,148 @@ impl std::convert::AsMut<RenderBlockTerrainPatch> for RenderBlockTerrainPatch {
     }
 }
 #[repr(C, align(8))]
+/// The additive fog-volume render block *type* (the
+/// `NGraphicsEngine::CRenderBlockAddFogVolume::CRenderBlockTypeAddFogVolume` singleton, type name
+/// `"AddFogVolume"`): the shared vertex/fragment programs, unit vertex buffer, and sampler for the
+/// additive fog-volume blocks that `CFogManager` draws through its own render passes.
+///
+/// **This type is never registered.** `CRenderBlockAddFogVolume::InitType` (`0x140_33D_E80`)
+/// constructs it, stores it in this singleton, calls its `Create`, and returns — without calling
+/// `CRenderBlockFactory::AddType`. Its only caller is the `CFogManager` constructor
+/// (`0x140_358_870`), which does not register it either, so it never enters the global
+/// [`RenderBlockTypeRegistry`](crate::graphics_engine::render_engine::RenderBlockTypeRegistry) and anything
+/// that enumerates the registry to reach every type will silently miss it — even though
+/// `CRenderPass::DoDraw` dispatches its `IsEnabled` through the vtable exactly as it does for a
+/// registered type. This singleton is the only way to reach it. See
+/// [`RenderBlockTypeParticle`](crate::graphics_engine::render_block::RenderBlockTypeParticle), which is unregistered in the same way.
+pub struct RenderBlockTypeAddFogVolume {
+    pub base: crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    _field_8: [u8; 88],
+}
+fn _RenderBlockTypeAddFogVolume_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x60], RenderBlockTypeAddFogVolume>([0u8; 0x60]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeAddFogVolume {
+    pub unsafe fn get() -> Option<&'static mut Self> {
+        unsafe {
+            let ptr: *mut Self = *(5417825232usize as *mut *mut Self);
+            ptr.as_mut()
+        }
+    }
+}
+impl RenderBlockTypeAddFogVolume {
+    pub fn vftable(
+        &self,
+    ) -> *const crate::graphics_engine::render_engine::RenderBlockTypeBaseVftable {
+        self.base.vftable()
+            as *const crate::graphics_engine::render_engine::RenderBlockTypeBaseVftable
+    }
+    /// Creates the type's GPU resources (shaders, buffers) against the given
+    /// `SResourceContext`. Each type's `RegisterType` calls this at startup with the render
+    /// engine's own resource context.
+    pub unsafe fn Create(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Create).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Destroys the type's GPU resources.
+    pub unsafe fn Destroy(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Destroy).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Recreates the type's GPU resources against the given `SResourceContext`.
+    /// `CRenderEngine::RecreateRenderBlockTypes` calls this on every registered type with the
+    /// render engine's own resource context (the settings-change path) — but several types,
+    /// including the terrain setup types, implement it as a no-op; re-creating those requires
+    /// calling [`Destroy`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume::Destroy) and
+    /// [`Create`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume::Create) directly.
+    pub unsafe fn Recreate(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Recreate).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Returns the type's display name (e.g. `"VolumetricTerrain"`, `"TerrainPatch"`).
+    pub unsafe fn GetTypeName(&self) -> *const u8 {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetTypeName).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Returns the type's name hash (the registry sort key).
+    pub unsafe fn GetHash(&self) -> u32 {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetHash).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Whether render passes draw blocks of this type: `CRenderPass::DoDraw` dispatches this
+    /// per type run (vtable offset `0x90`) and skips every block whose type reports disabled.
+    /// In the release build the base implementation is compiled to a constant `true`.
+    pub unsafe fn IsEnabled(&self) -> bool {
+        unsafe {
+            let f = (&raw const (*self.vftable()).IsEnabled).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Enables drawing of this type's blocks. In the release build the base implementation is
+    /// compiled to a no-op (the enabled flag was optimized out).
+    pub unsafe fn Enable(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Enable).read();
+            f(self as *mut Self as _)
+        }
+    }
+    /// Disables drawing of this type's blocks. In the release build the base implementation is
+    /// compiled to a no-op (the enabled flag was optimized out), so suppressing a type requires
+    /// replacing its [`IsEnabled`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume::IsEnabled) vtable entry.
+    pub unsafe fn Disable(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Disable).read();
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<crate::graphics_engine::render_engine::RenderBlockTypeBase>
+for RenderBlockTypeAddFogVolume {
+    fn as_ref(&self) -> &crate::graphics_engine::render_engine::RenderBlockTypeBase {
+        &self.base
+    }
+}
+impl std::convert::AsMut<crate::graphics_engine::render_engine::RenderBlockTypeBase>
+for RenderBlockTypeAddFogVolume {
+    fn as_mut(
+        &mut self,
+    ) -> &mut crate::graphics_engine::render_engine::RenderBlockTypeBase {
+        &mut self.base
+    }
+}
+impl std::convert::AsRef<RenderBlockTypeAddFogVolume> for RenderBlockTypeAddFogVolume {
+    fn as_ref(&self) -> &RenderBlockTypeAddFogVolume {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeAddFogVolume> for RenderBlockTypeAddFogVolume {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeAddFogVolume {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The fog-volume render block *type* (the
 /// `NGraphicsEngine::CRenderBlockFogVolume::CRenderBlockTypeFogVolume` singleton): owns the froxel
 /// volumetric-fog textures and recreates them when the scene render resolution changes.
@@ -838,17 +1030,19 @@ impl std::convert::AsMut<RenderBlockTypeFogVolume> for RenderBlockTypeFogVolume 
 ///
 /// **This type is never registered.** `CRenderBlockParticle::InitType` (`0x140_4AD_2D0`) constructs
 /// it, stores it in this singleton, calls its `Create`, and returns — without calling
-/// `CRenderEngine::AddType`, which every other render block's `InitType`/`RegisterType` does. So it
-/// does not appear in the global
+/// `CRenderBlockFactory::AddType`, which every other render block's `InitType`/`RegisterType`
+/// eventually does. So it does not appear in the global
 /// [`RenderBlockTypeRegistry`](crate::graphics_engine::render_engine::RenderBlockTypeRegistry), and anything
 /// that enumerates the registry to reach every type will silently miss it — even though
 /// `CRenderPass::DoDraw` dispatches its `IsEnabled` through the vtable exactly as it does for a
-/// registered type. This singleton is the only way to reach it. `CRenderBlockLRParticleCompose` is
-/// unregistered in the same way, and has no `RegisterType` at all; its type object is owned privately
-/// by `CPostEffectsManager` rather than held in a global.
+/// registered type. This singleton is the only way to reach it.
 ///
-/// Sweeping every `*::InitType` in the image against the callers of `CRenderEngine::AddType`
-/// (`0x140_173_110`) shows this is the *only* named `InitType` that skips registration.
+/// Walking every construction site of `IRenderBlockType` in the image — the calls to its constructor
+/// (`0x140_100_FC0`) plus the sites that inline it, which are exactly the writers of
+/// [`RenderBlockTypeInstances`](crate::graphics_engine::render_engine::RenderBlockTypeInstances) — and
+/// checking each against `CRenderBlockFactory::AddType` (`0x140_161_2F0`) shows two types skip
+/// registration: this one and
+/// [`RenderBlockTypeAddFogVolume`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume).
 pub struct RenderBlockTypeParticle {
     pub base: crate::graphics_engine::render_engine::RenderBlockTypeBase,
     _field_8: [u8; 2685],
@@ -912,8 +1106,8 @@ impl RenderBlockTypeParticle {
     /// `CRenderEngine::RecreateRenderBlockTypes` calls this on every registered type with the
     /// render engine's own resource context (the settings-change path) — but several types,
     /// including the terrain setup types, implement it as a no-op; re-creating those requires
-    /// calling [`Destroy`](crate::graphics_engine::render_block::RenderBlockTypeParticle::Destroy) and
-    /// [`Create`](crate::graphics_engine::render_block::RenderBlockTypeParticle::Create) directly.
+    /// calling [`Destroy`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume::Destroy) and
+    /// [`Create`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume::Create) directly.
     pub unsafe fn Recreate(
         &mut self,
         resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
@@ -956,7 +1150,7 @@ impl RenderBlockTypeParticle {
     }
     /// Disables drawing of this type's blocks. In the release build the base implementation is
     /// compiled to a no-op (the enabled flag was optimized out), so suppressing a type requires
-    /// replacing its [`IsEnabled`](crate::graphics_engine::render_block::RenderBlockTypeParticle::IsEnabled) vtable entry.
+    /// replacing its [`IsEnabled`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume::IsEnabled) vtable entry.
     pub unsafe fn Disable(&mut self) {
         unsafe {
             let f = (&raw const (*self.vftable()).Disable).read();
@@ -985,6 +1179,55 @@ impl std::convert::AsRef<RenderBlockTypeParticle> for RenderBlockTypeParticle {
 }
 impl std::convert::AsMut<RenderBlockTypeParticle> for RenderBlockTypeParticle {
     fn as_mut(&mut self) -> &mut RenderBlockTypeParticle {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The screen-space decal render block *type*
+/// (`NGraphicsEngine::CRenderBlockSSDecal::CRenderBlockTypeSSDecal`): the per-pass setup shared by
+/// the twelve `ssdecal*` fragment permutations, which project a decal's textures onto whatever the
+/// scene depth buffer says is behind the decal's box volume.
+pub struct RenderBlockTypeSSDecal {}
+impl RenderBlockTypeSSDecal {
+    pub const Setup_ADDRESS: usize = 0x140191C20;
+    /// Binds the decal render state (alpha blend, depth test with depth writes off, back-face cull),
+    /// the shared vertex program and vertex declaration, and stages the pass's **depth→view-space
+    /// reconstruction basis on fragment slot 1, registers 0..3**.
+    ///
+    /// The basis is `Scaling(2, -2, 1)` with the translation row `(-1, 1, 0, 1)` — the viewport-UV to
+    /// NDC map — post-multiplied (row-vector convention) by the inverse of
+    /// [`RenderContext::m_View`](crate::graphics_engine::graphics_engine::RenderContext::m_View) with its
+    /// translation row replaced by `(0, 0, 0, 1)`, times
+    /// [`RenderContext::m_ProjectionF`](crate::graphics_engine::graphics_engine::RenderContext::m_ProjectionF).
+    /// The fragment shaders feed it the interpolated projective screen coordinate divided by its `w`
+    /// (a UV normalized over the *viewport*) together with the sampled scene depth, and divide the
+    /// result by `w` to recover the camera-relative world position the decal box is tested against.
+    ///
+    /// It is staged once per pass, not per draw: [`RenderBlockSSDecal::Draw`](crate::graphics_engine::render_block::RenderBlockSSDecal::Draw) restages every other
+    /// fragment constant the permutations read but never this one.
+    ///
+    /// The whole body is conditional on the render context's pass flags, so the depth-only and
+    /// velocity passes stage nothing.
+    pub unsafe fn Setup(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+            ) = ::std::mem::transmute(Self::Setup_ADDRESS);
+            f(self as *const Self as _, rc)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockTypeSSDecal> for RenderBlockTypeSSDecal {
+    fn as_ref(&self) -> &RenderBlockTypeSSDecal {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeSSDecal> for RenderBlockTypeSSDecal {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeSSDecal {
         self
     }
 }

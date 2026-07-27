@@ -19,9 +19,10 @@ mod tokens;
 pub use checksum::refresh_checksum;
 pub use container::{Chunk, Dxbc, DxbcError};
 pub use rewrite::{
-    MEYE_ROW_BASE, STEREO_CB_REGISTER, STEREO_CB_ROWS, STEREO_REPROJ_CB_ROWS,
-    forward_eye_hull_shader, inject_eye_forward_vertex_shader, patch_vertex_shader,
-    reproject_domain_shader, reproject_vertex_shader,
+    MEYE_ROW_BASE, SSDECAL_EYE_BIAS_REGISTER, STEREO_CB_REGISTER, STEREO_CB_ROWS,
+    STEREO_REPROJ_CB_ROWS, bias_ssdecal_depth_uv, forward_eye_hull_shader,
+    inject_eye_forward_vertex_shader, patch_vertex_shader, reproject_domain_shader,
+    reproject_vertex_shader,
 };
 pub use tokens::{Operand, OperandKind, ShaderStage, TokenStream};
 

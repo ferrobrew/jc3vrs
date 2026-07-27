@@ -630,3 +630,29 @@ impl std::convert::AsMut<SunHaloEffect> for SunHaloEffect {
         self
     }
 }
+pub const GetViewProjInverse_ADDRESS: usize = 0x1400C77E0;
+/// Builds the depth-of-field chain's clip-to-world basis into `out`, which is also returned.
+///
+/// It rebuilds the clip-to-view inverse from the post-effect render context's vertical field of view,
+/// aspect ratio, and far/near planes via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4), then
+/// multiplies that by the context's camera transform with the translation row replaced by
+/// `(0, 0, 0, 1)`, so the result maps clip space to a camera-relative world direction. Being rebuilt
+/// from a field of view and an aspect ratio, it can only describe a symmetric frustum, whatever
+/// projection the context actually carries.
+///
+/// Its one caller is [`DownScale2x2PackFocus::Apply`](crate::graphics_engine::post_effects::DownScale2x2PackFocus::Apply), which uploads the result as vertex constants
+/// 1..4 of the packing draw that ends the bokeh downscale prepass.
+pub unsafe fn GetViewProjInverse(
+    out: *mut crate::types::math::Matrix4,
+    ctx: *mut crate::graphics_engine::post_effects::PostEffectContext,
+) -> *mut crate::types::math::Matrix4 {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            out: *mut crate::types::math::Matrix4,
+            ctx: *mut crate::graphics_engine::post_effects::PostEffectContext,
+        ) -> *mut crate::types::math::Matrix4 = ::std::mem::transmute(
+            GetViewProjInverse_ADDRESS,
+        );
+        f(out, ctx)
+    }
+}

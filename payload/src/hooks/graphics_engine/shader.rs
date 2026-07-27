@@ -72,6 +72,9 @@ const DISSOLVE_NEVER: [u8; 4] = [0xe6, 0xb1, 0x61, 0xff];
 
 static PATCHED: AtomicUsize = AtomicUsize::new(0);
 static DISSOLVE_PATCHED: AtomicUsize = AtomicUsize::new(0);
+/// The number of screen-space decal permutations whose depth fetch has been biased since injection --
+/// twelve per bundle load. Read on eject to decide whether the pristine shaders need restoring.
+static SSDECAL_BIASED: AtomicUsize = AtomicUsize::new(0);
 static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Read a shader program's engine debug name (a null-terminated C string in
@@ -216,13 +219,15 @@ fn create_fragment_program(
     // When enabled and a target site is present, point the params at a patched copy of the bytecode
     // for the duration of the (bytecode-copying) CreatePixelShader call, then restore the caller's
     // pointer. `saved` keeps the patched copy alive across the call.
-    let mut saved: Option<(*const u8, Vec<u8>)> = None;
+    let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
     let (patch_pcf, patch_dissolve) =
         Config::lock_query(|c| (c.stereo.patch_shadow_pcf_hash, c.stereo.patch_lod_dissolve));
+    // The screen-space decal permutations' depth-UV bias, the one rewrite here that *grows* the blob.
+    let bias_ssdecal = super::ss_decal::shader_rewrite_enabled();
     // Skip patching once eject begins, so the shader restore's bounce re-creates pristine fragment
     // shaders (matching the vertex side) and the clean game keeps none of the mod's edits.
     if !crate::is_shutting_down()
-        && (patch_pcf || patch_dissolve)
+        && (patch_pcf || patch_dissolve || bias_ssdecal)
         && let Some(p) = unsafe { params.as_mut() }
     {
         let size = p.m_Size as usize;
@@ -243,18 +248,40 @@ fn create_fragment_program(
                 refresh_checksum(&mut copy);
                 PATCHED.fetch_add(pcf, Ordering::Relaxed);
                 DISSOLVE_PATCHED.fetch_add(dissolve, Ordering::Relaxed);
-                saved = Some((p.m_Code, copy));
-                p.m_Code = saved.as_ref().expect("just set").1.as_ptr();
+            }
+            // Structural, not name-gated: the rewrite declines every shader without the decals'
+            // projective-UV depth fetch, and reassembles (and re-checksums) the container itself.
+            let mut biased = false;
+            if bias_ssdecal && let Ok(blob) = dxbc_stereo::bias_ssdecal_depth_uv(&copy) {
+                copy = blob;
+                biased = true;
+                // `CreateFragmentProgramParams` carries no debug name (unlike the vertex/hull/domain
+                // forms), so the running count is the only handle on which permutations were caught.
+                let count = SSDECAL_BIASED.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::debug!(
+                    target: "single_pass",
+                    "ssdecal: depth-UV biased ({count} permutations so far)",
+                );
+            }
+            if pcf + dissolve > 0 || biased {
+                // Unlike the in-place byte patches, the decal rewrite splices an instruction in, so
+                // `m_Size` has to move with `m_Code` or the engine hands D3D a container whose chunk
+                // table runs past the declared length. Both are restored after the copying call.
+                let len = copy.len() as u64;
+                saved = Some((p.m_Code, p.m_Size, copy));
+                p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
+                p.m_Size = len;
             }
         }
     }
 
     let result = CREATE_FRAGMENT_PROGRAM.get().unwrap().call(device, params);
 
-    if let Some((original, _copy)) = saved
+    if let Some((original_code, original_size, _copy)) = saved
         && let Some(p) = unsafe { params.as_mut() }
     {
-        p.m_Code = original;
+        p.m_Code = original_code;
+        p.m_Size = original_size;
     }
     result
 }
@@ -430,6 +457,7 @@ pub fn restore_original_shaders_on_eject() {
     let patched_anything = crate::stereo::single_pass::has_patched_shaders()
         || patched_count() > 0
         || dissolve_patched_count() > 0
+        || SSDECAL_BIASED.load(Ordering::Relaxed) > 0
         || hull_forwarded > 0
         || domain_reprojected > 0;
     if !patched_anything {

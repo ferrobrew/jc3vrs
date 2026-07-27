@@ -970,6 +970,29 @@ pub unsafe fn screen_uv_cb_per_eye(
     true
 }
 
+/// Run `render` once per eye with that eye's half-viewport pinned on both slots, restoring the
+/// collapse's full viewport afterwards. Returns `false` when the intercept must not run -- the same
+/// gate every other per-eye re-issue takes ([`baked_cb_intercept_ready`]) -- in which case the caller
+/// must do its work itself, exactly once.
+///
+/// The bare form of [`reproject_baked_cb_per_eye`] and [`screen_uv_cb_per_eye`], for a block whose
+/// per-eye state is not a vertex constant this module knows how to transform: `render` receives the
+/// eye and does whatever staging that block needs before invoking its own `Draw`. Each call is
+/// bracketed by [`PER_EYE_REISSUE`], so the draw and viewport detours leave the block's own
+/// submissions alone instead of splitting them a second time.
+pub fn draw_per_eye_half(mut render: impl FnMut(usize)) -> bool {
+    let Some((_, full, d3d)) = baked_cb_intercept_ready() else {
+        return false;
+    };
+    for eye in 0..2 {
+        let _reissue = PerEyeReissue::enter(eye);
+        bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
+        render(eye);
+    }
+    bind_both_viewport_slots(d3d, full);
+    true
+}
+
 /// Warn, at most once per (`cb_index`, `reg_offset`), that a per-eye re-issue found nothing to
 /// reproject -- see [`REPROJECT_FIRED`].
 fn warn_reproject_never_fired(cb_index: i32, reg_offset: u32) {

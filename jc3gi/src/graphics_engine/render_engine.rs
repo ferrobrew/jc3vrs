@@ -240,6 +240,44 @@ impl std::convert::AsMut<RenderBlockTypeEntry> for RenderBlockTypeEntry {
     }
 }
 #[repr(C, align(8))]
+/// The engine's fixed-size table of *every* live [`RenderBlockTypeBase`](crate::graphics_engine::render_engine::RenderBlockTypeBase) instance, distinct from the
+/// [`RenderBlockTypeRegistry`](crate::graphics_engine::render_engine::RenderBlockTypeRegistry) below. `IRenderBlockType`'s constructor (`0x140_100_FC0`, also inlined
+/// at many construction sites) scans this table for the first null slot, stores the instance there,
+/// and records the slot index in the object; the destructor clears the slot again. Every render-block
+/// type therefore appears here the moment it is constructed, whether or not it is later handed to
+/// `CRenderBlockFactory::AddType` — so this table, minus the registry, is the set of types that draw
+/// but cannot be reached through the registry.
+///
+/// The slots are raw `IRenderBlockType*` with no hash alongside; a type's name comes from its own
+/// [`GetTypeName`](crate::graphics_engine::render_engine::RenderBlockTypeBase::GetTypeName). The constructor breaks into the debugger if the
+/// table is full.
+///
+/// The table is **not** compacted: the destructor nulls only the slot its own object claimed, so a
+/// type destroyed out of construction order leaves a hole with occupied slots after it, and the next
+/// construction refills that hole rather than appending. A walk therefore has to cover all
+/// [`CAPACITY`](crate::graphics_engine::render_engine::RenderBlockTypeInstances::CAPACITY) slots and skip nulls, which is what the engine's own consumer does —
+/// `CGPUProfiler::DrawDrawCallPanel` (`0x140_0E0_D00`) indexes every slot from 0 to 127 to label its
+/// per-type draw-call rows.
+pub struct RenderBlockTypeInstances {}
+impl RenderBlockTypeInstances {}
+impl RenderBlockTypeInstances {
+    /// The first slot of the table.
+    pub const ADDRESS: u64 = 5417824192;
+    /// The number of slots; the constructor's scan bound is the address one past the last slot
+    /// (`0x142_ED7_3C0`).
+    pub const CAPACITY: u64 = 128;
+}
+impl std::convert::AsRef<RenderBlockTypeInstances> for RenderBlockTypeInstances {
+    fn as_ref(&self) -> &RenderBlockTypeInstances {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeInstances> for RenderBlockTypeInstances {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeInstances {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The global render-block-type registry that `CRenderEngine::AddType` and `RemoveType` maintain
 /// (the leading fields of the `CRenderBlockFactory` object): a vector of
 /// [`RenderBlockTypeEntry`](crate::graphics_engine::render_engine::RenderBlockTypeEntry), kept sorted by type hash for binary search. The factory itself sits
@@ -954,5 +992,20 @@ impl RenderBlockTypeRegistry {
     /// The registry's element range must point to live entries for the borrow.
     pub unsafe fn as_slice(&self) -> &[RenderBlockTypeEntry] {
         unsafe { self.m_Types.as_slice() }
+    }
+}
+impl RenderBlockTypeInstances {
+    /// Every slot of the table, nulls included. The table is not compacted, so a null is a hole
+    /// rather than the end of the occupied range and the caller has to skip it and keep going.
+    ///
+    /// # Safety
+    /// The module image must be loaded, so that the table's static storage is mapped.
+    pub unsafe fn as_slice() -> &'static [*mut RenderBlockTypeBase] {
+        unsafe {
+            std::slice::from_raw_parts(
+                Self::ADDRESS as *const *mut RenderBlockTypeBase,
+                Self::CAPACITY as usize,
+            )
+        }
     }
 }

@@ -13,7 +13,10 @@
 
 use std::collections::BTreeMap;
 
-use dxbc_stereo::{Dxbc, DxbcError, ShaderStage, TokenStream, patch_vertex_shader, per_eye_refs};
+use dxbc_stereo::{
+    Dxbc, DxbcError, OperandKind, SSDECAL_EYE_BIAS_REGISTER, ShaderStage, TokenStream,
+    bias_ssdecal_depth_uv, patch_vertex_shader, per_eye_refs,
+};
 
 mod common;
 use common::shader_dir;
@@ -157,6 +160,130 @@ fn corpus_patch_is_sound() {
         455,
         "every VS is patched, has no per-eye refs, or is an instance-id deferral"
     );
+}
+
+/// The decal depth-UV bias is offered every fragment shader the engine creates, so its structural
+/// matcher has to be exact: it must transform the twelve `ssdecal*` permutations and decline all 949
+/// other pixel shaders. Each transform must also re-parse, keep a walkable token stream, and widen the
+/// `cb1` declaration far enough to cover the register the injected `mad` reads.
+///
+/// The count is the whole point. A matcher that over-captures corrupts unrelated shaders in flight,
+/// and one that under-captures leaves the decals reading the wrong half of the depth buffer while
+/// reporting success.
+#[test]
+fn corpus_ssdecal_bias_matches_only_the_decal_permutations() {
+    let Some(dir) = shader_dir() else {
+        return;
+    };
+
+    let mut pixel_shaders = 0usize;
+    let mut biased: Vec<String> = Vec::new();
+    let mut invalid: Vec<String> = Vec::new();
+    let mut other_errors: BTreeMap<String, usize> = BTreeMap::new();
+
+    for entry in std::fs::read_dir(&dir).expect("read shader dir") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().is_none_or(|e| e != "dxbc") {
+            continue;
+        }
+        let blob = std::fs::read(&path).expect("read blob");
+        if stage(&blob) != Some(ShaderStage::Pixel) {
+            continue;
+        }
+        pixel_shaders += 1;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+        match bias_ssdecal_depth_uv(&blob) {
+            Ok(out) => {
+                biased.push(name.clone());
+                if let Err(reason) = validate_bias(&out) {
+                    invalid.push(format!("{name}: {reason}"));
+                }
+            }
+            Err(DxbcError::NoDepthUvFetch) => {}
+            Err(e) => *other_errors.entry(e.to_string()).or_default() += 1,
+        }
+    }
+
+    biased.sort();
+    eprintln!(
+        "ssdecal bias: {pixel_shaders} PS -> {} biased, {} structurally invalid",
+        biased.len(),
+        invalid.len(),
+    );
+    for line in &invalid {
+        eprintln!("  invalid {line}");
+    }
+    assert!(
+        invalid.is_empty(),
+        "{} biased shaders are invalid",
+        invalid.len()
+    );
+    assert!(
+        other_errors.is_empty(),
+        "the bias errored outside the documented decline: {other_errors:?}",
+    );
+    assert_eq!(pixel_shaders, 961, "total pixel shaders in the bundle");
+    assert_eq!(
+        biased.len(),
+        12,
+        "the twelve ssdecal* permutations, and nothing else: {biased:?}",
+    );
+}
+
+/// Structurally validate one biased blob: it re-parses, its token stream walks end to end, and its
+/// `cb1` declaration covers the register the injected instruction reads.
+fn validate_bias(blob: &[u8]) -> Result<(), String> {
+    let dxbc = Dxbc::parse(blob).map_err(|e| format!("output does not re-parse: {e}"))?;
+    let shex = dxbc
+        .shader_chunk()
+        .ok_or_else(|| "output has no shader chunk".to_string())?;
+    let stream = TokenStream::new(shex.body(blob))
+        .map_err(|e| format!("output SHEX does not parse: {e}"))?;
+
+    let mut declared = None;
+    let mut reads_bias = false;
+    for insn in stream.instructions() {
+        let insn = insn.map_err(|e| format!("output instruction walk failed: {e}"))?;
+        for operand in insn.operands() {
+            let operand = operand.map_err(|e| format!("output operand walk failed: {e}"))?;
+            if let OperandKind::ConstantBuffer {
+                register: 1,
+                element,
+            } = operand.kind
+            {
+                if insn.is_declaration() {
+                    declared = Some(element);
+                } else if element == SSDECAL_EYE_BIAS_REGISTER {
+                    reads_bias = true;
+                }
+            }
+        }
+    }
+    if !reads_bias {
+        return Err(format!(
+            "no instruction reads cb1[{SSDECAL_EYE_BIAS_REGISTER}]"
+        ));
+    }
+    match declared {
+        Some(size) if size > SSDECAL_EYE_BIAS_REGISTER => Ok(()),
+        other => Err(format!(
+            "cb1 is declared as {other:?} rows, which does not cover register \
+             {SSDECAL_EYE_BIAS_REGISTER}",
+        )),
+    }
+}
+
+/// A blob's shader stage, or `None` if it is not a parseable container.
+fn stage(blob: &[u8]) -> Option<ShaderStage> {
+    Dxbc::parse(blob)
+        .ok()
+        .and_then(|dxbc| dxbc.shader_chunk())
+        .and_then(|shex| TokenStream::new(shex.body(blob)).ok())
+        .map(|stream| stream.stage())
 }
 
 /// The fixed size of an `ISGN`/`OSGN` element record.
