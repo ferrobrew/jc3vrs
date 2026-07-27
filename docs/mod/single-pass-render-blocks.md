@@ -258,11 +258,53 @@ rows. Their roles:
 
 Neither takes its clip position from `cb0`, so the remap bought them nothing: instance-doubling and
 `SV_ViewportArrayIndex` routing put them in both eye halves, but both halves were drawn from the
-collapsed **centre** camera. Near geometry at zero disparity reads as sitting at infinity while moving
-like near geometry — which in a headset is grass and trunks that are roughly in the right place but
-drift in world space as the camera moves. It also *locked out the fix*: `baked_cb_intercept_ready`
-declines whenever `BOUND_VS_PATCHED` is set, so `single_pass_foliage` and `single_pass_bark` could
-never run.
+collapsed **centre** camera. It also *locked out the fix*: `baked_cb_intercept_ready` declines whenever
+`BOUND_VS_PATCHED` is set, so `single_pass_foliage` and `single_pass_bark` could never run.
+
+### What that looks like, and why it is a *mono* defect
+
+The symptom was first reported as vegetation that is roughly in the right place but does not stay put
+as the camera moves, and it was first explained here as zero disparity between the eyes. **That
+explanation was wrong**, and the correction matters because it changes which mechanism to chase: it was
+observed in the **left-eye desktop mirror, with the headset not being worn**. A single view cannot show
+a stereo-depth defect at all.
+
+Under the collapse the render camera stays centred and each patched shader gets its eye's view from
+`cb13`; so in the left half of the double-wide target, terrain, props and characters are drawn from the
+**left eye's** viewpoint while the vegetation is drawn from the **centre**. Within that one image the
+vegetation therefore sits at a rigid world-space offset of `campos_centre − campos_eye0` — half the
+IPD, ~32 mm — from the ground it grows out of. `world_offset` is `eye_position − 0.5·(pos0 + pos1)`
+(`vr::frame`), so it is the eye-to-midpoint vector: lateral, in the camera's own basis, with no forward
+component for a symmetric headset.
+
+The reason this only shows up when you walk up to a bush is a general property of projection, not a
+coincidence: **two pinhole projections that share an optical centre differ by a homography on the
+image**, i.e. by a function of ray *direction* only. So a wrong projection or a wrong view rotation
+displaces geometry by a fixed angle at every depth, and a wrong *optical centre* displaces it by
+`offset/distance`. Only the second can change as you approach. That is the discriminator, and it points
+at the viewpoint:
+
+| Candidate | Distance-dependent? | Magnitude |
+|---|---|---|
+| Vegetation drawn from the centre viewpoint instead of the eye's | **yes**, `32 mm / d` — 0.4° at 5 m, 3.7° at 0.5 m | half the IPD |
+| Bark's remapped `cb0[4]` against a centre-baked `OffsetVP` | no — same optical centre, different projection, so a fixed angular warp | — |
+| Foliage's remapped `cb0[4]` in the wind-noise UV | no | bounded by the *vertical* component of a 32 mm offset, against a world-scaled noise lookup |
+
+So of the two `cb0[4]` mis-substitutions, bark's actually *supplied* the correct eye viewpoint (it
+rebases by `cb0[4]`, which the remap made per-eye) and left only the fixed projection difference, while
+foliage's is confined to a wind-noise coordinate and is negligible. The distance-dependent term belongs
+entirely to foliage, whose clip path never touches `cb0` and was therefore wholly centre-viewed. The
+`cb0[4]` misclassification is what *prevented the repair*, not what caused the displacement.
+
+What the arithmetic predicts precisely is a rigid ~32 mm lateral displacement that swings around with
+the camera heading and grows angularly as you close on it. Whether "recedes as I approach" is the right
+words for that is interpretation — separating a lateral offset from a depth one needs a frame capture,
+which has not been taken. The mechanism is pinned by the distance dependence regardless of the
+adjective.
+
+The stereo consequence — both eyes seeing the identical centre image, so the vegetation also fuses at
+infinite depth in a headset — is real, and the same fix addresses it. It is simply not what was seen
+here.
 
 **The fix, in `stereo::single_pass::baked_cb_block_owns_vs`.** While a family's intercept flag is on,
 its vertex shaders are declined by the `cb0` remap at creation, so the block intercept owns them end to
@@ -271,13 +313,84 @@ that really does read `cb0[29..32]` is left to the remap. The decline and the in
 because either alone is wrong — declining without the intercept forwards an unpatched instanced draw
 once at whatever viewport is bound, which is the 2× horizontal stretch.
 
-**Why this is scoped by name rather than applied to every `cb0[4]`-only shader.** Fifty of the bundle's
-455 vertex shaders are claimed on a `cb0[4]` reference alone (23 vegetation, the rest water, clouds,
-particles, and a few model families — pinned by
-`corpus_vegetation_reads_the_camera_position_but_never_the_view_projection`). The other 27 have no
-per-eye re-issue to fall back on, so un-patching them would move them from "centre view, correctly
-sized in both eyes" to "issued once at whatever viewport is bound". They are wrong the same way and
-worth fixing, but each needs its own bucket-(b) or (d) wiring first.
+Reprojecting `cb2[4..7]` by `M_eye` is exactly the right correction, and not only approximately: the
+shader computes `clip = OffsetVP_c · (world − campos_c) = VP_centre · world`, and
+`M_eye · VP_centre = VP_eye · VP_centre⁻¹ · VP_centre = VP_eye`. The eye's viewpoint *and* its
+projection both land, for every draw kind the block issues.
+
+### The other 27 shaders claimed on `cb0[4]` alone (triaged)
+
+Fifty of the bundle's 455 vertex shaders are claimed on a `cb0[4]` reference alone — 23 vegetation, and
+27 others, pinned by `corpus_vegetation_reads_the_camera_position_but_never_the_view_projection`. Since
+the defect is mono-visible, they deserve a second look, but the conclusion is that *declining the remap
+is not what fixes them*. Being claimed is not the disease; taking clip from a centre-camera matrix is,
+and that is true whether or not the remap claims the shader. Un-patching without supplying a per-eye
+transform makes things worse, not better — an unpatched instanced draw is forwarded once at whatever
+viewport is bound.
+
+All fifty were then read out of the disassembly one at a time, and the classification is pinned by
+`corpus_camera_only_population_is_the_triaged_fifty`. The axis that matters is where each takes its
+clip from:
+
+- **A baked world-view-projection in the shader's own constant buffer.** Reprojectable:
+  `M_eye · VP_centre = VP_eye`, exactly. `generaljc3` (`sh_0065`), `landmark` (`sh_0085`), `layered`
+  (`sh_0086`), and `layeredblend` (`sh_0087`) are one shared body — `clip = cb1[0..3] · objectPosition`,
+  `cb0[4]` differenced into a `dp3` for a LOD fade (`mad_sat o3.w, r0.x, l(-0.0001), l(1.0)`), and a
+  post-projection depth bias `mad o0.z, cb2[0].x, r0.w, r0.z`. None of them is an NDC writer: each
+  multiplies an object-space position by a 4×4 matrix. All four are now on `REPROJECT_NAME_PREFIXES`
+  and take `single_pass_reproject_camera_only` (on by default, requires `single_pass_reproject`), at no
+  extra draw cost. The vegetation families and `terrainshadowsimple` are also in this group but are
+  owned elsewhere — the block intercepts and the shadow atlas respectively.
+- **The global full view-projection, `cb0[0..3]`.** `RenderContext::m_ViewProjectionF`
+  (translation-bearing, mapping *absolute* world to clip), staged into `m_VPGlobalConstData[0..3]` by
+  `SetGlobalShaderProgramCameraConstants` — verified in the IDB, not just read off the def. It is
+  per-view data, but it is **not** one of the five rows the remap makes per-eye, so these shaders are
+  centre-viewed for a reason the remap could never have fixed. The legacy water surfaces (`waterbelow`,
+  `waterbox`, `waterboxbelow`, `waterboxsurface`, `waterhighend`, `watershader_lod0/1`), the clouds
+  (`cirrusclouds`, `cloudflythrough`, `clouds`, `cloudsshadow`), and `weather` are all here. They are
+  structurally reprojectable — the reprojection post-multiplies whatever clip the shader computed, so
+  the source buffer is irrelevant — and because they are already *claimed*, their draws are already
+  instance-doubled and viewport-routed, so switching them needs no new draw wiring. They are
+  deliberately left alone anyway: their name spaces contain outright NDC writers a prefix would sweep
+  up (`waterbumpcomposite` writes `mad o0.xy, v0.xyxx, l(2,-2), l(-1,1)`, `waterfoamsub` passes `v0`
+  straight to `o0`), the cloud distances make `32 mm / d` vanish, `cloudsshadow` is a shadow pass, and
+  `weather`'s cull branch writes a literal `o0 = (2,2,2,1)`.
+
+  Three of the legacy water permutations — `waterbox`, `waterboxbelow`, `waterboxsurface` — reconstruct
+  their world position from `cb0[4]` before that multiply (`add r1.xyz, r0.xyzx, cb0[4].xyzx` ahead of
+  the `cb0[0..3]` chain), so for them the remap is not merely inert: it shifts the reconstructed world
+  position by the eye offset while the projection stays centred, adding the error instead of correcting
+  it. (`waterbelow`, `waterhighend`, and `watershader_lod0/1` do *not* — they build an absolute grid
+  position from `cb2[0]` and read `cb0[4]` only for an output view vector. Worth separating, because it
+  is the difference between a wrong sign and a no-op.) Reprojecting them is still not a standalone
+  change: `single_pass_water_uv_per_eye` biases their projective screen UVs on the premise that the
+  geometry lands at the *centre* view, so the two have to move together, with the staged UV rows
+  rebuilt from the eye's full view-projection. The water-box surface grid is drawn from
+  `NWater::DrawWaterBoxSurface` rather than `WaterBoxRenderBlock::Draw` and would need its own
+  intercept as well.
+- **Direct NDC writes.** `lpvinit` and `lpvinitbilinear` rasterize the light-propagation volume from a
+  vertex id straight into device coordinates (`mad r0.x, r0.x, l(2.0), l(-1.0)`, `o0.w = 1`). They must
+  never be reprojected. Their only `cb0` reads are the scalars `cb0[4].w` and `cb0[5].w`, so the remap
+  claims them on a lane that is not a position at all — and `cb13` reproduces `cb0[4].w` verbatim, so
+  the claim is inert.
+- **No clip position at all.** `terrainprezsimple`, `nvwaterbox_tess`, and the five
+  `particleeffecttess*` emit tessellation control points; clip is built downstream in the domain
+  shader, and the reprojection refuses them with `NoPositionOutput`. The particles read only
+  `cb0[4].w` / `cb0[5].w`.
+
+`nvwaterbox` (`sh_0163`) and `nvwaterbox_tess` (`sh_0290`) sit apart, and they are the clearest
+remaining instance of the bug this whole section is about. Both add the camera position to a
+model-space position before the baked `cb1[0..3]` multiply, so `cb0[4]` really is on their position
+path. `single_pass_nvwater_per_eye` is precisely a baked-cb block intercept — it restages that matrix
+from the eye's own camera — but `nvwater*` is **not** on `BAKED_CB_VS_NAME_PREFIXES`, so the remap
+claims these two before the handler that owns them is ever consulted, exactly as it did `generaljc3`.
+The remapped `cb0[4]` is then added on top of a transform that already accounts for the eye offset,
+displacing the water box by that offset again. Half an IPD on a water surface, so not urgent, but the
+fix has the same shape as the vegetation one: add the prefix so the remap declines while the intercept
+is on. It is not done here because it needs a `BlockIntercept` variant for the WaveWorks flag (which
+`water.rs` currently queries directly) and live validation that the decline and the intercept's
+`draw_per_eye_half_ignoring_bound_vs` re-issue compose — the two must land together, since declining
+without the intercept forwards the draw once at whatever viewport is bound.
 
 **The bound-shader gate also had to change.** `baked_cb_intercept_ready`'s `BOUND_VS_PATCHED` check
 reads the shader bound by the *previous* draw, because these blocks bind their own inside the `Draw`

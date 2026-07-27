@@ -763,6 +763,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             cfg.stereo.single_pass_collapse = on;
             cfg.stereo.single_pass_double_wide = on;
             cfg.stereo.single_pass_reproject = on;
+            cfg.stereo.single_pass_reproject_camera_only = on;
             cfg.stereo.single_pass_terrain = on;
             cfg.stereo.single_pass_tree_impostors = on;
             cfg.stereo.single_pass_bark = on;
@@ -838,6 +839,23 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                         "Rewrites the baked-WVP scene shaders (characters, props, buildings, roads) \
                          to post-multiply their clip by the per-eye M_eye, instead of leaving them \
                          double-drawn. Reloads shaders to apply. Sky/UI/post are excluded.",
+                    )
+                    .changed()
+                {
+                    shader::request_reload();
+                }
+                if ui
+                    .checkbox(
+                        &mut cfg.stereo.single_pass_reproject_camera_only,
+                        "...including the ones claimed on a cb0[4] reference alone",
+                    )
+                    .on_hover_text(
+                        "Extends the reprojection to allowlisted families the cb0 remap claims on a \
+                         camera-position reference that is not their position path (generaljc3 reads \
+                         cb0[4] for a LOD fade and builds clip from a baked cb1). Without it they get \
+                         viewport routing but no per-eye clip, so both eye halves are drawn from the \
+                         collapsed centre viewpoint. Requires the reprojection above. Reloads shaders \
+                         to apply.",
                     )
                     .changed()
                 {

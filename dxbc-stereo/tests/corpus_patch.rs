@@ -15,7 +15,8 @@ use std::collections::BTreeMap;
 
 use dxbc_stereo::{
     Dxbc, DxbcError, OperandKind, SSDECAL_EYE_BIAS_REGISTER, ShaderStage, TokenStream,
-    bias_ssdecal_depth_uv, patch_vertex_shader, per_eye_refs, reads_global_view_projection,
+    bias_ssdecal_depth_uv, patch_vertex_shader, per_eye_refs, reads_full_view_projection,
+    reads_global_view_projection, reproject_vertex_shader,
 };
 
 mod common;
@@ -263,6 +264,301 @@ fn corpus_vegetation_reads_the_camera_position_but_never_the_view_projection() {
         camera_only, 50,
         "vertex shaders the cb0 remap claims on a camera-position reference alone",
     );
+}
+
+/// The *allowlisted* scene families the remap claims on a camera-position reference alone, which the
+/// payload's `single_pass_reproject_camera_only` sends to the reprojection instead. They share one
+/// vertex-shader body: `clip = cb1[0..3] · objectPosition` from a baked world-view-projection, a
+/// distance fade off `cb0[4]` (`add rN.xyz, rM.xyzx, -cb0[4].xyzx` into a `dp3` and then a
+/// `mad_sat ... l(-0.0001), l(1.0)`), and a depth bias applied after the projection
+/// (`mad o0.z, cb2[0].x, r0.w, r0.z`).
+///
+/// The three facts that decision rests on are pinned per family: the remap does claim it (so the
+/// choice is between two transforms, never between one and none), it does not read the global
+/// view-projection (so the remap gives it no per-eye clip), and the reprojection rewrite accepts it
+/// (so the substitution has something to substitute).
+const ALLOWLISTED_CAMERA_ONLY: &[(&str, &str)] = &[
+    ("generaljc3", "sh_0065_0002c7a0.dxbc"),
+    ("landmark", "sh_0085_0003aad0.dxbc"),
+    ("layered", "sh_0086_0003b550.dxbc"),
+    ("layeredblend", "sh_0087_0003bfd0.dxbc"),
+];
+
+#[test]
+fn corpus_allowlisted_camera_only_families_are_claimed_and_reprojectable() {
+    let Some(dir) = shader_dir() else {
+        return;
+    };
+    for (family, file) in ALLOWLISTED_CAMERA_ONLY {
+        let blob = std::fs::read(dir.join(file)).expect("read the allowlisted blob");
+
+        let rows: Vec<u32> = per_eye_refs(&blob)
+            .expect("parse the allowlisted blob")
+            .iter()
+            .map(|r| r.row)
+            .collect();
+        assert_eq!(rows, vec![4], "{family}'s per-eye cb0 references");
+        assert!(
+            !reads_global_view_projection(&blob).expect("parse the allowlisted blob"),
+            "{family} reads the global view-projection, so the remap does give it a per-eye clip"
+        );
+        assert!(
+            patch_vertex_shader(&blob).is_ok(),
+            "{family} is not claimed by the remap, so there is nothing to redirect"
+        );
+        let reprojected = reproject_vertex_shader(&blob).expect("the allowlisted blob reprojects");
+        validate_reprojection(&reprojected)
+            .unwrap_or_else(|reason| panic!("{family}'s reprojected output: {reason}"));
+
+        // The reprojection deliberately leaves `cb0[4]` alone -- unlike the remap, whose invariant is
+        // that no per-eye `cb0` operand survives. The fade distance therefore stays measured from the
+        // centre camera, which is what keeps a LOD from popping between the eyes.
+        let residual: Vec<u32> = per_eye_refs(&reprojected)
+            .expect("parse the reprojected output")
+            .iter()
+            .map(|r| r.row)
+            .collect();
+        assert_eq!(
+            residual,
+            vec![4],
+            "{family}: the fade's cb0[4] read is left in place"
+        );
+    }
+}
+
+/// Structurally validate one reprojected blob: it re-parses, carries the `SFI0` viewport bit, and its
+/// token stream still walks end to end.
+fn validate_reprojection(reprojected: &[u8]) -> Result<(), String> {
+    let dxbc = Dxbc::parse(reprojected).map_err(|e| format!("does not re-parse: {e}"))?;
+    let sfi0 = dxbc.chunk(b"SFI0").ok_or("has no SFI0 chunk")?;
+    let body = sfi0.body(reprojected);
+    if body.len() < 8 {
+        return Err(format!("SFI0 body is {} bytes, expected >= 8", body.len()));
+    }
+    let flags = u64::from_le_bytes(body[..8].try_into().expect("8 bytes"));
+    if flags & SFI0_VIEWPORT_BIT == 0 {
+        return Err(format!("SFI0 viewport bit not set (flags {flags:#x})"));
+    }
+    let shex = dxbc.shader_chunk().ok_or("has no shader chunk")?;
+    let stream = TokenStream::new(shex.body(reprojected))
+        .map_err(|e| format!("SHEX does not parse: {e}"))?;
+    for insn in stream.instructions() {
+        let insn = insn.map_err(|e| format!("instruction walk failed: {e}"))?;
+        for operand in insn.operands() {
+            operand.map_err(|e| format!("operand walk failed: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// How a camera-only shader gets its clip position, established by reading the disassembly of all
+/// fifty. This is the axis that decides what the mod may do with one, and none of it is inferable
+/// from the API -- hence the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipSource {
+    /// `clip = cbN[0..3] · position` from a CPU-baked world-view-projection in the shader's *own*
+    /// constant buffer. Reprojectable: `M_eye · VP_centre = VP_eye`.
+    BakedConstantBuffer,
+    /// `clip = cb0[0..3] · worldPosition` -- the *global* full, translation-bearing view-projection
+    /// (`RenderContext::m_ViewProjectionF`, staged into `m_VPGlobalConstData[0..3]` by
+    /// `SetGlobalShaderProgramCameraConstants`). It is per-view data, but it is **not** one of the
+    /// five rows the remap makes per-eye, so being claimed buys these shaders no per-eye clip either.
+    /// Structurally reprojectable all the same, since the reprojection post-multiplies whatever clip
+    /// the shader computed.
+    GlobalViewProjection,
+    /// The shader writes clip directly in normalized device coordinates. It must never be
+    /// reprojected: there is no world-space transform for `M_eye` to correct.
+    NormalizedDeviceCoordinates,
+    /// The shader writes no `SV_Position` at all -- it emits tessellation control points, and the clip
+    /// position is built downstream in the domain shader. Nothing here to reproject; the reprojection
+    /// rewrite refuses it with `NoPositionOutput`.
+    NoClipPosition,
+}
+
+/// What the shader does with `cb0[4]`, the row that got it claimed. The second axis of the triage,
+/// and the one that says whether the remap is merely *inert* or actively *harmful*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CameraRowUse {
+    /// Read for shading, a distance fade, or a texture-lookup origin -- anything but the clip
+    /// position. Remapping it substitutes the eye's camera position into a term that is not a
+    /// position, which is harmless (and for a fade, desirable: the centre distance keeps a LOD from
+    /// popping between the eyes).
+    OffThePositionPath,
+    /// Added to a camera-relative position to reconstruct a world one *before* the clip transform.
+    /// Here the remap actively moves the geometry: it shifts the reconstructed world position by the
+    /// eye offset while the projection stays centred, so the error is added rather than corrected.
+    OnThePositionPath,
+    /// Only the scalar lane `cb0[4].w` is read, never the camera position. `cb13` reproduces that lane
+    /// verbatim, so the claim changes nothing at all.
+    ScalarLaneOnly,
+}
+
+/// The complete population the `cb0` remap claims on a lone `cb0[4]` reference, with each family's
+/// clip source and `cb0[4]` role read out of its disassembly. `corpus_patch_is_sound` pins the
+/// *count* at fifty; this pins *which* fifty and what each one does, so a bundle change or a change to
+/// the per-eye register set has to restate the triage rather than silently re-shuffle it.
+///
+/// Why `cb0[4]` alone is not a verdict: it is the camera world *position*, and a shader may read it
+/// for a view vector, a distance fade, or to turn a camera-relative position back into a world one,
+/// while taking its clip from somewhere else entirely. Only [`ClipSource::BakedConstantBuffer`] and
+/// [`ClipSource::GlobalViewProjection`] families are reprojectable, and only the ones the payload
+/// allowlists by name are actually reprojected -- see
+/// `stereo::single_pass::should_reproject_camera_only`.
+#[rustfmt::skip]
+const CAMERA_ONLY_POPULATION: &[(&str, &str, ClipSource, CameraRowUse)] = &[
+    // The allowlisted model families: baked `cb1[0..3]`, `cb0[4]` for a distance fade only.
+    ("sh_0065_0002c7a0.dxbc", "generaljc3",   ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0085_0003aad0.dxbc", "landmark",     ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0086_0003b550.dxbc", "layered",      ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0087_0003bfd0.dxbc", "layeredblend", ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+
+    // The light-propagation-volume injection passes rasterize into a volume from a vertex id, writing
+    // clip straight in NDC (`mad r0.x, r0.x, l(2.0), l(-1.0)` into `o0`, `o0.w = 1`).
+    ("sh_0082_00038250.dxbc", "lpvinit",         ClipSource::NormalizedDeviceCoordinates, CameraRowUse::ScalarLaneOnly),
+    ("sh_0083_00039440.dxbc", "lpvinitbilinear", ClipSource::NormalizedDeviceCoordinates, CameraRowUse::ScalarLaneOnly),
+
+    // Clouds and weather project absolute world positions through the global full view-projection;
+    // `cb0[4]` is a view vector or a horizontal distance, never part of the position.
+    ("sh_0153_00050bd0.dxbc", "cirrusclouds",    ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+    ("sh_0155_000516d0.dxbc", "cloudflythrough", ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+    ("sh_0156_00052530.dxbc", "clouds",          ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+    ("sh_0157_00053990.dxbc", "cloudsshadow",    ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+    ("sh_0223_00087820.dxbc", "weather",         ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+
+    // The WaveWorks water box: clip from the block type's own baked `g_ModelViewProjectionMatrix`
+    // (`cb1[0..3]`), with `cb0[4]` added to the model-space position first. Its per-eye view comes
+    // from the `NvWater*` block re-issue, which restages that matrix from the eye's camera -- so the
+    // remapped `cb0[4]` is added on top of a transform that already accounts for the eye offset.
+    ("sh_0163_00057a40.dxbc", "nvwaterbox",      ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0290_000c3390.dxbc", "nvwaterbox_tess", ClipSource::NoClipPosition,      CameraRowUse::OnThePositionPath),
+
+    // The legacy (non-WaveWorks) water surfaces, all projecting through the global full
+    // view-projection. The three `waterbox*` permutations reconstruct their world position from
+    // `cb0[4]` first (`add r1.xyz, r0.xyzx, cb0[4].xyzx` ahead of the `cb0[0..3]` chain); the other
+    // four build an absolute grid position from `cb2[0]` and read `cb0[4]` only for an output view
+    // vector.
+    ("sh_0213_000840d0.dxbc", "waterbox",         ClipSource::GlobalViewProjection, CameraRowUse::OnThePositionPath),
+    ("sh_0214_00084700.dxbc", "waterboxbelow",    ClipSource::GlobalViewProjection, CameraRowUse::OnThePositionPath),
+    ("sh_0216_000854e0.dxbc", "waterboxsurface",  ClipSource::GlobalViewProjection, CameraRowUse::OnThePositionPath),
+    ("sh_0212_00083260.dxbc", "waterbelow",       ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+    ("sh_0219_00086190.dxbc", "waterhighend",     ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+    ("sh_0295_000c6960.dxbc", "watershader_lod0", ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+    ("sh_0296_000c77b0.dxbc", "watershader_lod1", ClipSource::GlobalViewProjection, CameraRowUse::OffThePositionPath),
+
+    // The simple (non-tessellated) terrain prepass and shadow permutations: clip from the pass's own
+    // baked `cb1[0..3]`, with `cb0[4].y` turning the camera-relative patch height into a world one.
+    // The prepass emits a control point rather than `SV_Position`.
+    ("sh_0170_0005c8f0.dxbc", "terrainprezsimple",   ClipSource::NoClipPosition,      CameraRowUse::OnThePositionPath),
+    ("sh_0174_0005dec0.dxbc", "terrainshadowsimple", ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+
+    // The vegetation families, owned end to end by the bark/foliage block intercepts (which reproject
+    // their baked `cb1`/`cb2` matrices on the CPU) and declined by the remap while those are on. Bark
+    // rebases a per-instance world position by `cb0[4]`; foliage reads it as a wind-noise origin.
+    ("sh_0238_00093d90.dxbc", "vegetationbarkhwinstanced",                ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0239_000949b0.dxbc", "vegetationbarkinstanced",                  ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0241_00095e30.dxbc", "vegetationbarkprezhwinstanced",            ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0242_00096530.dxbc", "vegetationbarkprezinstanced",              ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0244_000973e0.dxbc", "vegetationbarkshadowhwinstanced",          ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0245_00097ae0.dxbc", "vegetationbarkshadowinstanced",            ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0247_00098ad0.dxbc", "vegetationbarkvelocityhwinstanced",        ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0248_00099300.dxbc", "vegetationbarkvelocityinstanced",          ClipSource::BakedConstantBuffer, CameraRowUse::OnThePositionPath),
+    ("sh_0249_00099e00.dxbc", "vegetationfoliage",                        ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0251_0009bdb0.dxbc", "vegetationfoliagehwinstanced",             ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0252_0009d960.dxbc", "vegetationfoliagehwinstanced_osnormalmap", ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0253_0009f330.dxbc", "vegetationfoliageinstanced",               ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0254_000a1270.dxbc", "vegetationfoliageinstanced_osnormalmap",   ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0255_000a2f00.dxbc", "vegetationfoliageprez",                    ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0256_000a3d00.dxbc", "vegetationfoliageprezhwinstanced",         ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0257_000a5160.dxbc", "vegetationfoliageprezinstanced",           ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0261_000a86c0.dxbc", "vegetationfoliageshadow",                  ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0262_000a8f60.dxbc", "vegetationfoliageshadowhwinstanced",       ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0263_000a9e80.dxbc", "vegetationfoliageshadowinstanced",         ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0264_000ab050.dxbc", "vegetationfoliagevelocity",                ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0265_000abf90.dxbc", "vegetationfoliagevelocityhwinstanced",     ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0266_000ad540.dxbc", "vegetationfoliagevelocityinstanced",       ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+    ("sh_0267_000aeda0.dxbc", "vegetationfoliage_osnormalmap",            ClipSource::BakedConstantBuffer, CameraRowUse::OffThePositionPath),
+
+    // The tessellated particle effects emit hull vertices; clip is built in the domain shader, and
+    // their only `cb0` reads are the scalars `cb0[4].w` and `cb0[5].w` feeding an alpha fade.
+    ("sh_0308_000d23c0.dxbc", "particleeffecttess",            ClipSource::NoClipPosition, CameraRowUse::ScalarLaneOnly),
+    ("sh_0309_000d2b90.dxbc", "particleeffecttessblend",       ClipSource::NoClipPosition, CameraRowUse::ScalarLaneOnly),
+    ("sh_0310_000d3360.dxbc", "particleeffecttessblendnormal", ClipSource::NoClipPosition, CameraRowUse::ScalarLaneOnly),
+    ("sh_0311_000d3c20.dxbc", "particleeffecttesserosion",     ClipSource::NoClipPosition, CameraRowUse::ScalarLaneOnly),
+    ("sh_0312_000d43f0.dxbc", "particleeffecttessnormal",      ClipSource::NoClipPosition, CameraRowUse::ScalarLaneOnly),
+];
+
+#[test]
+fn corpus_camera_only_population_is_the_triaged_fifty() {
+    let Some(dir) = shader_dir() else {
+        return;
+    };
+
+    let mut found: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("read the shader dir") {
+        let path = entry.expect("dir entry").path();
+        let blob = std::fs::read(&path).expect("read blob");
+        if !is_vertex_shader(&blob) {
+            continue;
+        }
+        let refs = per_eye_refs(&blob).expect("parse blob");
+        if !refs.is_empty() && refs.iter().all(|r| r.row == 4) {
+            found.push(
+                path.file_name()
+                    .expect("file name")
+                    .to_string_lossy()
+                    .into(),
+            );
+        }
+    }
+    found.sort();
+
+    let mut expected: Vec<String> = CAMERA_ONLY_POPULATION
+        .iter()
+        .map(|(file, ..)| (*file).to_string())
+        .collect();
+    expected.sort();
+    assert_eq!(
+        found, expected,
+        "the vertex shaders claimed on a lone cb0[4] reference are not the triaged set",
+    );
+
+    for (file, family, clip, _) in CAMERA_ONLY_POPULATION {
+        let blob = std::fs::read(dir.join(file)).expect("read the triaged blob");
+        assert!(
+            !reads_global_view_projection(&blob).expect("parse the triaged blob"),
+            "{family} reads cb0[29..32], so it is not a camera-only shader at all"
+        );
+
+        // `cb0` carries two global view-projections and the remap only makes one of them per-eye, so
+        // "camera-only" does not mean "takes clip from its own buffer". The rows-0..3 read is the
+        // discriminator, and it is the one part of the clip-source column the bytecode can confirm.
+        assert_eq!(
+            reads_full_view_projection(&blob).expect("parse the triaged blob"),
+            *clip == ClipSource::GlobalViewProjection,
+            "{family}'s use of the full view-projection rows cb0[0..3] disagrees with the table"
+        );
+
+        // A family recorded as having no clip position must be the one the reprojection refuses for
+        // exactly that reason, and every other family must offer it a position to transform. Telling a
+        // baked matrix from a direct NDC write is read from the disassembly and documented above --
+        // the bytecode cannot, which is why the mod gates on the family name rather than a predicate.
+        let reprojected = reproject_vertex_shader(&blob);
+        if *clip == ClipSource::NoClipPosition {
+            assert!(
+                matches!(reprojected, Err(DxbcError::NoPositionOutput)),
+                "{family} is recorded as writing no clip position, but the reprojection did not \
+                 refuse it for that reason"
+            );
+        } else {
+            assert!(
+                matches!(
+                    reprojected,
+                    Ok(_) | Err(DxbcError::InstanceIdAlreadyDeclared)
+                ),
+                "{family} is recorded as writing a clip position, but the reprojection found none"
+            );
+        }
+    }
 }
 
 /// The decal depth-UV bias is offered every fragment shader the engine creates, so its structural

@@ -156,6 +156,21 @@ fn create_vertex_program(
         // position output), in which case the shader is left double-drawn.
         let substitute = if crate::stereo::single_pass::active() {
             match outcome {
+                // An allowlisted family the remap claims on a `cb0[4]` camera-position reference alone
+                // takes its clip from a baked matrix, so the remap would leave both eye halves on the
+                // collapsed centre viewpoint. Prefer the reprojection, which is the transform it should
+                // have had; if that rewrite bows out, keep the remap rather than dropping the shader to
+                // no per-eye transform at all.
+                Ok(ref patched)
+                    if crate::stereo::single_pass::should_reproject_camera_only(
+                        name.as_deref(),
+                        code,
+                    ) =>
+                {
+                    dxbc_stereo::reproject_vertex_shader(code)
+                        .ok()
+                        .or_else(|| Some(patched.clone()))
+                }
                 Ok(patched) => Some(patched),
                 Err(dxbc_stereo::DxbcError::NoPerEyeReferences)
                     if crate::stereo::single_pass::should_reproject(name.as_deref()) =>

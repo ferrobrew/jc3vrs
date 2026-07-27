@@ -172,6 +172,36 @@ pub fn should_reproject(name: Option<&str>) -> bool {
                 .any(|p| name.starts_with(p)))
 }
 
+/// Whether a scene family the `cb0` remap *claims* should be reprojected instead, because the only
+/// `cb0` row it reads is the camera position and its clip position therefore comes from a baked
+/// matrix like the no-`cb0` families'.
+///
+/// The remap's candidacy test is "references one of `cb0[{4, 29..32}]`", but those rows are not one
+/// thing. `cb0[29..32]` can only be a clip transform; `cb0[4]` is a camera *position*, which a shader
+/// may read for a view vector or a distance fade while taking its clip from a constant buffer of its
+/// own. `generaljc3` does exactly that -- `add r1.xyz, r0.xyzx, -cb0[4].xyzx` feeds a `dp3` whose
+/// result is a LOD fade, and clip comes from a baked `cb1[0..3]`. Claimed by the remap, such a shader
+/// gets viewport routing and instance doubling but no per-eye clip: under the collapse the render
+/// camera is centred, so *both* eye halves are drawn from the centre viewpoint, and the family sits at
+/// a rigid half-IPD offset from everything around it. That is visible in a single eye, not only in
+/// stereo.
+///
+/// Reprojection is the fix and is already built; it was simply unreachable, because the remap claimed
+/// the shader before [`should_reproject`] was ever consulted. Routing it there costs nothing extra --
+/// the shader still resolves its eye from `SV_InstanceID & 1` and the draw is still the one
+/// instance-doubled submission.
+///
+/// Gated on the family also being on [`REPROJECT_NAME_PREFIXES`], so this only ever moves a shader
+/// between two per-eye transforms, never off one: an unrecognised family keeps the remap rather than
+/// falling through to being drawn once. The `cb0[4]` reference is deliberately left un-remapped, which
+/// leaves the fade distance measured from the centre camera -- the same in both eyes, so a LOD does
+/// not pop between them.
+pub fn should_reproject_camera_only(name: Option<&str>, code: &[u8]) -> bool {
+    config_flags().has(Flag::ReprojectCameraOnly)
+        && should_reproject(name)
+        && dxbc_stereo::reads_global_view_projection(code).is_ok_and(|reads| !reads)
+}
+
 /// Vertex-shader name prefixes of the tessellated base terrain, whose VS originates the single-pass
 /// eye index on the free `TEXCOORD3.z` lane (it writes no `SV_Position`, so it takes neither the `cb0`
 /// remap nor the reprojection). The hull and domain shaders that pair with these are transformed
@@ -475,6 +505,7 @@ enum Flag {
     Collapse,
     DoubleWide,
     Reproject,
+    ReprojectCameraOnly,
     Terrain,
     TreeImpostors,
     Bark,
@@ -527,6 +558,10 @@ fn store_config_flags() -> u32 {
             | bit(s.single_pass_collapse, Flag::Collapse)
             | bit(s.single_pass_double_wide, Flag::DoubleWide)
             | bit(s.single_pass_reproject, Flag::Reproject)
+            | bit(
+                s.single_pass_reproject_camera_only,
+                Flag::ReprojectCameraOnly,
+            )
             | bit(s.single_pass_terrain, Flag::Terrain)
             | bit(s.single_pass_tree_impostors, Flag::TreeImpostors)
             | bit(s.single_pass_bark, Flag::Bark)

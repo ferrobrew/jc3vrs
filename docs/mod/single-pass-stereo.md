@@ -90,11 +90,17 @@ The per-eye data in the position path is exactly five `cb0` rows: `cb0[4]` (came
 `cb0[29..32]` (the view-projection).
 
 > **Referencing one of those rows is not the same as taking your position from them.** `cb0[29..32]`
-> can only be a clip transform, but `cb0[4]` is a camera *position*, and shaders read it for shading
-> and for world-space lookups while getting their clip position from a baked matrix elsewhere. The
-> whole vegetation set does exactly that, and being claimed by the remap left it drawing both eyes from
-> the collapsed centre view — see "The vegetation `cb0[4]` misclassification" in
-> [single-pass-render-blocks.md](single-pass-render-blocks.md).
+> can only be a clip transform, but `cb0[4]` is a camera *position*, and shaders read it for shading, for
+> a distance fade, and for world-space lookups while getting their clip position from a baked matrix
+> elsewhere. The whole vegetation set does exactly that, as does `generaljc3`. Being claimed by the
+> remap buys such a shader viewport routing and instance doubling but no per-eye clip, so under the
+> collapse's centred render camera *both* eye halves are drawn from the centre viewpoint — and the
+> family sits at a rigid half-IPD offset from everything around it, **within a single eye's image**.
+> That is visible in the desktop mirror with no headset on, and it grows as you approach, because a
+> wrong optical centre displaces geometry by `offset/distance` while a wrong projection or rotation
+> displaces it by a fixed angle. See "The vegetation `cb0[4]` misclassification" in
+> [single-pass-render-blocks.md](single-pass-render-blocks.md), which also covers the other families
+> the remap claims this way.
 
 The transform binds a mod-owned constant buffer at the free slot
 **cb13** holding *both* eyes' five rows, laid out `[eye0: 0..4][eye1: 5..9]`, and rewrites the shader
@@ -487,6 +493,7 @@ All under `stereo`. Off by default unless marked.
 | Flag | Effect |
 |---|---|
 | `single_pass_reproject` | Reprojects the no-`cb0` scene families (characters, props, buildings, roads) instead of leaving them double-drawn. |
+| `single_pass_reproject_camera_only` | Extends that to the allowlisted families the `cb0` remap claims on a camera-position reference alone (`generaljc3`), which otherwise get viewport routing but no per-eye clip. |
 | `single_pass_terrain` | Rides the eye index through the terrain tessellation pipeline (VS → HS → DS). |
 | `single_pass_tree_impostors` | Reprojects the far-distance tree impostors. |
 

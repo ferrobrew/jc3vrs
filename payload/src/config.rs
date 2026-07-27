@@ -252,6 +252,27 @@ pub struct StereoConfig {
     /// [`crate::stereo::single_pass`]); NDC writers (sky, UI, post) are excluded by the allowlist.
     /// Requires [`single_pass`](Self::single_pass); independent of the others so it can be A/B'd.
     pub single_pass_reproject: bool,
+    /// Extend [`single_pass_reproject`](Self::single_pass_reproject) to the allowlisted families the
+    /// `cb0` remap claims on a **camera-position** reference alone. The remap's candidacy test is
+    /// "references one of `cb0[{4, 29..32}]`", but `cb0[4]` is a camera position a shader may read for
+    /// a view vector or a distance fade while taking its clip from a baked matrix -- `generaljc3` reads
+    /// it for a LOD fade and builds clip from `cb1[0..3]`. Claimed by the remap, such a family gets
+    /// viewport routing but no per-eye clip, so under the collapse's centred render camera *both* eye
+    /// halves are drawn from the centre viewpoint and the family sits at a rigid half-IPD offset from
+    /// its surroundings -- visible in one eye, not only in stereo. This routes it to the reprojection
+    /// it should have had, at no extra draw cost. Only ever moves a shader between two per-eye
+    /// transforms: an unallowlisted family keeps the remap. Requires
+    /// [`single_pass_reproject`](Self::single_pass_reproject). On by default.
+    ///
+    /// The families it reaches in the shipped bundle are `generaljc3`, `landmark`, `layered` and
+    /// `layeredblend` -- one shared body, confirmed from the bytecode rather than the name.
+    ///
+    /// Caveat worth an A/B: all four apply a depth bias *after* their projection
+    /// (`o0.z += cb2[0].x · o0.w`), and that bias is folded into the clip position the reprojection
+    /// then transforms by `M_eye`, rather than left as a post-projection offset. `M_eye` is near
+    /// identity, so the bias survives approximately; if decal or shadow z-fighting appears on those
+    /// families, this is the first thing to switch off.
+    pub single_pass_reproject_camera_only: bool,
     /// Single-pass the tessellated base terrain (VS → HS → DS): the vertex shader originates the eye
     /// index on the free `TEXCOORD3.z` lane, the hull shader forwards it, and the domain shader reads
     /// it to reproject its clip by the per-eye `M_eye` and route to the eye's viewport. Covers the
@@ -787,6 +808,7 @@ impl StereoConfig {
             single_pass_collapse: false,
             single_pass_patch_dryrun: false,
             single_pass_reproject: false,
+            single_pass_reproject_camera_only: true,
             single_pass_terrain: false,
             single_pass_tree_impostors: false,
             single_pass_bark: true,
