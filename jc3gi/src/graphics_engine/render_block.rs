@@ -28,6 +28,106 @@ impl std::convert::AsMut<Matrix3x4> for Matrix3x4 {
     }
 }
 #[repr(C, align(8))]
+/// The WaveWorks water render block (`NGraphicsEngine::CNvWaterHighEndRenderBlock`): the ocean
+/// surface at the higher water-quality settings, simulated and tessellated through NVIDIA WaveWorks
+/// (`gfsdk_waveworks.win64.dll`) rather than through the engine's own patch grid.
+///
+/// Its block type registers itself as `"NvWaterHighEnd"` and owns the whole `NvWater*` shader family
+/// — `NvWaterShader_lod0[_tess]`, `NvWaterShader_lod1[_tess]`, `NvWaterBelow`,
+/// `NvWaterBelowShader_lod1`, `NvWaterLake`, and `NvWaterBox[_tess]` — selecting among them per draw
+/// from the tessellation cvar and the block's above/below-surface flag. It also owns the two
+/// constant buffers those permutations read: a 10-register buffer bound to **vertex and domain slot
+/// 1** and a 15-register buffer bound to **fragment slot 1**.
+pub struct NvWaterHighEndRenderBlock {}
+impl NvWaterHighEndRenderBlock {
+    pub const Setup_ADDRESS: usize = 0x140365040;
+    /// Bakes the per-view WaveWorks matrices and stages both of the block type's constant buffers.
+    ///
+    /// The block keeps three 4x4 matrices of its own, all rebuilt here from the render context:
+    /// - the WaveWorks **view** matrix, `Y/Z-swap · `[`RenderContext::m_View`](crate::graphics_engine::graphics_engine::RenderContext::m_View)
+    ///   (WaveWorks works in a Z-up frame, the engine in a Y-up one);
+    /// - the WaveWorks **projection** matrix, a verbatim copy of
+    ///   [`RenderContext::m_ProjectionF`](crate::graphics_engine::graphics_engine::RenderContext::m_ProjectionF);
+    /// - their product, the `g_ModelViewProjectionMatrix` the `NvWater*` vertex and domain shaders
+    ///   write clip position from.
+    ///
+    /// It then maps the vertex/domain constant buffer write-discard and writes that product into
+    /// **registers 0..3**, followed by the top-down-camera offset/scale, wind direction, character
+    /// world position, time, and Gerstner tuning through byte offset 148; and maps the fragment
+    /// constant buffer, writing the WaveWorks view matrix into its registers 0..3 followed by the
+    /// water colour, scattering, fog, and foam tuning. Neither buffer is written anywhere else, and
+    /// [`Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw) restages nothing — it hands the same two block-held matrices straight to
+    /// WaveWorks — so the whole family's view depends solely on the render context this call read.
+    ///
+    /// The body is selected by [`RenderContext::m_ActiveRenderPass`](crate::graphics_engine::graphics_engine::RenderContext::m_ActiveRenderPass):
+    /// `PRE_RP_WATER_CS_PRE` (41) only refreshes the block's cached camera info, `PRE_RP_WATER_WAKES_PRE`
+    /// (42) and `PRE_RP_WATER_FOAM_PRE` (43) only set the blend state and the wake/foam viewport
+    /// offsets, and every other pass takes the matrix-and-constant-buffer path described above.
+    ///
+    /// `sort_id` and `previous_sort_id` come from the draw-list walk in
+    /// [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass): the element's sort id, and
+    /// `~0` on a block-type change. This override reads neither.
+    pub unsafe fn Setup(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        sort_id: u64,
+        previous_sort_id: u64,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                sort_id: u64,
+                previous_sort_id: u64,
+            ) = ::std::mem::transmute(Self::Setup_ADDRESS);
+            f(self as *const Self as _, rc, sort_id, previous_sort_id)
+        }
+    }
+    pub const Draw_ADDRESS: usize = 0x14037AE00;
+    /// Draws the WaveWorks ocean: the simulation step, the quadtree surface, the water-box surfaces,
+    /// and the far LOD skirt.
+    ///
+    /// On the same three-way pass split as [`Setup`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Setup), `PRE_RP_WATER_CS_PRE` (41) runs the
+    /// compute foam sub-pass and `PRE_RP_WATER_FOAM_PRE` (43) the painted foam; every other pass takes
+    /// the main body, which in order: advances the ocean simulation
+    /// ([`WaveWorksSimulationStep`](crate::graphics_engine::render_block::WaveWorksSimulationStep)) unless the block's
+    /// simulation-suppressed flag is set; binds the render context's render setup, the `NvWater*`
+    /// program permutation for the current tessellation and above/below-surface state, and the water
+    /// depth/stencil state; calls `GFSDK_WaveWorks_Simulation_SetRenderStateD3D11` and
+    /// `GFSDK_WaveWorks_Quadtree_DrawD3D11` on the raw `ID3D11DeviceContext`, passing the two matrices
+    /// [`Setup`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Setup) baked as the view and projection the quadtree culls and picks LODs
+    /// against; draws the registered water-box surfaces through `NWater::DrawWaterBoxSurface`; and
+    /// restores the D3D state WaveWorks changed with `GFSDK_WaveWorks_Savestate_RestoreD3D11`. If the
+    /// block's far-LOD flag is set it then draws the far skirt quad as a plain [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed).
+    ///
+    /// The save and the restore of the WaveWorks savestate both happen inside this call, so no D3D
+    /// state it captures outlives the call.
+    pub unsafe fn Draw(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, rc, info)
+        }
+    }
+}
+impl std::convert::AsRef<NvWaterHighEndRenderBlock> for NvWaterHighEndRenderBlock {
+    fn as_ref(&self) -> &NvWaterHighEndRenderBlock {
+        self
+    }
+}
+impl std::convert::AsMut<NvWaterHighEndRenderBlock> for NvWaterHighEndRenderBlock {
+    fn as_mut(&mut self) -> &mut NvWaterHighEndRenderBlock {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The per-draw render block instance info: the instance's constant buffers, LOD state, and world
 /// transforms.
 pub struct RBIInfo {}
@@ -496,6 +596,29 @@ impl RenderBlockSSAO {
     pub const Draw_ADDRESS: usize = 0x140190E80;
     /// Draws the ambient-occlusion pass, reconstructing from depth and accumulating into the
     /// temporal history.
+    ///
+    /// One call runs five phases, each binding its own render setup, and they do not share a
+    /// resolution: the [`SSAOPass`](crate::graphics_engine::ssao::SSAOPass) sizes its depth targets at the
+    /// render resolution scaled by `m_Resolution` and its occlusion and history targets at half that
+    /// again, while the final composite goes to the full-resolution scene target.
+    ///
+    /// 1. A linear-depth pack into the current slot of the depth targets, followed by a whole-texture
+    ///    mip generation over it (the targets carry five mip levels).
+    /// 2. The occlusion generation into the first of the two occlusion targets, reconstructing
+    ///    view-space position from the packed depth using the render context's own projection terms
+    ///    and an inverse-transpose of its camera transform -- not through
+    ///    [`Matrix4::PerspectiveFovInverse`](types::math::Matrix4).
+    /// 3. A separable bilateral blur, when the pass's blur flag is set: two draws ping-ponging between
+    ///    the two occlusion targets, so the blurred result ends up back in the first. Neither draw is
+    ///    idempotent -- each reads and writes the same pair of textures.
+    /// 4. The temporal resolve, when [`m_EnableTemporalFilter`](crate::graphics_engine::ssao::SSAOPass) is
+    ///    set, into the current slot of the history targets, sampling the previous slot. This is the
+    ///    only phase that calls [`Matrix4::PerspectiveFovInverse`](types::math::Matrix4), uploading the
+    ///    composed clip-to-world basis as vertex constants 1..4 of constant buffer 2. Unless the pass
+    ///    is on its first frame it is preceded by a second separable blur pair, over the previous
+    ///    history slot.
+    /// 5. The composite into the alpha channel of the scene target (colour mask 8, depth test on),
+    ///    followed by the inlined history advance.
     pub unsafe fn Draw(
         &self,
         rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -1220,6 +1343,29 @@ impl RenderBlockTypeSSDecal {
             f(self as *const Self as _, rc)
         }
     }
+    pub const SetupConstantBuffers_ADDRESS: usize = 0x14016D420;
+    /// Binds the render context's global constant buffers to vertex and fragment slot 0 and declares
+    /// the pass's instance-constant slots: vertex slot 1 at **8** `float4` rows (base row 0), fragment
+    /// slot 1 at **13** rows (base row 0), and slots 2 and 3 unused on both stages.
+    ///
+    /// Those are exactly the rows the permutations declare: the shared `ssdecal` vertex program
+    /// declares `cb1[7]` and the twelve fragment permutations declare `cb1[13]`. Because
+    /// [`SetFragmentProgramConstantBufferSize`](crate::graphics_engine::draw::SetFragmentProgramConstantBufferSize) rounds a declared row count up to the next pool size
+    /// class, the buffer actually bound to fragment slot 1 for this pass holds **16** rows and
+    /// [`SetupRenderStates`](crate::graphics_engine::draw::SetupRenderStates) uploads all sixteen — the three rows past the declared thirteen carry
+    /// whatever the shared staging array holds.
+    pub unsafe fn SetupConstantBuffers(
+        &self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+            ) = ::std::mem::transmute(Self::SetupConstantBuffers_ADDRESS);
+            f(self as *const Self as _, rc)
+        }
+    }
 }
 impl std::convert::AsRef<RenderBlockTypeSSDecal> for RenderBlockTypeSSDecal {
     fn as_ref(&self) -> &RenderBlockTypeSSDecal {
@@ -1706,5 +1852,37 @@ impl std::convert::AsRef<WaterHighEndRenderBlockType> for WaterHighEndRenderBloc
 impl std::convert::AsMut<WaterHighEndRenderBlockType> for WaterHighEndRenderBlockType {
     fn as_mut(&mut self) -> &mut WaterHighEndRenderBlockType {
         self
+    }
+}
+pub const WaveWorksSimulationStep_ADDRESS: usize = 0x140336CE0;
+/// Advances the WaveWorks ocean simulation one step and blocks until its displacement readback is
+/// available (`GFSDK_WaveWorks_Simulation_Simulation` — a helper in the game's own image, named by
+/// its telemetry zone, not an export of `gfsdk_waveworks.win64.dll`).
+///
+/// Sets the simulation time, then loops `WaitStagingCursor` + `KickD3D11` until the staging cursor
+/// reports the readback is no longer in flight, and archives the resulting displacement snapshot —
+/// which is what the CPU-side wave-height and buoyancy queries
+/// (`GFSDK_WaveWorks_Simulation_GetArchivedDisplacements`) read. Finally restores the D3D state the
+/// kick changed from the shared savestate.
+///
+/// Called once per frame from [`NvWaterHighEndRenderBlock::Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw).
+/// It is not idempotent: each call archives another displacement snapshot and can block on the
+/// staging cursor.
+pub unsafe fn WaveWorksSimulationStep(
+    render_time: f64,
+    gfx_context: *mut ::std::ffi::c_void,
+    kick_id: *mut u64,
+    simulation: *mut ::std::ffi::c_void,
+    savestate: *mut ::std::ffi::c_void,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            render_time: f64,
+            gfx_context: *mut ::std::ffi::c_void,
+            kick_id: *mut u64,
+            simulation: *mut ::std::ffi::c_void,
+            savestate: *mut ::std::ffi::c_void,
+        ) = ::std::mem::transmute(WaveWorksSimulationStep_ADDRESS);
+        f(render_time, gfx_context, kick_id, simulation, savestate)
     }
 }

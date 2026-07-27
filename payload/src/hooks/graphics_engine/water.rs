@@ -17,15 +17,31 @@
 //! the global `cb0`, which the collapse already handles, and the projective coordinate is entirely a
 //! CPU-side constant.
 //!
-//! Not covered: `CNvWaterHighEndRenderBlock` (the WaveWorks path used at the higher water-quality
-//! settings) builds its screen UV as `SV_Position × (1/2W, 1/H)`, which is already self-consistent
-//! under double-wide, and `WaterBoxRenderBlock::DrawSurface` (the surface-rendering mode), whose
-//! matrix its type's `Setup` declines to stage at all.
+//! The WaveWorks family (`NvWater*`, [`NvWaterHighEndRenderBlock`]) does not have that defect -- its
+//! shaders build the screen UV as `SV_Position × (1/2W, 1/H)`, which is already self-consistent under
+//! double-wide -- but it has the other one, and the second half of this module fixes it: the whole
+//! family takes its clip position from a model-view-projection the block bakes into its own constant
+//! buffer, so the collapse's per-eye machinery never reaches it and both eyes see the collapsed centre
+//! view of the water surface. See [`nv_water_per_eye`].
+//!
+//! Not covered: `WaterBoxRenderBlock::DrawSurface` (the surface-rendering mode), whose matrix its
+//! type's `Setup` declines to stage at all.
+
+use std::{
+    ffi::c_void,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use detours_macro::detour;
-use jc3gi::graphics_engine::{
-    graphics_engine::RenderContext,
-    render_block::{RBIInfo, WaterBoxRenderBlock, WaterHighEndRenderBlock},
+use jc3gi::{
+    graphics_engine::{
+        graphics_engine::RenderContext,
+        render_block::{
+            NvWaterHighEndRenderBlock, RBIInfo, WaterBoxRenderBlock, WaterHighEndRenderBlock,
+        },
+        render_engine::RenderPassId,
+    },
+    types::math::Matrix4,
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -35,6 +51,8 @@ pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&WATER_HIGH_END_DRAW_BINDER)
         .with_static_binder(&WATER_BOX_DRAW_BINDER)
+        .with_static_binder(&NV_WATER_HIGH_END_DRAW_BINDER)
+        .with_static_binder(&WAVE_WORKS_SIMULATION_STEP_BINDER)
 }
 
 /// The high-end water family (`waterhighend`, `waterbelow`, `watershader_lod0/1/2`) reads its
@@ -82,6 +100,54 @@ fn water_box_draw(this: *const WaterBoxRenderBlock, rc: *mut RenderContext, info
     if !handled {
         detour.call(this, rc, info);
     }
+}
+
+/// The WaveWorks family, re-issued once per eye with that eye's camera substituted into the render
+/// context the block bakes its matrices from. See [`nv_water_per_eye`].
+#[detour(address = jc3gi::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw_ADDRESS)]
+fn nv_water_high_end_draw(
+    this: *const NvWaterHighEndRenderBlock,
+    rc: *mut RenderContext,
+    info: *const RBIInfo,
+) {
+    let detour = NV_WATER_HIGH_END_DRAW.get().unwrap();
+    // SAFETY: `this` and `rc` are the live block and render context the engine passed into `Draw`; the
+    // closure re-invokes the original `Draw` trampoline.
+    let handled = unsafe {
+        nv_water_per_eye(this, rc, || {
+            detour.call(this, rc, info);
+        })
+    };
+    if !handled {
+        detour.call(this, rc, info);
+    }
+}
+
+/// The WaveWorks simulation step, suppressed on the second eye of an [`nv_water_per_eye`] re-issue.
+///
+/// Re-issuing the block's `Draw` re-drives everything in it, and this one call is the only part that
+/// is not idempotent: it advances the simulation clock, blocks on the readback staging cursor, and
+/// archives another displacement snapshot into the ring the CPU-side wave-height and buoyancy queries
+/// read. Running it twice per frame would halve that ring's time span and pay the stall twice, for a
+/// second kick at the same simulation time that produces the same water.
+#[detour(address = jc3gi::graphics_engine::render_block::WaveWorksSimulationStep_ADDRESS)]
+extern "system" fn wave_works_simulation_step(
+    render_time: f64,
+    gfx_context: *mut c_void,
+    kick_id: *mut u64,
+    simulation: *mut c_void,
+    savestate: *mut c_void,
+) {
+    if SUPPRESS_SIMULATION_STEP.load(Ordering::Relaxed) {
+        return;
+    }
+    WAVE_WORKS_SIMULATION_STEP.get().unwrap().call(
+        render_time,
+        gfx_context,
+        kick_id,
+        simulation,
+        savestate,
+    );
 }
 
 /// The vertex constant buffer the water block types stage their screen-UV matrix into.
@@ -150,6 +216,113 @@ const TEX_BIAS: [f32; 16] = [
     0.0, 0.0, 1.0, 0.0,
     0.5, 0.5, 0.0, 1.0,
 ];
+
+/// Re-issue the WaveWorks block's `Draw` once per eye with that eye's camera, or return `false` when
+/// the flag is off, the pass is one of the block's auxiliary passes, the per-eye camera is
+/// unavailable, or the collapse intercept declines.
+///
+/// Every `NvWater*` permutation writes clip position from a `g_ModelViewProjectionMatrix` at the
+/// block type's *own* vertex/domain `cb1` registers 0..3, and its hull and domain shaders carry the
+/// same epilogue -- none of them touch the global `cb0` the collapse's shader rewrite works on, so no
+/// amount of `cb13`/viewport routing reaches them. The matrix is built in
+/// [`NvWaterHighEndRenderBlock::Setup`] from exactly two render-context fields, `m_View` and
+/// `m_ProjectionF`, and those same two matrices are also handed to WaveWorks itself as the view and
+/// projection its quadtree culls and picks patch LODs against.
+///
+/// So rather than reproject a constant in flight, this substitutes the *inputs*: it writes the eye's
+/// view and projection into the render context, calls the block's own `Setup` to rebuild and re-upload
+/// everything downstream of them, and re-issues `Draw` -- once per eye, each into that eye's half of
+/// the double-wide target. The render context is restored afterwards.
+///
+/// What that does *not* restore is the block's own cached matrices and the shared constant buffer,
+/// which are left holding the right eye's. Nothing reads them before the next `Setup`: the draw-list
+/// walk calls `Setup` before the first `Draw` of a block-type run and again whenever the sort id
+/// changes, and every `Draw` in between comes back through here and restages per eye anyway.
+///
+/// # Safety
+///
+/// `this` and `rc` must be the live pointers the detoured `Draw` received, and `draw` must invoke the
+/// block's original `Draw` trampoline.
+unsafe fn nv_water_per_eye(
+    this: *const NvWaterHighEndRenderBlock,
+    rc: *mut RenderContext,
+    mut draw: impl FnMut(),
+) -> bool {
+    if !Config::lock_query(|c| c.stereo.single_pass_nvwater_per_eye) {
+        return false;
+    }
+    // SAFETY: `rc` is the live render context per the caller contract.
+    let (pass, center_view) = unsafe { ((*rc).m_ActiveRenderPass, (*rc).m_View) };
+    if NV_WATER_AUXILIARY_PASSES.contains(&pass) {
+        return false;
+    }
+    let Some(eyes) = eye_cameras(center_view) else {
+        return false;
+    };
+    // SAFETY: as above.
+    let saved_projection = unsafe { (*rc).m_ProjectionF };
+
+    let handled = crate::stereo::single_pass::draw_per_eye_half_ignoring_bound_vs(|eye| {
+        // SAFETY: `rc` is live, and `this` is the live block whose `Setup` reads it. The two trailing
+        // arguments are the draw-list sort ids, which this block's `Setup` override does not read.
+        unsafe {
+            (*rc).m_View = eyes[eye].view;
+            (*rc).m_ProjectionF = eyes[eye].projection;
+            SUPPRESS_SIMULATION_STEP.store(eye != 0, Ordering::Relaxed);
+            (*this).Setup(rc, 0, 0);
+        }
+        draw();
+    });
+
+    SUPPRESS_SIMULATION_STEP.store(false, Ordering::Relaxed);
+    // SAFETY: as above.
+    unsafe {
+        (*rc).m_View = center_view;
+        (*rc).m_ProjectionF = saved_projection;
+    }
+    handled
+}
+
+/// The passes whose `CNvWaterHighEndRenderBlock::Draw` body is not the water surface: the compute
+/// foam sub-pass, the wake prepass, and the painted-foam prepass. They render into the block's own
+/// simulation and foam targets from their own viewports rather than into the scene, so the eye split
+/// does not apply to them and `Setup` stages no view matrix for them either.
+const NV_WATER_AUXILIARY_PASSES: [i32; 3] = [
+    RenderPassId::PRE_RP_WATER_CS_PRE as i32,
+    RenderPassId::PRE_RP_WATER_WAKES_PRE as i32,
+    RenderPassId::PRE_RP_WATER_FOAM_PRE as i32,
+];
+
+/// Raised for the duration of the second eye's re-issue; see [`wave_works_simulation_step`].
+static SUPPRESS_SIMULATION_STEP: AtomicBool = AtomicBool::new(false);
+
+/// One eye's substitute for the render context's camera matrices.
+struct EyeCamera {
+    view: Matrix4,
+    projection: Matrix4,
+}
+
+/// The two eyes' view and projection matrices, derived from the collapse's centre view the same way
+/// the `SetupRenderCamera` hook derives the double-draw path's per-eye camera: offset the centre
+/// camera's world transform by the eye's world offset, apply its head-local orientation delta on the
+/// right (about the now-offset eye position), and invert. `None` when no VR frame is in flight.
+fn eye_cameras(center_view: Matrix4) -> Option<[EyeCamera; 2]> {
+    let center_world = glam::Mat4::from(center_view).inverse();
+    Some([eye_camera(center_world, 0)?, eye_camera(center_world, 1)?])
+}
+
+fn eye_camera(center_world: glam::Mat4, eye: usize) -> Option<EyeCamera> {
+    let params = crate::vr::render_params(eye)?;
+    let mut world = center_world;
+    world.w_axis += params.world_offset.extend(0.0);
+    let world = world * glam::Mat4::from_quat(params.orientation_delta);
+    Some(EyeCamera {
+        view: Matrix4::from(world.inverse()),
+        // The reverse-Z form, which is what the render camera's `m_ProjectionF` holds by the time a
+        // render context is filled from it, under either projection convention.
+        projection: params.projection_reverse_z,
+    })
+}
 
 #[cfg(test)]
 mod tests {

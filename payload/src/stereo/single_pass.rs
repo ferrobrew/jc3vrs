@@ -850,14 +850,23 @@ fn eye_half_viewport(full: D3D11_VIEWPORT, eye: usize) -> D3D11_VIEWPORT {
 /// (the shadow-cascade and reflection passes reuse these blocks' `DrawZ`, and eye-splitting a
 /// shadow-atlas draw would corrupt it), and outside the collapse re-issuing per eye is wrong.
 fn baked_cb_intercept_ready() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, EngineContext)> {
-    if !collapse_active() || !in_gbuffer_range() {
-        return None;
-    }
     // A block whose vertex shader the rewriter happened to patch (patching is by operand detection,
     // not by name, so any permutation touching `cb0[4]`/`cb0[29..32]` gets it) already renders both
     // eyes from one draw. Re-issuing it would draw the geometry twice per eye, and its position would
     // come from `cb13`'s eye slot rather than the reprojected constant. Leave it to the patched path.
     if BOUND_VS_PATCHED.load(Ordering::Relaxed) {
+        return None;
+    }
+    eye_split_state()
+}
+
+/// The state every per-eye re-issue needs, without the bound-shader gate: the two per-eye `M_eye`
+/// matrices, the collapse full viewport, and the immediate context. Requires the collapse (a single
+/// centered walk) and the G-buffer pass range -- outside the range the eye-half split does not apply
+/// (the shadow-cascade and reflection passes reuse these blocks' `DrawZ`, and eye-splitting a
+/// shadow-atlas draw would corrupt it), and outside the collapse re-issuing per eye is wrong.
+fn eye_split_state() -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, EngineContext)> {
+    if !collapse_active() || !in_gbuffer_range() {
         return None;
     }
     let m_eye = (*CURRENT_M_EYE.lock())?;
@@ -890,6 +899,29 @@ pub unsafe fn reproject_baked_cb_per_eye(
     reg_offset: u32,
     mut draw: impl FnMut(),
 ) -> bool {
+    // SAFETY: forwarded unchanged from this function's own contract.
+    unsafe { reproject_baked_cb_per_eye_staged(rc, cb_index, reg_offset, |_| draw()) }
+}
+
+/// [`reproject_baked_cb_per_eye`] for a block that *also* has per-eye state of its own to stage:
+/// `render` receives the eye and does that staging before invoking the block's `Draw`, all while the
+/// vertex reprojection is armed.
+///
+/// The two halves act on different uploads and must not be conflated. The armed reprojection rewrites
+/// the block's own **vertex** constant stage at (`cb_index`, `reg_offset`) as it passes through
+/// [`set_vertex_program_constants_detour`], which is what gives the geometry its parallax; anything
+/// `render` stages is its own upload, on whatever stage and slot it chooses, and is left alone.
+///
+/// # Safety
+///
+/// `rc` must be the live [`RenderContext`] the detoured `Draw` received, and `render` must invoke the
+/// block's original `Draw` trampoline.
+pub unsafe fn reproject_baked_cb_per_eye_staged(
+    rc: *const RenderContext,
+    cb_index: i32,
+    reg_offset: u32,
+    mut render: impl FnMut(usize),
+) -> bool {
     let Some((m_eye, full, d3d)) = baked_cb_intercept_ready() else {
         return false;
     };
@@ -904,7 +936,7 @@ pub unsafe fn reproject_baked_cb_per_eye(
             m_eye: m,
         });
         bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
-        draw();
+        render(eye);
         if !disarm_reproject() {
             warn_reproject_never_fired(cb_index, reg_offset);
         }
@@ -984,13 +1016,38 @@ pub fn draw_per_eye_half(mut render: impl FnMut(usize)) -> bool {
     let Some((_, full, d3d)) = baked_cb_intercept_ready() else {
         return false;
     };
+    per_eye_halves(full, d3d, &mut render);
+    true
+}
+
+/// [`draw_per_eye_half`] for a block that binds its own vertex programs *inside* the `Draw` being
+/// re-issued, so the shader bound when the gate runs is the previous draw's and says nothing about
+/// this one.
+///
+/// [`baked_cb_intercept_ready`]'s bound-shader gate exists to leave already-patched geometry to the
+/// patched path, and it reads the shader that `VSSetShader` last saw. For a block whose type binds
+/// its programs in a per-pass setup that is a fair proxy; for one that binds them per draw it is a
+/// coin flip on whatever drew before it, which would make the re-issue fire intermittently. Callers
+/// take this variant only when the block's own vertex programs are provably outside the rewrite --
+/// the rewriter only patches shaders that reference the per-eye `cb0` entries, so a family that
+/// builds clip position from a constant buffer of its own never qualifies.
+pub fn draw_per_eye_half_ignoring_bound_vs(mut render: impl FnMut(usize)) -> bool {
+    let Some((_, full, d3d)) = eye_split_state() else {
+        return false;
+    };
+    per_eye_halves(full, d3d, &mut render);
+    true
+}
+
+/// Run `render` once per eye with that eye's half of `full` pinned on both viewport slots, then put
+/// `full` back for the draws that follow.
+fn per_eye_halves(full: D3D11_VIEWPORT, d3d: EngineContext, render: &mut impl FnMut(usize)) {
     for eye in 0..2 {
         let _reissue = PerEyeReissue::enter(eye);
         bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
         render(eye);
     }
     bind_both_viewport_slots(d3d, full);
-    true
 }
 
 /// Warn, at most once per (`cb_index`, `reg_offset`), that a per-eye re-issue found nothing to

@@ -502,6 +502,14 @@ pub const SetFragmentProgramConstants_ADDRESS: usize = 0x141964840;
 /// Stages `count` float4 constants into the given fragment constant buffer slot, starting at
 /// `start_offset`, writing to the context's per-slot staging buffer and setting the dirty flag. The
 /// actual GPU upload happens at the next state flush.
+///
+/// The staging buffer is a single 512-row `float4` array per shader stage, held in the graphics
+/// context (the fragment one begins at context offset `0x2020`, after the vertex one at `0x20`); the
+/// four slots of a stage carve their windows out of it, each starting at the row
+/// [`SetFragmentProgramConstantBufferSize`](crate::graphics_engine::draw::SetFragmentProgramConstantBufferSize) recorded for it. The write is therefore bounded by that
+/// window and by the pooled buffer the slot is bound to, not by `count` alone. A row-level redundancy
+/// check skips rows byte-identical to what is already staged, and a call that skips every row leaves
+/// the dirty flag alone.
 pub unsafe fn SetFragmentProgramConstants(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     cb_index: i32,
@@ -518,6 +526,76 @@ pub unsafe fn SetFragmentProgramConstants(
             count: u32,
         ) = ::std::mem::transmute(SetFragmentProgramConstants_ADDRESS);
         f(ctx, cb_index, start_offset, data, count)
+    }
+}
+pub const SetFragmentProgramConstantBufferSize_ADDRESS: usize = 0x1419643B0;
+/// Declares how large a fragment constant-buffer slot is for the draws that follow, and where in the
+/// stage's shared staging array its window begins.
+///
+/// `count` is a number of `float4` rows. It is not stored as-is: the engine rounds it **up** to the
+/// next entry of a fixed 17-entry pool-size table — `1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128,
+/// 196, 256, 384, 512` — and binds the pre-created `ID3D11Buffer` of that size to the slot (a
+/// `PSSetConstantBuffers` call, skipped when the size class is unchanged). The rounded size class,
+/// not `count`, is what [`SetupRenderStates`](crate::graphics_engine::draw::SetupRenderStates) later uploads, so the constant buffer the shader sees is
+/// the rounded one and the rows between `count` and the size class are uploaded as whatever the
+/// staging array happens to hold. `start_offset` is recorded as the slot's base row within the
+/// stage's 512-row staging array; every shipped call passes `0`, so at most one staged slot per stage
+/// is live at a time. Passing `count = 0` unbinds the slot and clears its dirty flag.
+///
+/// The debug build additionally keeps `count` verbatim so that every
+/// [`SetFragmentProgramConstants`](crate::graphics_engine::draw::SetFragmentProgramConstants) can assert that its own `start_offset + count` stays within it; the
+/// release build stores only the bound buffer, the size class, and the base row, and performs no
+/// bounds check at all.
+pub unsafe fn SetFragmentProgramConstantBufferSize(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            count: u32,
+        ) = ::std::mem::transmute(SetFragmentProgramConstantBufferSize_ADDRESS);
+        f(ctx, cb_index, start_offset, count)
+    }
+}
+pub const SetVertexProgramConstantBufferSize_ADDRESS: usize = 0x141964280;
+/// The vertex analogue of [`SetFragmentProgramConstantBufferSize`](crate::graphics_engine::draw::SetFragmentProgramConstantBufferSize), over the vertex staging array and
+/// the vertex slots' pooled buffers.
+pub unsafe fn SetVertexProgramConstantBufferSize(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            count: u32,
+        ) = ::std::mem::transmute(SetVertexProgramConstantBufferSize_ADDRESS);
+        f(ctx, cb_index, start_offset, count)
+    }
+}
+pub const SetupRenderStates_ADDRESS: usize = 0x14195FEA0;
+/// Flushes the graphics context's deferred state to D3D11 ahead of a draw: for each of the four slots
+/// of each shader stage whose dirty flag is set, maps its bound constant buffer with
+/// `D3D11_MAP_WRITE_DISCARD` and copies `16 * size_class` bytes into it from the stage's staging array
+/// starting at the slot's base row — the **rounded** size class from
+/// [`SetFragmentProgramConstantBufferSize`](crate::graphics_engine::draw::SetFragmentProgramConstantBufferSize), not the requested row count — then resolves the
+/// depth-stencil, blend, and rasterizer state objects from their cached descriptors.
+pub unsafe fn SetupRenderStates(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        ) = ::std::mem::transmute(SetupRenderStates_ADDRESS);
+        f(ctx)
     }
 }
 pub const SetVertexProgramConstants_ADDRESS: usize = 0x141964740;
