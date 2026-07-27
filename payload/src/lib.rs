@@ -116,6 +116,13 @@ fn shutdown_startup() {
         module::pin();
     }
 
+    // Likewise for a profiler capture's writer thread: see `profiler::capture::shutdown`'s doc
+    // comment for why an unjoined writer is the same class of hazard as the frame tail.
+    #[cfg(feature = "profiler")]
+    if !profiler::capture::shutdown() {
+        module::pin();
+    }
+
     // The cleanups cleared render-thread-driven config flags (e.g. the HUD redirect). Give the still-
     // live hooks a few frames to tick those changes through -- the per-frame restore runs on the
     // render thread -- before uninstalling.
