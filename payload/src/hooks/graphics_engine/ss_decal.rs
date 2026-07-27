@@ -34,6 +34,26 @@
 //! Behind [`StereoConfig::single_pass_ssdecal_per_eye`](crate::config::StereoConfig). Because the
 //! shader half is applied at shader-creation time, flipping the flag needs a shader reload before the
 //! rewrite reaches the permutations.
+//!
+//! # The box geometry
+//!
+//! Those two together fix where each pixel of the decal reconstructs *from*. They do not move the box
+//! itself: `Draw` bakes the instance's world-view-projection into **vertex** `cb1[0..3]` (followed by
+//! the decal's view-independent box axes at `cb1[4..7]`), and the shared decal vertex program builds
+//! clip with the multiply-add chain `Σ v.i · cb1[i] + cb1[3]`, so each of those four registers is a
+//! *column* of the baked matrix and nothing in the collapse's per-eye machinery ever reaches them.
+//! The decal therefore lands on the right surface in both eyes and at the same screen position in
+//! both -- correct-looking in a screenshot, flat in a headset.
+//!
+//! Behind [`StereoConfig::single_pass_ssdecal_geometry_per_eye`](crate::config::StereoConfig), the
+//! per-eye re-issue becomes
+//! [`reproject_baked_cb_per_eye_staged`](crate::stereo::single_pass::reproject_baked_cb_per_eye_staged),
+//! which post-multiplies that vertex upload by the eye's `M_eye` on its way through as the block
+//! stages it. Only the vertex upload: the fragment restaging above is a separate constant buffer on a
+//! separate stage and is left exactly as it is. The two are consistent afterwards rather than in
+//! spite of each other -- the vertex program hands the pixel shader its screen UV as a projective
+//! `TEXCOORD0` derived from the very clip position being reprojected, so moving the box into the
+//! eye's own frustum is what makes the eye's own reconstruction basis the right one to read it with.
 
 use detours_macro::detour;
 use glam::Mat4;
@@ -78,6 +98,16 @@ fn ss_decal_draw(this: *const RenderBlockSSDecal, rc: *mut RenderContext, info: 
 /// The fragment constant-buffer slot the decal permutations read (`cbInstanceConsts`).
 const INSTANCE_CB: i32 = 1;
 
+/// The **vertex** constant-buffer slot the shared decal vertex program reads, also `cbInstanceConsts`
+/// and also slot 1 -- a different buffer on a different stage from [`INSTANCE_CB`], staged through a
+/// different entry point.
+const VERTEX_INSTANCE_CB: i32 = 1;
+
+/// The first of the four vertex registers [`RenderBlockSSDecal::Draw`] bakes the box's
+/// world-view-projection into (`Draw` follows them with the box's axis basis at 4..7, which is
+/// view-independent and must not be reprojected).
+const WORLD_VIEW_PROJECTION_REGISTER: u32 = 0;
+
 /// The first register of the pass's depth reconstruction basis, staged by the block type's `Setup`.
 const BASIS_REGISTER: u32 = 0;
 
@@ -98,19 +128,19 @@ unsafe fn per_eye(rc: *mut RenderContext, mut draw: impl FnMut()) -> bool {
         return false;
     }
     // SAFETY: `rc` is live per the caller contract.
-    let Some(rc) = (unsafe { rc.as_ref() }) else {
+    let Some(rc_ref) = (unsafe { rc.as_ref() }) else {
         return false;
     };
-    let ctx = rc.m_Context;
+    let ctx = rc_ref.m_Context;
     if ctx.is_null() {
         return false;
     }
-    let view = rotation_only(&rc.m_View);
+    let view = rotation_only(&rc_ref.m_View);
     let Some(bases) = eye_bases(&view) else {
         return false;
     };
 
-    let handled = crate::stereo::single_pass::draw_per_eye_half(|eye| {
+    let mut render = |eye: usize| {
         // SAFETY: `ctx` is the render context's live graphics context; the basis is four float4 rows
         // and the offset is one.
         unsafe {
@@ -118,18 +148,32 @@ unsafe fn per_eye(rc: *mut RenderContext, mut draw: impl FnMut()) -> bool {
             stage(ctx, EYE_BIAS_REGISTER, &eye_bias(eye), 1);
         }
         draw();
-    });
+    };
+    let handled = if Config::lock_query(|c| c.stereo.single_pass_ssdecal_geometry_per_eye) {
+        // SAFETY: `rc` is the live render context the detoured `Draw` received, and `render` invokes
+        // the block's original `Draw` trampoline.
+        unsafe {
+            crate::stereo::single_pass::reproject_baked_cb_per_eye_staged(
+                rc,
+                VERTEX_INSTANCE_CB,
+                WORLD_VIEW_PROJECTION_REGISTER,
+                &mut render,
+            )
+        }
+    } else {
+        crate::stereo::single_pass::draw_per_eye_half(&mut render)
+    };
     if handled {
         // Put the pass's own basis back, and the offset back to the left half. The type stages the
         // basis once per pass, ahead of every decal it covers, so leaving the second eye's behind
-        // would hand it to any later decal this intercept declines -- and the offset register is
-        // shared with the ~160 other fragment permutations that declare a `cb1` this long.
+        // would hand it to any later decal this intercept declines -- and the staging array the
+        // offset register lives in is shared with every other block type in the frame.
         // SAFETY: as above; `view` and `m_ProjectionF` are the matrices `Setup` itself composed.
         unsafe {
             stage(
                 ctx,
                 BASIS_REGISTER,
-                &reconstruction_basis(&view, &rc.m_ProjectionF),
+                &reconstruction_basis(&view, &rc_ref.m_ProjectionF),
                 MATRIX4_ROWS,
             );
             stage(ctx, EYE_BIAS_REGISTER, &eye_bias(0), 1);
@@ -139,6 +183,17 @@ unsafe fn per_eye(rc: *mut RenderContext, mut draw: impl FnMut()) -> bool {
 }
 
 /// The register the rewritten permutations read their depth-UV offset from.
+///
+/// It is one past the thirteen registers
+/// [`RenderBlockTypeSSDecal::SetupConstantBuffers`](jc3gi::graphics_engine::render_block::RenderBlockTypeSSDecal::SetupConstantBuffers)
+/// declares for this pass, and staging it is still sound: the engine rounds a declared row count up
+/// to the next pool size class before binding a buffer, so thirteen rows get a **sixteen**-row buffer
+/// and the flush uploads all sixteen from the base row the slot was given (zero here). Registers 13,
+/// 14, and 15 are that rounding's slack, none of them read by the pass's own permutations, and no
+/// other slot can be reached through them -- every constant-buffer slot in the engine is declared with
+/// base row zero, and in this pass fragment slots 2 and 3 are declared empty while slot 0 is a
+/// directly bound globals buffer rather than a staged one. The slack rows do persist in the shared
+/// staging array after the pass, which is why the restore below puts this one back.
 const EYE_BIAS_REGISTER: u32 = dxbc_stereo::SSDECAL_EYE_BIAS_REGISTER;
 
 /// The offset that maps a `[0, 1]` per-eye UV onto `eye`'s half of the double-wide depth texture,

@@ -42,6 +42,11 @@ use super::common::{OPERAND_IMM32_SCALAR, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELE
 /// The fragment `cb1` register the inserted `mad` reads its horizontal offset from. The `ssdecal*`
 /// permutations declare `cb1[13]`, so register 13 is the first one past what they already use, and the
 /// rewrite widens the declaration to cover it.
+///
+/// Widening the declaration is only half of what has to be in range: the caller must also be able to
+/// *stage* the register. It can, and by more than one row -- the engine rounds the pass's declared
+/// thirteen rows up to a sixteen-row pooled constant buffer and uploads all sixteen, so 13, 14, and 15
+/// are all addressable. See the register's counterpart in the payload for the rest of that argument.
 pub const SSDECAL_EYE_BIAS_REGISTER: u32 = 13;
 
 /// Insert the depth-UV bias into an `ssdecal*` pixel shader, returning the rewritten container.
