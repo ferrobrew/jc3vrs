@@ -24,8 +24,32 @@
 //! buffer, so the collapse's per-eye machinery never reaches it and both eyes see the collapsed centre
 //! view of the water surface. See [`nv_water_per_eye`].
 //!
-//! Not covered: `WaterBoxRenderBlock::DrawSurface` (the surface-rendering mode), whose matrix its
-//! type's `Setup` declines to stage at all.
+//! Not covered: the water-box *surface* geometry (`WaterBoxRenderBlock::DrawSurface`, and the
+//! `NWater::DrawWaterBoxSurface` loop [`NvWaterHighEndRenderBlock::Draw`] runs over every registered
+//! box). Neither of the two mechanisms above reaches it, and neither is its defect. Its vertex shader
+//! (`waterboxsurface`) builds clip as
+//!
+//! ```text
+//! world_rel = box_transform(cb1[0..3]) · position     // scale by half-extents + (centre - camera)
+//! clip      = cb0[0..3] · (world_rel + cb0[4])        // full view-projection · absolute world
+//! ```
+//!
+//! -- the *full*, translation-bearing view-projection at global rows `0..3`, which the collapse's
+//! per-eye register remap does not cover (it claims only `cb0[4]` and `cb0[29..32]`). The remap does
+//! claim the shader, on that lone `cb0[4]` camera-position reference, and retargets it to `cb13`
+//! while leaving the projection centred -- so the eye offset is added to the *world position* and
+//! then viewed from the centre, which displaces the surface by the eye offset in the wrong direction
+//! instead of giving it parallax. The per-eye re-issue below draws with one instance, so the parity
+//! resolves to eye 0 in both halves and both eyes get eye 0's displacement.
+//!
+//! This is the whole legacy family's idiom, not one permutation's: `waterbox`, `waterboxbelow`,
+//! `watershader_lod0`, and `watershader_lod1` read the same rows. The transform they want is the
+//! reprojection rewrite, which replaces the clip position wholesale and so does not care that the
+//! source was `cb0[0..3]` -- but reprojecting them moves where they rasterize, which invalidates the
+//! projective screen UV the first half of this module corrects (that fix is deliberately *not*
+//! reprojected, precisely because the geometry still lands at the centre view). The two are one
+//! change, and the surface grid additionally has no per-eye re-issue of its own to hang it off.
+//! See `docs/mod/single-pass-stereo.md`.
 
 use std::{
     ffi::c_void,

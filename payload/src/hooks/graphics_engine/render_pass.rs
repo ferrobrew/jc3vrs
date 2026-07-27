@@ -501,6 +501,12 @@ fn commit_render_pass_settings(this: *mut ShadowManager, ctx: *mut c_void) {
 // the last word before the loop; the passes are re-enabled after so the next frame's first eye runs them.
 // Gated on `restore_frame_counters` so both eyes share the shadow-atlas parity slot (without it, eye 1
 // advances parity and would sample the other, unrendered slot).
+//
+// Under the single-pass collapse this whole path is inert, and correctly so: the collapse runs one
+// dispatch, so `dispatch_ordinal()` is never > 0 and PreDraw already runs exactly once per frame.
+// There is no second walk of the prepasses to elide, which is why extending the collapse over
+// PreDraw would save nothing -- see "Why `PreDraw` is outside the collapse" in
+// docs/mod/single-pass-stereo.md.
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PreDraw_ADDRESS)]
 fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
     // The first seam of a dispatch: label this thread's puffin lane (a no-op on single-core,

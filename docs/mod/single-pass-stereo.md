@@ -426,6 +426,56 @@ fix from a no-op.
 > survived so long; `single_pass_nvwater_per_eye` (off) addresses it, and
 > `single_pass_ssdecal_geometry_per_eye` (off) is the same shape for the decal box.
 
+#### The water box surface, and what the legacy family's clip path actually is
+
+The water-box *surface* grid — `NWater::DrawWaterBoxSurface`, run over every registered box from
+inside `CNvWaterHighEndRenderBlock::Draw` — was recorded as deliberately uncovered because its type's
+`SetupSurface` stages no screen-UV matrix. That is true but incidental; the interesting part is its
+clip path, which is the legacy family's and settles what "needs per-eye draw wiring first" meant.
+
+The block stages a box transform (a scale by the half-extents plus a translation of
+`centre − camera position`) and `waterboxsurface` does:
+
+    world_rel = box_transform(cb1[0..3]) · position
+    clip      = cb0[0..3] · (world_rel + cb0[4])
+
+`cb0[0..3]` is the **full**, translation-bearing view-projection — not the translation-free
+`m_OffsetViewProjection` at `cb0[29..32]`. The per-eye register remap covers only `cb0[4]` and
+`cb0[29..32]`, so the projection is out of its reach. Disassembling the shipped water vertex shaders
+shows this is the whole legacy family's idiom, not one permutation's: `waterbox`, `waterboxbelow`,
+`waterboxsurface`, `watershader_lod0`, and `watershader_lod1` all read `cb0[0..3]` plus `cb0[4]`, and
+`waterboxclear`, `watergodraysshader`, and `waves` read `cb0[0..3]` alone. (`nvwaterbox` and
+`nvwaterbox_tess` read `cb0[4]` alone, with clip from the block's baked matrix — the shape
+`baked_cb_block_owns_vs` exists for, though `nvwater*` is not on its list.)
+
+The `cb0[4]` reference alone is enough for the remap to claim these shaders, and it is the
+"camera-only" misclassification in its most damaging form: the eye offset gets added to the shader's
+reconstructed **world position** and the result is then viewed from the centre, so the geometry is
+displaced by the eye offset in the *opposite* direction to the parallax it should have had. In
+practice a per-eye re-issue draws one instance, so `SV_InstanceID & 1` resolves to eye 0 in both
+halves and both eyes get eye 0's displacement — a rigid ~32 mm world-space offset of the water
+relative to everything around it, growing as `offset / distance`, visible in a single eye.
+
+Reprojection is the transform these want: it replaces the clip position wholesale with
+`M_eye · clip_center`, so it does not care that the source was `cb0[0..3]` rather than a baked matrix,
+and it fixes the parallax, the wrong-direction displacement, and the double-wide squash together. It
+is unreachable only because `should_reproject_camera_only` is gated on `REPROJECT_NAME_PREFIXES` and
+the `water*` family is on the excluded list.
+
+**It cannot simply be un-gated, and this is the coupling to be careful of.** Reprojecting the
+geometry moves where it rasterises, and the same shaders emit a *projective screen UV* on `TEXCOORD1`
+from a CPU-staged matrix built out of the centre view-projection — the one mechanism 3 above
+corrects, deliberately *without* `M_eye`, because "the geometry still rasterizes from the collapsed
+centre view, so the UV has to describe where that geometry actually landed". Reproject the geometry
+and that stops being true: the staged rows would then have to be rebuilt from the *eye's* full
+view-projection rather than the render context's centre one. The two changes are one change. Doing
+either alone trades a known-shape defect for a subtler one, so neither has been made.
+
+The surface grid is the awkward member of the set: it is drawn from `NWater::DrawWaterBoxSurface`
+rather than from `WaterBoxRenderBlock::Draw`, so the per-eye re-issue in
+`hooks/graphics_engine/water.rs` does not reach it, and it would need its own intercept before the
+paired fix could be applied to it.
+
 ### 4. A reduced-resolution target handed the scene's viewport
 
 The collapse's viewport split was target-blind: it re-derived the eye halves from the recorded *scene*
@@ -493,7 +543,7 @@ All under `stereo`. Off by default unless marked.
 | Flag | Effect |
 |---|---|
 | `single_pass_reproject` | Reprojects the no-`cb0` scene families (characters, props, buildings, roads) instead of leaving them double-drawn. |
-| `single_pass_reproject_camera_only` | Extends that to the allowlisted families the `cb0` remap claims on a camera-position reference alone (`generaljc3`), which otherwise get viewport routing but no per-eye clip. |
+| `single_pass_reproject_camera_only` | Extends that to the allowlisted families the `cb0` remap claims on a camera-position reference alone (`generaljc3`, `landmark`, `layered`, `layeredblend`), which otherwise get viewport routing but no per-eye clip. |
 | `single_pass_terrain` | Rides the eye index through the terrain tessellation pipeline (VS → HS → DS). |
 | `single_pass_tree_impostors` | Reprojects the far-distance tree impostors. |
 
@@ -531,6 +581,69 @@ All under `stereo`. Off by default unless marked.
 | `single_pass_water_uv_per_eye` | Legacy water's projective screen UV (mechanism 3). |
 | `single_pass_clustered_per_eye` | **On.** Per-eye clustered froxel light grid. |
 | `single_pass_clustered_per_eye_light_view` | **On.** Also assign each eye's lights from that eye's position. |
+
+## Why `PreDraw` is outside the collapse, and why extending it over it would save nothing
+
+`PreDraw` is the second-largest GPU item in the frame (~2.16 ms, `docs/mod/performance.md`) and does
+not come through `DrawRenderPassRange`, so it is natural to read it as a large pool of draws the
+collapse has not claimed. It is not. **Under the collapse there is exactly one dispatch, so `PreDraw`
+already runs exactly once per frame.** `hooks/game.rs` builds the dispatch list as `&[(0, false)]`
+when `collapse_active()`, and `CGraphicsEngine::HandleDrawThreadTask` calls `CRenderEngine::PreDraw`
+once per dispatch. There is no second walk to collapse; the ceiling on submission savings from
+extending the collapse over `PreDraw` is **zero**.
+
+The measurement agrees, and is the reason to trust this rather than the reading above. In the
+off/on comparison in `performance.md`, `PreDraw` is 2.29 ms with two dispatches and 2.25 ms with one.
+If it were duplicated per eye, halving the dispatch count would have roughly halved it. It does not,
+because `share_prepasses` (on by default) already elides the view-independent categories on the
+second eye of the double-draw path. The ~0.04 ms difference is the residual: the categories that path
+still runs twice.
+
+### The classification
+
+`CRenderPass::Draw` (the pre-pass entry, vtable slot 0) selects the pass camera: the pass's own
+external camera if it has one, otherwise the camera manager's render camera. `SetRenderContextCamera`
+then overrides that from the render context's *pass id* for the shadow families — three disjoint
+branches selecting a uniform light camera at `pass − 22`, `pass − 30`, and `pass − 38`, which land
+exactly on `PRE_RP_STATIC_SHADOW_0` (22), `PRE_RP_SHADOW_0` (30), and
+`PRE_RP_SHADOW_REFLECTIVE_SUN_NEAR` (38). So pass ids 22–40 are rendered from the **sun / light**
+view by construction, not by convention, and cannot depend on which eye is being drawn.
+
+| Category | Camera | Per-eye? |
+|---|---|---|
+| Terrain-patch prep (1–7) | falls through to the render camera | yes |
+| Sky-lighting LUT (8) | render camera | held per-eye, conservatively |
+| Planar + environment reflections (9–17) | the pass's own reflection camera | no |
+| Cloud shadows (18) | world-space | no |
+| Vegetation (19–21) | render camera | held per-eye, conservatively |
+| Sun-shadow cascade atlas, static + dynamic + reflective (22–40) | light camera, from the pass id | **no**, verified in the binary |
+| Water simulation compute (41–44) | own targets and viewports | no |
+| Rain occluder (45) | render camera | held per-eye, conservatively |
+
+`SHARED_PREPASS_CATEGORIES` in `hooks/graphics_engine/render_pass.rs` encodes the "no" rows that have
+been validated in game (9–18 and 22–44) and elides them on the second eye of the double-draw path.
+Under the collapse that elision is inert and correctly so — nothing is duplicated to elide.
+
+### What is left
+
+The prepasses are already at their floor of one issuance per frame. What remains in `PreDraw` is the
+game's own baseline shadow, reflection and vegetation cost, the same as flatscreen, and reducing it is
+a shadow/reflection quality decision (cascade count, atlas resolution, update cadence), not a stereo
+one. Two stereo-attributable riders are worth knowing about, both small and both deliberate:
+
+- `widen_shadow_fit` (**on**) widens the cascade fit to the union FOV of both eyes, which puts more
+  geometry inside each cascade and so costs some shadow draws. That is the price of the cascades
+  covering both eyes at all.
+- `shadow_update_every_frame` (off) would defeat the engine's `2^L` cascade update amortization and
+  multiply the shadow render cost. It is a flicker diagnostic; leave it off.
+
+The related item — "roughly 450 instanced draws per frame issued outside the G-buffer range (the
+shadow-pass families)" — is the same answer. Those are issued once per frame under the collapse. The
+collapse's draw and viewport detours are gated on `in_gbuffer_range()`, which is raised only for
+`first >= RP_Z_OCCLUDERS`, so no prepass draw is instance-doubled or eye-split. The only thing that
+leaks into them is a patched shader's unconditional `SV_ViewportArrayIndex` write, which
+`single_pass_uniform_viewport_slots` (on) already neutralises. There is no submission saving there
+either: they are correctness surface, not duplicated work.
 
 ## Known gaps
 

@@ -56,7 +56,7 @@ Its larger win is on the CPU, and the compositor's 72 Hz cap hides it: frame tim
 
 Ordered by expected payoff.
 
-**Submission.** This is where the frame is going, so it is where the wins are. Single-pass stereo is the right lever and has more to take: roughly 450 instanced draws per frame are still issued outside the G-buffer range (the shadow-pass families), and `PreDraw` at 2.16 ms is now the second-largest GPU item and entirely outside the collapse.
+**Submission.** This is where the frame is going, so it is where the wins are. Single-pass stereo is the right lever, but not on the two items that look most inviting. `PreDraw` at 2.16 ms is the second-largest GPU item and sits outside the collapse — but the collapse runs one dispatch, and `PreDraw` runs once per dispatch, so it is already issued once per frame and there is nothing there to collapse. The same goes for the ~450 instanced draws issued outside the G-buffer range (the shadow-pass families). Both are the game's own baseline cost, and the 2.29 ms / 2.25 ms pair above is the measurement that says so: halving the dispatch count barely moves `PreDraw`. See "Why `PreDraw` is outside the collapse" in [`single-pass-stereo.md`](single-pass-stereo.md). What is left on the submission side is the geometry that the collapse still re-issues per eye rather than instance-doubling.
 
 **Fill rate, for the configurations this hardware does not represent.** Higher-resolution headsets and weaker GPUs will bind on fill where this machine does not, and the render is noticeably soft at 1.0x, so resolution wants to go *up*. The asymmetry above makes that affordable: extra pixels cost post-chain time, not geometry time.
 

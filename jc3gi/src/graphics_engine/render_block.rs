@@ -1764,8 +1764,18 @@ impl WaterBoxRenderBlock {
     /// translation — on **vertex slot 2, registers 0..3** first. It stages no view-projection; the
     /// screen-lookup matrix is whatever
     /// [`WaterBoxRenderBlockType::Setup`](crate::graphics_engine::render_block::WaterBoxRenderBlockType::Setup) last left on vertex slot 1.
-    /// `NWater::DrawWaterBoxSurface` (`0x140_368_C70`) runs the same body inline over every visible
+    /// [`DrawWaterBoxSurface`](crate::graphics_engine::render_block::DrawWaterBoxSurface) runs the same body inline over every visible
     /// registered water box.
+    ///
+    /// The `waterboxsurface` vertex shader consumes those two stagings as `cb1[0..3]` (the box
+    /// transform) and `cb1[4..7]` (the screen lookup), and takes its clip position from the *global*
+    /// vertex constant buffer instead: it adds the camera world position at `cb0[4]` to the
+    /// camera-relative transformed vertex, recovering an absolute world position, and multiplies that
+    /// by the full, translation-bearing view-projection at `cb0[0..3]` — not the translation-free
+    /// [`RenderContext::m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection)
+    /// at `cb0[29..32]` that the camera-relative model families use. It is the only member of the
+    /// water-box family that builds clip that way; the volume permutations drawn by
+    /// [`Draw`](crate::graphics_engine::render_block::WaterBoxRenderBlock::Draw) go through the block type's own staging.
     pub unsafe fn DrawSurface(
         &self,
         rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -1944,6 +1954,42 @@ impl std::convert::AsRef<WaterHighEndRenderBlockType> for WaterHighEndRenderBloc
 impl std::convert::AsMut<WaterHighEndRenderBlockType> for WaterHighEndRenderBlockType {
     fn as_mut(&mut self) -> &mut WaterHighEndRenderBlockType {
         self
+    }
+}
+pub const DrawWaterBoxSurface_ADDRESS: usize = 0x140368C70;
+/// Draws every registered water box's surface grid, under the water-box manager's critical section:
+/// for each box, frustum-culls it against `CCameraManager::GetRenderCamera()`, stages the box
+/// transform — `CMatrix4f::Scaling` by the box half-extents, with the translation set to the box
+/// centre minus the render context's camera world position — on **vertex constant-buffer bank 2,
+/// registers 0..3**, and issues the grid as a plain [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed) (162 primitives, or 6 in the
+/// manager's simplified mode). Inlined from
+/// [`WaterBoxRenderBlock::DrawSurface`](crate::graphics_engine::render_block::WaterBoxRenderBlock::DrawSurface), whose doc records the
+/// clip path the `waterboxsurface` shader builds from it. Called by
+/// [`NvWaterHighEndRenderBlock::Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw) once the ocean quadtree is
+/// down.
+pub unsafe fn DrawWaterBoxSurface(
+    rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        ) = ::std::mem::transmute(DrawWaterBoxSurface_ADDRESS);
+        f(rc)
+    }
+}
+pub const SetupWaterBoxSurface_ADDRESS: usize = 0x140355120;
+/// Binds the water-box surface state ahead of [`DrawWaterBoxSurface`](crate::graphics_engine::render_block::DrawWaterBoxSurface): under the
+/// same critical section, and only when at least one box is registered, it fetches the shared
+/// [`WaterBoxRenderBlockType`](crate::graphics_engine::render_block::WaterBoxRenderBlockType) off the first box's render block and forwards
+/// to [`SetupSurface`](crate::graphics_engine::render_block::WaterBoxRenderBlockType::SetupSurface).
+pub unsafe fn SetupWaterBoxSurface(
+    rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        ) = ::std::mem::transmute(SetupWaterBoxSurface_ADDRESS);
+        f(rc)
     }
 }
 pub const WaveWorksSimulationStep_ADDRESS: usize = 0x140336CE0;
