@@ -43,6 +43,13 @@ Comparing captures with the feature off and on, at 1.0x:
 
 The collapse works as designed — one dispatch instead of two. The GPU saving is about 0.6 ms, concentrated in the one pass it touches (`DrawGBuffer`, down 11%), which is the expected shape: the same pixels are shaded either way, so what it removes is submission overhead inside that pass. Starvation falls too, which is the right direction — fewer, larger submissions feed the GPU better.
 
+**This comparison predates the collapse's per-eye correctness work.** Since the capture, the deferred
+resolve, atmospheric scattering, and the clustered froxel light-grid build have all become per-eye by
+default (`docs/mod/single-pass-stereo.md`), each of which runs its pass a second time. The collapse's
+draw-submission win is unchanged — it is a property of the one geometry walk — but the "on" column's
+GPU numbers now understate the pass cost, and the pair wants re-measuring before either is quoted
+again.
+
 Its larger win is on the CPU, and the compositor's 72 Hz cap hides it: frame time is pinned, so headroom shows up as fewer dips rather than a smaller number. `PreDraw` (shadows and reflections) is untouched by design, since those passes fall outside the G-buffer range.
 
 ## What this implies
@@ -55,7 +62,7 @@ Ordered by expected payoff.
 
 - **Foveation** (`payload/src/vr/foveation.rs`) is the structurally correct answer, because it saves more as resolution rises and it discards pixels the optics discard anyway.
 - **FSR2** (`payload/src/fsr/`) is already integrated and trades fill for sharpness directly.
-- The obvious VR post savings are already taken: `post_fx.skip_motion_blur` and `post_fx.skip_dof` default on (both are unpleasant in VR regardless), and `stereo.skip_ssr` exists. What remains in the post chain is wanted output — tone mapping, bloom, AA, SSAO — so cutting it further is a quality decision, not free.
+- The obvious VR post savings are available but not taken by default: `post_fx.skip_motion_blur`, `post_fx.skip_dof`, and `stereo.skip_ssr` all exist and all default **off**. What remains in the post chain is wanted output — tone mapping, bloom, AA, SSAO — so cutting it further is a quality decision, not free.
 
 **Worth checking before either.** The engine renders at the runtime's recommended size while the OpenXR swapchain keeps the size it was created at, and the eye-to-swapchain step is a scaling shader blit. If those disagree, every frame pays a resample that looks exactly like softness. Both sizes are in the log (`created the stereo swapchain …` against the resize target); confirm they match at 1.0x before attributing blur to resolution.
 

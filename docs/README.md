@@ -6,7 +6,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 
 ## engine/
 
-- [rendering.md](engine/rendering.md) — the frame pipeline: camera and projection (§2), present and `BLOCK_FLIP` (§7), device and context (§8), resolution and render setups (§9), the stereo double-Draw machinery (§11–13).
+- [rendering.md](engine/rendering.md) — the frame pipeline: camera and projection (§2), buffers, the depth-reconstruction passes, the draw entry points and how shaders address the screen (§4), present and `BLOCK_FLIP` (§7), device and context (§8), resolution and render setups (§9), the stereo double-Draw machinery (§11–13).
 - [skeleton.md](engine/skeleton.md) — the Havok pose store, the model-space Joint API, frame ordering, and where to override bones.
 - [humanik.md](engine/humanik.md) — the HumanIK solver: layout, per-frame lifecycle, effector ids, and the external-target injection recipe.
 - [aim-pipeline.md](engine/aim-pipeline.md) — how the player aims and fires: the per-consumer aim target cache, shot construction, dual-wield, auto-aim, and the camera getters.
@@ -17,7 +17,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [render-setups-reinit.md](engine/render-setups-reinit.md) — the runtime resize path: `CreateRenderSetups`, its callers, what `ApplyResize` and `DestroyRenderSetups` touch, and how far the swapchain is separable from the scene targets.
 - [profiling.md](engine/profiling.md) — what survives of the engine's profiler in release, and the recommended path to per-phase CPU/GPU timings.
 - [shaders.md](engine/shaders.md) — extracting, disassembling, and patching the game's shaders; tooling in `tools/shaders/`.
-- [lighting-shadow-pipeline.md](engine/lighting-shadow-pipeline.md) — the per-frame sun-shadow and global-lighting state: the frame counters, cascade fit and amortization, `SetGlobalShaderConstants`, and the table of which GlobalConstants are parity- or counter-indexed (the flicker ping-pong surface).
+- [lighting-shadow-pipeline.md](engine/lighting-shadow-pipeline.md) — the per-frame sun-shadow and global-lighting state: the frame counters, cascade fit and amortization, the clustered froxel light grid and its consumers (§4), `SetGlobalShaderConstants`, and the table of which GlobalConstants are parity- or counter-indexed (the flicker ping-pong surface).
 
 ## mod/
 
@@ -28,7 +28,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering.md) documents
 - [swapchain-ownership.md](mod/swapchain-ownership.md) — the mod-owned back buffer: substituting the engine's swapchain-derived render setups so the scene renders per-eye while the DXGI buffers stay at the window size.
 - [input.md](mod/input.md) — how the mod taps, consumes, and injects the game's input.
 - [fsr.md](mod/fsr.md) — FSR anti-aliasing and upscaling in the stereo pipeline.
-- [single-pass-stereo.md](mod/single-pass-stereo.md) — rendering both eyes in one geometry walk into a double-wide target: the shader rewrites, the routing, and the configuration.
+- [single-pass-stereo.md](mod/single-pass-stereo.md) — rendering both eyes in one geometry walk into a double-wide target: the shader rewrites, the routing, the four ways content goes wrong under the collapse and what fixes each, and the configuration.
 - [single-pass-render-blocks.md](mod/single-pass-render-blocks.md) — the per-render-block record of what single-pass stereo needs from each, and what it took to get there.
 - [far-field.md](mod/far-field.md) — the monoscopic far field (issue #32): identifying the far-regime scene work and sharing it between eyes.
 - [foveation.md](mod/foveation.md) — static foveated rendering (issue #29): the stencil radial-density-masking design, the depth-stencil-state seam, and the build plan.

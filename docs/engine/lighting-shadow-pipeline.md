@@ -64,6 +64,72 @@ There is no dynamic sun-occlusion query feeding the shadow strength. The whole-t
 
 `CRenderBlockDeferredLighting::DrawClustered` (`0x14013CFD0`, `RP_DEFERRED_LIGHTS` = `0x5C`) does the clustered light assignment and the deferred combine into MainColor. It reads the per-view constants out of the **render context** `a2` (light counts at ctx `+0x3E8`/`+0x3F8`, camera position at ctx `+0x288`, projection scalars at ctx `+0x2FC`/`+0x310`/`+0x314`), binds the global CB (`SetFragmentProgramConstantBuffer 0 = a2[101]`), and calls `CLightManager::SetupLightingTextures`. It consumes the GlobalConstants and the shadow atlas the previous stages staged; it does not itself select frame-indexed state. The sun contribution and cascade sampling ride the GlobalConstants block (§5).
 
+### 4.1 How the froxel grid is built
+
+Local lights are assigned to a **64-pixel tile lattice over the framebuffer**, `Tx = m_DisplayWidth / 64` by `Ty = m_DisplayHeight / 64` tiles by 64 depth slices. `DrawClustered` builds it in two phases before the deferred resolve.
+
+**Phase 1, light assignment.** Binds `RenderContext + 0x3C8` as the render setup — a target one texel per tile, arrayed over light chunks — then:
+
+```c
+Graphics::Clear(ctx, 0x3C, {1,1,1,1}, ...);                      // ClearRenderTargetView on every colour RT
+Graphics::SetVertexProgramConstants(ctx, 2, 0, &view_rows, 4);   // lightassignment VS  cb2.ViewMatrix
+Graphics::SetGeometryProgramConstants(ctx, 0, 0, M, 4);          // lightassignment GS  cb0.ProjMatrix
+Graphics::SetFragmentProgramConstants(ctx, 1, 0, tile_bounds);   // lightassignment PS  cb1  (2 vec4s)
+Graphics::SetBlendEnable(ctx, 1); SetBlendEquation(ctx, 4, 4); SetBlendFunc(ctx, 2, 2, 2);
+Graphics::DrawIndexedInstanced(ctx, nullptr, 0xF0, point_light_count);   // sphere proxies
+Graphics::DrawIndexedInstanced(ctx, nullptr, 0x30, spot_light_count);    // cone proxies
+```
+
+where `M = m_ProjectionF · T(+1,-1,0) · Scaling(Tx/ceil(Tx), Ty/ceil(Ty), 1) · T(-1,+1,0)` — the projection plus the NDC nudge that snaps the grid to whole tiles when the display size is not a multiple of 64.
+
+The `cb2` view matrix comes from `RenderContext::m_View` (`+0x18`) with its translation row forced to `(0,0,0,1)`, over light positions the CPU has already biased by `RenderContext::m_RenderCameraPosition` (`+0x288`, the main render camera's world position, distinct from `m_CameraPosition` at `+0x218` which follows whichever camera the pass draws with). The light-assignment vertex shaders (`sh_0090` point, `sh_0092` spot) end with `add o0.xyz, r0.xyzx, cb2[3].xyzx`, so `cb2` row 3 *is* the translation the engine bothers to zero.
+
+The geometry shader (`sh_1483`) emits `SV_RenderTargetArrayIndex` from each light's packed chunk index and passes the proxy triangle's three view-space vertices down as packed f16. The pixel shader (`sh_0572`) reconstructs them and tests them against the tile's frustum, derived affinely from its own pixel coordinate:
+
+```
+cbuffer PerFrameConstants {          // cb1 -- 8 floats
+  float scale_x, bias_x0, bias_x1, dummy_x;
+  float scale_y, bias_y0, bias_y1, dummy_y;
+}
+dcl_input_ps_siv linear noperspective v0.xy, position
+mad r1.xz, v0.xxxx, cb1[0].xxxx, cb1[0].yyzy     // tile x max/min frustum bound
+mad r4.xy, v0.yyyy, cb1[1].xxxx, cb1[1].yzyy     // tile y max/min frustum bound
+```
+
+Because `SV_Position` is the absolute render-target coordinate (rendering §4.3), `v0.x` is the absolute tile index plus `0.5`.
+
+**Phase 2, the fill.** Binds `RenderContext + 0x3B8` as the render setup, binds phase 1's output as a texture (`RenderContext + 0x3C0`), uploads the four light-chunk counts on `cb1` (`count = 1`), and issues `Graphics::Draw(ctx, nullptr, 0xC0)`. Its geometry shader (`sh_1484`) turns each of the 192 vertices' 64 primitives into a fullscreen triangle with `SV_RenderTargetArrayIndex = SV_PrimitiveID`, one pass over each of the 64 depth slices. Each output texel reads only its own tile's chunk entries, so this phase is entirely per-tile-local.
+
+**Then the resolve** — `SetupLightingTextures`, `PerspectiveFovInverse` (rendering §4.1), and a fullscreen `Graphics::Draw(ctx, nullptr, 3)`.
+
+Three properties of the build fall out and are worth stating explicitly, because they determine what a partial rebuild can and cannot do: the phase-1 clear is viewport- and scissor-independent and covers the whole target; the assignment blend is commutative, so disjoint tile sets accumulate independently of order; and the fill is per-tile-local.
+
+### 4.2 Who reads the grid, and when
+
+The grid is **live well outside `DrawClustered`**. The engine binds it through exactly one function pair: `CLightManager::SetupLightingTextures` (`0x1400B9910`) is called only from `DrawClustered`, and `CLightManager::SetupForwardLightingResources` (`0x1400B98B0`) is the forward-lit path; both delegate to `CRenderBlockType::SetupLightingTextures` (`0x140101160`), which does the binding. `SetupForwardLightingResources`' callers are the complete consumer list — 20 render-block types:
+
+| Render-block type `Setup` | Address | | Render-block type `Setup` | Address |
+|---|---|---|---|---|
+| `CRenderBlockBavariumShield` | `0x140103750` | | `CRenderBlockCharacter` | `0x14012A890` |
+| `CRenderBlockBuildingJC3` | `0x1401044C0` | | `CRenderBlockCharacterSkin` | `0x14012BA70` |
+| `CRenderBlockCarLight` | `0x140105B90` | | `CRenderBlockWindow` | `0x14012D7A0` |
+| `CRenderBlockCarPaintMM` | `0x140106DB0` | | `CRenderBlockGeneralMkIII` | `0x14012FE40` |
+| `CRenderBlockGeneral` | `0x14010E950` | | `CRenderBlockMaterialTune` | `0x140167FB0` |
+| `CRenderBlockGeneralJC3` | `0x14010F8A0` | | `CRenderBlockMeshParticle` | `0x140168A60` |
+| `CRenderBlockGeneralMaskedJC3` | `0x140110160` | | `CRenderBlockProp` | `0x14016ACC0` |
+| `CRenderBlockLayered` | `0x1401133C0` | | `CRenderBlockRoadJunction` | `0x14016C420` |
+| `CRenderBlockSkidmarks` | `0x14016E4E0` | | `CRenderBlockFoliage` | `0x1401847F0` |
+| `CRenderBlockWeather` | `0x14039FBA0` | | `CRenderBlockParticle` | `0x14047ED00` |
+
+The shader side agrees: 172 of the 1551 blobs in `Shaders_F` bind `LightLookup` (`texture3d`, `uint4`, `t31`). Seven are the `deferred_clusteredlighting*` resolves; the rest are the forward-lit families — every `*_blend` material permutation, `vegetationfoliageblend*`, `windowsimple*`/`windowdamage`, `skidmarks_normal_diffuse`, and ~90 `particleeffect*` permutations. They index it by the **absolute** framebuffer tile (rendering §4.3).
+
+`RP_DEFERRED_LIGHTS` is pass 92 and `RP_LAST_GBUFFER` is 85, so `DrawClustered` runs after the whole G-buffer range — and the consumers straddle it:
+
+- **Before.** `CRenderBlockFoliage` draws in `RP_VEGETATION_OPAQUE` (70), inside the G-buffer range, and its `Setup` calls `SetupForwardLightingResources` unconditionally; `CRenderBlockRoadJunction` is likewise `RP_ROAD_JUNCTION` (78) / `RP_ROAD_JUNCTION_OPAQUE` (80). **These read the grid the frame before it is built.**
+- **After.** The transparent and particle families: `RP_SKIDMARKS` (111), `RP_MODELS_TRANSPARENT` (120), `RP_VEGETATION_TRANSPARENT` (121), `RP_MODELS_GLINT` (124), `RP_PARTICLE_RIBBON` (129), `RP_PARTICLE_LOWRES` (131), `RP_WINDOW_DECALS` (133), `RP_MODELS_REFRACT` (134), `RP_PARTICLE_GENERAL` (135), `RP_PARTICLE_LOWRES_OVERLAY` (137).
+
+Nothing binds or unbinds `t31` outside those two functions, so a grid left half-valid stays half-valid for the rest of the frame *and* into the next one.
+
 ## 5. `SetGlobalShaderConstants` (`0x140185740`) — the centerpiece
 
 Called per dispatch (`HandleDrawThreadTask+0x166`) after `SetRenderContextCamera`. It assembles the `cb0` GlobalConstants block into a staging region on `CRenderEngine` (dword fields from ~`this[1600]` on; the block is later bound as the global vertex/fragment CB). It runs only when the light manager singleton is present (`qword_142ED0E70`), first calling `CLightManager::ApplyDynamicLights` + `UpdateRenderContext`. What it stages, grouped:
@@ -87,7 +153,7 @@ Called per dispatch (`HandleDrawThreadTask+0x166`) after `SetRenderContextCamera
 - **Full (translation-bearing) view-projection** `memcpy(this+6428, RenderCamera->m_ViewProjectionF, 0x40)` (render cam `+0x194`) — drives screen-space / non-geometry work (rendering §2.4). Off-axis, so **per-eye** in stereo.
 - **Camera world position** from `RenderCamera->m_TransformF` translation row (render cam dwords `+29..31` and `+33..35`, i.e. `m_TransformF` rows 2/3) → `this[1623..1630]`, `this[1819..1830]`. **Per-eye.**
 - **Depth-unproject constants** from the render camera near/far: `1/m_Near` (cam `+0x594`) and `1/m_Far` (cam `+0x598`) → `this[1841] = 1/near − 1/far`, `this[1842] = 1/far`. Stable within a frame.
-- **Inverse RT size** from `GetDeviceInfo`: `1/width`, `1/height` → `this[1837]`, `this[1838]`.
+- **Inverse display size** from `Graphics::GetDeviceInfo`: `1/width`, `1/height` → `this[1837]`, `this[1838]`. `m_FPGlobalConstData` is at `+0x1C2C`, so dword 1837 is byte `0x1CB4` — row 8, lane `.z`. The fragment `GlobalConstants` cbuffer therefore carries `cb0[8].zw = (1/DisplayWidth, 1/DisplayHeight)`, sourced from `Graphics::SDeviceInfo` and **not** from the bound render setup or the viewport. This is the one screen-size constant the shaders have; see rendering §4.3 for how they use it.
 
 ### 5.4 Wetness and fog
 
@@ -119,7 +185,7 @@ Every per-frame global lighting/shadow value the material shaders consume, and w
 | Full view-projection (`m_ViewProjectionF`) | `SetGlobalShaderConstants+0x757` | render cam `+0x194` → CB `this+6428` | per-eye |
 | Camera world position | `SetGlobalShaderConstants` | render cam `m_TransformF` translation → CB `this[1623..1630/1819..1830]` | per-eye |
 | Depth-unproject (1/near, 1/far) | `SetGlobalShaderConstants+0x45F` | render cam `m_Near`/`m_Far` (`+0x594`/`+0x598`) | stable within frame |
-| Inverse RT size | `SetGlobalShaderConstants+0x67F` | `GetDeviceInfo` | stable |
+| Inverse display size (`cb0[8].zw`) | `SetGlobalShaderConstants+0x67F` | `GetDeviceInfo` → CB `this[1837/1838]` | stable |
 | Wet properties block | `SetGlobalShaderConstants+0x538` | `GetWetProperties(ctx)` → CB `this+7852` | stable |
 | Fog colour / ramps / fog light dir | `SetFog` | `CRenderEngine this[1334..1365]` → CB `this[1663..1982]` | stable (time-of-day) |
 | Dynamic light list | `CopyLightsToUpdate` | `m_FrameLightInfo[3]`, `m_LightLookup[3]` | **counter** (3-slot ring) |

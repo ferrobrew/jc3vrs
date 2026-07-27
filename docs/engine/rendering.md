@@ -397,6 +397,32 @@ its inputs. Two of the seven sample the sun shadow cascade over the reconstructe
 reconstruction basis is governed by those two together, and fixing one alone leaves the other
 painting over it.
 
+### 4.2 Draw entry points, and the D3D11 slots they reach
+
+Every render block submits its geometry through one of the `Graphics::` draw wrappers (`draw.pyxis`), and each wrapper is a thin cover over a single `ID3D11DeviceContext` vtable slot. **Two of the wrapper names do not describe the D3D11 method they call** — the release symbol table misreports these functions' argument counts and types as well, so the names cannot be trusted on their own:
+
+| Wrapper | Address | `ID3D11DeviceContext` method | Vtable slot |
+|---|---|---|---|
+| `Graphics::DrawIndexed` | `0x141967720` | `DrawIndexed` | 12 |
+| `Graphics::Draw` | `0x141967680` | `Draw` | 13 |
+| `Graphics::DrawIndexedInstanced` | `0x141962E80` | `DrawIndexedInstanced` | 20 |
+| `Graphics::DrawInstanced` | `0x141962F10` | **`DrawIndexedInstancedIndirect`** | 39 |
+| `Graphics::DrawIndexedInstancedIndirectNoMutex` | `0x141962FF0` | **`DrawInstancedIndirect`** | 40 |
+
+The two indirect slots are how the GPU-driven geometry submits: `CRenderBlockTerrainPatch::Draw`'s near tessellating passes (56 and 57) go through slot 40, and `CRenderBlockFoliage::Draw`'s dominant grass path through slot 39. Both blocks also have plain `DrawIndexed` paths for their other passes, so a block is not characterized by one entry point (see `docs/mod/single-pass-render-blocks.md` for the per-block routing).
+
+`Graphics::Draw` (slot 13) is not exclusively the fullscreen-pass entry point, though that is its dominant use. Several render blocks submit ordinary world geometry non-indexed through it — evidenced so far in `RP_ROAD_LAYERS` (`0x4F`, `CRenderBlockSplineRoad`), `RP_DECALS` (`0x52`, the four `CRenderBlockDecal*` blocks), `RP_SKIDMARKS` (`0x6F`), and `RP_WINDOW_DECALS` (`0x86`). A fullscreen triangle and a decal box are indistinguishable at the draw call; only the pass tells them apart.
+
+### 4.3 How shaders address the screen
+
+Three idioms are in use, and they agree with one another in the stock game only because it renders one view into a target the size of the display.
+
+1. **Absolute texel fetch** — `ftoi SV_Position.xy` followed by `ld`. The deferred and forward G-buffer readers use this, as does the clustered light-grid lookup (`tile = ftoi(SV_Position.xy) >> 6`). `SV_Position` in a pixel shader is the absolute render-target coordinate: `RSSetViewports`' `TopLeftX`/`TopLeftY` are already included. This addresses the **target**.
+2. **Normalized by the inverse display size** — `mul rN.xy, v0.xyxx, cb0[8].zzwz`, where `cb0[8].zw = (1/DisplayWidth, 1/DisplayHeight)` is staged by `SetGlobalShaderConstants` from `Graphics::SDeviceInfo` and **not** from the bound render setup or the viewport (see `lighting-shadow-pipeline.md` §5.3). `deferred_clusteredlighting_full`'s reflection and SSR lookups build their UV this way, and so does the WaveWorks `nvwater*` family. This also addresses the **target**.
+3. **A CPU-staged projective UV** — the legacy, non-WaveWorks `Water*` / `WaterBox*` family (selected at the lower water-quality settings) receives a world-to-screen-UV matrix on vertex `cb1` from its block type's `Setup`: the render context's view-projection post-multiplied by an NDC-to-UV bias, so the `x·0.5 + w·0.5` is folded in on the CPU. The vertex shader passes the result on as a projective `TEXCOORD1` and the pixel shader divides by `w`. That UV is normalized over the **viewport**, not over the target. `WaterHighEndRenderBlockType::Setup` stages it at `cb1[1..4]` and the water-box type at `cb1[4..7]`; both are pinned in `render_block.pyxis`. Exactly 9 of the 961 pixel shaders in `Shaders_F` bind `RefractionMap`, and they are this family.
+
+The distinction is invisible while the viewport covers the whole target and load-bearing as soon as it does not.
+
 ---
 
 ## 5. Per-frame-once / single-use state (double-dispatch hazards)
@@ -479,6 +505,7 @@ The mod currently takes the disable path: `config.stereo.force_smaa_1x` (default
 ## 9. Viewport / render resolution
 
 - **Viewport is set per render-setup, not from a global.** `Graphics::SetRenderSetup`, when binding RTs, sets the viewport to the **bound color/depth target's own dimensions** (`vp = {0,0,target->m_Width, target->m_Height, 0, 1}; RSSetViewports(...)`). So per-pass viewport = bound RT size. (`Graphics::SetViewport` -> `RSSetViewports` exists for explicit sets.)
+- **Not every pass draws at scene resolution.** Several passes redirect their draws to a reduced-resolution off-screen target: a shared quarter-resolution buffer (half per axis) that the low-resolution clouds, the low-resolution particles, and the volumetric spot-light cones all render into, plus the downsampled depth buffer beside it. Their composes then stretch the whole low-resolution texture over the whole scene target with a baked UV, and blend rather than overwrite. So the viewport in force mid-frame is not always the scene's, and anything deriving a screen region has to follow the bound target rather than the scene.
 - **Render resolution source:** every scene RT in `CreateRenderSetups` is sized from its `SDeviceInfo` *parameter*'s `m_DisplayWidth`/`m_DisplayHeight`, which `ApplyResize` fills from `device->m_DeviceInfo`. Some derived RTs are `>>1` (half-res). `m_BackBufferLinear` is the exception: it is not sized at all, but built as a format alias of swapchain buffer 0, so it inherits the swapchain's dimensions (§7, and `docs/engine/render-setups-reinit.md` §4). The two coincide in the stock game because the same `ApplyResize` drives both.
 - **No dynamic resolution / render-scale** found — RTs are allocated at full display resolution; no scale multiplier between display size and RT size.
 - **Per-eye resolution:** because all scene RT sizes flow from the device info through `CreateRenderSetups`, setting the device display size to the per-eye render resolution and re-running `CreateRenderSetups` resizes the whole scene chain, and viewports follow automatically from the bound RT sizes — no per-pass viewport patching. `m_BackBufferLinear` and the two back-buffer render setups do not follow, because they derive from the swapchain rather than the device info; the mod substitutes its own (`docs/mod/swapchain-ownership.md`).
@@ -569,4 +596,7 @@ Two viable structures (§11): **(A)** run the whole `GraphicsEngine::Draw` twice
 3. **`unk_142E5B664` / `unk_142E5B670` consumers** (the `%3` ring values): not traced; presumed triple-buffered per-frame resources. Advanced once/frame in the prologue, so benign for double-dispatch.
 4. **TAA history RT binding + EffectInfo VP-history struct offset** (§5.7): the camera-side snapshot chain is verified; the downstream history RT names were not traced.
 5. **Reflection-proxy RT formats / `VfxDepthCopy_%d` count**: names confirmed, formats not.
-6. **Camera-relative per-object combine site (§2.4)**: the mechanism is established from `SetRenderContextCamera` storing a translation-free OffsetVP (`CalculateOffsetViewProjectionMatrix`) alongside a separate `CameraPosition` (from `m_TransformF`'s translation) — there is no other reason to keep both. The literal per-object `world.row3 -= CameraPosition` multiply in the model render block was not line-verified (a claimed address was a misattribution); not needed for the camera-side fix.
+6. **Which draw entry point WaveWorks uses** (§4.2). `CNvWaterHighEndRenderBlock::Draw` (`0x14037AE00`) hands a raw `ID3D11DeviceContext` to `GFSDK_WaveWorks_Quadtree_DrawD3D11`, an import from `gfsdk_waveworks.win64.dll`, so which of slots 12/20/39/40/21 the water geometry lands on is not visible in the IDB. A per-slot counter keyed to the water pass ids, or a frame capture, settles it in one run.
+7. **Whether WaveWorks' savestate restore stomps the viewport.** `GFSDK_WaveWorks_Savestate_RestoreD3D11` restores rasterizer state around the water draws through the same context the engine draws on; what exactly it puts back is not determinable from the IDB.
+8. **Whether `UVScale` is ever non-unity.** The fullscreen reconstruction vertex shaders build their G-buffer UV as `o1 = (v0 · 0.5 + 0.5) · cb1[5].xy` (`UVScale`), which is only a no-op while that constant is `(1, 1)`. Nothing has been found that writes it otherwise, but the writer was not traced.
+9. **Camera-relative per-object combine site (§2.4)**: the mechanism is established from `SetRenderContextCamera` storing a translation-free OffsetVP (`CalculateOffsetViewProjectionMatrix`) alongside a separate `CameraPosition` (from `m_TransformF`'s translation) — there is no other reason to keep both. The literal per-object `world.row3 -= CameraPosition` multiply in the model render block was not line-verified (a claimed address was a misattribution); not needed for the camera-side fix.

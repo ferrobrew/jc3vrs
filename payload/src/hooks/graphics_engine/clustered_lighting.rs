@@ -50,7 +50,8 @@
 //! frame early, in `RP_VEGETATION_OPAQUE`.
 //!
 //! [`StereoConfig::single_pass_clustered_per_eye`](crate::config::StereoConfig) makes the assignment
-//! per-eye too. Per run:
+//! per-eye too. Per run (see `docs/engine/lighting-shadow-pipeline.md` section 4.1 for how the engine
+//! builds the grid, and `docs/mod/single-pass-stereo.md` for the split):
 //!
 //! 1. the light-assignment target's viewport is narrowed to this eye's half of the *tile* grid, which
 //!    is a different half-width from the framebuffer's, so the collapse's own viewport helpers cannot

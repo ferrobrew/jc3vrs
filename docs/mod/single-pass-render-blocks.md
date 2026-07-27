@@ -77,11 +77,14 @@ general path or need a bucket-b reproject.
 | 59, 61 | `DrawIndexed` head range `[0, split)` | Same. |
 | 14, 38–40 | `DrawIndexed` full range | Depth/other. |
 
-**Wiring — not built.** The `DrawIndexed` passes ride the general path when their VS is cb0-remapped.
-The near passes 56/57 would need the bucket-(d) intercept: detour `Draw`, and for each eye bind the
-eye's half-viewport and override the transform for that eye (cb13-both-slots if the VS is cb0-remapped,
-otherwise reproject the bound cb1 WVP into a mod scratch buffer), then re-issue. Nothing does this
-today; the near passes stay double-drawn.
+**Wiring — no block intercept, but the near passes are covered.** The `DrawIndexed` passes ride the
+general path when their VS is cb0-remapped. The near passes 56/57 have no bucket-(d) block intercept;
+instead `single_pass_indirect_per_eye` (on by default) detours the two GPU-indirect context-vtable
+slots wholesale and re-issues any such draw once per eye with both viewport slots pinned to that eye's
+half. That makes the near patches present and correctly sized in both eyes without parallax — before
+it, they inherited whatever viewport the previous draw left bound, usually the full double-wide one,
+which stretched them 2x horizontally and made them appear to slide across the world. A block-level
+intercept overriding the transform per eye is what would add the parallax; it is not built.
 
 ## VegetationBark
 
@@ -145,7 +148,14 @@ The cheaper shape — reproject the VS and double each `m_InstDrawParams` slot's
 also need the `SV_InstanceID >> 1` consumer rewrite on the CPU-instanced path so the doubled instance
 id still indexes the original instance.
 
-**Black-in-VR.** Foliage is forward-lit with clustered lighting, not deferred — the type `Setup` binds
+**Black-in-VR — the clustered-grid suspect was the right one.** Under the collapse the grid was built
+with one eye's projection against the double-wide tile count, so every light landed in the wrong tiles
+and the forward-lit families were lit from an empty lookup. `single_pass_clustered_per_eye` (on by
+default) fixes it; see [single-pass-stereo.md](single-pass-stereo.md) and engine
+`lighting-shadow-pipeline.md` §4. The original two-suspect analysis follows, kept for the resource
+map.
+
+Foliage is forward-lit with clustered lighting, not deferred — the type `Setup` binds
 the clustered-light constant buffer (FS cb3), the light-cluster index texture (FS t15), GI, reflection,
 and sun-shadow cascades to the fragment stage. From `CRenderBlockType::SetupLightingTextures`
 (`0x140101160`): the sun-shadow cascades bind at **FS t44/t45** (`0x2C`/`0x2D`) from

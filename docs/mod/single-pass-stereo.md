@@ -11,8 +11,9 @@ Single-pass is opt-in and off by default. It is inert without the DXVK viewport-
 
 ## The technique
 
-**Instance-doubled, double-wide, viewport-routed** — for scene geometry; the fullscreen lighting and
-post passes still run once over the whole target.
+**Instance-doubled, double-wide, viewport-routed** — for scene geometry. The fullscreen passes run
+once over the whole target by default; the ones that reconstruct position from depth are re-issued
+per eye under a scissor mask instead (see "Four ways content goes wrong under the collapse").
 
 - **Routing.** A vertex shader writes `SV_ViewportArrayIndex` directly — the D3D11.3
   `VPAndRTArrayIndexFromAnyShaderFeedingRasterizer` capability, which DXVK reports and compiles (gated
@@ -305,9 +306,151 @@ viewport follows the RT size automatically. The **XR swapchain stays per-eye wid
 capture textures are sized to half the back buffer, so the collapse's capture split copies each
 full-width half straight into its eye texture with no squish.
 
+## Four ways content goes wrong under the collapse
+
+Once the two geometry walks became one, a set of things stopped tracking the world and slid across the
+screen as the camera moved: sun shadows, terrain patches, foliage, water, decals, clouds and smoke.
+They look like one bug and are four, sharing only a shape — a per-eye quantity paired with a
+full-width one. Each has its own seam and its own flag.
+
+They also share a signature worth recognising, because it is what makes the symptom *sliding* rather
+than a static mis-scale: a fixed 2x horizontal scale error is a **2x horizontal motion gain**. Content
+rendered or sampled at the double-wide scale sweeps past at twice the camera's rate, which reads as
+sliding over the world.
+
+**Note on what is not the mechanism.** The obvious hypothesis — that some engine constant holds the
+wrong screen size — was investigated and is wrong. The engine has exactly one screen-size constant,
+`cb0[8].zw`, derived from the device display size, which the mod's `ResizeBuffers` substitute already
+sets to the double-wide width; the buffers it addresses are double-wide too, so it is self-consistent,
+as are the `ftoi SV_Position` texel fetches (engine `rendering.md` §4.3). Do not go looking there
+again.
+
+### 1. Draws that never get an eye viewport bound
+
+The collapse moves the eye split from pass level to draw level, so a draw arriving on an entry point
+nothing detours inherits whatever the two viewport slots happen to hold — dominated by
+`CollapseViewport::Full`. Two families arrive that way:
+
+- **GPU-indirect draws** (`DrawIndexedInstancedIndirect` slot 39, `DrawInstancedIndirect` slot 40;
+  engine `rendering.md` §4.2). The near tessellating terrain patches and the dominant foliage path
+  submit here. Fixed by `single_pass_indirect_per_eye` (**on**): re-issue once per eye with both
+  viewport slots pinned. The instance counts live in a GPU buffer and cannot be doubled, so re-issue
+  is the only option — the geometry is present and correctly sized in both eyes, without parallax.
+- **Non-indexed world geometry** (`Draw`, slot 13). Slot 13 is overwhelmingly the fullscreen-pass
+  entry point, so the collapse resets to the full viewport for it — which stretches the decal, road
+  and skidmark blocks that also submit there across both halves. Skidmarks are the sharp case: their
+  vertex shader *is* patched and the blanket reset defeated the mod's own routing. Fixed by
+  `single_pass_slot13_per_eye` (off), routing an allowlist of passes through `instanced_per_eye`. It
+  is an allowlist, not a heuristic, because a fullscreen triangle and a decal box are identical at the
+  draw call, and misclassifying a fullscreen pass is a visibly wrong frame while missing a geometry
+  pass is only the status quo.
+
+### 2. One eye-0 reconstruction basis over the whole double-wide target
+
+A fullscreen pass is one draw with one constant buffer, so a pass that rebuilds world position from
+depth gets one basis while its quad spans both halves: the left half gets eye 0's frustum compressed
+2x horizontally and the right half a basis unrelated to it. The error is a function of the view
+matrix, so it turns with the camera — and the two passes that sample the sun cascade over the
+reconstructed positions are what made the shadows slide.
+
+The consumer set is closed at seven (engine `rendering.md` §4.1), and each is now its own flag:
+`single_pass_reconstruct_per_eye` and `single_pass_atmospheric_per_eye` (both **on** — splitting only
+the deferred resolve leaves atmospheric scattering painting the mistake back over it),
+`single_pass_ssao_per_eye`, `single_pass_ssr_per_eye`, `single_pass_subsurface_per_eye`, and
+`single_pass_dof_per_eye` (all off, each with its own hazard; DoF logs that it declines rather than
+silently doing nothing). `DrawPassThrough` needs nothing — it is reached only under wireframe.
+
+The shared machinery is `reconstruction::split_fullscreen_pass`, which holds the preconditions and the
+demotion rule. Each run is masked with a **scissor**, not a half viewport, so the quad keeps its
+one-to-one NDC-to-pixel mapping and its G-buffer sampling stays correct; the per-eye basis comes from
+folding the full-target-NDC to eye-NDC remap into the substituted inverse. The demotion rule matters:
+a run that never masked has already drawn the whole target, so the split stops after one run rather
+than double-exposing an accumulating pass.
+
+`CRenderBlockSSDecal` has the same defect without being a `PerspectiveFovInverse` consumer — its
+type-level `Setup` builds a basis inline into fragment `cb1[0..3]` and its pixel shader derives the
+depth-fetch UV projectively from its own clip position. `single_pass_ssdecal_per_eye` (off) fixes both
+halves together: the block is re-issued per eye restaging that eye's basis, and the 12 `ssdecal` pixel
+shaders get one spliced instruction biasing the depth UV into that eye's half. The same `uv` feeds the
+reconstruction matrix (which wants the per-eye value) and the depth fetch (which wants the double-wide
+one), so they cannot be corrected as one.
+
+### 3. A projective screen UV in per-eye space against a double-wide buffer
+
+The legacy `Water*`/`WaterBox*` family takes its reflection, refraction, and depth UV from a
+CPU-staged matrix, projectively, normalized over the **viewport** while the buffers it indexes are the
+whole target (engine `rendering.md` §4.3). `single_pass_water_uv_per_eye` (off) composes one more bias
+per eye, `u' = (u + eye) · 0.5`, onto the rows the block type staged. Because the type stages them
+once per pass, ahead of the `Draw` being re-issued, the fix restages the rows per eye rather than
+transforming an upload in flight, and puts the type's own rows back afterwards. It is deliberately
+*not* reprojected by `M_eye`: the geometry still rasterizes from the collapsed centre view, so the UV
+has to describe where that geometry actually landed. Default off because the affected family may not
+be on screen at all at the water-quality setting in use, which makes an A/B the only way to tell the
+fix from a no-op.
+
+> **A correction worth keeping.** This mechanism was first attributed to `NvWaterHighEnd`, and the fix
+> was first designed as a DXBC rewrite of nine water pixel shaders with eye parity plumbed into a
+> pixel shader. Both were wrong. `NvWater*` builds its UV from `SV_Position × cb0[8].zw`, which is
+> already consistent under double-wide; the projective-UV family is the legacy non-NV one. And the
+> defect lives entirely in a CPU-staged matrix, so no bytecode rewrite and no pixel-shader eye parity
+> is needed. `NvWater*` has a different defect — its vertex shader writes clip from a baked
+> model-view-projection in its own constant buffer, so both eyes see the collapsed centre view. Flat
+> water at the wrong depth is invisible in a screenshot and wrong only in a headset, which is why it
+> survived so long; `single_pass_nvwater_per_eye` (off) addresses it, and
+> `single_pass_ssdecal_geometry_per_eye` (off) is the same shape for the decal box.
+
+### 4. A reduced-resolution target handed the scene's viewport
+
+The collapse's viewport split was target-blind: it re-derived the eye halves from the recorded *scene*
+viewport before every draw in the range, regardless of what the engine actually had bound. Several
+passes draw into a shared quarter-resolution off-screen target (engine `rendering.md` §9), and a draw
+into a `W × H/2` target handed a `2W × H` viewport is magnified 2x about the target origin and
+cropped to a quadrant — for the right eye, whose half starts at `x = W`, clipped away entirely. That
+is the clouds-and-smoke sliding. `collapse_viewport_follows_target` (off) keeps a second record that
+is always the live bind, so the split follows the bound target. The single record could not simply be
+made to follow the engine, because it is also the scene notion and following a half-resolution post
+target would have mis-split the scene itself.
+
+The composes need no matching change and must not get one: they map the whole low-resolution texture
+over the whole target with a baked UV, so a half-and-half texture composites correctly on its own, and
+both blend rather than overwrite, so re-issuing either per eye would double-composite.
+
+## The clustered froxel grid, per eye
+
+Not a sliding defect, but the same shape and a defect in every collapsed frame: the grid is built with
+one eye's projection paired with the **double-wide** tile count, so it is twice as wide as the frustum
+it describes and every local light lands in the wrong 64-pixel tiles — for both eyes, and for the ~20
+forward-lit render-block types that sample it as well as the deferred resolve. `foliage` reads it a
+frame early, inside the G-buffer range. See engine `lighting-shadow-pipeline.md` §4.1–4.2 for how the
+grid is built and who consumes it.
+
+`single_pass_clustered_per_eye` (**on**) rides the per-eye resolve re-issue: each run narrows the
+light-assignment viewport to its own half of the tile grid, rebuilds the geometry transform from that
+eye's projection, makes the tile bounds affine in the *absolute* tile index, and suppresses the second
+run's `Graphics::Clear`. The two halves then compose, on the three properties §4.1 records — the clear
+is the only whole-target step, the assignment blend is commutative over disjoint tiles, and the fill is
+per-tile-local — so the grid ends the frame valid in **both** halves, which is what the forward
+consumers need this frame and next. Nothing is written into engine memory; every substitution is a
+constant-buffer upload or viewport/clear state the mod already intercepts.
+
+`single_pass_clustered_per_eye_light_view` (**on**) additionally assigns each eye's lights from that
+eye's position, by writing the eye's world offset into the translation row of the uploaded `cb2` view
+matrix — algebraically identical to biasing the light positions, and it needs no engine write because
+that row is exactly where the engine's own zeroed translation goes. The per-eye display canting is not
+applied, only the positional offset. It keeps its own flag because the difference may fall below the
+64-pixel tile granularity.
+
+The split **declines itself**, leaving the un-split behaviour and logging once, when the eye seam
+would not fall on a whole tile column (double-wide width not a multiple of 128), when the bound
+assignment target is not the tile grid it sized for, or when the dispatch has no lights. If eye 0
+splits but the resolve turns out not to be maskable, the grid is rebuilt whole rather than left
+half-cleared.
+
 ## Configuration
 
-All under `stereo`, all off by default.
+All under `stereo`. Off by default unless marked.
+
+### Structure
 
 | Flag | Effect |
 |---|---|
@@ -316,14 +459,50 @@ All under `stereo`, all off by default.
 | `single_pass_dual_eye` | Makes the eyes diverge: distinct per-eye `cb13`, eye-half viewports, instance doubling. On its own (no collapse, no double-wide) each eye renders into half a per-eye target — squished; a bisection step. |
 | `single_pass_collapse` | Collapses the per-eye double-draw to one `game.Draw` walk. Requires `single_pass_dual_eye`. |
 | `single_pass_double_wide` | Re-creates the scene targets at 2x per-eye width so each eye half is full resolution. Requires `single_pass_collapse` and `vr.native_resolution`. |
-| `single_pass_reproject` | Reprojects the no-`cb0` scene families (characters, props, buildings, roads) instead of leaving them double-drawn. Needs a shader reload to apply. |
-| `single_pass_terrain` | Rides the eye index through the terrain tessellation pipeline (VS → HS → DS). Needs a shader reload to apply. |
-| `single_pass_tree_impostors` | Reprojects the far-distance tree impostors. Needs a shader reload to apply. |
-| `single_pass_bark` | Per-eye re-issue of `RenderBlockBark`'s colour and depth draws. |
-| `single_pass_foliage` | Per-eye re-issue of `RenderBlockFoliage`'s draw. |
-| `single_pass_occluder` | Per-eye re-issue of `RenderBlockOccluder`'s depth prime. |
-| `single_pass_instanced_per_eye` | Per-eye re-issue of an already-instanced `DrawIndexedInstanced` with a patched shader bound. Requires the collapse. **On by default.** |
-| `single_pass_uniform_viewport_slots` | Puts both viewport slots back to one region once the G-buffer range ends, so a patched shader's instance parity is a no-op in the passes that are not eye-split. Requires the collapse. **On by default.** |
+| `single_pass_clear_range_on_dispatch` | **On.** Clears a leaked routed range on the draw thread rather than the game thread. |
+
+### Shader rewrites (need a shader reload to apply)
+
+| Flag | Effect |
+|---|---|
+| `single_pass_reproject` | Reprojects the no-`cb0` scene families (characters, props, buildings, roads) instead of leaving them double-drawn. |
+| `single_pass_terrain` | Rides the eye index through the terrain tessellation pipeline (VS → HS → DS). |
+| `single_pass_tree_impostors` | Reprojects the far-distance tree impostors. |
+
+### Per-eye re-issue of a render block
+
+| Flag | Effect |
+|---|---|
+| `single_pass_bark` | `RenderBlockBark`'s colour and depth draws. |
+| `single_pass_foliage` | `RenderBlockFoliage`'s draw. |
+| `single_pass_occluder` | `RenderBlockOccluder`'s depth prime. |
+| `single_pass_nvwater_per_eye` | The WaveWorks water blocks, whose baked model-view-projection leaves both eyes on the centre view. |
+| `single_pass_ssdecal_geometry_per_eye` | The screen-space decal box geometry, same shape. On top of `single_pass_ssdecal_per_eye`. |
+
+### Per-eye viewport and draw routing
+
+| Flag | Effect |
+|---|---|
+| `single_pass_instanced_per_eye` | **On.** Per-eye re-issue of an already-instanced `DrawIndexedInstanced` with a patched shader bound. |
+| `single_pass_indirect_per_eye` | **On.** Per-eye re-issue of the GPU-indirect draws (mechanism 1). |
+| `single_pass_slot13_per_eye` | Per-eye re-issue of non-indexed world geometry, by pass allowlist (mechanism 1). |
+| `collapse_viewport_follows_target` | Derives the eye halves from the bound render target rather than the scene viewport (mechanism 4). |
+| `single_pass_uniform_viewport_slots` | **On.** Puts both viewport slots back to one region once the G-buffer range ends, so a patched shader's instance parity is a no-op in the passes that are not eye-split. |
+
+### Per-eye fullscreen and screen-space passes
+
+| Flag | Effect |
+|---|---|
+| `single_pass_reconstruct_per_eye` | **On.** Deferred clustered-lighting resolve (mechanism 2). |
+| `single_pass_atmospheric_per_eye` | **On.** Atmospheric scattering / aerial perspective (mechanism 2). |
+| `single_pass_ssao_per_eye` | SSAO. Hazard: a temporal history advanced per invocation, snapshotted and restored across the split — but the AO generation and blur ahead of the mask still re-run unmasked. |
+| `single_pass_ssr_per_eye` | Screen-space reflections. |
+| `single_pass_subsurface_per_eye` | Screen-space subsurface skin. |
+| `single_pass_dof_per_eye` | Depth of field. Logs that it declines: its target is the quarter-resolution packed texture, and its prepass opens with non-idempotent compute dispatches that ignore the scissor. |
+| `single_pass_ssdecal_per_eye` | Screen-space decals: per-eye basis plus a spliced depth-UV bias in the 12 `ssdecal` pixel shaders (mechanism 2). |
+| `single_pass_water_uv_per_eye` | Legacy water's projective screen UV (mechanism 3). |
+| `single_pass_clustered_per_eye` | **On.** Per-eye clustered froxel light grid. |
+| `single_pass_clustered_per_eye_light_view` | **On.** Also assign each eye's lights from that eye's position. |
 
 ## Known gaps
 
@@ -332,8 +511,8 @@ All under `stereo`, all off by default.
   this.
 - **`cb0`'s projection is double-wide.** Unpatched geometry that reads `cb0` rather than `cb13`
   renders horizontally squashed under double-wide.
-- **Screen-space passes leak across the eye seam.** FSR, SSAO and SSR run once over the double-wide
-  target and sample neighbourhoods; they need a UV clamp at the seam.
+- **Screen-space passes leak across the eye seam.** FSR and the unsplit screen-space passes run once
+  over the double-wide target and sample neighbourhoods; they need a UV clamp at the seam.
 - **The 14 already-instanced shaders** need their `SV_InstanceID` consumers rewritten to
   `SV_InstanceID >> 1` to survive the doubling. The DXBC transform is offline-testable; the
   per-instance semantics are not.
