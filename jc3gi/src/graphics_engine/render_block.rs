@@ -835,8 +835,23 @@ impl std::convert::AsMut<RenderBlockTypeFogVolume> for RenderBlockTypeFogVolume 
 /// The particle render block *type* (the `CRenderBlockParticle::CRenderBlockTypeParticle` singleton):
 /// the shared state and shaders for every particle render block, including the flags that decide
 /// whether a particle draw is routed to the low-resolution particle pass.
+///
+/// **This type is never registered.** `CRenderBlockParticle::InitType` (`0x140_4AD_2D0`) constructs
+/// it, stores it in this singleton, calls its `Create`, and returns — without calling
+/// `CRenderEngine::AddType`, which every other render block's `InitType`/`RegisterType` does. So it
+/// does not appear in the global
+/// [`RenderBlockTypeRegistry`](crate::graphics_engine::render_engine::RenderBlockTypeRegistry), and anything
+/// that enumerates the registry to reach every type will silently miss it — even though
+/// `CRenderPass::DoDraw` dispatches its `IsEnabled` through the vtable exactly as it does for a
+/// registered type. This singleton is the only way to reach it. `CRenderBlockLRParticleCompose` is
+/// unregistered in the same way, and has no `RegisterType` at all; its type object is owned privately
+/// by `CPostEffectsManager` rather than held in a global.
+///
+/// Sweeping every `*::InitType` in the image against the callers of `CRenderEngine::AddType`
+/// (`0x140_173_110`) shows this is the *only* named `InitType` that skips registration.
 pub struct RenderBlockTypeParticle {
-    _field_0: [u8; 2693],
+    pub base: crate::graphics_engine::render_engine::RenderBlockTypeBase,
+    _field_8: [u8; 2685],
     /// When set, a particle render block whose effect opts in and that falls below the low-resolution
     /// distance threshold routes its draw to the low-resolution particle pass (later composited back
     /// up by the low-res upsampling pass); when clear, that particle routes to the full-resolution
@@ -864,7 +879,105 @@ impl RenderBlockTypeParticle {
         }
     }
 }
-impl RenderBlockTypeParticle {}
+impl RenderBlockTypeParticle {
+    pub fn vftable(
+        &self,
+    ) -> *const crate::graphics_engine::render_engine::RenderBlockTypeBaseVftable {
+        self.base.vftable()
+            as *const crate::graphics_engine::render_engine::RenderBlockTypeBaseVftable
+    }
+    /// Creates the type's GPU resources (shaders, buffers) against the given
+    /// `SResourceContext`. Each type's `RegisterType` calls this at startup with the render
+    /// engine's own resource context.
+    pub unsafe fn Create(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Create).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Destroys the type's GPU resources.
+    pub unsafe fn Destroy(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Destroy).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Recreates the type's GPU resources against the given `SResourceContext`.
+    /// `CRenderEngine::RecreateRenderBlockTypes` calls this on every registered type with the
+    /// render engine's own resource context (the settings-change path) — but several types,
+    /// including the terrain setup types, implement it as a no-op; re-creating those requires
+    /// calling [`Destroy`](crate::graphics_engine::render_block::RenderBlockTypeParticle::Destroy) and
+    /// [`Create`](crate::graphics_engine::render_block::RenderBlockTypeParticle::Create) directly.
+    pub unsafe fn Recreate(
+        &mut self,
+        resource_context: *mut crate::graphics_engine::render_engine::ResourceContext,
+    ) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Recreate).read();
+            f(self as *mut Self as _, resource_context)
+        }
+    }
+    /// Returns the type's display name (e.g. `"VolumetricTerrain"`, `"TerrainPatch"`).
+    pub unsafe fn GetTypeName(&self) -> *const u8 {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetTypeName).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Returns the type's name hash (the registry sort key).
+    pub unsafe fn GetHash(&self) -> u32 {
+        unsafe {
+            let f = (&raw const (*self.vftable()).GetHash).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Whether render passes draw blocks of this type: `CRenderPass::DoDraw` dispatches this
+    /// per type run (vtable offset `0x90`) and skips every block whose type reports disabled.
+    /// In the release build the base implementation is compiled to a constant `true`.
+    pub unsafe fn IsEnabled(&self) -> bool {
+        unsafe {
+            let f = (&raw const (*self.vftable()).IsEnabled).read();
+            f(self as *const Self as _)
+        }
+    }
+    /// Enables drawing of this type's blocks. In the release build the base implementation is
+    /// compiled to a no-op (the enabled flag was optimized out).
+    pub unsafe fn Enable(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Enable).read();
+            f(self as *mut Self as _)
+        }
+    }
+    /// Disables drawing of this type's blocks. In the release build the base implementation is
+    /// compiled to a no-op (the enabled flag was optimized out), so suppressing a type requires
+    /// replacing its [`IsEnabled`](crate::graphics_engine::render_block::RenderBlockTypeParticle::IsEnabled) vtable entry.
+    pub unsafe fn Disable(&mut self) {
+        unsafe {
+            let f = (&raw const (*self.vftable()).Disable).read();
+            f(self as *mut Self as _)
+        }
+    }
+}
+impl std::convert::AsRef<crate::graphics_engine::render_engine::RenderBlockTypeBase>
+for RenderBlockTypeParticle {
+    fn as_ref(&self) -> &crate::graphics_engine::render_engine::RenderBlockTypeBase {
+        &self.base
+    }
+}
+impl std::convert::AsMut<crate::graphics_engine::render_engine::RenderBlockTypeBase>
+for RenderBlockTypeParticle {
+    fn as_mut(
+        &mut self,
+    ) -> &mut crate::graphics_engine::render_engine::RenderBlockTypeBase {
+        &mut self.base
+    }
+}
 impl std::convert::AsRef<RenderBlockTypeParticle> for RenderBlockTypeParticle {
     fn as_ref(&self) -> &RenderBlockTypeParticle {
         self

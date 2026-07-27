@@ -14,7 +14,8 @@ use jc3gi::{
     camera::camera::CameraState,
     graphics_engine::{
         render_block::{
-            RenderBlockTypeTerrain as BaseTerrain, RenderBlockTypeTerrainPatch as TerrainPatch,
+            RenderBlockTypeParticle, RenderBlockTypeTerrain as BaseTerrain,
+            RenderBlockTypeTerrainPatch as TerrainPatch,
         },
         render_engine::RenderBlockTypeRegistry,
     },
@@ -330,6 +331,7 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
         "Render block types (engine registry; disable to bisect)",
         |ui| {
             show_render_block_type_registry(ui);
+            show_unregistered_render_block_types(ui);
         },
     );
 
@@ -556,6 +558,62 @@ unsafe extern "system" fn render_block_type_always_disabled(
 /// The `IsEnabled` vtable slots currently patched to
 /// [`render_block_type_always_disabled`], keyed by slot address.
 static DISABLED_TYPE_SLOTS: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
+
+/// Render the render-block types the registry cannot reach.
+///
+/// The registry list above is not "every type". A render block whose `InitType` stores its type in a
+/// global and returns *without* calling `CRenderEngine::AddType` never enters the registry, so it does
+/// not get a row -- while `CRenderPass::DoDraw` still dispatches its `IsEnabled` through the vtable
+/// exactly as it does for a registered type. Particles are the case in practice: unticking every row
+/// in the registry list leaves smoke and every other particle effect still drawing, which reads as a
+/// broken kill switch rather than a missing entry, and quietly invalidates any bisect run through that
+/// list.
+///
+/// Sweeping every `*::InitType` against the callers of `AddType` shows `ParticleRB` is the only named
+/// one that skips registration, so this list is short by construction rather than by sampling. It uses
+/// the same vtable patch and the same restore path as the registry rows.
+fn show_unregistered_render_block_types(ui: &mut egui::Ui) {
+    ui.separator();
+    ui.label(
+        "Types the registry does not list (their InitType never calls AddType, so the list above \
+         cannot reach them -- but their draws are gated identically)",
+    );
+    // SAFETY: the type singleton is static engine storage, constructed at startup and live for the
+    // process. The vtable slot write is an aligned qword store through the patcher while the render
+    // thread may read it -- acceptable for a diagnostic toggle, as for the registry rows.
+    let slot = unsafe {
+        let Some(ty) = RenderBlockTypeParticle::get() else {
+            ui.label("ParticleRB: type singleton not reachable");
+            return;
+        };
+        (&raw const (*ty.vftable()).IsEnabled) as usize
+    };
+
+    let mut disabled_slots = DISABLED_TYPE_SLOTS.lock().unwrap();
+    let mut enabled = !disabled_slots.contains(&slot);
+    if ui
+        .checkbox(&mut enabled, "ParticleRB (unregistered)")
+        .on_hover_text(
+            "Every particle render block, including the low-resolution smoke and trail effects. \
+             Not present in the registry list above at any setting.",
+        )
+        .changed()
+        && let Some(mut patcher) = crate::hooks::patcher()
+    {
+        // SAFETY: `slot` is the address of this type's `IsEnabled` vtable entry, and the stub is
+        // vtable-compatible with it. Same patch and same restore path as the registry rows.
+        unsafe {
+            if enabled {
+                patcher.unpatch(slot);
+                disabled_slots.remove(&slot);
+            } else {
+                let stub = render_block_type_always_disabled as *const () as usize;
+                patcher.patch(slot, &stub.to_le_bytes());
+                disabled_slots.insert(slot);
+            }
+        }
+    }
+}
 
 /// Render the engine render-block-type registry: one row per registered type, name from the type's
 /// own `GetTypeName`, and a checkbox that patches the type's `IsEnabled` vtable slot to a
