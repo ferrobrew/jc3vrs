@@ -347,6 +347,26 @@ pub struct StereoConfig {
     /// fullscreen pass as geometry is a visibly wrong frame while missing a geometry pass is only the
     /// status quo.
     pub single_pass_slot13_per_eye: bool,
+    /// Derive the collapse's eye-half viewports from the render target the engine currently has
+    /// bound, rather than always from the scene's double-wide viewport.
+    ///
+    /// Several passes redirect their draws to a **reduced-resolution off-screen target**: the shared
+    /// quarter-resolution buffer (half per axis) that the low-resolution clouds, the low-resolution
+    /// particles, and the volumetric spot-light cones all render into, and the downsampled depth
+    /// buffer. The collapse's viewport split is otherwise target-blind — it re-derives the halves from
+    /// the recorded scene viewport before every draw in the range — so a draw into a half-sized target
+    /// receives a viewport twice that target's dimensions. Its content is magnified 2x about the
+    /// target's origin and cropped, and since the error is a fixed scale it is a 2x motion gain too:
+    /// clouds and smoke sweep past at twice the camera's rate.
+    ///
+    /// The composes need no matching change. They stretch the whole low-resolution texture over the
+    /// whole double-wide target with a baked UV, so a texture holding a left-half/right-half image
+    /// lands as a left-half/right-half screen image on its own — and they must **not** be re-issued
+    /// per eye, since both blend rather than overwrite.
+    ///
+    /// Off by default: everywhere except those passes the two records hold the same viewport and this
+    /// is a no-op, which makes it a clean A/B.
+    pub collapse_viewport_follows_target: bool,
     /// Requires [`single_pass_reconstruct_per_eye`](Self::single_pass_reconstruct_per_eye) and
     /// [`fix_clustered_light_frustum`](Self::fix_clustered_light_frustum): build the clustered
     /// (froxel) light grid **per eye** as well, instead of building it once with eye 0's projection
@@ -665,6 +685,7 @@ impl StereoConfig {
             single_pass_reconstruct_per_eye: true,
             single_pass_atmospheric_per_eye: true,
             single_pass_slot13_per_eye: false,
+            collapse_viewport_follows_target: false,
             single_pass_clustered_per_eye: true,
             single_pass_clustered_per_eye_light_view: true,
             single_pass_uniform_viewport_slots: true,

@@ -926,6 +926,13 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                      screen. Needs the off-axis reconstruction override on.",
                 );
                 ui.checkbox(
+                    &mut cfg.stereo.collapse_viewport_follows_target,
+                    "Eye viewports follow the bound target (clouds, smoke, spotlight volumetrics)",
+                )
+                .on_hover_text(
+                    "Splits the viewport of whatever render target the engine currently has bound,                      instead of always splitting the scene's double-wide one. The low-resolution                      clouds, particles, and spot-light cones render into a shared quarter-resolution                      buffer (half per axis); handing those draws a full-scene viewport magnifies them                      2x about the target's origin and crops them, which is also a 2x motion gain --                      clouds and smoke sliding at twice the camera's rate. A no-op everywhere else,                      since the two viewports agree outside those passes.",
+                );
+                ui.checkbox(
                     &mut cfg.stereo.single_pass_slot13_per_eye,
                     "Non-indexed geometry per eye (decals, roads, skidmarks)",
                 )

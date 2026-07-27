@@ -1832,6 +1832,9 @@ unsafe extern "system" fn rs_set_viewports_detour(
             if is_scene_sized(vp) {
                 *COLLAPSE_FULL_VIEWPORT.lock() = Some(vp);
             }
+            // Unconditional, unlike the scene record above: this one has to follow the engine onto the
+            // reduced-resolution off-screen targets, which is the whole point of it.
+            *CURRENT_ENGINE_VIEWPORT.lock() = Some(vp);
             VIEWPORT_DUP.fetch_add(1, Ordering::Relaxed);
             set_viewport_slots_uniform(true);
             unsafe { detour.call(context, 2, [vp, vp].as_ptr()) };
@@ -1883,7 +1886,14 @@ enum CollapseViewport {
 /// submitted. Derives the halves from the full viewport recorded by [`rs_set_viewports_detour`]; a
 /// no-op until the scene's first viewport bind records it.
 fn ensure_collapse_viewport(context: *mut c_void, target: CollapseViewport) {
-    let Some(full) = *COLLAPSE_FULL_VIEWPORT.lock() else {
+    // Split the viewport of whatever target is actually bound, not the scene's. They are the same
+    // everywhere except the reduced-resolution off-screen passes -- see [`CURRENT_ENGINE_VIEWPORT`].
+    let base = if Config::lock_query(|c| c.stereo.collapse_viewport_follows_target) {
+        (*CURRENT_ENGINE_VIEWPORT.lock()).or(*COLLAPSE_FULL_VIEWPORT.lock())
+    } else {
+        *COLLAPSE_FULL_VIEWPORT.lock()
+    };
+    let Some(full) = base else {
         return;
     };
     let Some(detour) = RS_SET_VIEWPORTS.get() else {
@@ -3338,6 +3348,22 @@ static CVS_REACQ_ERR: AtomicUsize = AtomicUsize::new(0);
 /// runs long after the range. Every consumer that must not see a stale value gates on
 /// [`in_gbuffer_range`] instead.
 static COLLAPSE_FULL_VIEWPORT: Mutex<Option<D3D11_VIEWPORT>> = Mutex::new(None);
+
+/// The viewport the **engine** last bound during a collapsed camera scene, whatever its size, recorded
+/// by [`rs_set_viewports_detour`].
+///
+/// [`COLLAPSE_FULL_VIEWPORT`] deliberately records only *scene-sized* binds, because the eye halves
+/// were derived from it and following a half-resolution post target would have mis-split the scene.
+/// That is right for the scene notion and wrong for the split: several passes redirect their draws to
+/// a reduced-resolution off-screen target -- the shared quarter-resolution buffer the low-resolution
+/// clouds, the low-resolution particles, and the volumetric spot-light cones all render into, and the
+/// downsampled depth buffer -- and a draw into a `W x H/2` target handed a `2W x H` viewport is
+/// magnified 2x about the target's origin and cropped, which is a 2x motion gain as well.
+///
+/// So this record exists alongside rather than replacing: it is always the live bind, so it cannot go
+/// stale the way a single shared record would, and the halves derived from it are the halves of
+/// whatever target is actually bound.
+static CURRENT_ENGINE_VIEWPORT: Mutex<Option<D3D11_VIEWPORT>> = Mutex::new(None);
 /// The two per-eye reprojection matrices `M_eye` (`clip_eye = M_eye · clip_center`), published each
 /// view by [`compute_dual_eye_rows`]. The terrain-detail render-block intercept reads them to build a
 /// per-eye `cb1` on the CPU (the detail draw is GPU-indirect, so it cannot be instance-doubled).
