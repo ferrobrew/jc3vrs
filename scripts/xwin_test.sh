@@ -10,4 +10,15 @@ repo=$(cd "$here/.." && pwd)
 . "$here/wine_prefix.sh"
 jc3vrs_ensure_wine_prefix
 cd "$repo"
-cargo xwin test --xwin-cache-dir .xwin --target x86_64-pc-windows-msvc "$@"
+
+# The workspace's `default-members` is just the injector, so a bare `cargo xwin test` runs the
+# injector's (zero) tests and reports a green run that exercised nothing -- including none of the
+# payload's. Select the whole workspace unless the caller scopes the run themselves.
+case " $* " in
+    *" -p "*|*" --package "*|*" --workspace "*|*" --all "*) scope= ;;
+    *) scope=--workspace ;;
+esac
+
+# Unquoted on purpose: empty means "pass no scope flag".
+# shellcheck disable=SC2086
+cargo xwin test --xwin-cache-dir .xwin --target x86_64-pc-windows-msvc $scope "$@"
