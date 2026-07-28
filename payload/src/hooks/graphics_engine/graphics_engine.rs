@@ -11,7 +11,7 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
-    Graphics::Direct3D11::D3D11_BOX,
+    Graphics::Direct3D11::{D3D11_BOX, ID3D11Texture2D},
     System::Threading::{EnterCriticalSection, GetCurrentThreadId, LeaveCriticalSection},
 };
 
@@ -32,13 +32,14 @@ pub(super) fn hook_library() -> HookLibrary {
 /// `crate::hooks::game::game_update_render` (which calls this too, `pub(crate)` for exactly that),
 /// whose thread identity settles two questions static reasoning could not.
 ///
-/// The first is a lock-order inversion. `crate::update` takes the `EguiState` lock and then
-/// `crate::ui::render::EGUI_DEBUG_RENDER_STATE` inside it; `render_engine_post_draw` takes
-/// `EGUI_DEBUG_RENDER_STATE` and holds it across `hud::egui_panel::draw_quad` and
-/// `hud::mirror_overlay::render`, both of which take the `EguiState` lock. Two blocking mutexes,
-/// acquired in opposite orders, on the shipped default path -- which deadlocks if and only if the two
-/// sides run on different threads, so the ordering is a real bug or a non-issue depending only on
-/// what these lines report.
+/// The first was a lock-order inversion against `crate::update`, which takes the `EguiState` lock and
+/// then `crate::ui::render::EGUI_DEBUG_RENDER_STATE` inside it: `render_engine_post_draw` used to hold
+/// `EGUI_DEBUG_RENDER_STATE` across `hud::egui_panel::draw_quad` and `hud::mirror_overlay::render`,
+/// both of which take the `EguiState` lock. Two blocking mutexes in opposite orders deadlock if and
+/// only if the two sides run on different threads. The nesting is gone (the captures are now cloned
+/// under a brief lock, as everywhere else), so the answer no longer decides whether that pair was a
+/// bug -- but it still says whether the two do run apart, which is what the rest of this hook's
+/// shared state has to assume.
 ///
 /// The second is whether [`crate::vr::back_buffer`]'s safety argument holds: it is built on
 /// `CreateRenderSetups` running on the render thread under the drained idle context while the
@@ -236,7 +237,17 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
             );
         }
 
-        let lock = crate::ui::render::EGUI_DEBUG_RENDER_STATE.lock();
+        // Clone (AddRef) the per-eye capture textures under a brief EGUI lock, released before the
+        // context work below, mirroring the lock discipline of the other consumers of these captures
+        // (`vr::blit::submit`, `vr::mirror::present_mirror_inner`, `capture::present_active`). Held
+        // across the body instead, this deadlocks: the panel and mirror-overlay draws below take the
+        // `EguiState` lock, while `crate::update` takes `EguiState` and then this one inside it. One
+        // acquisition, not one per eye, so the collapse's two half-copies cannot straddle a resize
+        // that rebuilds the pair.
+        let eye_textures: [Option<ID3D11Texture2D>; 2] = {
+            let lock = crate::ui::render::EGUI_DEBUG_RENDER_STATE.lock();
+            [lock.texture(0).cloned(), lock.texture(1).cloned()]
+        };
         let index = crate::stereo::draw_index();
 
         EnterCriticalSection(context.m_Mutex);
@@ -286,7 +297,7 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
                 let half_w = u32::from(src.m_Width) / 2;
                 let height = u32::from(src.m_Height);
                 for eye in 0..2u32 {
-                    if let Some(dst) = lock.texture(eye as usize) {
+                    if let Some(dst) = eye_textures[eye as usize].as_ref() {
                         let region = D3D11_BOX {
                             left: eye * half_w,
                             top: 0,
@@ -307,7 +318,7 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
                         );
                     }
                 }
-            } else if let Some(dst) = lock.texture(index) {
+            } else if let Some(dst) = eye_textures.get(index).and_then(Option::as_ref) {
                 context.m_Context.CopyResource(dst, &src.m_Texture);
             }
 

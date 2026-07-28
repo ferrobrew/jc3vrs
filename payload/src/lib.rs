@@ -123,6 +123,13 @@ fn shutdown_startup() {
         module::pin();
     }
 
+    // And for an F12 screenshot's writer. The PNG encode of a double-wide capture runs off-thread
+    // precisely because it is too slow to do inline, so the same unjoined-thread hazard applies --
+    // and unlike the profiler's, this one is not behind a feature.
+    if !screenshot::shutdown() {
+        module::pin();
+    }
+
     // The cleanups cleared render-thread-driven config flags (e.g. the HUD redirect). Give the still-
     // live hooks a few frames to tick those changes through -- the per-frame restore runs on the
     // render thread -- before uninstalling.
