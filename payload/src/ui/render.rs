@@ -2,16 +2,21 @@
 //! correctness/quality levers — plus the render-thread capture state that feeds the Previews tab
 //! and the VR blit.
 
+use std::time::{Duration, Instant};
+
 use parking_lot::Mutex;
-use windows::Win32::{
-    Graphics::{
-        Direct3D11::{
-            D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
-            ID3D11ShaderResourceView, ID3D11Texture2D,
+use windows::{
+    Win32::{
+        Graphics::{
+            Direct3D11::{
+                D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+                ID3D11ShaderResourceView, ID3D11Texture2D,
+            },
+            Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
         },
-        Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
+        System::Threading::{EnterCriticalSection, LeaveCriticalSection},
     },
-    System::Threading::{EnterCriticalSection, LeaveCriticalSection},
+    core::Interface,
 };
 
 use crate::{config, hooks::graphics_engine::shader, stereo::single_pass};
@@ -42,8 +47,18 @@ pub struct EguiDebugRenderState {
     main_color_desc: Option<(u32, u32, i32)>,
     /// Per-(stage, eye) captures of intermediate post-effect results: index `stage * 2 + eye`.
     pub(super) post_stage_captures: Vec<StageCapture>,
-    /// Cache of engine SRV pointer -> egui texture id, for the live render-target thumbnails.
-    srv_thumbnails: Vec<(usize, egui::TextureId)>,
+    /// Cache of engine SRV pointer -> (width, height, egui texture id), for the live render-target
+    /// thumbnails. The size rides along so a reused SRV address backed by a resized surface (see
+    /// [`Self::thumbnail_id`]) is detected instead of serving the stale image.
+    srv_thumbnails: Vec<(usize, (u32, u32), egui::TextureId)>,
+    /// Egui texture ids dropped on the render thread (a post-stage capture's descriptor changed)
+    /// that still need `unregister_user_texture`, which only the UI thread can reach a renderer
+    /// for. Drained by [`Self::prepare_if_necessary`].
+    pending_unregisters: Vec<egui::TextureId>,
+    /// Whether the Previews tab counted as visible ([`previews_visible`]) as of the last
+    /// `prepare_if_necessary`, so a visible -> not-visible transition is caught exactly once to
+    /// free the preview-only captures.
+    previews_were_visible: bool,
 }
 impl EguiDebugRenderState {
     const fn new() -> Self {
@@ -54,6 +69,8 @@ impl EguiDebugRenderState {
             main_color_desc: None,
             post_stage_captures: Vec::new(),
             srv_thumbnails: Vec::new(),
+            pending_unregisters: Vec::new(),
+            previews_were_visible: false,
         }
     }
 
@@ -75,48 +92,64 @@ impl EguiDebugRenderState {
             result.m_Height as u32,
             result.m_Format as i32,
         );
+        // The renderer that owns the egui registration is only reachable from the UI thread, so a
+        // dropped id from here (the render thread) would leak the registration and the
+        // full-resolution SRV it pins. Queue it for `prepare_if_necessary` to unregister once it
+        // next runs with a renderer, instead of just discarding it.
+        if self.post_stage_captures[idx].created_desc != Some(desc)
+            && let Some(id) = self.post_stage_captures[idx].egui_id.take()
+        {
+            self.pending_unregisters.push(id);
+        }
         let cap = &mut self.post_stage_captures[idx];
         unsafe {
             if cap.created_desc != Some(desc) {
                 cap.texture = None;
                 cap.srv = None;
-                cap.egui_id = None;
-                cap.created_desc = None;
                 let mut texture: Option<ID3D11Texture2D> = None;
-                if device
-                    .m_Device
-                    .CreateTexture2D(
-                        &D3D11_TEXTURE2D_DESC {
-                            Width: desc.0,
-                            Height: desc.1,
-                            MipLevels: 1,
-                            ArraySize: 1,
-                            Format: DXGI_FORMAT(desc.2),
-                            SampleDesc: DXGI_SAMPLE_DESC {
-                                Count: 1,
-                                Quality: 0,
-                            },
-                            Usage: D3D11_USAGE_DEFAULT,
-                            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as _,
-                            CPUAccessFlags: 0,
-                            MiscFlags: 0,
+                if let Err(e) = device.m_Device.CreateTexture2D(
+                    &D3D11_TEXTURE2D_DESC {
+                        Width: desc.0,
+                        Height: desc.1,
+                        MipLevels: 1,
+                        ArraySize: 1,
+                        Format: DXGI_FORMAT(desc.2),
+                        SampleDesc: DXGI_SAMPLE_DESC {
+                            Count: 1,
+                            Quality: 0,
                         },
-                        None,
-                        Some(&mut texture),
-                    )
-                    .is_err()
-                {
+                        Usage: D3D11_USAGE_DEFAULT,
+                        BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as _,
+                        CPUAccessFlags: 0,
+                        MiscFlags: 0,
+                    },
+                    None,
+                    Some(&mut texture),
+                ) {
+                    // Stamp `created_desc` even on failure so this does not retry every stage of
+                    // every frame forever with only "(no capture)" visible to the user.
+                    tracing::error!(
+                        "failed to create the post-stage capture texture for stage {stage}, eye \
+                         {eye}: {e:?}"
+                    );
+                    cap.created_desc = Some(desc);
                     return;
                 }
                 let Some(texture) = texture else {
+                    cap.created_desc = Some(desc);
                     return;
                 };
                 let mut srv: Option<ID3D11ShaderResourceView> = None;
-                if device
-                    .m_Device
-                    .CreateShaderResourceView(&texture, None, Some(&mut srv))
-                    .is_err()
+                if let Err(e) =
+                    device
+                        .m_Device
+                        .CreateShaderResourceView(&texture, None, Some(&mut srv))
                 {
+                    tracing::error!(
+                        "failed to create the post-stage capture SRV for stage {stage}, eye \
+                         {eye}: {e:?}"
+                    );
+                    cap.created_desc = Some(desc);
                     return;
                 }
                 cap.srv = srv;
@@ -131,22 +164,41 @@ impl EguiDebugRenderState {
         }
     }
 
-    /// Get (registering+caching on first use) an egui texture id for an engine SRV.
+    /// Get (registering+caching on first use) an egui texture id for an engine SRV. Keyed on the
+    /// SRV's raw pointer *and* its current size, so a reused address backed by a resized surface
+    /// (a resolution change recreates the engine's render targets) is treated as a fresh SRV
+    /// instead of returning a retained id that shows the pre-resize image.
     pub(super) fn thumbnail_id(
         &mut self,
         renderer: &mut egui_directx11::Renderer,
         srv_raw: usize,
         srv: &ID3D11ShaderResourceView,
     ) -> egui::TextureId {
-        if let Some((_, id)) = self.srv_thumbnails.iter().find(|(p, _)| *p == srv_raw) {
-            return *id;
+        let size = unsafe { srv_texture_size(srv) };
+        if let Some(pos) = self
+            .srv_thumbnails
+            .iter()
+            .position(|(p, _, _)| *p == srv_raw)
+        {
+            let (_, cached_size, id) = self.srv_thumbnails[pos];
+            if cached_size == size {
+                return id;
+            }
+            renderer.unregister_user_texture(id);
+            self.srv_thumbnails.remove(pos);
         }
         let id = renderer.register_user_texture(srv.clone());
-        self.srv_thumbnails.push((srv_raw, id));
+        self.srv_thumbnails.push((srv_raw, size, id));
         id
     }
 
     pub(crate) fn prepare_if_necessary(&mut self, renderer: &mut egui_directx11::Renderer) {
+        // Drain post-stage egui ids the render thread dropped without a renderer to unregister
+        // them with (see `capture_post_stage`); this is the first point back on the UI thread.
+        for id in self.pending_unregisters.drain(..) {
+            renderer.unregister_user_texture(id);
+        }
+
         unsafe {
             let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
                 return;
@@ -158,7 +210,8 @@ impl EguiDebugRenderState {
             // One eye's worth of the engine's render target (R8G8B8A8), recreated when its size
             // changes. Under single-pass double-wide the render target holds both eye-halves side by
             // side, so each per-eye capture texture is half its width -- the collapse's capture split
-            // copies one full-width half in.
+            // copies one full-width half in. This is the real VR-presentation consumer, so it is
+            // always kept current, independent of the Previews tab.
             if let Some(size) = crate::stereo::per_eye_render_size()
                 && (self.target_size != Some(size)
                     || self.target_textures.iter().any(Option::is_none))
@@ -178,26 +231,56 @@ impl EguiDebugRenderState {
                 self.target_size = Some(size);
             }
 
-            // HDR scene (MainColor), matching its own format, recreated on size/format change.
-            if let Some(mc) = ge.m_MainColorBuffer.as_ref() {
-                let desc = (mc.m_Width as u32, mc.m_Height as u32, mc.m_Format as i32);
-                if self.main_color_desc != Some(desc)
-                    || self.main_color_textures.iter().any(Option::is_none)
-                {
-                    for slot in &mut self.main_color_textures {
-                        if let Some((_, id)) = slot.take() {
-                            renderer.unregister_user_texture(id);
+            // The MainColor and post-stage captures exist only for the Previews tab, so they track
+            // its visibility: created/refreshed while it is open, released the first frame it is
+            // not, so an occasional peek does not pin full-resolution surfaces for the rest of the
+            // session.
+            let visible = previews_visible();
+            if visible {
+                // HDR scene (MainColor), matching its own format, recreated on size/format change.
+                if let Some(mc) = ge.m_MainColorBuffer.as_ref() {
+                    let desc = (mc.m_Width as u32, mc.m_Height as u32, mc.m_Format as i32);
+                    if self.main_color_desc != Some(desc)
+                        || self.main_color_textures.iter().any(Option::is_none)
+                    {
+                        for slot in &mut self.main_color_textures {
+                            if let Some((_, id)) = slot.take() {
+                                renderer.unregister_user_texture(id);
+                            }
+                            *slot = Self::create_target(
+                                device,
+                                renderer,
+                                desc.0,
+                                desc.1,
+                                DXGI_FORMAT(desc.2),
+                            );
                         }
-                        *slot = Self::create_target(
-                            device,
-                            renderer,
-                            desc.0,
-                            desc.1,
-                            DXGI_FORMAT(desc.2),
-                        );
+                        self.main_color_desc = Some(desc);
                     }
-                    self.main_color_desc = Some(desc);
                 }
+            } else if self.previews_were_visible {
+                self.free_preview_captures(renderer);
+            }
+            self.previews_were_visible = visible;
+        }
+    }
+
+    /// Release the MainColor and post-stage captures and their egui registrations. Called once,
+    /// when the Previews tab stops being visible -- these captures have no consumer besides that
+    /// tab (unlike `target_textures`, which the VR presentation path reads).
+    fn free_preview_captures(&mut self, renderer: &mut egui_directx11::Renderer) {
+        for slot in &mut self.main_color_textures {
+            if let Some((_, id)) = slot.take() {
+                renderer.unregister_user_texture(id);
+            }
+        }
+        self.main_color_desc = None;
+        for cap in &mut self.post_stage_captures {
+            cap.texture = None;
+            cap.srv = None;
+            cap.created_desc = None;
+            if let Some(id) = cap.egui_id.take() {
+                renderer.unregister_user_texture(id);
             }
         }
     }
@@ -209,7 +292,6 @@ impl EguiDebugRenderState {
         height: u32,
         format: DXGI_FORMAT,
     ) -> Option<(ID3D11Texture2D, egui::TextureId)> {
-        // TODO: recreate on resize
         unsafe {
             let mut texture: Option<ID3D11Texture2D> = None;
             if let Err(e) = device.m_Device.CreateTexture2D(
@@ -264,28 +346,93 @@ impl EguiDebugRenderState {
             .map(|(texture, _)| texture)
     }
 
-    fn uninstall(&mut self, renderer: &mut egui_directx11::Renderer) {
-        for slot in self
-            .target_textures
-            .iter_mut()
-            .chain(self.main_color_textures.iter_mut())
-        {
-            if let Some((_, texture_id)) = slot.take() {
-                renderer.unregister_user_texture(texture_id);
+    /// Tear down the captured D3D surfaces and, where a renderer is reachable, their egui
+    /// registrations too. The D3D side is released unconditionally: an `EguiState` that failed to
+    /// install still holds the captures from before the failure, and without a renderer to
+    /// unregister with, dropping them is the only cleanup possible -- but it must still happen, or
+    /// every failed inject/eject cycle leaks the full-resolution captured surfaces.
+    fn uninstall(&mut self, renderer: Option<&mut egui_directx11::Renderer>) {
+        match renderer {
+            Some(renderer) => {
+                for slot in self
+                    .target_textures
+                    .iter_mut()
+                    .chain(self.main_color_textures.iter_mut())
+                {
+                    if let Some((_, texture_id)) = slot.take() {
+                        renderer.unregister_user_texture(texture_id);
+                    }
+                }
+                for (_, _, texture_id) in self.srv_thumbnails.drain(..) {
+                    renderer.unregister_user_texture(texture_id);
+                }
+                for cap in self.post_stage_captures.drain(..) {
+                    if let Some(id) = cap.egui_id {
+                        renderer.unregister_user_texture(id);
+                    }
+                }
+                for id in self.pending_unregisters.drain(..) {
+                    renderer.unregister_user_texture(id);
+                }
             }
-        }
-        for (_, texture_id) in self.srv_thumbnails.drain(..) {
-            renderer.unregister_user_texture(texture_id);
-        }
-        for cap in self.post_stage_captures.drain(..) {
-            if let Some(id) = cap.egui_id {
-                renderer.unregister_user_texture(id);
+            None => {
+                self.target_textures = [None, None];
+                self.main_color_textures = [None, None];
+                self.srv_thumbnails.clear();
+                self.post_stage_captures.clear();
+                self.pending_unregisters.clear();
             }
         }
     }
 }
+
+/// The width/height of an SRV's underlying `ID3D11Texture2D`, used by
+/// [`EguiDebugRenderState::thumbnail_id`] to detect a resized surface that reused its predecessor's
+/// SRV address.
+unsafe fn srv_texture_size(srv: &ID3D11ShaderResourceView) -> (u32, u32) {
+    unsafe {
+        let Ok(resource) = srv.GetResource() else {
+            return (0, 0);
+        };
+        let Ok(texture) = resource.cast::<ID3D11Texture2D>() else {
+            return (0, 0);
+        };
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        texture.GetDesc(&mut desc);
+        (desc.Width, desc.Height)
+    }
+}
+
 pub static EGUI_DEBUG_RENDER_STATE: Mutex<EguiDebugRenderState> =
     Mutex::new(EguiDebugRenderState::new());
+
+/// How long after [`mark_previews_visible`] was last called the Previews tab still counts as open.
+/// The tab has no "closed" event to hook -- an `egui_dock` tab simply stops being drawn once it is
+/// not the active tab in its leaf -- so recency stands in for it: a few frames' slack absorbs
+/// frame-to-frame jitter while still reclaiming the preview-only captures promptly once the tab
+/// stops drawing.
+const PREVIEWS_VISIBLE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// When the Previews tab last drew, per [`mark_previews_visible`]; `None` before it ever has.
+static PREVIEWS_LAST_SEEN: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Mark the Previews tab visible for the current frame. The debug-only capture path
+/// (`capture_post_stage`, `capture_main_color`) gates on [`previews_visible`], so nobody pays for a
+/// full-size `CopyResource` per stage per eye for a panel almost nobody has open -- call this once
+/// per frame from the top of the tab's body.
+pub fn mark_previews_visible() {
+    *PREVIEWS_LAST_SEEN.lock() = Some(Instant::now());
+}
+
+/// Whether the Previews tab has drawn recently enough to still count as open (see
+/// [`PREVIEWS_VISIBLE_TIMEOUT`]). Read by the post-stage and MainColor capture call sites to skip
+/// their `CopyResource`, and by [`EguiDebugRenderState::prepare_if_necessary`] to know when to
+/// release the captures it has been maintaining.
+pub fn previews_visible() -> bool {
+    PREVIEWS_LAST_SEEN
+        .lock()
+        .is_some_and(|t| t.elapsed() < PREVIEWS_VISIBLE_TIMEOUT)
+}
 
 /// Capture a post-effect stage's result texture for the given eye -- called from the stage's detour
 /// on the render thread, after the stage runs. `result` is the stage's slot result texture.
@@ -348,9 +495,7 @@ pub fn capture_main_color(eye: usize) {
 /// egui registrations at shutdown.
 pub fn install() {
     crate::lifecycle::on_cleanup(|renderer| {
-        if let Some(renderer) = renderer {
-            EGUI_DEBUG_RENDER_STATE.lock().uninstall(renderer);
-        }
+        EGUI_DEBUG_RENDER_STATE.lock().uninstall(renderer);
     });
 }
 

@@ -138,8 +138,11 @@ fn generate_histogram(
     TraceState::record_eye(TraceEvent::GenerateHistogram { skip });
     // The histogram reads the final HDR scene (MainColor) for auto-exposure, so this is the first
     // point in the post chain where MainColor still holds this dispatch's clean scene -- grab it for
-    // the per-eye "Scene" preview before the chain recycles it.
-    crate::ui::render::capture_main_color(draw_index());
+    // the per-eye "Scene" preview before the chain recycles it. Debug-only: gated on the Previews tab
+    // actually being open, so the CopyResource isn't paid for every dispatch by everyone.
+    if crate::ui::render::previews_visible() {
+        crate::ui::render::capture_main_color(draw_index());
+    }
 
     if skip {
         unsafe {

@@ -16,6 +16,12 @@ const POST_STAGE_LABELS: [&str; 2] = ["after DoF", "after MB"];
 static PREVIEW_WIDTH: Mutex<f32> = Mutex::new(700.0);
 
 pub fn egui_debug_previews(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
+    // The capture path this tab displays is gated on the tab being drawn, so that a panel almost
+    // nobody has open does not cost a full-size `CopyResource` per stage per eye on every frame.
+    // Marked here rather than on tab selection because `egui_dock` has no "closed" event -- a tab
+    // that stops being drawn simply stops calling this.
+    crate::ui::render::mark_previews_visible();
+
     let preview_width = {
         let mut w = PREVIEW_WIDTH.lock();
         ui.add(egui::Slider::new(&mut *w, 48.0..=4096.0).text("Preview size (px)"));

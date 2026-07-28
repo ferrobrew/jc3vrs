@@ -203,9 +203,10 @@ fn anti_aliasing_apply(
 }
 
 /// Read a stage's slot result texture (`CTX[slot+83]`, where `CTX` is the manager arg) and capture
-/// it for the current eye into the debug overlay's per-stage preview.
+/// it for the current eye into the debug overlay's per-stage preview. Debug-only: gated on the
+/// Previews tab actually being open, so the CopyResource isn't paid for every dispatch by everyone.
 fn capture_post_result(stage: usize, mgr: *mut c_void, slot: u32) {
-    if mgr.is_null() {
+    if mgr.is_null() || !crate::ui::render::previews_visible() {
         return;
     }
     let eye = draw_index();
