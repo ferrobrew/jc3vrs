@@ -1,5 +1,4 @@
-//! The terrain detail-tessellation budget fix (issue #40), plus a diagnostic detour on the base
-//! VolumetricTerrain hull-clip selection.
+//! The terrain detail-tessellation budget fix (issue #40).
 //!
 //! The detail rock skin (`CTerrainRenderBlockDetail` — cliff walls, cave ceilings, near-field rock)
 //! is built each frame by a GPU pipeline: compute stages admit quads by frustum and distance, then
@@ -23,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use detours_macro::detour;
 use jc3gi::graphics_engine::{
     graphics_engine::{GraphicsEngine, RenderContext},
-    render_block::{RBIInfo, RenderBlockTerrain, RenderBlockTerrainDetail},
+    render_block::{RBIInfo, RenderBlockTerrainDetail},
     render_engine::{
         RenderBlockTypeRegistry, RenderEngine, TerrainDetailBudgetPatchSites as BudgetSites,
     },
@@ -33,9 +32,7 @@ use re_utilities::hook_library::HookLibrary;
 use crate::config::Config;
 
 pub(super) fn hook_library() -> HookLibrary {
-    HookLibrary::new()
-        .with_static_binder(&HULL_CLIP_TYPE_BINDER)
-        .with_static_binder(&TERRAIN_DETAIL_DRAW_BINDER)
+    HookLibrary::new().with_static_binder(&TERRAIN_DETAIL_DRAW_BINDER)
 }
 
 /// Detour on the terrain-detail render block's `Draw` for single-pass stereo. The detail rock skin is
@@ -58,26 +55,6 @@ fn terrain_detail_draw(
     };
     if !handled {
         detour.call(this, rc, info);
-    }
-}
-
-// Diagnostic: override the base VolumetricTerrain block's *water*-clip hull type (clip type 2 — the
-// below-water discard; type 1 is the LOD clip, type 0 no clipping). Kept as a lever for the dormant
-// base-terrain system; the retail world's terrain is the volumetric-patch system, which inlines its
-// own clip selection.
-#[detour(address = jc3gi::graphics_engine::render_block::RenderBlockTerrain::HullClipType_ADDRESS)]
-fn hull_clip_type(this: *const RenderBlockTerrain, render_context: *mut RenderContext) -> i64 {
-    let original = HULL_CLIP_TYPE.get().unwrap().call(this, render_context);
-    let (force, value) = Config::lock_query(|c| {
-        (
-            c.stereo.force_terrain_hull_clip,
-            c.stereo.terrain_hull_clip_value,
-        )
-    });
-    if force && original == 2 {
-        i64::from(value)
-    } else {
-        original
     }
 }
 

@@ -309,18 +309,6 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
                 crate::hooks::graphics_engine::terrain::request_detail_budget_apply();
             }
         });
-        ui.checkbox(
-            &mut cfg.stereo.force_terrain_hull_clip,
-            "Force the water-clip hull type (type 2; ruled out for #40)",
-        );
-        ui.add(
-            egui::Slider::new(&mut cfg.stereo.terrain_hull_clip_value, 0..=2)
-                .text("Replacement clip type for type 2"),
-        )
-        .on_hover_text(
-            "Clip type 2 is the below-water discard for base-LOD tiles when the camera is above \
-             water -- not the LOD clip",
-        );
     });
 
     // The engine's render-block-type registry: every registered type by name, with its engine-native

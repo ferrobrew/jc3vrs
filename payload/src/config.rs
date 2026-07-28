@@ -741,17 +741,6 @@ pub struct StereoConfig {
     /// the flicker survives two identical off-axis draws, it is not inter-eye divergence at all. VR only;
     /// no-op on flatscreen. **Default off.**
     pub mirror_eye0_to_both: bool,
-    /// Diagnostic: override the base VolumetricTerrain block's *water*-clip hull type. Clip type 2 is
-    /// the water clip (patches below the cached water level are discarded when the camera is above
-    /// water), selected for base-LOD tiles at the high-detail LOD -- it is **not** the LOD clip (that
-    /// is type 1). When set, the `HullClipType` detour replaces a returned clip type 2 with
-    /// [`terrain_hull_clip_value`](Self::terrain_hull_clip_value). Kept as a diagnostic lever; ruled
-    /// out for issue #40 (forcing it changed nothing, consistent with the water clip being irrelevant
-    /// above water). VR and flatscreen; **default off.**
-    pub force_terrain_hull_clip: bool,
-    /// The clip type the [`force_terrain_hull_clip`](Self::force_terrain_hull_clip) detour substitutes
-    /// for a returned type 2 (try 1, then 0, for the non-clipping hull variants).
-    pub terrain_hull_clip_value: i32,
     /// The multiplier for the terrain detail-tessellation GPU budget buffers — the fix for the
     /// world-locked black cliff-wall/cave-ceiling tiles (issue #40). The detail rock skin is built
     /// by a GPU pipeline that allocates vertices/indices/texels from fixed-size buffers with
@@ -857,8 +846,6 @@ impl StereoConfig {
             symmetrize_eye_frusta: false,
             mirror_eye0_to_both: false,
             fix_clustered_light_frustum: true,
-            force_terrain_hull_clip: false,
-            terrain_hull_clip_value: 1,
             terrain_detail_budget_scale: 4,
         }
     }
