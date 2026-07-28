@@ -1332,7 +1332,12 @@ fn instanced_exposure_readout(ui: &mut egui::Ui) {
     if offenders.is_empty() {
         return;
     }
-    ui.collapsing("Instanced patched-shader draws by shader", |ui| {
+    ui.collapsing("Instanced patched-shader draws by shader (sampled)", |ui| {
+        ui.label(
+            "Attributing a draw to a shader takes a lock, so it runs only on diagnostic frames. \
+             These counts are a sample and are not comparable in absolute terms with the exhaustive \
+             totals above -- read them for the ranking between shaders, not the magnitudes.",
+        );
         for offender in offenders {
             let name = offender
                 .name

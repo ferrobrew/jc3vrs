@@ -2743,9 +2743,16 @@ fn record_instanced_bystander(patched: bool, in_range: bool, instance_count: u32
 /// in-range from out-of-range so the per-shader table says whether the geometry families losing
 /// instances outside the G-buffer range are the same ones the in-range re-issue covers.
 ///
-/// Only patched shaders are attributed: the eye parity is theirs alone, and it keeps the mutex off the
-/// draws that cannot be affected by it.
+/// Only patched shaders are attributed: the eye parity is theirs alone. The attribution itself only
+/// runs on a [`diagnostic_frame`] -- every such draw pays [`diagnostic_frame`]'s relaxed load, but the
+/// map and its mutex are reached only on the sampled frame, so the per-shader table is a sample of the
+/// diagnostic cadence rather than an exhaustive tally (unlike the exposure counters in
+/// [`record_instanced_case`] and [`record_instanced_bystander`], which are plain atomics and stay
+/// exhaustive).
 fn attribute_instanced_draw(in_range: bool, instance_count: u32) {
+    if !diagnostic_frame() {
+        return;
+    }
     INSTANCED_OFFENDERS
         .lock()
         .entry(BOUND_VS.load(Ordering::Relaxed))
@@ -2779,8 +2786,9 @@ impl InstancedOffender {
 }
 
 /// The already-instanced draws issued with a patched vertex shader bound, attributed to that shader
-/// and keyed by its `ID3D11VertexShader` pointer. Cumulative, and cleared alongside [`PATCHED_VS`]
-/// (whose released pointers can be recycled).
+/// and keyed by its `ID3D11VertexShader` pointer. Cumulative over the [`diagnostic_frame`]s sampled
+/// (see [`attribute_instanced_draw`]), and cleared alongside [`PATCHED_VS`] (whose released pointers
+/// can be recycled).
 static INSTANCED_OFFENDERS: Mutex<BTreeMap<usize, InstancedOffender>> = Mutex::new(BTreeMap::new());
 
 /// One frame's already-instanced draw exposure. See [`draw_indexed_instanced_detour`].
@@ -2969,7 +2977,9 @@ fn reset_instanced_exposure() {
 }
 
 /// One entry of [`instanced_offenders`]: a vertex shader and the already-instanced draws of its that
-/// the eye-parity case applies to, whether they were re-issued per eye or left exposed.
+/// the eye-parity case applies to, whether they were re-issued per eye or left exposed. Sampled on
+/// [`diagnostic_frame`]s only (see [`attribute_instanced_draw`]), so the counts are proportional to,
+/// not equal to, the shader's actual share of the exhaustive totals in [`InstancedExposure`].
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct InstancedOffenderReport {
     /// The shader's engine name (`CreateVertexProgramParams.m_Name`), or `None` when the shader was
@@ -2977,11 +2987,11 @@ pub struct InstancedOffenderReport {
     pub name: Option<String>,
     /// The `ID3D11VertexShader` pointer -- the only identity an unnamed shader has.
     pub shader: usize,
-    /// Draws inside the G-buffer range: the ones the per-eye re-issue handles.
+    /// Draws inside the G-buffer range on a sampled frame: the ones the per-eye re-issue handles.
     pub draws: u64,
     pub instances: u64,
-    /// Draws outside it: the shadow, reflection and post passes, where nothing eye-splits and the
-    /// parity must be neutralised by the viewport slots being identical instead.
+    /// Draws outside it on a sampled frame: the shadow, reflection and post passes, where nothing
+    /// eye-splits and the parity must be neutralised by the viewport slots being identical instead.
     pub out_of_range_draws: u64,
     pub out_of_range_instances: u64,
 }
@@ -2989,7 +2999,9 @@ pub struct InstancedOffenderReport {
 /// The vertex shaders responsible for the already-instanced draws the eye-parity case applies to, the
 /// busiest first, capped at `limit`. Which shaders these are is what says how much of the extra
 /// submission cost each family is carrying, and which of them a per-block re-issue (bark, foliage,
-/// occluder) already covers.
+/// occluder) already covers. Built from [`INSTANCED_OFFENDERS`], which only accumulates on
+/// [`diagnostic_frame`]s, so this is a sample of the diagnostic cadence, not an exhaustive tally --
+/// treat the ranking as indicative and the raw counts as proportional rather than absolute.
 pub fn instanced_offenders(limit: usize) -> Vec<InstancedOffenderReport> {
     let names = PATCHED_VS_NAMES.lock();
     let mut offenders: Vec<InstancedOffenderReport> = INSTANCED_OFFENDERS
@@ -3037,7 +3049,7 @@ fn log_instanced_exposure(frame: InstancedExposure) {
         "instanced eye-parity: {} re-issued per eye ({} instances) and {} still exposed ({} \
          single-instance, {} multi-instance, {} instances) of {} DrawIndexedInstanced this frame, max \
          {} instances | mean over {} frames: {:.1} handled + {:.1} exposed of {:.1}, {:.1} handled \
-         instances, peak {} | top: {}",
+         instances, peak {} | top (sampled every {}th frame, not the exhaustive total above): {}",
         frame.handled,
         frame.handled_instances,
         frame.affected,
@@ -3052,6 +3064,7 @@ fn log_instanced_exposure(frame: InstancedExposure) {
         report.mean_total,
         report.mean_handled_instances,
         report.peak_instances,
+        DIAGNOSTIC_FRAME_CADENCE,
         if offenders.is_empty() { "-".to_string() } else { offenders.join(", ") },
     );
     tracing::info!(
