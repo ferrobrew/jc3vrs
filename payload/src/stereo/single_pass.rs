@@ -708,7 +708,7 @@ unsafe fn terrain_detail_eye_passes(
     if !terrain_active() {
         return None;
     }
-    let (m_eye, full, d3d) = baked_cb_intercept_ready(BoundVsGate::Checked)?;
+    let (m_eye, full, d3d) = baked_cb_intercept_ready("terrain-detail", BoundVsGate::Checked)?;
 
     // SAFETY: caller guarantees live pointers.
     let ovp = unsafe { (*rc).m_OffsetViewProjection.data };
@@ -997,13 +997,40 @@ pub enum BoundVsGate {
 /// (the shadow-cascade and reflection passes reuse these blocks' `DrawZ`, and eye-splitting a
 /// shadow-atlas draw would corrupt it), and outside the collapse re-issuing per eye is wrong.
 fn baked_cb_intercept_ready(
+    site: &'static str,
     gate: BoundVsGate,
 ) -> Option<([glam::Mat4; 2], D3D11_VIEWPORT, EngineContext)> {
     if gate == BoundVsGate::Checked && BOUND_VS_PATCHED.load(Ordering::Relaxed) {
+        warn_intercept_declined_on_patched_vs(site);
         return None;
     }
     eye_split_state()
 }
+
+/// Warn, at most once per `site`, that a per-eye intercept stood itself down because a patched vertex
+/// shader was bound.
+///
+/// The gate exists so an intercept and the shader rewrite cannot both claim the same geometry. But a
+/// family whose *own* vertex shaders the rewrite claims declines on every draw, for the whole session,
+/// silently -- the intercept is then dead code that reports success, and its flag documents a fix that
+/// never runs. Which families those are is not decidable from the bytecode alone: it depends on which
+/// permutations a session loads and on what happens to be bound when the block draws. So record it
+/// from the one place that knows.
+///
+/// A single line per site over a whole session is the signal that the intercept never ran at all.
+fn warn_intercept_declined_on_patched_vs(site: &'static str) {
+    if INTERCEPT_DECLINED_ON_PATCHED_VS.lock().insert(site) {
+        tracing::warn!(
+            target: "single_pass",
+            "{site} per-eye intercept declined: a patched vertex shader was bound, so the shader \
+             rewrite already owns this draw. If this is the only line for {site} all session, the \
+             intercept never ran and its flag is documenting a fix that is not happening.",
+        );
+    }
+}
+
+static INTERCEPT_DECLINED_ON_PATCHED_VS: Mutex<BTreeSet<&'static str>> =
+    Mutex::new(BTreeSet::new());
 
 /// The state every per-eye re-issue needs, without the bound-shader gate: the two per-eye `M_eye`
 /// matrices, the collapse full viewport, and the immediate context. Requires the collapse (a single
@@ -1069,7 +1096,7 @@ pub unsafe fn reproject_baked_cb_per_eye_staged(
     gate: BoundVsGate,
     mut render: impl FnMut(usize),
 ) -> bool {
-    let Some((m_eye, full, d3d)) = baked_cb_intercept_ready(gate) else {
+    let Some((m_eye, full, d3d)) = baked_cb_intercept_ready("baked-cb", gate) else {
         return false;
     };
     // SAFETY: `rc` is the live render context the detoured `Draw` received.
@@ -1125,7 +1152,9 @@ pub unsafe fn screen_uv_cb_per_eye(
     base: [f32; 16],
     mut draw: impl FnMut(),
 ) -> bool {
-    let Some((_, full, d3d)) = baked_cb_intercept_ready(BoundVsGate::Checked) else {
+    let Some((_, full, d3d)) =
+        baked_cb_intercept_ready("legacy-water screen UV", BoundVsGate::Checked)
+    else {
         return false;
     };
     // SAFETY: `rc` is live per the caller contract.
@@ -1159,8 +1188,11 @@ pub unsafe fn screen_uv_cb_per_eye(
 /// eye and does whatever staging that block needs before invoking its own `Draw`. Each call is
 /// bracketed by [`PER_EYE_REISSUE`], so the draw and viewport detours leave the block's own
 /// submissions alone instead of splitting them a second time.
-pub fn draw_per_eye_half(mut render: impl FnMut(usize)) -> bool {
-    let Some((_, full, d3d)) = baked_cb_intercept_ready(BoundVsGate::Checked) else {
+/// `site` names the calling block for the decline diagnostic (see
+/// [`warn_intercept_declined_on_patched_vs`]); it is the caller's identity rather than this helper's,
+/// because a bound-shader decline is a fact about that block's own shaders.
+pub fn draw_per_eye_half(site: &'static str, mut render: impl FnMut(usize)) -> bool {
+    let Some((_, full, d3d)) = baked_cb_intercept_ready(site, BoundVsGate::Checked) else {
         return false;
     };
     per_eye_halves(full, d3d, &mut render);

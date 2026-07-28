@@ -213,7 +213,7 @@ unsafe fn per_eye(rc: *mut RenderContext, mut draw: impl FnMut()) -> bool {
             )
         }
     } else {
-        crate::stereo::single_pass::draw_per_eye_half(&mut render)
+        crate::stereo::single_pass::draw_per_eye_half("SSDecal geometry", &mut render)
     };
     if handled {
         // Put the pass's own basis back, and the offset back to the left half. The type stages the
