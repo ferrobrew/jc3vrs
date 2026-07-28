@@ -60,6 +60,8 @@
 //! `TEXCOORD0` derived from the very clip position being reprojected, so moving the box into the
 //! eye's own frustum is what makes the eye's own reconstruction basis the right one to read it with.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use detours_macro::detour;
 use glam::Mat4;
 use jc3gi::{
@@ -92,9 +94,25 @@ pub(super) fn hook_library() -> HookLibrary {
 /// reload; the debug UI requests one when the flag changes, and [`ss_decal_draw`] keeps the interval
 /// in between bounded.
 pub(super) fn shader_rewrite_enabled() -> bool {
-    crate::stereo::single_pass::collapse_active()
-        && Config::lock_query(|c| c.stereo.single_pass_ssdecal_per_eye)
+    let enabled = crate::stereo::single_pass::collapse_active()
+        && Config::lock_query(|c| c.stereo.single_pass_ssdecal_per_eye);
+    if enabled {
+        // Sticky, never cleared: this is the same gate `create_fragment_program` reads to decide
+        // whether to splice the depth-UV offset into a permutation, so a `true` here means a
+        // rewritten permutation may now exist in the pass, for the rest of the session, even past a
+        // later toggle-off (the permutation itself stays bound, stale, until the reload it triggers
+        // lands). [`neutralize_eye_bias`] reads this latch rather than re-deriving the condition,
+        // because a live re-check would go back to `false` on toggle-off and skip the very interval
+        // it exists to cover.
+        EVER_REWRITTEN.store(true, Ordering::Relaxed);
+    }
+    enabled
 }
+
+/// Whether [`shader_rewrite_enabled`] has ever answered `true` this session, so a rewritten `ssdecal`
+/// permutation may exist. See [`shader_rewrite_enabled`] for why this is a latch rather than a
+/// re-derived condition.
+static EVER_REWRITTEN: AtomicBool = AtomicBool::new(false);
 
 #[detour(address = jc3gi::graphics_engine::render_block::RenderBlockSSDecal::Draw_ADDRESS)]
 fn ss_decal_draw(this: *const RenderBlockSSDecal, rc: *mut RenderContext, info: *const RBIInfo) {
@@ -107,8 +125,16 @@ fn ss_decal_draw(this: *const RenderBlockSSDecal, rc: *mut RenderContext, info: 
         })
     };
     if !handled {
-        // SAFETY: `rc` is the live render context the engine passed into `Draw`.
-        unsafe { neutralize_eye_bias(rc) };
+        // This is the ordinary path -- single-pass off, the collapse off, or ordinary double-draw VR
+        // all decline the per-eye re-issue and land here -- so the neutralizing write must not run
+        // unconditionally: it stages into a slack row of a constant buffer pool shared with every
+        // other block type in the frame (see `EYE_BIAS_REGISTER`), and it overwrites rather than
+        // saves and restores whatever that row held. Gating on `EVER_REWRITTEN` confines that write
+        // to sessions where a rewritten permutation could actually exist to be neutralized.
+        if EVER_REWRITTEN.load(Ordering::Relaxed) {
+            // SAFETY: `rc` is the live render context the engine passed into `Draw`.
+            unsafe { neutralize_eye_bias(rc) };
+        }
         detour.call(this, rc, info);
     }
 }
