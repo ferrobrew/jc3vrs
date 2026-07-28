@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 
 use detours_macro::detour;
 use jc3gi::{
@@ -12,7 +12,7 @@ use jc3gi::{
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
     Graphics::Direct3D11::D3D11_BOX,
-    System::Threading::{EnterCriticalSection, LeaveCriticalSection},
+    System::Threading::{EnterCriticalSection, GetCurrentThreadId, LeaveCriticalSection},
 };
 
 use crate::debug::trace::{TraceEvent, TraceState};
@@ -24,6 +24,47 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&RENDER_ENGINE_POST_DRAW_BINDER)
         .with_static_binder(&CREATE_RENDER_SETUPS_BINDER)
         .with_static_binder(&DEVICE_RESIZE_BUFFERS_BINDER)
+}
+
+/// Logs the OS thread id of a hook's first call, and again if a later call lands on a different
+/// thread than the last one logged. Not debug scaffolding: this is permanent instrumentation for
+/// `render_engine_post_draw`, `CreateRenderSetups` (both here), and
+/// `crate::hooks::game::game_update_render` (which calls this too, `pub(crate)` for exactly that),
+/// whose thread identity settles two questions static reasoning could not.
+///
+/// The first is a lock-order inversion. `crate::update` takes the `EguiState` lock and then
+/// `crate::ui::render::EGUI_DEBUG_RENDER_STATE` inside it; `render_engine_post_draw` takes
+/// `EGUI_DEBUG_RENDER_STATE` and holds it across `hud::egui_panel::draw_quad` and
+/// `hud::mirror_overlay::render`, both of which take the `EguiState` lock. Two blocking mutexes,
+/// acquired in opposite orders, on the shipped default path -- which deadlocks if and only if the two
+/// sides run on different threads, so the ordering is a real bug or a non-issue depending only on
+/// what these lines report.
+///
+/// The second is whether [`crate::vr::back_buffer`]'s safety argument holds: it is built on
+/// `CreateRenderSetups` running on the render thread under the drained idle context while the
+/// game-thread hooks transition its `BACKING` mutex from elsewhere.
+///
+/// `target: "thread_identity"` and the `hook`/`thread_id` field names are shared across all three call
+/// sites so the logs can be compared directly across a session.
+pub(crate) fn log_hook_thread(hook: &'static str, last_thread_id: &AtomicU32) {
+    // SAFETY: `GetCurrentThreadId` reads only the calling thread's own TEB entry; it has no
+    // preconditions and cannot fail.
+    let thread_id = unsafe { GetCurrentThreadId() };
+    // Relaxed and diagnostic-only: if the same hook is genuinely re-entered concurrently from two
+    // threads, both may see the prior value as unset and both log a "first call" line. That is itself
+    // evidence the hook is not confined to one thread, which is the fact this exists to surface.
+    let previous = last_thread_id.swap(thread_id, std::sync::atomic::Ordering::Relaxed);
+    if previous == 0 {
+        tracing::info!(target: "thread_identity", hook, thread_id, "hook entry thread (first call)");
+    } else if previous != thread_id {
+        tracing::info!(
+            target: "thread_identity",
+            hook,
+            thread_id,
+            previous_thread_id = previous,
+            "hook entry thread changed",
+        );
+    }
 }
 
 /// Keep the DXGI swapchain at the window size while the engine resizes everything else.
@@ -80,6 +121,7 @@ fn device_resize_buffers(device: *mut HDevice_t, width: u32, height: u32) -> boo
     address = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups_ADDRESS
 )]
 fn create_render_setups(this: *mut GraphicsEngine, device_info: *const DeviceInfo) -> bool {
+    log_hook_thread("CreateRenderSetups", &CREATE_RENDER_SETUPS_THREAD);
     let returned = CREATE_RENDER_SETUPS.get().unwrap().call(this, device_info);
     // Deliberately *not* gated on `returned`: the release build never sets a return value. Its C++
     // signature says `bool` and the symbol-dump build ends in `return 1`, but release codegen dropped
@@ -94,6 +136,9 @@ fn create_render_setups(this: *mut GraphicsEngine, device_info: *const DeviceInf
     }
     returned
 }
+
+/// Last-seen thread id for [`create_render_setups`]. See [`log_hook_thread`].
+static CREATE_RENDER_SETUPS_THREAD: AtomicU32 = AtomicU32::new(0);
 
 // `CGame::Draw` clears `m_DrawScene` while a static-background full-screen UI is up (pause / map), so
 // the draw thread renders only the UI and clears the eye to transparent -- a black void behind the
@@ -145,6 +190,7 @@ fn graphics_flip(device: *mut Device) -> u64 {
 
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PostDraw_ADDRESS)]
 fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Context) -> u64 {
+    log_hook_thread("render_engine_post_draw", &RENDER_ENGINE_POST_DRAW_THREAD);
     // The last render seam of the dispatch: bracket PostDraw on both timelines, then close the GPU
     // dispatch opened in `render_pass::pre_draw` (ending the disjoint query and reading back the
     // dispatches the GPU has since finished). `Context` and `HContext_t` are the same handle.
@@ -281,3 +327,6 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
 
     result
 }
+
+/// Last-seen thread id for [`render_engine_post_draw`]. See [`log_hook_thread`].
+static RENDER_ENGINE_POST_DRAW_THREAD: AtomicU32 = AtomicU32::new(0);

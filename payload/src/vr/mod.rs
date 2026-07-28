@@ -33,7 +33,10 @@
 
 pub mod projection;
 
-use std::time::Instant;
+use std::{
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    time::Instant,
+};
 
 use anyhow::Context as _;
 use openxr as xr;
@@ -379,17 +382,43 @@ pub fn frame_begin() -> Option<FrameContext> {
 
     let cfg = Config::lock_query(|c| c.vr.clone());
     match guard.begin_frame(&cfg) {
-        Ok(frame) => Some(FrameContext {
-            guard,
-            frame,
-            image_acquired: false,
-        }),
+        Ok(frame) => {
+            // Recovered from a failure streak (if any): report how long it lasted, mirroring the
+            // transition log below so the two bracket the outage in the log.
+            if FRAME_BEGIN_FAILING.swap(false, Ordering::Relaxed) {
+                let frames = FRAME_BEGIN_FAIL_COUNT.swap(0, Ordering::Relaxed);
+                tracing::info!(target: "vr", frames, "frame begin recovered");
+            }
+            Some(FrameContext {
+                guard,
+                frame,
+                image_acquired: false,
+            })
+        }
         Err(e) => {
-            tracing::warn!(target: "vr", "frame begin failed: {e:#}");
+            let count = FRAME_BEGIN_FAIL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            // This runs once a frame, so a session state that fails `wait_frame`/`begin_frame`
+            // persistently (rather than a one-off) would otherwise flood the log at the frame rate and
+            // scroll the actual diagnosis out of view. Log in full at the transition into the failure
+            // streak, then only a periodic reminder (roughly once a second at a 90 Hz frame rate) while
+            // it continues; [`FRAME_BEGIN_FAILING`] resets on recovery above.
+            if !FRAME_BEGIN_FAILING.swap(true, Ordering::Relaxed) {
+                tracing::warn!(target: "vr", "frame begin failed: {e:#}");
+            } else if count.is_multiple_of(90) {
+                tracing::warn!(target: "vr", count, "frame begin still failing: {e:#}");
+            }
             None
         }
     }
 }
+
+/// Whether [`frame_begin`] is currently in a `wait_frame`/`begin_frame` failure streak, so repeated
+/// failures log a transition and a recovery instead of one line per frame. See the rate-limiting
+/// comment in [`frame_begin`].
+static FRAME_BEGIN_FAILING: AtomicBool = AtomicBool::new(false);
+/// Frames lost to the current (or, once recovery is logged, the just-ended) frame-begin failure
+/// streak. Paired with [`FRAME_BEGIN_FAILING`].
+static FRAME_BEGIN_FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
 
 /// A per-eye view for the frame in flight: pose relative to the recenter baseline, the raw HMD FOV,
 /// and the off-axis projection built from it (both depth conventions, see [`projection`]).

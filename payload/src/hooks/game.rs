@@ -1,5 +1,5 @@
 use std::{
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicU32, Ordering},
     time::{Duration, Instant},
 };
 
@@ -25,7 +25,10 @@ use crate::{
     stereo::STEREO_STATE,
 };
 
-use super::graphics_engine::{self, graphics_engine::BLOCK_FLIP};
+use super::graphics_engine::{
+    self,
+    graphics_engine::{BLOCK_FLIP, log_hook_thread},
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -52,6 +55,7 @@ fn game_update(game: *const Game) -> bool {
 
 #[detour(address = jc3gi::game::Game::UpdateRender_ADDRESS)]
 fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
+    log_hook_thread("game_update_render", &GAME_UPDATE_RENDER_THREAD);
     #[cfg(feature = "profiler")]
     puffin::profile_scope!("CGame::UpdateRender");
     unsafe {
@@ -469,6 +473,10 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         crate::crash::mark(Phase::FrameEnd);
     }
 }
+
+/// Last-seen thread id for [`game_update_render`]. See
+/// [`graphics_engine::graphics_engine::log_hook_thread`].
+static GAME_UPDATE_RENDER_THREAD: AtomicU32 = AtomicU32::new(0);
 
 /// Snapshot of the reflection-proxy depth-history lifecycle (the 5 slot counters + the picked
 /// index). Advanced once per scene dispatch, so we restore it between the two stereo Draws.
