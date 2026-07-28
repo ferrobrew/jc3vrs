@@ -12,6 +12,8 @@
 
 use super::*;
 
+use windows::Win32::Foundation::RECT;
+
 /// Bind `viewport` to both viewport slots of the immediate context. Binding two slots (rather than
 /// one) passes the collapse viewport detour through untouched -- it only special-cases a single-slot
 /// set -- and the terrain-detail VS has no `SV_ViewportArrayIndex`, so it rasterizes into slot 0.
