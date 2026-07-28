@@ -1460,6 +1460,7 @@ unsafe extern "system" fn set_vertex_program_constants_detour(
     // range.
     if let Some(rows) =
         crate::hooks::graphics_engine::clustered_lighting::substitute_assignment_view(
+            ctx as usize,
             cb_index,
             start_offset,
             data,

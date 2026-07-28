@@ -145,14 +145,23 @@ pub(crate) fn on_render_setup_bound() {
 /// this upload is not that one or the per-eye light view is not engaged.
 ///
 /// Called from the `Graphics::SetVertexProgramConstants` detour in [`crate::stereo::single_pass`],
-/// which owns that entry point.
+/// which owns that entry point. `ctx` identifies which graphics context is staging the upload: the
+/// detour sees every vertex-constant stage in the process, and `(cb_index, start_offset, count)` alone
+/// does not identify this one -- `RenderBlockTerrainPatch` also stages exactly four rows at vertex
+/// `cb1` offset 0, the same shape the sibling per-eye reprojection in `single_pass` guards against by
+/// comparing `ctx` too. Without the check, a `RenderBlockTerrainPatch` stage that happens to land while
+/// this split is active would have its rows overwritten with the light-assignment view instead.
 pub(crate) fn substitute_assignment_view(
+    ctx: usize,
     cb_index: i32,
     start_offset: u32,
     data: *const f32,
     count: u32,
 ) -> Option<[f32; MATRIX4_FLOATS]> {
     let state = active_split()?;
+    if state.ctx != ctx {
+        return None;
+    }
     let offset = state.light_view_offset?;
     if cb_index != ASSIGNMENT_VIEW_CB
         || start_offset != 0
@@ -311,6 +320,7 @@ fn run_draw_clustered(
     // dispatch) guarantees it is valid for the duration of `DrawClustered`.
     let rc_ref = unsafe { rc.as_ref() };
     let grid = rc_ref.map(TileGrid::of);
+    let ctx = rc_ref.map(|rc| rc.m_Context as usize).unwrap_or(0);
     // Un-split runs keep reading the collapse's single dispatch index, which is always eye 0.
     let dispatch_eye = request.eye.unwrap_or_else(crate::stereo::draw_index);
     let params = crate::vr::render_params(dispatch_eye);
@@ -331,6 +341,7 @@ fn run_draw_clustered(
             let half_x = grid.exact_x / 2.0;
             Some(SplitState {
                 eye,
+                ctx,
                 grid,
                 cb0: assignment_transform(&params.projection_reverse_z, &grid),
                 cb1: tile_bounds_from_projection(
@@ -391,6 +402,10 @@ impl Drop for ClusteredScope {
 struct SplitState {
     /// The eye this run assigns lights for, and whose half of the tile grid it writes.
     eye: usize,
+    /// The graphics context `DrawClustered` is running on, as the caller's raw pointer value. Keys
+    /// [`substitute_assignment_view`]'s match so an unrelated vertex-constant stage on another context
+    /// -- or another block's on this one -- cannot be mistaken for the light-assignment view upload.
+    ctx: usize,
     grid: TileGrid,
     /// This eye's light-assignment geometry transform, substituted on `cb0`.
     cb0: [f32; MATRIX4_FLOATS],
