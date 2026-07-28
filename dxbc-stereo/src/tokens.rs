@@ -98,8 +98,11 @@ impl<'a> Iterator for Instructions<'a> {
                 return Some(Err(DxbcError::UnexpectedEndOfTokens));
             };
             let len = len as usize;
-            if len == 0 || start + len > self.tokens.len() {
+            if len == 0 {
                 return Some(Err(DxbcError::ZeroLengthInstruction));
+            }
+            if start + len > self.tokens.len() {
+                return Some(Err(DxbcError::UnexpectedEndOfTokens));
             }
             self.pos = start + len;
             return Some(Ok(Instruction {
@@ -366,5 +369,58 @@ fn immediate_component_count(num_components_enum: u32) -> usize {
         0 => 0, // zero-component: no inline values
         1 => 1, // one-component: l(x)
         _ => 4, // four-component: l(x, y, z, w)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a minimal `SHEX`-style token stream body: a version token, a length-in-dwords header,
+    /// and the given tokens, all little-endian.
+    fn token_stream_body(tokens: &[u32]) -> Vec<u8> {
+        let length = (tokens.len() + 2) as u32;
+        let mut body = Vec::new();
+        body.extend_from_slice(&0u32.to_le_bytes()); // version: pixel shader, unused by the walk.
+        body.extend_from_slice(&length.to_le_bytes());
+        for token in tokens {
+            body.extend_from_slice(&token.to_le_bytes());
+        }
+        body
+    }
+
+    /// A custom-data block whose declared length runs past the end of the token stream is a truncated
+    /// stream, not a zero-length instruction -- the two used to share `ZeroLengthInstruction`, which
+    /// told a caller bucketing by error kind the wrong story about what went wrong.
+    #[test]
+    fn a_truncated_customdata_block_is_unexpected_end_of_tokens() {
+        let body = token_stream_body(&[OPCODE_CUSTOMDATA, 100]);
+        let stream = TokenStream::new(&body).expect("header parses");
+        // `Instruction` is deliberately not `Debug` (it borrows the token stream), so match rather
+        // than `unwrap_err`, which would require the bound on the success type.
+        let Err(err) = stream
+            .instructions()
+            .next()
+            .expect("one instruction attempt")
+        else {
+            panic!("a custom-data block running past the stream must not parse");
+        };
+        assert_eq!(err, DxbcError::UnexpectedEndOfTokens);
+    }
+
+    /// A custom-data block that declares a zero length is still `ZeroLengthInstruction`: an infinite
+    /// loop in the token walk, not a truncated stream.
+    #[test]
+    fn a_zero_length_customdata_block_is_zero_length_instruction() {
+        let body = token_stream_body(&[OPCODE_CUSTOMDATA, 0]);
+        let stream = TokenStream::new(&body).expect("header parses");
+        let Err(err) = stream
+            .instructions()
+            .next()
+            .expect("one instruction attempt")
+        else {
+            panic!("a zero-length custom-data block must not parse");
+        };
+        assert_eq!(err, DxbcError::ZeroLengthInstruction);
     }
 }

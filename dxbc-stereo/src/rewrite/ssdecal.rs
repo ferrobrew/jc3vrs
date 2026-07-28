@@ -55,7 +55,10 @@ pub const SSDECAL_EYE_BIAS_REGISTER: u32 = 13;
 /// that is not one of the decal permutations), which the caller treats as "leave this one alone".
 pub fn bias_ssdecal_depth_uv(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
     let dxbc = Dxbc::parse(blob)?;
-    let shex = dxbc.shader_chunk().ok_or(DxbcError::NoShaderChunk)?;
+    if dxbc.chunk(b"SHEX").is_none() && dxbc.chunk(b"SHDR").is_some() {
+        return Err(DxbcError::UnsupportedShaderModel);
+    }
+    let shex = dxbc.chunk(b"SHEX").ok_or(DxbcError::NoShaderChunk)?;
     let stream = TokenStream::new(shex.body(blob))?;
     if stream.stage() != ShaderStage::Pixel {
         return Err(DxbcError::NoDepthUvFetch);
@@ -342,6 +345,39 @@ mod tests {
             bias_ssdecal_depth_uv(&[]).unwrap_err(),
             DxbcError::NotDxbc,
             "a non-container is rejected before any token walk",
+        );
+    }
+
+    /// A minimal DXBC container holding only an `SHDR` (SM4) chunk, no other chunks needed since the
+    /// SM4 guard is meant to reject the container before anything reads the body.
+    fn sm4_only_container() -> Vec<u8> {
+        let mut blob = Vec::new();
+        blob.extend_from_slice(b"DXBC");
+        blob.extend_from_slice(&[0u8; 16]); // checksum, unchecked by `Dxbc::parse`.
+        blob.extend_from_slice(&1u32.to_le_bytes()); // format version, unused by the guard.
+        blob.extend_from_slice(&0u32.to_le_bytes()); // total size, filled in below.
+        blob.extend_from_slice(&1u32.to_le_bytes()); // chunk count.
+        let table_offset = blob.len();
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk offset, filled in below.
+        let chunk_offset = blob.len() as u32;
+        blob.extend_from_slice(b"SHDR");
+        blob.extend_from_slice(&0u32.to_le_bytes()); // chunk body length: empty, never read.
+        blob[table_offset..table_offset + 4].copy_from_slice(&chunk_offset.to_le_bytes());
+        let total_size = blob.len() as u32;
+        blob[0x18..0x1C].copy_from_slice(&total_size.to_le_bytes());
+        blob
+    }
+
+    /// An SM4 (`SHDR`) container must be rejected up front, matching every other rewrite entry point --
+    /// see `rewrite::remap::patch_vertex_shader`, `rewrite::reproject::reproject_vertex_shader`, and
+    /// `rewrite::terrain`. Before this guard, [`bias_ssdecal_depth_uv`] fell through to
+    /// [`Dxbc::shader_chunk`], which accepts `SHDR` as a fallback, and silently reassembled the
+    /// original bytes unmodified because [`super::common::reassemble`] only substitutes an `SHEX` body.
+    #[test]
+    fn an_sm4_container_is_rejected() {
+        assert_eq!(
+            bias_ssdecal_depth_uv(&sm4_only_container()).unwrap_err(),
+            DxbcError::UnsupportedShaderModel,
         );
     }
 }
