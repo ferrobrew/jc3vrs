@@ -60,7 +60,7 @@ use jc3gi::{
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
     Foundation::RECT,
-    Graphics::Direct3D11::{D3D11_VIEWPORT, ID3D11DeviceContext},
+    Graphics::Direct3D11::{D3D11_RASTERIZER_DESC, D3D11_VIEWPORT, ID3D11DeviceContext},
     System::Threading::{EnterCriticalSection, LeaveCriticalSection},
 };
 
@@ -110,7 +110,11 @@ pub(super) fn enter_per_eye_half_with(
         let mut rects = [RECT::default(); 2];
         // SAFETY: `count` is the length of `rects`, as `RSGetScissorRects` requires.
         unsafe { d3d.RSGetScissorRects(&mut count, Some(rects.as_mut_ptr())) };
-        rects
+        SavedScissor {
+            rects,
+            count: bound_scissor_count(&rects, count),
+            enable: current_scissor_enable(d3d),
+        }
     });
     let state = PerEyeState {
         eye,
@@ -354,13 +358,29 @@ impl Drop for PerEyeHalf {
         if let Some(state) = PER_EYE.replace(None)
             && state.masked
         {
+            // Restore the bit that was actually there, not an unconditional `false`: arming the mask
+            // always turns scissor on, but the pass it interrupted may have had it on already for its own
+            // reasons (a masked post pass, a clipped UI draw), and a bare disable would silently carry
+            // that change into the rest of the frame instead of undoing only what this guard did.
+            // `saved_scissor` is `None` only when the immediate context could not be reached at capture,
+            // in which case nothing is known to restore and `false` is what this unconditionally did
+            // before the bit was tracked.
+            let enable = state.saved_scissor.is_some_and(|saved| saved.enable);
             // SAFETY: `ctx` is the graphics context the detoured `Draw` was running on, live for the
             // duration of the guard.
-            unsafe { SetScissorEnable(state.ctx, false) };
+            unsafe { SetScissorEnable(state.ctx, enable) };
             if let Some(saved) = state.saved_scissor {
                 with_immediate_context(|d3d| {
-                    // SAFETY: a two-element slice is a valid scissor-rect array.
-                    unsafe { d3d.RSSetScissorRects(Some(&saved)) };
+                    if saved.count > 0 {
+                        // SAFETY: a `count`-length prefix of a two-element array is a valid rect slice of
+                        // that length.
+                        unsafe {
+                            d3d.RSSetScissorRects(Some(&saved.rects[..saved.count as usize]))
+                        };
+                    }
+                    // `count == 0` means neither slot was really bound -- writing the runtime's leftover
+                    // (typically zeroed) rects back would install a clip-everything rect the moment
+                    // anything downstream re-enables scissor.
                 });
             }
         }
@@ -489,9 +509,21 @@ struct PerEyeState {
     arming: MaskArming,
     /// Whether the mask was actually applied; see [`PerEyeHalf::masked`].
     masked: bool,
-    /// The scissor rectangles found bound before the run, put back when the guard drops. `None` when
-    /// the immediate context could not be reached, in which case nothing was changed either.
-    saved_scissor: Option<[RECT; 2]>,
+    /// The scissor state found bound before the run, put back when the guard drops. `None` when the
+    /// immediate context could not be reached, in which case nothing was changed either.
+    saved_scissor: Option<SavedScissor>,
+}
+
+/// The scissor state [`enter_per_eye_half_with`] captures before it takes the rasterizer over, and
+/// [`PerEyeHalf`]'s drop puts back.
+#[derive(Clone, Copy)]
+struct SavedScissor {
+    /// The rectangles bound in slots 0 and 1, valid up to `count`.
+    rects: [RECT; 2],
+    /// How many leading slots of `rects` were actually bound; see [`bound_scissor_count`].
+    count: u32,
+    /// Whether scissor testing was enabled.
+    enable: bool,
 }
 
 /// How many runs a per-eye split makes: one per eye half of the double-wide collapse target.
@@ -634,6 +666,41 @@ fn set_eye_half_scissor(viewport: D3D11_VIEWPORT, eye: usize) -> Option<()> {
         // SAFETY: a two-element slice is a valid scissor-rect array.
         unsafe { d3d.RSSetScissorRects(Some(&[rect, rect])) };
     })
+}
+
+/// How many leading slots of a two-slot [`RSGetScissorRects`](ID3D11DeviceContext::RSGetScissorRects)
+/// capture were really bound, independent of `reported` -- the count the runtime handed back.
+///
+/// Whether a runtime writes back the requested slot count or the number actually bound is
+/// implementation-defined; [`capture_viewport_slots`](crate::stereo::single_pass) resolves the identical
+/// ambiguity for viewport slots by trusting the extent instead of the count, since a slot nothing bound
+/// reads back zero-width. A scissor rectangle has the same tell: a rect that is actually in effect always
+/// has positive area, so a rect with none -- typically what an unset trailing slot reads back as -- is
+/// the "not really there" signal, not `reported`. Restoring it once scissor is re-enabled later would
+/// clip every subsequent primitive through that slot to nothing.
+fn bound_scissor_count(rects: &[RECT; 2], reported: u32) -> u32 {
+    rects
+        .iter()
+        .take(reported.min(2) as usize)
+        .take_while(|r| r.right > r.left && r.bottom > r.top)
+        .count() as u32
+}
+
+/// Whether scissor testing is enabled in the rasterizer state currently bound on the immediate context.
+///
+/// [`RSGetState`](ID3D11DeviceContext::RSGetState) reports no object at all (rather than a real one) only
+/// when nothing has ever been explicitly bound, which is exactly the D3D11 default rasterizer state --
+/// whose `ScissorEnable` is `FALSE` -- so that case folds into the same answer a bound state would give
+/// if it matched the default.
+fn current_scissor_enable(d3d: &ID3D11DeviceContext) -> bool {
+    // SAFETY: `d3d` is the live immediate context.
+    let Ok(state) = (unsafe { d3d.RSGetState() }) else {
+        return false;
+    };
+    let mut desc = D3D11_RASTERIZER_DESC::default();
+    // SAFETY: `desc` is a valid receiver for a rasterizer-state description.
+    unsafe { state.GetDesc(&mut desc) };
+    desc.ScissorEnable.as_bool()
 }
 
 /// The viewport bound on the immediate context, which is the space a scissor rectangle set now would
