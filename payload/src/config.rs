@@ -3,6 +3,12 @@
 //! they need at the top of a detour. Live engine-interface state (the current eye, frame counters,
 //! the trace arm-flag) does NOT live here -- see [`crate::stereo::StereoState`] and the per-subsystem
 //! runtime statics.
+//!
+//! These types derive `Serialize`/`Deserialize`, but only the serializing half is used -- the trace
+//! manifest and the screenshot sidecar record the configuration a capture was taken under. Nothing
+//! reads a configuration back, so the `#[serde(default)]` attributes scattered through the
+//! sub-structs describe a load path that does not exist yet rather than one that is silently
+//! consulting them. Defaults come from the `new()` constructors.
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
