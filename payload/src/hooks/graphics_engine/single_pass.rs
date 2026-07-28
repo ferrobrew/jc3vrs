@@ -34,6 +34,50 @@ use re_utilities::hook_library::HookLibrary;
 
 use crate::stereo::single_pass::{BlockIntercept, BoundVsGate};
 
+/// Where a render block's baked view-projection lives, and how its intercept is gated: the four values
+/// that vary between the render-block detours below, pinned in one place so a block's buffer layout is
+/// stated once and stays greppable.
+struct BakedCbBlock {
+    /// The config flag that turns this block's reprojection on.
+    intercept: BlockIntercept,
+    /// The vertex constant buffer the block bakes its view-projection into.
+    cb_index: i32,
+    /// The first of the four consecutive registers the view-projection occupies within `cb_index`.
+    reg_offset: u32,
+    /// Whether the re-issue must check for a patched vertex shader before running (see
+    /// [`BoundVsGate`]).
+    gate: BoundVsGate,
+}
+
+/// Runs the shared re-issue dance for a render-block detour: if the block's flag is on, hand the
+/// original `Draw` off to [`reproject_baked_cb_per_eye`] so it runs once per eye against a reprojected
+/// constant; otherwise (or if the re-issue declines) fall back to a single unmodified `Draw`.
+///
+/// # Safety
+///
+/// `rc` must be the live [`RenderContext`] the engine passed to the detour, and `draw` must invoke that
+/// detour's original trampoline with the same arguments the engine passed in.
+unsafe fn intercept_render_block(
+    block: &BakedCbBlock,
+    rc: *mut RenderContext,
+    mut draw: impl FnMut(),
+) {
+    // SAFETY: forwarded from this function's own contract.
+    let handled = crate::stereo::single_pass::block_intercept_enabled(block.intercept)
+        && unsafe {
+            crate::stereo::single_pass::reproject_baked_cb_per_eye(
+                rc,
+                block.cb_index,
+                block.reg_offset,
+                block.gate,
+                &mut draw,
+            )
+        };
+    if !handled {
+        draw();
+    }
+}
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&SET_ALL_GLOBAL_SHADER_PROGRAM_CONSTANTS_BINDER)
@@ -43,6 +87,35 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&RENDER_BLOCK_FOLIAGE_DRAW_Z_BINDER)
         .with_static_binder(&RENDER_BLOCK_OCCLUDER_DRAW_Z_BINDER)
 }
+
+/// The tree-trunk/branch block bakes its world-view-projection into vertex `cb1` registers 0..3.
+const BARK: BakedCbBlock = BakedCbBlock {
+    intercept: BlockIntercept::Bark,
+    cb_index: 1,
+    reg_offset: 0,
+    gate: BoundVsGate::Owned,
+};
+
+/// The grass/foliage block bakes its view-projection into vertex `cb2` registers 4..7 (register 0 is
+/// the per-draw world matrix).
+const FOLIAGE: BakedCbBlock = BakedCbBlock {
+    intercept: BlockIntercept::Foliage,
+    cb_index: 2,
+    reg_offset: 4,
+    gate: BoundVsGate::Owned,
+};
+
+/// The occluder depth-prime block's non-instanced path bakes its world-view-projection into vertex
+/// `cb1` registers 0..3.
+///
+/// Its shaders read no `cb0[4]`, so the remap never claims them and nothing declines them at creation;
+/// the bound-shader check stays as the guard against a patched neighbour's geometry being re-issued.
+const OCCLUDER: BakedCbBlock = BakedCbBlock {
+    intercept: BlockIntercept::Occluder,
+    cb_index: 1,
+    reg_offset: 0,
+    gate: BoundVsGate::Checked,
+};
 
 /// The tree-trunk/branch block bakes its world-view-projection into vertex `cb1` registers 0..3, so
 /// reproject those four rows per eye. Covers all three of its draw kinds (plain, CPU-instanced,
@@ -56,21 +129,7 @@ fn render_block_bark_draw(
     let detour = RENDER_BLOCK_BARK_DRAW.get().unwrap();
     // SAFETY: `this`/`rc`/`info` are the live pointers the engine passed in; the closure re-invokes the
     // original `Draw` trampoline.
-    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Bark)
-        && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(
-                rc,
-                1,
-                0,
-                BoundVsGate::Owned,
-                || {
-                    detour.call(this, rc, info);
-                },
-            )
-        };
-    if !handled {
-        detour.call(this, rc, info);
-    }
+    unsafe { intercept_render_block(&BARK, rc, || detour.call(this, rc, info)) };
 }
 
 /// The tree-trunk/branch depth-and-velocity pass bakes the same `cb1` view-projection; reproject it too.
@@ -90,21 +149,7 @@ fn render_block_bark_draw_z(
 ) {
     let detour = RENDER_BLOCK_BARK_DRAW_Z.get().unwrap();
     // SAFETY: as above.
-    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Bark)
-        && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(
-                rc,
-                1,
-                0,
-                BoundVsGate::Owned,
-                || {
-                    detour.call(this, rc, info);
-                },
-            )
-        };
-    if !handled {
-        detour.call(this, rc, info);
-    }
+    unsafe { intercept_render_block(&BARK, rc, || detour.call(this, rc, info)) };
 }
 
 /// The grass/foliage block bakes its view-projection into vertex `cb2` registers 4..7 (register 0 is
@@ -117,21 +162,7 @@ fn render_block_foliage_draw(
 ) {
     let detour = RENDER_BLOCK_FOLIAGE_DRAW.get().unwrap();
     // SAFETY: as above.
-    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Foliage)
-        && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(
-                rc,
-                2,
-                4,
-                BoundVsGate::Owned,
-                || {
-                    detour.call(this, rc, info);
-                },
-            )
-        };
-    if !handled {
-        detour.call(this, rc, info);
-    }
+    unsafe { intercept_render_block(&FOLIAGE, rc, || detour.call(this, rc, info)) };
 }
 
 /// The grass/foliage depth, shadow, and velocity pass stages the same `cb2[4..7]` view-projection as
@@ -154,21 +185,7 @@ fn render_block_foliage_draw_z(
 ) {
     let detour = RENDER_BLOCK_FOLIAGE_DRAW_Z.get().unwrap();
     // SAFETY: as above.
-    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Foliage)
-        && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(
-                rc,
-                2,
-                4,
-                BoundVsGate::Owned,
-                || {
-                    detour.call(this, rc, info);
-                },
-            )
-        };
-    if !handled {
-        detour.call(this, rc, info);
-    }
+    unsafe { intercept_render_block(&FOLIAGE, rc, || detour.call(this, rc, info)) };
 }
 
 /// The occluder depth-prime block's non-instanced path bakes its world-view-projection into vertex
@@ -188,24 +205,7 @@ fn render_block_occluder_draw_z(
 ) {
     let detour = RENDER_BLOCK_OCCLUDER_DRAW_Z.get().unwrap();
     // SAFETY: as above.
-    let handled = crate::stereo::single_pass::block_intercept_enabled(BlockIntercept::Occluder)
-        && unsafe {
-            crate::stereo::single_pass::reproject_baked_cb_per_eye(
-                rc,
-                1,
-                0,
-                // The occluder's shaders read no `cb0[4]`, so the remap never claims them and nothing
-                // declines them at creation; the bound-shader check stays as the guard against a
-                // patched neighbour's geometry being re-issued.
-                BoundVsGate::Checked,
-                || {
-                    detour.call(this, rc, info);
-                },
-            )
-        };
-    if !handled {
-        detour.call(this, rc, info);
-    }
+    unsafe { intercept_render_block(&OCCLUDER, rc, || detour.call(this, rc, info)) };
 }
 
 #[detour(
