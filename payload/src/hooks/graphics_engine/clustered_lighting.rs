@@ -73,6 +73,7 @@
 
 use std::{
     cell::Cell,
+    collections::BTreeSet,
     ffi::c_void,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -86,6 +87,7 @@ use jc3gi::{
     },
     types::math::Matrix4,
 };
+use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::Graphics::Direct3D11::D3D11_VIEWPORT;
 
@@ -266,8 +268,10 @@ fn draw_clustered(
         && let Some(ctx) = ctx
         && crate::vr::render_params(1).is_some()
     {
-        // The froxel split rides on the cb1 override, so it cannot outrun it.
-        let split_eye = |eye: usize| (clustered && fix_frustum).then_some(eye);
+        // The froxel split rides on the cb1 override, so it cannot outrun it -- and it stands down on
+        // a graphics context whose resolve has already proved unmaskable, for the reason below.
+        let splittable = !unsplittable_context(ctx as usize);
+        let split_eye = |eye: usize| (clustered && fix_frustum && splittable).then_some(eye);
         for eye in 0..2 {
             let half = reconstruction::enter_per_eye_half(eye, ctx);
             let engaged = run(split_eye(eye));
@@ -275,11 +279,27 @@ fn draw_clustered(
             // does. Issuing eye 1's run would draw the same full-width image a second time, so stop.
             if !half.masked() {
                 if engaged {
-                    // The froxel split *did* engage, so the grid now holds eye 0's half beside a
-                    // cleared right half -- and nothing will fill it, because there is no second run.
-                    // Rebuild it whole-grid, which is what the un-split pass would have left.
-                    repair_warning();
-                    run(None);
+                    // Worse than a wasted split: the grid now holds eye 0's half beside a cleared
+                    // right half, and there is no second run to fill it.
+                    //
+                    // The mask refuses when the bound viewport is not the collapse's double-wide
+                    // target -- which is to say this dispatch is not the collapsed scene pass at all,
+                    // so a per-eye grid is meaningless for it. The assignment split engaged anyway
+                    // because its own precondition is weaker: it narrows as soon as the bound target
+                    // is the tile grid it sized for, which an off-scene dispatch can satisfy. The two
+                    // preconditions disagreeing is the whole defect, and the grid is shared, so the
+                    // damage lands on the main scene's forward-lit geometry rather than here.
+                    //
+                    // Maskability is a property of the pass, not of the run (see `MaskArming::
+                    // OnReconstruction`), so one observation settles it for this context: record it
+                    // and let every later dispatch on the same context skip the split outright. That
+                    // costs one half-built grid per context, once, and leaves the main scene's own
+                    // context -- which does mask -- splitting exactly as before.
+                    //
+                    // Rebuilding the grid here instead would mean re-running `DrawClustered`, resolve
+                    // included, which is the double exposure `split_fullscreen_pass_policy` exists to
+                    // prevent.
+                    decline_split_for_context(ctx as usize);
                 }
                 break;
             }
@@ -600,24 +620,37 @@ fn decline_warning(grid: &TileGrid) {
     }
 }
 
-/// Warn, once, that a per-eye froxel run built eye 0's half and then found the resolve could not be
-/// masked, so no second run will fill the other half and the grid had to be rebuilt whole.
-fn repair_warning() {
-    if !REPAIR_LOGGED.swap(true, Ordering::Relaxed) {
-        tracing::warn!(
-            target: "single_pass",
-            "per-eye froxel grid repaired: eye 0's run split the grid but the resolve could not be \
-             masked to its half, so there is no second run to fill the other half; rebuilding the \
-             grid whole-target",
-        );
+/// Record that this graphics context's `DrawClustered` cannot be split, so later dispatches on it skip
+/// the light-assignment split instead of half-building the shared grid again. Warns the first time.
+///
+/// Keyed on the context rather than latched globally: the scene's own context does mask, and letting an
+/// off-scene dispatch stand the split down everywhere would trade a once-per-context artifact for
+/// losing the per-eye grid for the whole session.
+fn decline_split_for_context(ctx: usize) {
+    if !UNSPLITTABLE_CONTEXTS.lock().insert(ctx) {
+        return;
     }
+    tracing::warn!(
+        target: "single_pass",
+        ctx = format!("{ctx:#x}"),
+        "per-eye froxel light assignment declined for this graphics context: eye 0's run split the \
+         assignment, but the resolve could not be masked to its half, which means the dispatch is not \
+         drawing to the collapse's double-wide target and a per-eye grid does not apply to it. This \
+         frame's grid is half-built; later dispatches on this context leave it whole.",
+    );
 }
+
+/// Whether [`decline_split_for_context`] has stood the split down for `ctx`.
+fn unsplittable_context(ctx: usize) -> bool {
+    UNSPLITTABLE_CONTEXTS.lock().contains(&ctx)
+}
+
+static UNSPLITTABLE_CONTEXTS: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
 
 /// One-shot latches for the coverage log lines above: the split either works for the whole session or
 /// does not, so reporting it once is the whole signal.
 static SPLIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DECLINE_LOGGED: AtomicBool = AtomicBool::new(false);
-static REPAIR_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// The light-assignment geometry shader's `ProjMatrix`: the projection, plus the NDC nudge that snaps
 /// the grid to whole tiles when the display size is not a multiple of [`TILE_SIZE`].
