@@ -68,6 +68,10 @@ jc3vrs_ensure_wine_prefix() {
         echo "wine prefix: creating $WINEPREFIX" >&2
         mkdir -p "$WINEPREFIX"
         wineboot -i >/dev/null 2>&1 || true
+        if [ ! -d "$_jc3vrs_sys32" ]; then
+            echo "wine prefix: wineboot failed to create the prefix; wine may be misconfigured" >&2
+            return 1
+        fi
     fi
 
     # `shadergen` downloads and installs the native DLL; reuse its copy if a previous run left one,

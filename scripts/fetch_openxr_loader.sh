@@ -39,10 +39,14 @@ fi
 
 # Extract the x64 desktop loader from the package (a NuGet package is a zip; there is no `unzip` in the
 # dev shell, so use Python, which the other tooling already relies on).
-python3 - "$pkg" "$MEMBER" "$dll" <<'PY'
+python3 - "$pkg" "$MEMBER" "$dll" "$VERSION" <<'PY'
 import sys, zipfile
 with zipfile.ZipFile(sys.argv[1]) as z:
-    data = z.read(sys.argv[2])
+    try:
+        data = z.read(sys.argv[2])
+    except KeyError:
+        sys.exit(f"fetch_openxr_loader: expected member {sys.argv[2]!r} not found in {sys.argv[1]}; "
+                 f"the NuGet package layout may have changed in version {sys.argv[4]}")
 with open(sys.argv[3], "wb") as f:
     f.write(data)
 PY

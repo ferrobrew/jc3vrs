@@ -49,7 +49,13 @@ pub(super) fn install() {
         .with(
             crate::session::dir()
                 .map(|dir| dir.join("jc3vrs.log"))
-                .and_then(|path| std::fs::File::create(&path).ok())
+                .and_then(|path| match std::fs::File::create(&path) {
+                    Ok(file) => Some(file),
+                    Err(e) => {
+                        eprintln!("logging: could not open {}: {e}", path.display());
+                        None
+                    }
+                })
                 .map(|file| {
                     tracing_subscriber::fmt::layer()
                         // Never write ANSI escapes to the log file.

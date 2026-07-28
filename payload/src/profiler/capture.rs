@@ -169,11 +169,17 @@ pub fn is_writing() -> bool {
 /// argument.
 #[must_use = "a writer that did not finish means the payload must stay mapped"]
 pub fn shutdown() -> bool {
-    for _ in 0..SHUTDOWN_POLLS {
+    for poll in 0..SHUTDOWN_POLLS {
         if !WRITING.load(Ordering::Acquire) {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
+        if poll > 0 && poll % 100 == 0 {
+            tracing::debug!(
+                "profiler: capture writer still running, {} s elapsed",
+                poll / 100,
+            );
+        }
     }
     tracing::error!(
         "profiler: the capture writer did not finish within {} s; leaving the payload mapped \
@@ -188,6 +194,10 @@ pub fn shutdown() -> bool {
 /// decompression" -- generous enough to cover the largest captures this mod takes (a few hundred
 /// frames of scope data) without being an unbounded wait, since the cost of waiting too long is
 /// only a slower eject, while unloading too early is the unrecoverable wedge this exists to avoid.
+///
+/// Worst case: a 5-second capture at ~3 dispatches/frame at 90 Hz is ~1350 frames, producing tens to
+/// hundreds of megabytes of JSON. On an HDD or network share, writing 200 MB+ could approach 10 s. If
+/// this proves insufficient, increase to 2000 (20 s).
 const SHUTDOWN_POLLS: u32 = 1000;
 
 fn write_capture(frames: &[Arc<FrameData>]) -> anyhow::Result<PathBuf> {

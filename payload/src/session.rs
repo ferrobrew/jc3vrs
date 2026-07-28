@@ -43,6 +43,13 @@ pub fn dir() -> Option<PathBuf> {
 /// created if missing. For artifact kinds that emit several files. `None` if the root is unavailable
 /// or the directory could not be created.
 pub fn subdir(name: &str) -> Option<PathBuf> {
+    debug_assert!(
+        !name.contains(std::path::MAIN_SEPARATOR)
+            && !name.contains('/')
+            && !name.contains('\\')
+            && name != "..",
+        "session::subdir: name must be a simple directory name, got {name:?}"
+    );
     let dir = root()?.join(name);
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
@@ -86,5 +93,22 @@ mod tests {
         assert!(millis.bytes().all(|b| b.is_ascii_digit()), "{stamp}");
         assert_eq!(date.matches('-').count(), 2, "{stamp}");
         assert_eq!(time.matches('-').count(), 2, "{stamp}");
+    }
+
+    /// `subdir` must reject path separators and parent-directory components so a caller cannot
+    /// escape the session root. Under `debug_assertions` the invalid names panic; in release builds
+    /// the test is skipped (the `debug_assert!` is a no-op there).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "session::subdir: name must be a simple directory name")]
+    fn subdir_rejects_path_separators() {
+        let _ = super::subdir("../escape");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "session::subdir: name must be a simple directory name")]
+    fn subdir_rejects_nested_path() {
+        let _ = super::subdir("a/b");
     }
 }

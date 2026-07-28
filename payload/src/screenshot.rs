@@ -14,6 +14,9 @@
 //! A writer thread outliving the payload is the hazard that buys: a thread still executing when
 //! [`crate::module::exit`] unmaps the image parks forever holding whatever it took. [`shutdown`]
 //! closes that the same way [`crate::vr::tail::shutdown`] and the profiler's capture writer do.
+//!
+//! F12 capture is best-effort: if the writer thread cannot be spawned (resource exhaustion), the
+//! capture is logged and dropped with no retry.
 
 use std::{
     path::PathBuf,

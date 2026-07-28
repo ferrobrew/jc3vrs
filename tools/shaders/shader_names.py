@@ -178,7 +178,8 @@ def main() -> None:
     if len(args) != 1 or flags - {"--json", "--scan"}:
         sys.exit(f"usage: {sys.argv[0]} <bundle.shader_bundle> [--json] [--scan]")
 
-    data = open(os.path.expanduser(args[0]), "rb").read()
+    with open(os.path.expanduser(args[0]), "rb") as f:
+        data = f.read()
     if "--scan" in flags:
         shaders, mode = _from_backwards_scan(data), "backwards-scan"
         shaders.sort(key=lambda s: s["offset"])
