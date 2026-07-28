@@ -324,6 +324,11 @@ pub(super) fn cached_vs_transform(code: &[u8]) -> Option<VsTransform> {
 /// A pristine shader blob's identity for [`VS_TRANSFORM_CACHE`]: its length and an FNV-1a hash of its
 /// bytes. The length is part of the key rather than folded into the hash so that the cheap half of the
 /// comparison is exact.
+///
+/// FNV-1a has no collision resistance, but with ~455 shaders and 64-bit hashes the birthday-bound
+/// collision probability is negligible (~1e-15). The length is part of the key to make the cheap half
+/// exact, so a collision would require two shaders of the same length with identical hash —
+/// astronomically unlikely for this corpus.
 fn vs_blob_key(code: &[u8]) -> (usize, u64) {
     const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;

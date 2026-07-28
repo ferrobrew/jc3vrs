@@ -66,6 +66,9 @@ pub(super) unsafe extern "system" fn create_vertex_shader_detour(
     out: *mut *mut c_void,
 ) -> i32 {
     let detour = CREATE_VERTEX_SHADER.get().expect("set before enable");
+    // `PATCH_PENDING` is only set by callers that have already verified `active()` — specifically
+    // `hooks::graphics_engine::shader` gates on `saved.is_some()` which requires `active()` — so the
+    // recording path is safe by contract even though `active()` is not re-checked here.
     let pending = PATCH_PENDING.with(Cell::take);
     // Taken unconditionally, so a name left behind by a create that did not reach the record below
     // cannot be attributed to a later, unrelated shader.

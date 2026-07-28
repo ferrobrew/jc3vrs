@@ -382,7 +382,13 @@ pub(super) fn instanced_per_eye(submit: &dyn Fn()) -> bool {
         submitted += 1;
     }
 
-    write_cb13_rows(d3d, &rows);
+    if !write_cb13_rows(d3d, &rows) {
+        // The buffer is still mapped, so there is no way to retry within this call. The warning is the
+        // diagnostic signal: cb13 stays pinned to the last eye's rows for the rest of the pass.
+        tracing::warn!(
+            "cb13 restore failed after per-eye pin; geometry may render from one eye for the rest of the pass"
+        );
+    }
     restore_viewport_slots(d3d, saved);
     // A map failure before the first submission leaves the draw undrawn, so the caller must still
     // submit it; one after leaves it partially drawn, where a further submission would only duplicate

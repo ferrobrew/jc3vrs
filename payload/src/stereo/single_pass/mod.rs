@@ -502,6 +502,9 @@ impl<T: Function> DetourSlot<T> {
         {
             // SAFETY: the slot was already occupied, so nothing else can have seen `raw`.
             drop(unsafe { Box::from_raw(raw) });
+            // `set` is only called under `DETOUR_INSTALL`, so this should never fire; if it does, it
+            // flags a real bug — a duplicate install attempted while the slot was already occupied.
+            tracing::warn!("detour slot: duplicate install attempted and dropped");
         }
     }
 
@@ -521,6 +524,17 @@ unsafe extern "system" fn rs_set_scissor_rects_detour(
 ) {
     let detour = RS_SET_SCISSOR_RECTS.get().expect("set before enable");
     if active() && count == 1 && !rects.is_null() {
+        // Duplicating the single scissor into both slots unconditionally is correct because the
+        // viewport detour keeps the scissor and viewport in lockstep:
+        //
+        // During a per-eye re-issue, both viewport slots are already pinned to the same eye half
+        // (via `ensure_collapse_viewport` with `CollapseViewport::Eye`), so duplicating the scissor
+        // into both slots matches the duplicated viewport.
+        //
+        // During the collapse split, both viewport slots are the two eye halves, and duplicating the
+        // single scissor into both is the non-diverging fallback — each eye's scissor is the same
+        // full-target rect. The scissor never needs to be split differently from the viewport because
+        // the engine always sets them together.
         let rect = unsafe { *rects };
         unsafe { detour.call(context, 2, [rect, rect].as_ptr()) };
     } else {
