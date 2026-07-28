@@ -37,7 +37,7 @@ use jc3gi::graphics_engine::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::{config::Config, stereo::single_pass::VsTransform};
 
 /// The 16-byte `dp2` immediate `l(12.9898, 78.233, 0, 0)` -- the screen-pixel PCF rotation seed. The
 /// first eight bytes are the two multiplier constants; zeroing them makes the dot product (and thus
@@ -101,10 +101,13 @@ pub(super) fn hook_library() -> HookLibrary {
 ///
 /// When single-pass (or its census-only dry-run) is enabled, run [`dxbc_stereo::patch_vertex_shader`]
 /// on the incoming DXBC and tally the outcome ([`crate::stereo::single_pass::record_patch_outcome`]),
-/// so the debug UI reports how the rewriter fares against the game's real shader set. When single-pass
-/// is *active* (master on, dry-run off, capability present), also point the params at the patched copy
-/// for the (bytecode-copying) `CreateVertexShader` call -- the copy is kept alive in `saved` and the
-/// caller's pointer restored afterwards, exactly as the fragment hook does. The patched shader reads
+/// so the debug UI reports how the rewriter fares against the game's real shader set. Decide which of
+/// the single-pass transforms the shader is to get ([`crate::stereo::single_pass::decide_vs_transform`])
+/// -- that decision reads the shader's engine name, which exists nowhere else -- and remember it
+/// against the bytecode for the D3D-level re-create path. When single-pass is *active* (master on,
+/// dry-run off, capability present), also point the params at the patched copy for the
+/// (bytecode-copying) `CreateVertexShader` call -- the copy is kept alive in `saved` and the caller's
+/// pointer restored afterwards, exactly as the fragment hook does. The patched shader reads
 /// its position from `cb13` (see [`crate::hooks::graphics_engine::single_pass`]); in dry-run the copy
 /// is discarded and rendering is unchanged. Only sees shaders created after it installs; use the
 /// shader-reload button for shaders loaded before injection.
@@ -143,66 +146,34 @@ fn create_vertex_program(
         // pristine: the remap would claim it on a `cb0[4]` reference that is not its position path,
         // leaving both eyes on the collapsed centre view *and* standing the intercept down. It is
         // counted as having no per-eye reference, which is what it has -- no per-eye *clip* reference.
-        let outcome = if crate::stereo::single_pass::baked_cb_block_owns_vs(name.as_deref(), code) {
+        let owned = crate::stereo::single_pass::baked_cb_block_owns_vs(name.as_deref(), code);
+        let outcome = if owned {
             Err(dxbc_stereo::DxbcError::NoPerEyeReferences)
         } else {
             dxbc_stereo::patch_vertex_shader(code)
         };
         crate::stereo::single_pass::record_patch_outcome(&outcome, name.as_deref());
-        // Substitute the rewritten bytecode when single-pass is active. The `cb0` remap is the primary
-        // path; a shader with no per-eye `cb0` operand instead takes the reprojection rewrite, but only
-        // for the scene-geometry families on the allowlist -- reprojecting an NDC writer (sky, UI,
-        // post) would corrupt it. The reprojection rewrite can still bow out (e.g. a terrain VS with no
-        // position output), in which case the shader is left double-drawn.
+        // Which transform this shader gets is decided here, because here is the only place its engine
+        // name exists. The decision is then remembered against the bytecode, so the `CreateVertexShader`
+        // detour re-applies *this* decision to a shader re-created through a path that skips this hook,
+        // rather than deriving a `cb0` remap it has no name to override.
+        //
+        // Decided (and remembered) whether or not single-pass is active: the dry-run census is the only
+        // pass over the shader set that some shaders get, and turning single-pass on afterwards creates
+        // no new programs to decide from.
+        let transform = if owned {
+            VsTransform::None
+        } else {
+            crate::stereo::single_pass::decide_vs_transform(name.as_deref(), code, &outcome)
+        };
+        crate::stereo::single_pass::remember_vs_transform(code, transform);
         let substitute = if crate::stereo::single_pass::active() {
-            match outcome {
-                // An allowlisted family the remap claims on a `cb0[4]` camera-position reference alone
-                // takes its clip from a baked matrix, so the remap would leave both eye halves on the
-                // collapsed centre viewpoint. Prefer the reprojection, which is the transform it should
-                // have had; if that rewrite bows out, keep the remap rather than dropping the shader to
-                // no per-eye transform at all.
-                Ok(ref patched)
-                    if crate::stereo::single_pass::should_reproject_camera_only(
-                        name.as_deref(),
-                        code,
-                    ) =>
-                {
-                    dxbc_stereo::reproject_vertex_shader(code)
-                        .ok()
-                        .or_else(|| Some(patched.clone()))
-                }
-                Ok(patched) => Some(patched),
-                Err(dxbc_stereo::DxbcError::NoPerEyeReferences)
-                    if crate::stereo::single_pass::should_reproject(name.as_deref()) =>
-                {
-                    dxbc_stereo::reproject_vertex_shader(code).ok()
-                }
-                // The terrain VS builds no clip (the domain shader does), so it neither remaps nor
-                // reprojects -- it originates the eye index on the free TEXCOORD3.z lane, forwarded
-                // through the hull to the domain (see the terrain path in `single_pass`).
-                Err(dxbc_stereo::DxbcError::NoPerEyeReferences)
-                    if crate::stereo::single_pass::should_eye_inject(name.as_deref()) =>
-                {
-                    // Terrain VS families split by whether they tessellate. The non-tessellated
-                    // variants write SV_Position directly, so they reproject per-eye by M_eye exactly
-                    // like the model families; only the tessellated variants (no SV_Position -- clip is
-                    // built in the domain shader) need the eye-lane inject. Try reproject first, fall
-                    // back to eye-inject.
-                    let (out, path) = match dxbc_stereo::reproject_vertex_shader(code) {
-                        Ok(blob) => (Some(blob), "reproject"),
-                        Err(_) => (
-                            dxbc_stereo::inject_eye_forward_vertex_shader(code).ok(),
-                            "eye-inject",
-                        ),
-                    };
-                    tracing::info!(
-                        target: "single_pass", stage = "vertex", name = ?name, path,
-                        transformed = out.is_some(), "terrain: VS transform",
-                    );
-                    out
-                }
-                Err(_) => None,
-            }
+            crate::stereo::single_pass::apply_vs_transform(
+                transform,
+                code,
+                outcome.ok(),
+                name.as_deref(),
+            )
         } else {
             None
         };

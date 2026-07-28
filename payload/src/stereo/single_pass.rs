@@ -7,7 +7,11 @@
 //! - the DXVK viewport-routing **capability probe** ([`probe`] / [`capability`]);
 //! - the vertex-shader rewrite **census** ([`record_patch_outcome`] and the `*_count` getters), which
 //!   the `CreateVertexProgram` hook feeds so the debug UI can report how the rewriter fared against
-//!   the game's real shader set.
+//!   the game's real shader set;
+//! - which **transform** each vertex shader gets ([`decide_vs_transform`]), decided from its engine
+//!   name at `CreateVertexProgram` time and remembered against its bytecode ([`remember_vs_transform`])
+//!   so the D3D-level re-create path, which sees no name, applies the same decision instead of
+//!   guessing a different one.
 //!
 //! The rest of the pipeline (cb13 dual-eye upload, the double-wide render-setup re-init, the
 //! draw-doubling) runs under [`crate::config::StereoConfig::single_pass`] and the per-step flags
@@ -290,6 +294,152 @@ pub fn terrain_counts() -> (usize, usize) {
     )
 }
 
+/// Which single-pass transform a vertex shader is to be given, resolved at `CreateVertexProgram` time
+/// (see [`decide_vs_transform`]) and applied by [`apply_vs_transform`].
+///
+/// The decision needs the shader's engine name, which only the `CreateVertexProgram` hook has: the
+/// D3D layer sees a bare blob. So the decision is made once, where the name is, and carried to the
+/// D3D layer through [`remember_vs_transform`] rather than guessed at again from the bytecode --
+/// guessing can only ever produce the `cb0` remap, which for the reprojection families is the wrong
+/// transform and for the intercept-owned families is one transform too many.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VsTransform {
+    /// The `cb0` per-eye remap ([`dxbc_stereo::patch_vertex_shader`]).
+    Remap,
+    /// The `M_eye` reprojection, keeping the remap if the reprojection bows out. For a family the
+    /// remap claims on a `cb0[4]` camera-position reference alone (see
+    /// [`should_reproject_camera_only`]) -- reprojection is the transform it should have had, and the
+    /// remap is still better than no per-eye transform at all.
+    ReprojectOrRemap,
+    /// The `M_eye` reprojection alone, for an allowlisted family the remap found no per-eye operand in.
+    Reproject,
+    /// The `M_eye` reprojection, falling back to originating the eye index on the free `TEXCOORD3.z`
+    /// lane. The terrain families split by whether they tessellate: the non-tessellated variants write
+    /// `SV_Position` and reproject like the model families, and only the tessellated ones (whose clip
+    /// is built in the domain shader) need the eye-lane inject.
+    ReprojectOrEyeInject,
+    /// Leave the shader pristine. Either no transform applies to it, or a render-block intercept owns
+    /// its draws ([`baked_cb_block_owns_vs`]) and the two mechanisms must not both claim the same
+    /// geometry.
+    None,
+}
+
+/// Resolve which single-pass transform a vertex shader is to be given, from its engine name and the
+/// outcome of the `cb0` remap on its bytecode. Callers that a block intercept owns must pass
+/// [`VsTransform::None`] to [`remember_vs_transform`] instead of consulting this.
+///
+/// Decided independently of [`active`], so the decision is on record for the D3D layer even in the
+/// census-only dry-run: enabling single-pass afterwards creates no new shader *programs*, so the
+/// dry-run pass is the only chance to record a name-derived decision for the shaders already loaded.
+pub fn decide_vs_transform(
+    name: Option<&str>,
+    code: &[u8],
+    remap: &Result<Vec<u8>, DxbcError>,
+) -> VsTransform {
+    match remap {
+        Ok(_) if should_reproject_camera_only(name, code) => VsTransform::ReprojectOrRemap,
+        Ok(_) => VsTransform::Remap,
+        Err(DxbcError::NoPerEyeReferences) if should_reproject(name) => VsTransform::Reproject,
+        Err(DxbcError::NoPerEyeReferences) if should_eye_inject(name) => {
+            VsTransform::ReprojectOrEyeInject
+        }
+        Err(_) => VsTransform::None,
+    }
+}
+
+/// Rewrite `code` per `transform`, or `None` when the shader is to be left pristine (either the
+/// decision was [`VsTransform::None`] or every rewrite the decision allows bowed out). `remapped` is
+/// the `cb0` remap's output where the caller already has it, so the creation path does not run the
+/// rewrite twice; pass `None` to have it run on demand. `name` is used only for the terrain log line.
+pub fn apply_vs_transform(
+    transform: VsTransform,
+    code: &[u8],
+    remapped: Option<Vec<u8>>,
+    name: Option<&str>,
+) -> Option<Vec<u8>> {
+    let remap = || remapped.or_else(|| dxbc_stereo::patch_vertex_shader(code).ok());
+    match transform {
+        VsTransform::Remap => remap(),
+        VsTransform::ReprojectOrRemap => dxbc_stereo::reproject_vertex_shader(code)
+            .ok()
+            .or_else(remap),
+        VsTransform::Reproject => dxbc_stereo::reproject_vertex_shader(code).ok(),
+        VsTransform::ReprojectOrEyeInject => {
+            let (out, path) = match dxbc_stereo::reproject_vertex_shader(code) {
+                Ok(blob) => (Some(blob), "reproject"),
+                Err(_) => (
+                    dxbc_stereo::inject_eye_forward_vertex_shader(code).ok(),
+                    "eye-inject",
+                ),
+            };
+            tracing::info!(
+                target: "single_pass", stage = "vertex", name = ?name, path,
+                transformed = out.is_some(), "terrain: VS transform",
+            );
+            out
+        }
+        VsTransform::None => None,
+    }
+}
+
+/// Record the transform decided for the pristine blob `code`, so [`create_vertex_shader_detour`] can
+/// apply the same decision to a shader that reaches D3D without passing the `CreateVertexProgram`
+/// hook. Overwrites any previous decision for the same blob, so a re-created program re-decides under
+/// the current config rather than being pinned by the first pass.
+pub fn remember_vs_transform(code: &[u8], transform: VsTransform) {
+    VS_TRANSFORM_CACHE
+        .lock()
+        .insert(vs_blob_key(code), transform);
+}
+
+/// The transform decided at `CreateVertexProgram` time for each pristine vertex-shader blob, keyed by
+/// the blob's content.
+///
+/// **Keyed by content, not by pointer.** The engine owns the bytecode and frees and reuses those
+/// allocations, so a blob address is not a stable identity for a decision that has to survive until
+/// some later `ResourceCacheReCreateResource` hands the same bytecode to D3D. Hashing every blob costs
+/// one pass over a few hundred kilobytes per bundle load -- next to nothing beside the DXBC parse the
+/// rewrite does on the same blob, and on the re-create path it *replaces* a parse.
+///
+/// The bytes the two layers see are the same bytes: `CreateVertexShader` is handed
+/// `CreateVertexProgramParams.m_Code` and `m_Size` verbatim, which is the whole reason repointing them
+/// substitutes a shader at all. So a shader that passes the hook and is then created unsubstituted --
+/// the declined families -- hits its own entry on the very next call, on the same thread.
+///
+/// **Shared across threads, unlike [`PATCH_PENDING`].** That flag has to be thread-local because it
+/// carries no identity: a free-threaded `ID3D11Device` and a streaming loader mean a process-global
+/// flag can be consumed by whatever shader another thread creates next. This map is the opposite --
+/// the key *is* the identity, so a concurrent creation on another thread can only ever match its own
+/// entry, and it must be shared precisely because the deciding thread and the re-creating thread need
+/// not be the same one. Both sides are shader-creation paths (load time), never a draw path, so the
+/// lock is uncontended in practice.
+///
+/// Cleared with the patched-shader set in [`reset_patched_vs`], which is also where a bundle bounce
+/// re-creates every shader through the hook and so repopulates it; that bounds the map at one entry
+/// per distinct vertex shader in a bundle (a few hundred).
+static VS_TRANSFORM_CACHE: Mutex<BTreeMap<(usize, u64), VsTransform>> = Mutex::new(BTreeMap::new());
+
+/// The transform [`remember_vs_transform`] recorded for this blob, or `None` if the
+/// `CreateVertexProgram` hook never saw it. A recorded [`VsTransform::None`] is a *decision* to leave
+/// the shader pristine and is deliberately distinct from never having seen it.
+fn cached_vs_transform(code: &[u8]) -> Option<VsTransform> {
+    VS_TRANSFORM_CACHE.lock().get(&vs_blob_key(code)).copied()
+}
+
+/// A pristine shader blob's identity for [`VS_TRANSFORM_CACHE`]: its length and an FNV-1a hash of its
+/// bytes. The length is part of the key rather than folded into the hash so that the cheap half of the
+/// comparison is exact.
+fn vs_blob_key(code: &[u8]) -> (usize, u64) {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = OFFSET_BASIS;
+    for byte in code {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    (code.len(), hash)
+}
+
 /// Record the outcome of running [`dxbc_stereo::patch_vertex_shader`] on one vertex shader, for the
 /// census the debug UI reports. Classifies into four buckets: successfully patched; no per-eye
 /// references (the baked-WVP / no-position families -- expected; this also covers the families
@@ -492,6 +642,10 @@ const BAKED_CB_VS_NAME_PREFIXES: &[(&str, BlockIntercept)] = &[
 /// The bytecode is the final say, not the name: a permutation that really does read the global
 /// view-projection is left to the remap, so a future bundle that moves one of these families onto
 /// `cb0` does not silently lose its position path.
+///
+/// The decline is recorded as [`VsTransform::None`] against the blob, so the D3D-level re-create path
+/// honours it too -- that path has no name to decline by, and left to itself it would remap the very
+/// shaders this declined.
 pub fn baked_cb_block_owns_vs(name: Option<&str>, code: &[u8]) -> bool {
     let Some(name) = name else {
         return false;
@@ -984,7 +1138,8 @@ pub enum BoundVsGate {
     /// the reprojected constant.
     Checked,
     /// Run regardless. For a block whose shaders are declined at creation while its own flag is on
-    /// ([`baked_cb_block_owns_vs`]), so none of them can be patched — and where the check would be
+    /// ([`baked_cb_block_owns_vs`], a decline both creation paths honour), so none of them can be
+    /// patched — and where the check would be
     /// wrong anyway: it reads the shader bound by the *previous* draw, since the block binds its own
     /// inside the `Draw` being wrapped. A bark block drawn between two patched model draws would stand
     /// down on the neighbour's shader and lose its parallax.
@@ -3120,6 +3275,18 @@ type VsSetShaderFn = unsafe extern "system" fn(*mut c_void, *mut c_void, *const 
 static CREATE_VERTEX_SHADER: DetourSlot<CreateVertexShaderFn> = DetourSlot::new();
 static VS_SET_SHADER: DetourSlot<VsSetShaderFn> = DetourSlot::new();
 
+/// What [`create_vertex_shader_detour`] made of a blob that did not arrive pre-substituted from the
+/// `CreateVertexProgram` hook.
+enum Reacquired {
+    /// The hook did see this blob and decided its transform by name ([`remember_vs_transform`]); that
+    /// decision was re-applied here. `None` when the decision was to leave the shader pristine, or
+    /// when the rewrites it allows all bowed out.
+    Decided(Option<Vec<u8>>),
+    /// The hook never saw this blob, so there is no name to decide with. Fall back to the `cb0` remap,
+    /// the only transform decidable from the bytecode alone.
+    Rederived(Result<Vec<u8>, DxbcError>),
+}
+
 /// Substitute and record the `ID3D11VertexShader` for a stereo-patched blob, covering both the fresh
 /// and the re-created shader-creation paths.
 ///
@@ -3129,11 +3296,17 @@ static VS_SET_SHADER: DetourSlot<VsSetShaderFn> = DetourSlot::new();
 /// an already-loaded shader through `ResourceCacheReCreateResource`, which calls `CreateVertexShader`
 /// directly *without* re-running `CreateVertexProgram` -- so a shader first loaded before single-pass
 /// (e.g. a character shader from level start, whose resource still holds the original bytecode) would
-/// arrive here unsubstituted and render mono/skewed. Catch that path by running the rewrite on the
-/// incoming bytecode: an unpatched-but-patchable blob is substituted in place for the create call, and
-/// an already-patched blob (`Cb13AlreadyDeclared` -- a reload of a shader whose resource already holds
-/// the patched blob) is recorded as-is. `PATCH_PENDING` short-circuits the re-analysis for the fresh
-/// path, whose blob `CreateVertexProgram` already substituted.
+/// arrive here unsubstituted and render mono/skewed.
+///
+/// Catch that path with the decision the hook already made for that blob ([`cached_vs_transform`]),
+/// which is the only way to get it right: the transform is chosen by shader *name* and the D3D layer
+/// has no name, so re-deriving one here can only ever produce the `cb0` remap -- the wrong transform
+/// for the reprojection families, and one transform too many for the families a render-block intercept
+/// owns and the hook deliberately left pristine. Only a blob the hook never saw is re-derived, and
+/// then the remap is the best that can be done: an unpatched-but-patchable blob is substituted in
+/// place for the create call, and an already-patched blob (`Cb13AlreadyDeclared` -- a reload of a
+/// shader whose resource already holds the patched blob) is recorded as-is. `PATCH_PENDING`
+/// short-circuits all of it for the fresh path, whose blob `CreateVertexProgram` already substituted.
 unsafe extern "system" fn create_vertex_shader_detour(
     device: *mut c_void,
     bytecode: *const c_void,
@@ -3148,22 +3321,39 @@ unsafe extern "system" fn create_vertex_shader_detour(
     let pending_name = PATCH_PENDING_NAME.with(Cell::take);
     let reacquired = (!pending && active() && !bytecode.is_null() && length >= 4).then(|| {
         let code = unsafe { std::slice::from_raw_parts(bytecode.cast::<u8>(), length) };
-        dxbc_stereo::patch_vertex_shader(code)
+        match cached_vs_transform(code) {
+            // No remap output to hand on (this path did not run one) and no name (the whole reason the
+            // decision had to be made elsewhere), so the terrain log line here is unnamed.
+            Some(transform) => Reacquired::Decided(apply_vs_transform(transform, code, None, None)),
+            None => Reacquired::Rederived(dxbc_stereo::patch_vertex_shader(code)),
+        }
     });
     let (record, blob, len) = match &reacquired {
-        Some(Ok(patched)) => {
+        Some(Reacquired::Decided(Some(transformed))) => {
+            CVS_DECIDED_TRANSFORMED.fetch_add(1, Ordering::Relaxed);
+            (
+                true,
+                transformed.as_ptr().cast::<c_void>(),
+                transformed.len(),
+            )
+        }
+        Some(Reacquired::Decided(None)) => {
+            CVS_DECIDED_PRISTINE.fetch_add(1, Ordering::Relaxed);
+            (false, bytecode, length)
+        }
+        Some(Reacquired::Rederived(Ok(patched))) => {
             CVS_REACQ_PATCHED.fetch_add(1, Ordering::Relaxed);
             (true, patched.as_ptr().cast::<c_void>(), patched.len())
         }
-        Some(Err(DxbcError::Cb13AlreadyDeclared)) => {
+        Some(Reacquired::Rederived(Err(DxbcError::Cb13AlreadyDeclared))) => {
             CVS_REACQ_CB13.fetch_add(1, Ordering::Relaxed);
             (true, bytecode, length)
         }
-        Some(Err(DxbcError::NoPerEyeReferences)) => {
+        Some(Reacquired::Rederived(Err(DxbcError::NoPerEyeReferences))) => {
             CVS_REACQ_NOREFS.fetch_add(1, Ordering::Relaxed);
             (false, bytecode, length)
         }
-        Some(Err(_)) => {
+        Some(Reacquired::Rederived(Err(_))) => {
             CVS_REACQ_ERR.fetch_add(1, Ordering::Relaxed);
             (false, bytecode, length)
         }
@@ -3220,8 +3410,15 @@ pub fn reset_patched_vs() {
     // Both are keyed by shader pointer, and those addresses become reusable the moment the references
     // above are dropped, so an entry that survived the reset would be attributed to a different shader.
     PATCHED_VS_NAMES.lock().clear();
+    // The transform decisions go with them: this runs mid-bounce, so the pass that follows re-decides
+    // every shader under the current config and repopulates the map. Keeping the old entries would let
+    // a decision made under config that has since changed outlive the shader it was made for, and
+    // would accumulate the previous bundle's blobs across every reload.
+    VS_TRANSFORM_CACHE.lock().clear();
     reset_instanced_exposure();
     CVS_PENDING.store(0, Ordering::Relaxed);
+    CVS_DECIDED_TRANSFORMED.store(0, Ordering::Relaxed);
+    CVS_DECIDED_PRISTINE.store(0, Ordering::Relaxed);
     CVS_REACQ_PATCHED.store(0, Ordering::Relaxed);
     CVS_REACQ_CB13.store(0, Ordering::Relaxed);
     CVS_REACQ_NOREFS.store(0, Ordering::Relaxed);
@@ -3259,6 +3456,8 @@ pub fn warn_if_shaders_hold_patched_bytecode() {
 pub struct SubstitutionStats {
     pub recorded_vs: usize,
     pub cvs_pending: usize,
+    pub cvs_decided_transformed: usize,
+    pub cvs_decided_pristine: usize,
     pub cvs_reacq_patched: usize,
     pub cvs_reacq_cb13: usize,
     pub cvs_reacq_no_refs: usize,
@@ -3274,6 +3473,8 @@ pub fn substitution_stats() -> SubstitutionStats {
     SubstitutionStats {
         recorded_vs: PATCHED_VS.lock().len(),
         cvs_pending: CVS_PENDING.load(Ordering::Relaxed),
+        cvs_decided_transformed: CVS_DECIDED_TRANSFORMED.load(Ordering::Relaxed),
+        cvs_decided_pristine: CVS_DECIDED_PRISTINE.load(Ordering::Relaxed),
         cvs_reacq_patched: CVS_REACQ_PATCHED.load(Ordering::Relaxed),
         cvs_reacq_cb13: CVS_REACQ_CB13.load(Ordering::Relaxed),
         cvs_reacq_no_refs: CVS_REACQ_NOREFS.load(Ordering::Relaxed),
@@ -3444,6 +3645,11 @@ pub fn uninstall_com_detours() {
         unsafe { com_release(shader as *mut c_void) };
     }
     PATCHED_VS_NAMES.lock().clear();
+    // The transform decisions go with them. They are normally cleared by the eject's shader bounce,
+    // but a session that patched nothing never bounces, and a `static` outlives the payload -- so a
+    // re-inject with different flags could otherwise consult the previous session's decisions for
+    // any blob the engine still has cached.
+    VS_TRANSFORM_CACHE.lock().clear();
     reset_instanced_exposure();
     tracing::info!("single-pass: COM detours uninstalled");
 }
@@ -3714,9 +3920,16 @@ static VIEWPORT_UNIFIED: AtomicUsize = AtomicUsize::new(0);
 
 /// `CreateVertexShader`-detour outcome tallies (cumulative since injection), to diagnose what the
 /// shader re-create path -- which bypasses `CreateVertexProgram` -- feeds through the D3D-level
-/// substitution: `pending` came pre-substituted from `CreateVertexProgram`; the four `reacq_*` buckets
-/// are what the detour's own rewrite of the incoming bytecode found.
+/// substitution: `pending` came pre-substituted from `CreateVertexProgram`; the two `decided_*` buckets
+/// re-applied the decision the hook recorded for that blob; the four `reacq_*` buckets are what the
+/// detour's own rewrite found for a blob the hook never saw.
 static CVS_PENDING: AtomicUsize = AtomicUsize::new(0);
+/// A blob the hook had decided a transform for, re-applied here.
+static CVS_DECIDED_TRANSFORMED: AtomicUsize = AtomicUsize::new(0);
+/// A blob the hook had decided to leave pristine -- overwhelmingly the families a render-block
+/// intercept owns. A count here is the intercepts and the rewrite staying out of each other's way; the
+/// same shaders showing up under `reacq_patched` instead would mean the decline was being undone.
+static CVS_DECIDED_PRISTINE: AtomicUsize = AtomicUsize::new(0);
 static CVS_REACQ_PATCHED: AtomicUsize = AtomicUsize::new(0);
 /// The incoming bytecode already declared `cb13`, so the rewriter refused it as already-patched.
 ///
