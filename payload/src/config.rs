@@ -245,6 +245,15 @@ pub struct StereoConfig {
     /// validates the DXBC rewriter against the game's real shader set and reports the true census in
     /// the debug UI, before the rest of the single-pass pipeline is wired up.
     pub single_pass_patch_dryrun: bool,
+    /// Record every vertex shader's name against its rewrite class and dump the result to the session
+    /// directory on a shader reload.
+    ///
+    /// The reprojection allowlist is baked in and the census it was built from is committed to
+    /// `docs/mod/single-pass-stereo.md`, so this is off by default. It earns a runtime flag rather
+    /// than a rebuild because a census only sees the shaders created while it runs: an area that
+    /// never loaded a family leaves that family out, and re-censusing is the way to catch one --
+    /// which is a thing to do in a session, not a thing to recompile for.
+    pub single_pass_dump_vs_name_census: bool,
     /// Reproject the no-`cb0` scene-geometry families (skinned characters/NPCs, props, buildings,
     /// roads, ...) for single-pass, instead of leaving them double-drawn. When on, a vertex shader
     /// with no per-eye `cb0` operand whose name is on the reprojection allowlist is rewritten to
@@ -787,6 +796,7 @@ impl StereoConfig {
             single_pass_double_wide: false,
             single_pass_collapse: false,
             single_pass_patch_dryrun: false,
+            single_pass_dump_vs_name_census: false,
             single_pass_reproject: false,
             single_pass_reproject_camera_only: true,
             single_pass_terrain: false,

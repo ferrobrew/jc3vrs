@@ -455,17 +455,21 @@ pub fn record_patch_outcome(outcome: &Result<Vec<u8>, DxbcError>, name: Option<&
         Err(_) => (&ERRORED, PatchClass::Errored),
     };
     counter.fetch_add(1, Ordering::Relaxed);
-    if DUMP_VS_NAME_CENSUS && let Some(name) = name {
+    if vs_name_census_enabled()
+        && let Some(name) = name
+    {
         VS_NAME_CENSUS.lock().insert(name.to_string(), class);
     }
 }
 
-/// Whether to record every vertex shader's name against its rewrite class and dump the result to the
-/// session directory on a shader reload (see [`dump_vs_name_census`]). Off: the reprojection allowlist
-/// ([`REPROJECT_NAME_PREFIXES`]) is baked in and the census file lives in `docs/mod/single-pass-stereo.md`.
-/// Flip to `true` and rebuild to re-census -- e.g. to catch scene shaders an area didn't load the first
-/// time (the census only sees shaders created while it runs).
-const DUMP_VS_NAME_CENSUS: bool = false;
+/// Whether to record every vertex shader's name against its rewrite class, for
+/// [`dump_vs_name_census`] to write out on the next shader reload.
+///
+/// Read live rather than pinned into the frame snapshot: this runs at shader creation, not on a draw
+/// path, and the census is armed by turning it on and reloading the shaders, which is the same action.
+fn vs_name_census_enabled() -> bool {
+    Config::lock_query(|c| c.stereo.single_pass_dump_vs_name_census)
+}
 
 /// The rewrite outcome class of a vertex shader, tracked per shader name in [`VS_NAME_CENSUS`] so the
 /// name census can group the reprojection candidates (no-per-eye-refs) apart from the `cb0`-remap set.
@@ -478,12 +482,12 @@ enum PatchClass {
 }
 
 /// Every censused vertex shader's name and its rewrite class (populated only while
-/// [`DUMP_VS_NAME_CENSUS`] is on), dumped to `vs-name-census.txt` on a shader reload to build the
+/// [`vs_name_census_enabled`] is on), dumped to `vs-name-census.txt` on a shader reload to build the
 /// reprojection allowlist from real data.
 static VS_NAME_CENSUS: Mutex<BTreeMap<String, PatchClass>> = Mutex::new(BTreeMap::new());
 
 /// Write the vertex-shader name census (see [`VS_NAME_CENSUS`]) to the session directory, grouped by
-/// rewrite class with the reprojection candidates first. A no-op unless [`DUMP_VS_NAME_CENSUS`] is on
+/// rewrite class with the reprojection candidates first. A no-op unless [`vs_name_census_enabled`] was on
 /// (the census is empty otherwise). Called after a shader reload, once the bounce has re-created every
 /// shader through the census hook.
 pub fn dump_vs_name_census() {

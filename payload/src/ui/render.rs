@@ -938,6 +938,15 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             "Runs the vertex-shader stereo rewrite on every shader at creation and counts the \
              outcomes, without changing rendering. Validates the rewriter against real shaders.",
         );
+        ui.checkbox(
+            &mut cfg.stereo.single_pass_dump_vs_name_census,
+            "Dump the vertex-shader name census on the next shader reload",
+        )
+        .on_hover_text(
+            "Records each vertex shader's name against its rewrite class and writes them to the \
+             session directory when the shaders next reload. The census only sees shaders created \
+             while it is on, so turn it on, visit the area whose families you want, and reload.",
+        );
         ui.separator();
         ui.label("Enable top-to-bottom; all are needed together for a clean image:");
         ui.add_enabled_ui(cfg.stereo.single_pass, |ui| {
