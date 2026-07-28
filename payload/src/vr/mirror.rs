@@ -101,9 +101,25 @@ static MIRROR: Mutex<Option<Mirror>> = Mutex::new(None);
 /// paces the HMD.
 pub fn present_mirror(eye: usize) {
     if let Err(e) = unsafe { present_mirror_inner(eye) } {
-        tracing::error!(target: "vr", "mirror present failed; disabling vr.mirror: {e:#}");
-        crate::config::CONFIG.lock().vr.mirror = false;
-        *MIRROR.lock() = None;
+        // Device-removed errors are fatal: the D3D11 device is gone, so the mirror cannot recover.
+        // Other errors (e.g. a transient occlusion, surface loss) may clear on the next frame, so
+        // log a warning but keep the mirror enabled for a retry.
+        if let Some(win_err) = e
+            .chain()
+            .filter_map(|src| src.downcast_ref::<windows::core::Error>())
+            .find(|win_err| {
+                let code = win_err.code();
+                code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED
+                    || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_HUNG
+                    || code == windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_RESET
+            })
+        {
+            tracing::error!(target: "vr", "mirror present failed with device-removed error {win_err}; disabling vr.mirror");
+            crate::config::CONFIG.lock().vr.mirror = false;
+            *MIRROR.lock() = None;
+        } else {
+            tracing::warn!(target: "vr", "mirror present failed (transient); will retry next frame: {e:#}");
+        }
     }
 }
 

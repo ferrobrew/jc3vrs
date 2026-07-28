@@ -127,7 +127,8 @@ pub fn resize_substitute_bypassed() -> bool {
 ///
 /// A no-op unless ownership is live, the substitution is installed, and the sizes actually differ.
 ///
-/// **Must run with the draw thread drained**, from the frame top on the game thread. That is what
+/// **Must run with the draw thread drained**, from the frame top on the game thread — the sole call
+/// site is `hooks::game::game_update_render` at the frame top, before the eye loop. That is what
 /// makes [`BYPASS_RESIZE_SUBSTITUTE`] sound: it is a process-global flag guarding a window in which
 /// no other thread may enter the `Graphics::ResizeBuffers` detour. If an `ApplyResize` on the render
 /// thread ever overlapped that window it would take the real resize and drag the swapchain to the
@@ -259,7 +260,7 @@ pub unsafe fn release_backing_texture(engine: &mut GraphicsEngine) {
             target: "vr",
             "back buffer: the substitution is still installed; retaining the backing texture. The \
              engine's m_BackBufferLinear, m_PostEffectRenderSetup, and m_BackBufferRenderSetup still \
-             point at it, so the desktop view stays dead until the engine next resizes on its own",
+             point at it.",
         );
         return;
     }
@@ -428,6 +429,8 @@ unsafe fn substitute(engine: &mut GraphicsEngine) -> anyhow::Result<()> {
     engine.m_BackBufferLinear = surface.cast::<Texture>();
     engine.m_PostEffectRenderSetup = post_effect;
     engine.m_BackBufferRenderSetup = composite;
+    // Not restored here: the next CreateRenderSetups cycle (driven by ApplyResize in on_shutdown)
+    // repopulates m_RenderContext.m_RenderSetup, the same cycle that clears INSTALLED.
     engine.m_RenderContext.m_RenderSetup = composite;
 
     // Consumers before the thing they consume: the setups reference the surface.
@@ -466,6 +469,7 @@ unsafe fn create_backing_texture(
         (*p).m_MultisampleType = MultisampleFormat::None;
         (*p).m_UsageType = UsageType::RenderTarget;
         (*p).m_PoolType = PoolType::GfxMem;
+        // BACKING_NAME is 'static, so the pointer is valid for the Create2DTexture call.
         (*p).m_Name = BACKING_NAME.as_ptr();
     }
 

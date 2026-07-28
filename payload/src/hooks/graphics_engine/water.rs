@@ -261,7 +261,10 @@ const TEX_BIAS: [f32; 16] = [
 /// What that does *not* restore is the block's own cached matrices and the shared constant buffer,
 /// which are left holding the right eye's. Nothing reads them before the next `Setup`: the draw-list
 /// walk calls `Setup` before the first `Draw` of a block-type run and again whenever the sort id
-/// changes, and every `Draw` in between comes back through here and restages per eye anyway.
+/// changes, and every `Draw` in between comes back through here and restages per eye anyway. This is
+/// verified by the pyxis definitions for `NvWaterHighEndRenderBlock::Setup` ("Neither buffer is
+/// written anywhere else, and `Draw` restages nothing") and `NvWaterHighEndRenderBlock::Draw` (which
+/// hands the same two block-held matrices straight to WaveWorks without restaging).
 ///
 /// # Safety
 ///

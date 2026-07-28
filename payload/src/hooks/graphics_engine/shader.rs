@@ -386,6 +386,13 @@ fn neutralize_unstable_dissolves(code: &mut [u8]) -> usize {
         if (token >> 12) & 0xFF == 0 && code[fade..fade + 4] == F32_ONE {
             code[fade..fade + 4].copy_from_slice(&DISSOLVE_NEVER);
             count += 1;
+        } else {
+            tracing::debug!(
+                "dissolve: seed matched at offset {i} but pattern check failed \
+                 (token type={}, fade immediate={:?}); coverage regression may have occurred",
+                (token >> 12) & 0xFF,
+                &code[fade..fade + 4],
+            );
         }
         i += DISSOLVE_SEED.len();
     }
@@ -520,6 +527,11 @@ fn toggle_bundle(name: &str) -> &'static str {
         "ShadersLowShadows" => "Shaders",
         "ShadersConstMath" => "ShadersConstMathLowShadows",
         "ShadersConstMathLowShadows" => "ShadersConstMath",
-        _ => "ShadersLowShadows",
+        _ => {
+            tracing::warn!(
+                "shader: toggle_bundle received unrecognized name {name:?}; falling back to ShadersLowShadows"
+            );
+            "ShadersLowShadows"
+        }
     }
 }

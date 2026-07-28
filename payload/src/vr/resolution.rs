@@ -136,6 +136,13 @@ pub fn apply_native_resolution() {
             // a restore if the fault above disabled native resolution.
         } else {
             pending.frames += 1;
+            if pending.frames % 60 == 0 {
+                tracing::debug!(
+                    target: "vr",
+                    "native resolution: resize pending, {} frames elapsed",
+                    pending.frames,
+                );
+            }
             if pending.frames > SERVICE_TIMEOUT_FRAMES {
                 tracing::error!(
                     target: "vr",
