@@ -1,5 +1,5 @@
 //! `NStateTask_InputLoco*` detours: the scoped aim-state shim behind
-//! [`force_fps_movement`](crate::config::MovementConfig::force_fps_movement).
+//! [`force_fps_movement`](crate::hooks::input::MovementConfig::force_fps_movement).
 //!
 //! The on-foot locomotion tasks choose between run/steer (the body rotates toward the movement
 //! direction) and aim-relative strafe (the body faces the aim reference, the directional keys
@@ -671,7 +671,7 @@ fn evaluate_character_displacement(
     // a world-space write slid in facing-dependent directions, correct at exactly one body yaw),
     // so bring the world move direction into the frame of the orientation matrix the game passed
     // in. The remaining fixed offset -- the local frame's own forward convention -- is the
-    // [`slide_rotation_deg`](crate::config::MovementConfig::slide_rotation_deg) dial, applied in
+    // [`slide_rotation_deg`](crate::hooks::input::MovementConfig::slide_rotation_deg) dial, applied in
     // the local frame. If the slide still tracks the facing after this (error doubling with yaw
     // instead of cancelling), the rotation convention of `Matrix4` -> glam is inverted here and
     // the `inverse()` should be dropped.

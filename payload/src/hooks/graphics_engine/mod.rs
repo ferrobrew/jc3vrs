@@ -3,6 +3,9 @@
 
 use re_utilities::hook_library::HookLibrary;
 
+// Exposure and post-effect config structs, accessed by `tone_mapping` and `post_effects` via
+// `Config::lock_query`.
+pub(crate) mod config;
 // `graphics_engine` stays public for hooks::game's BLOCK_FLIP reference; the others are private --
 // only `hook_library` below reaches their `extend`. The inner name mirrors jc3gi (CGraphicsEngine in
 // its own module), hence the module_inception allow.

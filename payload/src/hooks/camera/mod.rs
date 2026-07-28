@@ -25,6 +25,9 @@ use crate::{
     stereo::STEREO_STATE,
 };
 
+pub(crate) mod config;
+pub(crate) use config::CameraConfig;
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&CAMERA_UPDATE_RENDER_BINDER)
@@ -413,7 +416,7 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
 fn camera_position(
     pose: &crate::headpose::HeadPose,
     character_matrix: glam::Mat4,
-    camera_settings: &crate::config::CameraConfig,
+    camera_settings: &config::CameraConfig,
 ) -> glam::Vec3 {
     let (_, character_rotation, _) = character_matrix.to_scale_rotation_translation();
     let neck_pivot = pose.position + crate::headpose::neck_delta();
@@ -740,7 +743,7 @@ fn calculate_head_position(
     left_eye_matrix: glam::Mat4,
     right_eye_matrix: glam::Mat4,
     use_eye_matrices: bool,
-    camera_settings: &crate::config::CameraConfig,
+    camera_settings: &config::CameraConfig,
 ) -> glam::Vec3 {
     let (_, character_rotation, _character_position) =
         character_matrix.to_scale_rotation_translation();

@@ -22,7 +22,7 @@
 //! D3D passes borrow the engine's immediate context under `Context::m_Mutex`, the same discipline as
 //! [`crate::vr::blit`] and `crate::capture::composite`. On by default, but still experimental;
 //! disabling it skips the two passes and the per-draw index rewrite; see
-//! [`crate::config::FoveationConfig`].
+//! [`crate::vr::FoveationConfig`].
 
 use std::{
     ffi::c_void,

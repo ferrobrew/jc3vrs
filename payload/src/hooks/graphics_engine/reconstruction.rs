@@ -16,7 +16,7 @@
 //! and samples the sun shadow cascade over it (with the depth basis correct, the off-axis inverse
 //! reconstructs the sky and distant terrain without swimming).
 //!
-//! See [`StereoConfig::reconstruct_offaxis_inverse`](crate::config::StereoConfig).
+//! See [`StereoConfig::reconstruct_offaxis_inverse`](crate::stereo::config::StereoConfig).
 //!
 //! Substituting one eye's inverse presumes the pass is drawing *for* one eye, which the single-pass
 //! collapse breaks: there the fullscreen quad covers both eye halves of the double-wide target in a

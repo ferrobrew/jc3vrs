@@ -295,7 +295,7 @@ fn foveation_plan(first: i32, last: i32) -> Option<FoveationPlan> {
 
 /// Build the pass parameters from the config and the eye's foveal centre.
 fn foveation_params(
-    cfg: &crate::config::FoveationConfig,
+    cfg: &crate::vr::FoveationConfig,
     center_uv: glam::Vec2,
 ) -> crate::vr::foveation::FoveationParams {
     crate::vr::foveation::FoveationParams {

@@ -14,8 +14,8 @@
 //!   guessing a different one.
 //!
 //! The rest of the pipeline (cb13 dual-eye upload, the double-wide render-setup re-init, the
-//! draw-doubling) runs under [`crate::config::StereoConfig::single_pass`] and the per-step flags
-//! beside it. [`crate::config::StereoConfig::single_pass_patch_dryrun`] runs the census alone, with
+//! draw-doubling) runs under [`crate::stereo::config::StereoConfig::single_pass`] and the per-step flags
+//! beside it. [`crate::stereo::config::StereoConfig::single_pass_patch_dryrun`] runs the census alone, with
 //! no rendering change.
 
 use std::{

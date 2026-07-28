@@ -2,6 +2,9 @@
 
 use re_utilities::hook_library::HookLibrary;
 
+pub(crate) mod config;
+pub(crate) use config::MovementConfig;
+
 pub mod locomotion;
 pub mod look;
 

@@ -33,7 +33,7 @@
 //! basis describes one eye's frustum, so neither half reconstructs correctly and the error rotates
 //! with the camera -- the sun shadows slide across the screen instead of staying on the world.
 //!
-//! Under [`StereoConfig::single_pass_reconstruct_per_eye`](crate::config::StereoConfig), the block's
+//! Under [`StereoConfig::single_pass_reconstruct_per_eye`](crate::stereo::config::StereoConfig), the block's
 //! whole `Draw` is re-issued once per eye through [`reconstruction::split_fullscreen_pass`], which masks
 //! each run to that eye's half and hands it that eye's basis. The re-issue is of the whole block, not of
 //! the resolve alone, because the resolve is not separately reachable: the mask has to be armed after
@@ -51,7 +51,7 @@
 //! bind the grid through `CLightManager::SetupForwardLightingResources`, and foliage reads it a whole
 //! frame early, in `RP_VEGETATION_OPAQUE`.
 //!
-//! [`StereoConfig::single_pass_clustered_per_eye`](crate::config::StereoConfig) makes the assignment
+//! [`StereoConfig::single_pass_clustered_per_eye`](crate::stereo::config::StereoConfig) makes the assignment
 //! per-eye too. Per run (see `docs/engine/lighting-shadow-pipeline.md` section 4.1 for how the engine
 //! builds the grid, and `docs/mod/single-pass-stereo.md` for the split):
 //!

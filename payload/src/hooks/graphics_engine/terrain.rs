@@ -15,7 +15,7 @@
 //! required because injection happens after the engine has already created them, and these types'
 //! `Recreate` is a no-op in the release build. Applied automatically at the first frame start after
 //! injection and re-appliable from the debug UI. See
-//! [`StereoConfig::terrain_detail_budget_scale`](crate::config::StereoConfig).
+//! [`StereoConfig::terrain_detail_budget_scale`](crate::stereo::config::StereoConfig).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

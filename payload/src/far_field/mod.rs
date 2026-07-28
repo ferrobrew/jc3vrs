@@ -41,7 +41,10 @@ use jc3gi::graphics_engine::{
 };
 use parking_lot::Mutex;
 
-use crate::config::{Config, FarFieldMode};
+use crate::config::Config;
+
+mod config;
+pub use config::{DEFAULT_FAR_FIELD_GATED_TYPES, FarFieldConfig, FarFieldMode};
 
 pub mod share;
 

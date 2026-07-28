@@ -19,9 +19,9 @@
 //! untouched, and every correction is scoped to the main cull camera by its exact identity
 //! (`camera == this + 0x8`) -- shadow and reflection culls use different functions, and any other
 //! camera through this hook fails the check. See
-//! [`StereoConfig::widen_cull_frustum`](crate::config::StereoConfig),
-//! [`cull_size_fov_deg`](crate::config::StereoConfig::cull_size_fov_deg), and
-//! [`disable_bfbc_occlusion`](crate::config::StereoConfig::disable_bfbc_occlusion).
+//! [`StereoConfig::widen_cull_frustum`](crate::stereo::config::StereoConfig),
+//! [`cull_size_fov_deg`](crate::stereo::config::StereoConfig::cull_size_fov_deg), and
+//! [`disable_bfbc_occlusion`](crate::stereo::config::StereoConfig::disable_bfbc_occlusion).
 //!
 //! A second path widens the active camera's projection for callers that pass `m_ActiveCamera` instead
 //! of the cull camera -- `CSpawnSystem::Update` and
@@ -29,7 +29,7 @@
 //! active camera, so the cull-camera widen does not reach them. The active camera's `m_ProjectionF`
 //! is widened before the original call and fully restored (all 16 floats) after, so the per-eye
 //! render projections are untouched. See
-//! [`StereoConfig::widen_spawn_cull`](crate::config::StereoConfig).
+//! [`StereoConfig::widen_spawn_cull`](crate::stereo::config::StereoConfig).
 //!
 //! Terrain patches are a known exception: their visibility is decided by a separate landscape system
 //! that does not read this cull frustum, so these corrections do not affect terrain-patch pop-in.

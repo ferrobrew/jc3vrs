@@ -5,6 +5,8 @@ use jc3gi::types::math::Matrix4;
 
 use crate::{config, grapple, headpose, hooks, vr};
 
+use crate::hooks::character::BodyIkConfig;
+
 pub fn egui_debug_camera(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
     let cs = &mut cfg.camera;
@@ -50,7 +52,7 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
     ui.collapsing("Body IK", |ui| egui_debug_body_ik(ui, &mut cfg.body_ik));
 }
 
-fn egui_debug_body_ik(ui: &mut egui::Ui, ik: &mut config::BodyIkConfig) {
+fn egui_debug_body_ik(ui: &mut egui::Ui, ik: &mut BodyIkConfig) {
     ui.checkbox(&mut ik.enabled, "Enabled")
         .on_hover_text("Drive the upper body toward the headpose via the engine's HumanIK solver.");
     ui.checkbox(

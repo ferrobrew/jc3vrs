@@ -160,7 +160,8 @@ fn initialize_from_game() -> anyhow::Result<()> {
 
     EguiState::install()?;
     ui::render::install();
-    config::CONFIG.lock().far_field.gated_types = config::DEFAULT_FAR_FIELD_GATED_TYPES.to_owned();
+    config::CONFIG.lock().far_field.gated_types =
+        crate::far_field::DEFAULT_FAR_FIELD_GATED_TYPES.to_owned();
     hud::install();
     capture::install();
     vr::install();

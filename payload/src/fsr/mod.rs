@@ -11,6 +11,8 @@
 //! it. All of this lives on the render thread, behind [`FSR_STATE`]; dispatch runs under the engine's
 //! context mutex like the other D3D11 work.
 
+mod config;
+pub use config::FsrConfig;
 mod velocity_decode;
 
 use fsr_sys::{Context, DispatchInfo, Extent, init_flags};

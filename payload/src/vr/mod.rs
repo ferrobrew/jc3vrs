@@ -12,7 +12,7 @@
 //! toolchain) does not build in this environment -- cmake selects the Ninja generator, which the
 //! cross toolchain lacks -- so the portable choice is the runtime loader. The loader DLL defaults to
 //! `openxr_loader.dll` next to the payload DLL ([`crate::module::get_path`]) and is overridable via
-//! [`crate::config::VrConfig::loader_path`]. When the loader is absent the mod stays in flatscreen
+//! [`crate::vr::VrConfig::loader_path`]. When the loader is absent the mod stays in flatscreen
 //! stereo and retries on the configured cadence.
 //!
 //! ## Threading
@@ -27,7 +27,7 @@
 //! ## Degradation and retry
 //!
 //! Bring-up failure at any stage logs on target `"vr"` and leaves the mod in flatscreen stereo;
-//! [`update`] retries the whole bring-up every [`crate::config::VrConfig::retry_interval_secs`] while
+//! [`update`] retries the whole bring-up every [`crate::vr::VrConfig::retry_interval_secs`] while
 //! `vr.enabled`. Turning `vr.enabled` off, or [`crate::lifecycle`] shutdown, tears the runtime down
 //! in order (swapchain → session → instance) so the OpenXR instance never outlives the DLL.
 
@@ -46,7 +46,9 @@ use windows::core::Interface as _;
 
 use crate::config::Config;
 
-pub use config::{BlitGamma, FreezeMode, MirrorFraming, ProjectionConvention, VrConfig};
+pub use config::{
+    BlitGamma, FoveationConfig, FreezeMode, MirrorFraming, ProjectionConvention, VrConfig,
+};
 pub use frame::{
     EyeRenderParams, begin_render_frame, clear_render_params, cull_projection_standard,
     render_params,
@@ -298,7 +300,7 @@ const ANCHOR_SETTLE_EPS: f32 = 0.01;
 /// single [`recenter`] once gameplay is running and the player's head anchor has stopped moving (the
 /// entry animation has finished), so the neutral snaps to the player's real pose. In-session
 /// transitions such as exiting a vehicle keep a live character, so they never re-arm and never fire.
-/// See [`crate::config::VrConfig::auto_recenter_on_gameplay`].
+/// See [`crate::vr::VrConfig::auto_recenter_on_gameplay`].
 pub fn auto_recenter_tick() {
     if !Config::lock_query(|c| c.vr.auto_recenter_on_gameplay) || !is_running() {
         return;

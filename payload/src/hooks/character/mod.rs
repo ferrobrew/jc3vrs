@@ -23,6 +23,9 @@ use re_utilities::hook_library::HookLibrary;
 
 use crate::{config::Config, headpose};
 
+pub(crate) mod config;
+pub(crate) use config::BodyIkConfig;
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&CHARACTER_UPDATE_PASS_FINALIZE_POSE_PARALLEL_BINDER)

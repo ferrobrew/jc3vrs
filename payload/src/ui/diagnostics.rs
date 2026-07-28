@@ -84,7 +84,7 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
     ui.separator();
 
     // The #31 flicker-isolation A/B levers -- all default off; enable one at a time to localize the
-    // whole-terrain sun-shadow flicker. See `crate::config::StereoConfig`.
+    // whole-terrain sun-shadow flicker. See `crate::stereo::config::StereoConfig`.
     ui.collapsing("Flicker isolation (#31)", |ui| {
             ui.checkbox(
                 &mut cfg.stereo.symmetrize_eye_frusta,

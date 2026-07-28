@@ -31,7 +31,7 @@
 //! type's own bake, so the baked constants carry `0`, and restores the engine's values immediately
 //! afterwards (the engine's own settings, and its debug UI's view of them, are untouched). The LOD
 //! clip and the cull-by-detail term are left alone -- neither is view-dependent. Scoped to stereo
-//! frames and to [`StereoConfig::relax_terrain_patch_hull_culls`](crate::config::StereoConfig).
+//! frames and to [`StereoConfig::relax_terrain_patch_hull_culls`](crate::stereo::config::StereoConfig).
 //!
 //! Cost: the patches in the margin are tessellated and rasterized instead of dropped, bounded by
 //! whatever the CPU-side patch cull already admitted (itself widened to the binocular union in

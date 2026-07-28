@@ -235,7 +235,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // asymmetric off-axis frustum for a zero-shear symmetric one of the same extent (Test A); `mirror`
     // makes eye 1 reuse eye 0's params so both eyes draw the identical view (Test B). Both feed the
     // reconstruction consistently, since the camera hook and reconstruction read whatever lands in
-    // `RENDER_PARAMS`. See `crate::config::StereoConfig`.
+    // `RENDER_PARAMS`. See `crate::stereo::config::StereoConfig`.
     let (symmetrize, mirror) = config::Config::lock_query(|c| {
         (c.stereo.symmetrize_eye_frusta, c.stereo.mirror_eye0_to_both)
     });
@@ -287,7 +287,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
 }
 
 /// Build a zero-shear (symmetric) off-axis projection that preserves the eye's horizontal and vertical
-/// FOV *extent* but re-centres the frustum, for the [`crate::config::StereoConfig::symmetrize_eye_frusta`]
+/// FOV *extent* but re-centres the frustum, for the [`crate::stereo::config::StereoConfig::symmetrize_eye_frusta`]
 /// flicker-isolation diagnostic (issue #31). Each axis' symmetric half-extent is half the asymmetric
 /// tangent span, so `2/(tr-tl)` (the projection's scale term) is unchanged while the off-centre terms
 /// `(tl+tr)` and `(td+tu)` collapse to zero.

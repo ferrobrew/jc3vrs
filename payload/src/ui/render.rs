@@ -685,7 +685,7 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
         });
         ui.horizontal(|ui| {
             ui.label("Mode:");
-            use crate::config::FarFieldMode;
+            use crate::far_field::FarFieldMode;
             for (mode, label, hover) in [
                 (
                     FarFieldMode::Collect,
@@ -956,8 +956,8 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
             cfg.stereo.single_pass.occluder = on;
             cfg.stereo.single_pass.patch_dryrun = false;
             cfg.vr.native_resolution = on;
-            if on && cfg.far_field.mode == crate::config::FarFieldMode::Share {
-                cfg.far_field.mode = crate::config::FarFieldMode::Collect;
+            if on && cfg.far_field.mode == crate::far_field::FarFieldMode::Share {
+                cfg.far_field.mode = crate::far_field::FarFieldMode::Collect;
             }
             shader::request_reload();
         }
@@ -1029,9 +1029,9 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 }
                 if collapse_changed
                     && cfg.stereo.single_pass.collapse
-                    && cfg.far_field.mode == crate::config::FarFieldMode::Share
+                    && cfg.far_field.mode == crate::far_field::FarFieldMode::Share
                 {
-                    cfg.far_field.mode = crate::config::FarFieldMode::Collect;
+                    cfg.far_field.mode = crate::far_field::FarFieldMode::Collect;
                 }
                 if ui
                     .checkbox(

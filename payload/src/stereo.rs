@@ -8,6 +8,7 @@
 use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
+pub mod config;
 pub(crate) mod engine_context;
 pub mod single_pass;
 

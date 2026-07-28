@@ -51,7 +51,7 @@ const REPROJECT_NAME_PREFIXES: &[&str] = &[
 
 /// Whether a no-`cb0` vertex shader named `name` should be reprojected for single-pass: the
 /// Vertex-shader name prefixes of the far-distance tree impostors (`CTreeImpostorRB`), gated by the
-/// separate [`single_pass_tree_impostors`](crate::config::StereoConfig::single_pass_tree_impostors)
+/// separate [`single_pass_tree_impostors`](crate::stereo::config::StereoConfig::single_pass_tree_impostors)
 /// flag. The impostor VS writes `SV_Position` from the global billboard view-projection and draws a
 /// single non-instanced `DrawIndexed` -- no GPU-indirect path shares it -- so the same reprojection
 /// rewrite the scene families take covers it completely. The other vegetation families
