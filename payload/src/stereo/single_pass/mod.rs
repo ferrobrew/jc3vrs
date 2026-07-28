@@ -90,6 +90,8 @@ pub use shader_detours::*;
 pub use shader_policy::*;
 pub use viewport::*;
 
+pub(crate) use crate::stereo::engine_context::EngineContext;
+
 pub fn probe(device: &ID3D11Device) -> Capability {
     let mut options = D3D11_FEATURE_DATA_D3D11_OPTIONS3::default();
     let ok = unsafe {

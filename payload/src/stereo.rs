@@ -8,6 +8,7 @@
 use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
+pub(crate) mod engine_context;
 pub mod single_pass;
 
 /// The live stereo render state for the frame in flight.

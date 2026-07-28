@@ -52,22 +52,19 @@ use std::{
 use detours_macro::detour;
 
 use jc3gi::{
-    graphics_engine::{
-        draw::SetScissorEnable,
-        graphics_engine::{GraphicsEngine, HContext_t},
-    },
+    graphics_engine::{draw::SetScissorEnable, graphics_engine::HContext_t},
     types::math::Matrix4,
 };
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::{
     Foundation::RECT,
     Graphics::Direct3D11::{D3D11_RASTERIZER_DESC, D3D11_VIEWPORT, ID3D11DeviceContext},
-    System::Threading::{EnterCriticalSection, LeaveCriticalSection},
 };
 
 use crate::{
     config::Config,
     debug::trace::{TraceEvent, TraceState},
+    stereo::engine_context::EngineContext,
 };
 
 pub(super) fn hook_library() -> HookLibrary {
@@ -757,24 +754,14 @@ static ENGAGED: AtomicBool = AtomicBool::new(false);
 static UNMASKED_WARNED: AtomicBool = AtomicBool::new(false);
 static ENTRY_UNMASKED_WARNED: AtomicBool = AtomicBool::new(false);
 
-/// Run `f` on the engine's immediate D3D context under the context mutex every other path in the mod
-/// that touches it also takes. `None` when the device or context is not live yet.
+/// Resolve the engine's immediate D3D context and run `f` on it under the context mutex. `None` when
+/// the device or context is not live yet.
 ///
-/// The context is borrowed rather than cloned: an `AddRef`/`Release` pair per call would be wasted on
-/// a path that runs a handful of times per frame and never outlives the engine.
+/// A thin resolve-per-call wrapper over [`EngineContext`], kept because the callers here touch the
+/// context a handful of times per frame and have nothing to gain from holding a handle -- unlike the
+/// single-pass draw paths, which resolve once and carry it across a whole re-issue.
 pub(super) fn with_immediate_context<R>(f: impl FnOnce(&ID3D11DeviceContext) -> R) -> Option<R> {
-    // SAFETY: called on the render thread, where the engine's device/context pointers are stable.
-    unsafe {
-        let context = GraphicsEngine::get()?
-            .m_Device
-            .as_ref()?
-            .m_Context
-            .as_ref()?;
-        EnterCriticalSection(context.m_Mutex);
-        let result = f(&context.m_Context);
-        LeaveCriticalSection(context.m_Mutex);
-        Some(result)
-    }
+    Some(EngineContext::get()?.with_lock(f))
 }
 
 #[cfg(test)]
