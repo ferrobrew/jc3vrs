@@ -79,7 +79,7 @@ general path or need a bucket-b reproject.
 
 **Wiring — no block intercept, but the near passes are covered.** The `DrawIndexed` passes ride the
 general path when their VS is cb0-remapped. The near passes 56/57 have no bucket-(d) block intercept;
-instead `single_pass_indirect_per_eye` (on by default) detours the two GPU-indirect context-vtable
+instead `single_pass.indirect_per_eye` (on by default) detours the two GPU-indirect context-vtable
 slots wholesale and re-issues any such draw once per eye with both viewport slots pinned to that eye's
 half. That makes the near patches present and correctly sized in both eyes without parallax — before
 it, they inherited whatever viewport the previous draw left bound, usually the full double-wide one,
@@ -105,7 +105,7 @@ block. cb1 also carries opacity/UV (reg 4), the raw model matrix (regs 5–8), a
 non-instanced `DrawIndexed`; CPU-instanced `DrawIndexedInstanced`; GPU-indirect `DrawIndexedNoMutex`.
 All three read the same cb1 regs 0–3, so one reprojection corrects every kind.
 
-**Wiring — `single_pass_bark`, built, on by default.** `Draw` and `DrawZ` are detoured and re-issued once per eye
+**Wiring — `single_pass.bark`, built, on by default.** `Draw` and `DrawZ` are detoured and re-issued once per eye
 into the eye's half-viewport, with `cb1[0..3]` reprojected as `cb1[k]_eye = M_eye · cb1[k]_mono` (one
 entry at a time — the same `M_eye` the mod builds for cb13). Because `Draw` itself bakes cb1, the
 intercept reprojects the game's own `SetVertexProgramConstants(slot 1)` during a wrapped
@@ -138,7 +138,7 @@ rewriter applies. cb0 is bound for globals only.
 `DrawIndexedInstancedIndirect` (instance count in the GPU-only `m_InstDrawParams` args, populated by the
 vegetation draw-indirect compute pass); non-instanced `DrawIndexedNoMutex`.
 
-**Wiring — `single_pass_foliage`, built, on by default.** Same story as Bark: the non-indirect paths
+**Wiring — `single_pass.foliage`, built, on by default.** Same story as Bark: the non-indirect paths
 are bucket (b), but the dominant grass path is GPU-indirect and shares the VS, so a reproject allowlist
 entry would break the grass. `Draw` (colour, `0x14012DDA0`) and `DrawZ` (prez/shadow/velocity/RSM,
 `0x14012D9B0`) are therefore detoured and re-issued per eye with `cb2[4..7]` reprojected, which covers
@@ -156,7 +156,7 @@ id still indexes the original instance.
 ### Black-in-VR: the clustered grid is *not* the cause
 
 The earlier version of this section claimed the black grass was the clustered froxel grid and that
-`single_pass_clustered_per_eye` had fixed it. Both halves of that are wrong, and the shader bundle
+`single_pass.clustered_per_eye` had fixed it. Both halves of that are wrong, and the shader bundle
 says so directly.
 
 **The visible grass is deferred, not forward-lit.** The block's colour permutations split cleanly:
@@ -198,7 +198,7 @@ WARN single_pass: per-eye froxel grid declined: the 4030px double-wide render wi
 multiple of 128 …; the clustered light assignment ran whole-grid
 ```
 
-That is why toggling `single_pass_clustered_per_eye` changed nothing. Making the split usable means
+That is why toggling `single_pass.clustered_per_eye` changed nothing. Making the split usable means
 rounding the per-eye render width up to a multiple of 64 in `vr::engine_render_resolution` (so the
 double-wide is a multiple of 128) — worth doing for the local-lighting correctness it buys, but it will
 not touch the black grass.
@@ -236,7 +236,7 @@ log shows actually running). So "dark and speckled together" is the signature of
 and after that of the G-buffer *normal* (`o1`), which would leave the deferred resolve computing
 `N·L ≈ 0` on foliage while the terrain beside it lights correctly.
 
-The one-toggle experiment that separates them is `single_pass_foliage`, and it used to be unable to
+The one-toggle experiment that separates them is `single_pass.foliage`, and it used to be unable to
 engage at all — see the next section, which is now fixed.
 
 ## The vegetation `cb0[4]` misclassification (fixed)
@@ -259,7 +259,7 @@ rows. Their roles:
 Neither takes its clip position from `cb0`, so the remap bought them nothing: instance-doubling and
 `SV_ViewportArrayIndex` routing put them in both eye halves, but both halves were drawn from the
 collapsed **centre** camera. It also *locked out the fix*: `baked_cb_intercept_ready` declines whenever
-`BOUND_VS_PATCHED` is set, so `single_pass_foliage` and `single_pass_bark` could never run.
+`BOUND_VS_PATCHED` is set, so `single_pass.foliage` and `single_pass.bark` could never run.
 
 ### What that looks like, and why it is a *mono* defect
 
@@ -338,7 +338,7 @@ clip from:
   `cb0[4]` differenced into a `dp3` for a LOD fade (`mad_sat o3.w, r0.x, l(-0.0001), l(1.0)`), and a
   post-projection depth bias `mad o0.z, cb2[0].x, r0.w, r0.z`. None of them is an NDC writer: each
   multiplies an object-space position by a 4×4 matrix. All four are now on `REPROJECT_NAME_PREFIXES`
-  and take `single_pass_reproject_camera_only` (on by default, requires `single_pass_reproject`), at no
+  and take `single_pass.reproject_camera_only` (on by default, requires `single_pass.reproject`), at no
   extra draw cost. The vegetation families and `terrainshadowsimple` are also in this group but are
   owned elsewhere — the block intercepts and the shadow atlas respectively.
 - **The global full view-projection, `cb0[0..3]`.** `RenderContext::m_ViewProjectionF`
@@ -363,7 +363,7 @@ clip from:
   it. (`waterbelow`, `waterhighend`, and `watershader_lod0/1` do *not* — they build an absolute grid
   position from `cb2[0]` and read `cb0[4]` only for an output view vector. Worth separating, because it
   is the difference between a wrong sign and a no-op.) Reprojecting them is still not a standalone
-  change: `single_pass_water_uv_per_eye` biases their projective screen UVs on the premise that the
+  change: `single_pass.water_uv_per_eye` biases their projective screen UVs on the premise that the
   geometry lands at the *centre* view, so the two have to move together, with the staged UV rows
   rebuilt from the eye's full view-projection. The water-box surface grid is drawn from
   `NWater::DrawWaterBoxSurface` rather than `WaterBoxRenderBlock::Draw` and would need its own
@@ -381,7 +381,7 @@ clip from:
 `nvwaterbox` (`sh_0163`) and `nvwaterbox_tess` (`sh_0290`) sit apart, and they are the clearest
 remaining instance of the bug this whole section is about. Both add the camera position to a
 model-space position before the baked `cb1[0..3]` multiply, so `cb0[4]` really is on their position
-path. `single_pass_nvwater_per_eye` is precisely a baked-cb block intercept — it restages that matrix
+path. `single_pass.nvwater_per_eye` is precisely a baked-cb block intercept — it restages that matrix
 from the eye's own camera — but `nvwater*` is **not** on `BAKED_CB_VS_NAME_PREFIXES`, so the remap
 claims these two before the handler that owns them is ever consulted, exactly as it did `generaljc3`.
 The remapped `cb0[4]` is then added on top of a transform that already accounts for the eye offset,
@@ -411,7 +411,7 @@ at vertex slot 0, and computes clip from the engine's global per-view billboard 
 translation-bearing `m_ViewProjectionF`) — not cb0. It writes `SV_Position` directly and there is **no
 GPU-indirect path** sharing the VS.
 
-**Wiring — `single_pass_tree_impostors`, built.** The one clean allowlist win: `treeimpostor*` is a VS
+**Wiring — `single_pass.tree_impostors`, built.** The one clean allowlist win: `treeimpostor*` is a VS
 name prefix in the reproject set. The CB-agnostic reproject rewriter post-multiplies `SV_Position` by
 `M_eye` and emits `SV_ViewportArrayIndex`, and the plain `DrawIndexed` is then instance-doubled by the
 draw detour with the L/R viewport split. The card faces the centre camera rather than each eye, but at
@@ -437,7 +437,7 @@ separate. So forcing it per-eye is safe and correct — and necessary: a mono oc
 shared depth with one eye's projection, giving the other eye wrong early-Z (over-cull holes or lost
 priming).
 
-**Wiring — `single_pass_occluder`, built with an unenforced precondition.** `DrawZ` is detoured and
+**Wiring — `single_pass.occluder`, built with an unenforced precondition.** `DrawZ` is detoured and
 re-issued per eye into the eye's half-viewport with `cb1[0..3]` reprojected by `M_eye` (row 4, the depth
 bias, unchanged). The box count is small and bounded.
 
@@ -463,8 +463,8 @@ paths cover every case:
   the mod's `cb13` with both eye slots set to that eye's rows, so a single (indirect) instance reads the
   correct eye. **Not built** — no block uses this path yet.
 
-Each family has its own flag (`single_pass_bark` and `single_pass_foliage` on by default;
-`single_pass_occluder`, `single_pass_terrain`, and `single_pass_tree_impostors` off), so the model and
+Each family has its own flag (`single_pass.bark` and `single_pass.foliage` on by default;
+`single_pass.occluder`, `single_pass.terrain`, and `single_pass.tree_impostors` off), so the model and
 terrain-detail paths stay isolated while a new block is validated in-game.
 
 A re-issue marks itself while it runs, so the draw and viewport detours leave the block's own calls

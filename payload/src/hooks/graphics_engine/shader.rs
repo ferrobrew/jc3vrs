@@ -132,7 +132,9 @@ fn create_vertex_program(
     // nothing: the substitution is inert during shutdown, so the rewrite's only product is a tally
     // nobody will read.
     let census = !crate::is_shutting_down()
-        && Config::lock_query(|c| c.stereo.single_pass || c.stereo.single_pass_patch_dryrun);
+        && Config::lock_query(|c| {
+            c.stereo.single_pass.enabled || c.stereo.single_pass.patch_dryrun
+        });
     if census
         && let Some(p) = unsafe { params.as_mut() }
         && !p.m_Code.is_null()

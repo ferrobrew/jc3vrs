@@ -243,9 +243,9 @@ fn draw_clustered(
     let (fix_frustum, per_eye, clustered, light_view) = Config::lock_query(|c| {
         (
             c.stereo.fix_clustered_light_frustum,
-            c.stereo.single_pass_reconstruct_per_eye && c.stereo.reconstruct_offaxis_inverse,
-            c.stereo.single_pass_clustered_per_eye,
-            c.stereo.single_pass_clustered_per_eye_light_view,
+            c.stereo.single_pass.reconstruct_per_eye && c.stereo.reconstruct_offaxis_inverse,
+            c.stereo.single_pass.clustered_per_eye,
+            c.stereo.single_pass.clustered_per_eye_light_view,
         )
     });
     let run = |eye: Option<usize>| {

@@ -200,7 +200,7 @@ unsafe fn per_eye(
     view_projection: impl Fn(&RenderContext) -> [f32; 16],
     draw: impl FnMut(),
 ) -> bool {
-    if !Config::lock_query(|c| c.stereo.single_pass_water_uv_per_eye) {
+    if !Config::lock_query(|c| c.stereo.single_pass.water_uv_per_eye) {
         return false;
     }
     // SAFETY: `rc` is live per the caller contract.
@@ -272,7 +272,7 @@ unsafe fn nv_water_per_eye(
     rc: *mut RenderContext,
     mut draw: impl FnMut(),
 ) -> bool {
-    if !Config::lock_query(|c| c.stereo.single_pass_nvwater_per_eye) {
+    if !Config::lock_query(|c| c.stereo.single_pass.nvwater_per_eye) {
         return false;
     }
     // SAFETY: `rc` is the live render context per the caller contract.

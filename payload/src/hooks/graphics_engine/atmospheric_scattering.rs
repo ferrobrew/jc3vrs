@@ -41,7 +41,7 @@ fn atmospheric_scattering_draw(
     info: *const RBIInfo,
 ) {
     let enabled = Config::lock_query(|c| {
-        c.stereo.single_pass_atmospheric_per_eye && c.stereo.reconstruct_offaxis_inverse
+        c.stereo.single_pass.atmospheric_per_eye && c.stereo.reconstruct_offaxis_inverse
     });
     let call = || {
         ATMOSPHERIC_SCATTERING_DRAW

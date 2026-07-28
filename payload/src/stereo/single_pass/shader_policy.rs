@@ -363,7 +363,7 @@ pub fn record_patch_outcome(outcome: &Result<Vec<u8>, DxbcError>, name: Option<&
 /// Read live rather than pinned into the frame snapshot: this runs at shader creation, not on a draw
 /// path, and the census is armed by turning it on and reloading the shaders, which is the same action.
 fn vs_name_census_enabled() -> bool {
-    Config::lock_query(|c| c.stereo.single_pass_dump_vs_name_census)
+    Config::lock_query(|c| c.stereo.single_pass.dump_vs_name_census)
 }
 
 /// The rewrite outcome class of a vertex shader, tracked per shader name in [`VS_NAME_CENSUS`] so the

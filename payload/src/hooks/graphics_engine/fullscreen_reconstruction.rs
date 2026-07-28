@@ -88,7 +88,7 @@ pub(super) fn hook_library() -> HookLibrary {
 #[detour(address = jc3gi::graphics_engine::render_block::RenderBlockSSAO::Draw_ADDRESS)]
 fn ssao_block_draw(this: *mut RenderBlockSSAO, rc: *mut RenderContext, info: *const RBIInfo) {
     let enabled = Config::lock_query(|c| {
-        c.stereo.single_pass_ssao_per_eye && c.stereo.reconstruct_offaxis_inverse
+        c.stereo.single_pass.ssao_per_eye && c.stereo.reconstruct_offaxis_inverse
     });
     let call = || SSAO_BLOCK_DRAW.get().unwrap().call(this, rc, info);
 
@@ -131,7 +131,7 @@ fn ssr_draw(
     info: *const RBIInfo,
 ) {
     let enabled = Config::lock_query(|c| {
-        c.stereo.single_pass_ssr_per_eye && c.stereo.reconstruct_offaxis_inverse
+        c.stereo.single_pass.ssr_per_eye && c.stereo.reconstruct_offaxis_inverse
     });
     let call = || SSR_DRAW.get().unwrap().call(this, rc, info);
     split_or_issue_with(
@@ -157,7 +157,7 @@ fn subsurface_draw(
     info: *const RBIInfo,
 ) {
     let enabled = Config::lock_query(|c| {
-        c.stereo.single_pass_subsurface_per_eye && c.stereo.reconstruct_offaxis_inverse
+        c.stereo.single_pass.subsurface_per_eye && c.stereo.reconstruct_offaxis_inverse
     });
     let call = || SUBSURFACE_DRAW.get().unwrap().call(this, rc, info);
     split_or_issue(enabled, render_context_ctx(rc), call);
@@ -190,7 +190,7 @@ fn dof_downscale_apply(
     mgr: *mut PostEffectsManager,
 ) {
     let enabled = Config::lock_query(|c| {
-        c.stereo.single_pass_dof_per_eye && c.stereo.reconstruct_offaxis_inverse
+        c.stereo.single_pass.dof_per_eye && c.stereo.reconstruct_offaxis_inverse
     });
     let call = || DOF_DOWNSCALE_APPLY.get().unwrap().call(this, ctx, pec, mgr);
     split_or_issue_with(

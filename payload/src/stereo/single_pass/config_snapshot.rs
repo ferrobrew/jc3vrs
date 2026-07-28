@@ -97,33 +97,27 @@ pub(super) fn pin_dispatch_config_flags() {
 fn store_config_flags() -> u32 {
     let bit = |on: bool, flag: Flag| u32::from(on) << flag as u32;
     let snapshot = Config::lock_query(|c| {
-        let s = &c.stereo;
-        bit(s.single_pass, Flag::SinglePass)
-            | bit(s.single_pass_patch_dryrun, Flag::DryRun)
-            | bit(s.single_pass_dual_eye, Flag::DualEye)
-            | bit(s.single_pass_collapse, Flag::Collapse)
-            | bit(s.single_pass_double_wide, Flag::DoubleWide)
-            | bit(s.single_pass_reproject, Flag::Reproject)
-            | bit(
-                s.single_pass_reproject_camera_only,
-                Flag::ReprojectCameraOnly,
-            )
-            | bit(s.single_pass_terrain, Flag::Terrain)
-            | bit(s.single_pass_tree_impostors, Flag::TreeImpostors)
-            | bit(s.single_pass_bark, Flag::Bark)
-            | bit(s.single_pass_foliage, Flag::Foliage)
-            | bit(s.single_pass_occluder, Flag::Occluder)
-            | bit(s.single_pass_instanced_per_eye, Flag::InstancedPerEye)
-            | bit(s.single_pass_indirect_per_eye, Flag::IndirectPerEye)
-            | bit(
-                s.single_pass_uniform_viewport_slots,
-                Flag::UniformViewportSlots,
-            )
+        let s = &c.stereo.single_pass;
+        bit(s.enabled, Flag::SinglePass)
+            | bit(s.patch_dryrun, Flag::DryRun)
+            | bit(s.dual_eye, Flag::DualEye)
+            | bit(s.collapse, Flag::Collapse)
+            | bit(s.double_wide, Flag::DoubleWide)
+            | bit(s.reproject, Flag::Reproject)
+            | bit(s.reproject_camera_only, Flag::ReprojectCameraOnly)
+            | bit(s.terrain, Flag::Terrain)
+            | bit(s.tree_impostors, Flag::TreeImpostors)
+            | bit(s.bark, Flag::Bark)
+            | bit(s.foliage, Flag::Foliage)
+            | bit(s.occluder, Flag::Occluder)
+            | bit(s.instanced_per_eye, Flag::InstancedPerEye)
+            | bit(s.indirect_per_eye, Flag::IndirectPerEye)
+            | bit(s.uniform_viewport_slots, Flag::UniformViewportSlots)
             | bit(
                 s.collapse_viewport_follows_target,
                 Flag::ViewportFollowsTarget,
             )
-            | bit(s.single_pass_slot13_per_eye, Flag::Slot13PerEye)
+            | bit(s.slot13_per_eye, Flag::Slot13PerEye)
     }) | CONFIG_FLAGS_VALID;
     CONFIG_FLAGS.store(snapshot, Ordering::Relaxed);
     snapshot
