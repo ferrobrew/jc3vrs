@@ -463,8 +463,8 @@ paths cover every case:
   the mod's `cb13` with both eye slots set to that eye's rows, so a single (indirect) instance reads the
   correct eye. **Not built** — no block uses this path yet.
 
-Each family has its own default-off flag (`single_pass_bark`, `single_pass_foliage`,
-`single_pass_occluder`, `single_pass_terrain`, `single_pass_tree_impostors`), so the model and
+Each family has its own flag (`single_pass_bark` and `single_pass_foliage` on by default;
+`single_pass_occluder`, `single_pass_terrain`, and `single_pass_tree_impostors` off), so the model and
 terrain-detail paths stay isolated while a new block is validated in-game.
 
 A re-issue marks itself while it runs, so the draw and viewport detours leave the block's own calls

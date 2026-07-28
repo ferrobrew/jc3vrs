@@ -276,8 +276,10 @@ pub struct StereoConfig {
     /// Single-pass the tessellated base terrain (VS → HS → DS): the vertex shader originates the eye
     /// index on the free `TEXCOORD3.z` lane, the hull shader forwards it, and the domain shader reads
     /// it to reproject its clip by the per-eye `M_eye` and route to the eye's viewport. Covers the
-    /// `DrawIndexed` terrain passes (far/color/shadow); the GPU-indirect near passes stay double-drawn.
-    /// Requires [`single_pass`](Self::single_pass); independent so it can be A/B'd against the models.
+    /// `DrawIndexed` terrain passes (far/color/shadow); also gates the render-block re-issue that
+    /// reprojects the GPU-indirect terrain-detail pass (see
+    /// `payload/src/hooks/graphics_engine/terrain.rs`). Requires [`single_pass`](Self::single_pass);
+    /// independent so it can be A/B'd against the models.
     pub single_pass_terrain: bool,
     /// Single-pass the far-distance tree impostors (`CTreeImpostorRB`): the impostor vertex shader
     /// writes its clip position from the global billboard view-projection and draws non-instanced, with
@@ -377,10 +379,10 @@ pub struct StereoConfig {
     /// know which eye it is for. Deliberately *not* reprojected by `M_eye`: the geometry still
     /// rasterizes from the collapsed centre view, so the UV must describe where it actually landed.
     ///
-    /// Requires the collapse. **Default off**: the affected family may not even be on screen at the
-    /// water-quality setting in use, which makes an A/B the only way to tell the fix from a no-op,
-    /// and unlike the other re-issues this one recomputes a constant the engine staged rather than
-    /// transforming it in flight.
+    /// Requires the collapse. On by default, but the hardest of the re-issues to A/B in practice: the
+    /// affected family may not even be on screen at the water-quality setting in use, which makes a
+    /// headset comparison the only way to tell the fix from a no-op, and unlike the other re-issues
+    /// this one recomputes a constant the engine staged rather than transforming it in flight.
     pub single_pass_water_uv_per_eye: bool,
     /// Give the WaveWorks water blocks (`NvWater*`) a per-eye view under the collapse, so the water
     /// surface has parallax instead of being one eye's view shown to both.
