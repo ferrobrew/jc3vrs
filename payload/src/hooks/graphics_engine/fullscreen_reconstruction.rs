@@ -208,27 +208,27 @@ fn split_or_issue(enabled: bool, ctx: Option<*mut HContext_t>, draw: impl FnMut(
 
 /// Run `draw` once per eye half under the collapse, falling back to issuing it exactly once.
 ///
-/// [`reconstruction::split_fullscreen_pass_policy`] returns `false` both when the split never started
-/// and when it started and then demoted (a run turned out not to mask, so it *was* the un-split pass).
-/// Only the first case wants the caller's own issue; tracking whether the closure ran keeps the second
-/// from drawing the pass twice.
+/// Every caller here goes through [`reconstruction::SplitPolicy::at_entry`], which is the split's only
+/// constructor of [`MaskArming::AtEntry`](reconstruction::MaskArming::AtEntry) -- so this path can never
+/// demote: demotion is the [`MaskArming::OnReconstruction`](reconstruction::MaskArming::OnReconstruction)
+/// case where a run draws unmasked and [`reconstruction::split_fullscreen_pass_policy`] reports `true`
+/// because that run already drew the whole target. Under `AtEntry` the two runs are disjoint by
+/// construction: the mask either goes up before the first run draws anything -- in which case both runs
+/// happen and `split_fullscreen_pass_policy` returns `true` -- or it never goes up at all, nothing is
+/// drawn, and it returns `false`. So `false` here always means the caller's own issue is still needed.
 fn split_or_issue_with(
     dispatches: reconstruction::DispatchPhase,
     enabled: bool,
     ctx: Option<*mut HContext_t>,
     mut draw: impl FnMut(),
 ) {
-    let mut ran = false;
     let split = reconstruction::split_fullscreen_pass_policy(
         reconstruction::SplitPolicy::at_entry(dispatches),
         enabled,
         ctx,
-        || {
-            ran = true;
-            draw();
-        },
+        &mut draw,
     );
-    if !split && !ran {
+    if !split {
         draw();
     }
 }

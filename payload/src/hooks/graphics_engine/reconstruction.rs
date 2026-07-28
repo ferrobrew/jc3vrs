@@ -254,25 +254,9 @@ pub(super) fn split_fullscreen_pass(
     ctx: Option<*mut HContext_t>,
     draw: impl FnMut(),
 ) -> bool {
-    split_fullscreen_pass_with(MaskArming::OnReconstruction, enabled, ctx, draw)
-}
-
-/// [`split_fullscreen_pass`] with the mask-arming rule named explicitly.
-///
-/// Under [`MaskArming::AtEntry`] the two runs are disjoint by construction, so the demotion rule below
-/// cannot fire between them: the mask either goes up before the first run draws anything -- in which
-/// case both runs happen and each covers exactly its own half -- or it never goes up at all and the
-/// call returns `false` having drawn nothing, leaving the caller to issue the pass once as it always
-/// did.
-pub(super) fn split_fullscreen_pass_with(
-    arming: MaskArming,
-    enabled: bool,
-    ctx: Option<*mut HContext_t>,
-    draw: impl FnMut(),
-) -> bool {
     split_fullscreen_pass_policy(
         SplitPolicy {
-            arming,
+            arming: MaskArming::OnReconstruction,
             dispatches: DispatchPhase::Both,
         },
         enabled,
@@ -281,8 +265,8 @@ pub(super) fn split_fullscreen_pass_with(
     )
 }
 
-/// [`split_fullscreen_pass_with`] for a block that dispatches, whose compute work must be issued on one
-/// run of the split only -- see [`DispatchPhase`].
+/// [`split_fullscreen_pass`] generalized over [`SplitPolicy`], for a block that dispatches and whose
+/// compute work must be issued on one run of the split only -- see [`DispatchPhase`].
 ///
 /// The gate covers every issue of `draw` this function makes, including the degenerate second-run one
 /// below, and nothing outside them: a caller that falls back to issuing the pass itself does so
