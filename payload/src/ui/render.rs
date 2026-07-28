@@ -38,7 +38,10 @@ pub(super) struct StageCapture {
 
 pub struct EguiDebugRenderState {
     /// Final back-buffer capture per Draw (eye): index 0 and index 1.
-    pub(super) target_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
+    /// The per-eye captures the VR presentation path submits. The egui id is `None` until the UI
+    /// thread registers one for the Previews panel: these textures must exist whether or not the
+    /// debug UI ever installs, so their creation cannot depend on a renderer.
+    pub(super) target_textures: [Option<(ID3D11Texture2D, Option<egui::TextureId>)>; 2],
     /// HDR scene (MainColor, pre-post) capture per eye -- the first column of the pipeline rows.
     pub(super) main_color_textures: [Option<(ID3D11Texture2D, egui::TextureId)>; 2],
     /// (w, h) the back-buffer captures were built for; recreate them when the back buffer resizes.
@@ -207,28 +210,14 @@ impl EguiDebugRenderState {
                 return;
             };
 
-            // One eye's worth of the engine's render target (R8G8B8A8), recreated when its size
-            // changes. Under single-pass double-wide the render target holds both eye-halves side by
-            // side, so each per-eye capture texture is half its width -- the collapse's capture split
-            // copies one full-width half in. This is the real VR-presentation consumer, so it is
-            // always kept current, independent of the Previews tab.
-            if let Some(size) = crate::stereo::per_eye_render_size()
-                && (self.target_size != Some(size)
-                    || self.target_textures.iter().any(Option::is_none))
-            {
-                for slot in &mut self.target_textures {
-                    if let Some((_, id)) = slot.take() {
-                        renderer.unregister_user_texture(id);
-                    }
-                    *slot = Self::create_target(
-                        device,
-                        renderer,
-                        size.0,
-                        size.1,
-                        DXGI_FORMAT_R8G8B8A8_UNORM,
-                    );
+            // Register egui ids for any eye capture that does not have one yet, so the Previews
+            // panel can display textures `ensure_eye_targets` created without a renderer.
+            for slot in self.target_textures.iter_mut().flatten() {
+                if slot.1.is_none()
+                    && let Some(srv) = Self::view_for(device, &slot.0)
+                {
+                    slot.1 = Some(renderer.register_user_texture(srv));
                 }
-                self.target_size = Some(size);
             }
 
             // The MainColor and post-stage captures exist only for the Previews tab, so they track
@@ -247,13 +236,11 @@ impl EguiDebugRenderState {
                             if let Some((_, id)) = slot.take() {
                                 renderer.unregister_user_texture(id);
                             }
-                            *slot = Self::create_target(
-                                device,
-                                renderer,
-                                desc.0,
-                                desc.1,
-                                DXGI_FORMAT(desc.2),
-                            );
+                            *slot =
+                                Self::create_target(device, desc.0, desc.1, DXGI_FORMAT(desc.2))
+                                    .map(|(texture, srv)| {
+                                        (texture, renderer.register_user_texture(srv))
+                                    });
                         }
                         self.main_color_desc = Some(desc);
                     }
@@ -285,13 +272,63 @@ impl EguiDebugRenderState {
         }
     }
 
+    /// Create or resize the two per-eye captures the VR presentation path submits.
+    ///
+    /// Deliberately takes no renderer and is driven from the frame loop rather than from inside the
+    /// egui closure. These textures are what VR presents; they existed only as a side effect of the
+    /// debug UI preparing itself, so an `EguiState` that failed to install left VR with nothing to
+    /// submit and no indication why.
+    pub(crate) fn ensure_eye_targets(&mut self) {
+        // SAFETY: reads the live engine device on the game thread, as the UI preparation does.
+        unsafe {
+            let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
+                return;
+            };
+            let Some(device) = ge.m_Device.as_mut() else {
+                return;
+            };
+            // Under single-pass double-wide the render target holds both eye-halves side by side, so
+            // each capture is half its width -- the collapse's split copies one full-width half in.
+            let Some(size) = crate::stereo::per_eye_render_size() else {
+                return;
+            };
+            if self.target_size == Some(size) && self.target_textures.iter().all(Option::is_some) {
+                return;
+            }
+            for slot in &mut self.target_textures {
+                if let Some((_, Some(id))) = slot.take() {
+                    // The renderer is not reachable here; the UI thread drains this queue.
+                    self.pending_unregisters.push(id);
+                }
+                *slot = Self::create_target(device, size.0, size.1, DXGI_FORMAT_R8G8B8A8_UNORM)
+                    .map(|(texture, _)| (texture, None));
+            }
+            self.target_size = Some(size);
+        }
+    }
+
+    /// A fresh shader-resource view over `texture`, for a late egui registration.
+    fn view_for(
+        device: &jc3gi::graphics_engine::device::Device,
+        texture: &ID3D11Texture2D,
+    ) -> Option<ID3D11ShaderResourceView> {
+        let mut srv: Option<ID3D11ShaderResourceView> = None;
+        // SAFETY: `texture` was created on this device with `D3D11_BIND_SHADER_RESOURCE`.
+        unsafe {
+            device
+                .m_Device
+                .CreateShaderResourceView(texture, None, Some(&mut srv))
+                .ok()?;
+        }
+        srv
+    }
+
     fn create_target(
         device: &jc3gi::graphics_engine::device::Device,
-        renderer: &mut egui_directx11::Renderer,
         width: u32,
         height: u32,
         format: DXGI_FORMAT,
-    ) -> Option<(ID3D11Texture2D, egui::TextureId)> {
+    ) -> Option<(ID3D11Texture2D, ID3D11ShaderResourceView)> {
         unsafe {
             let mut texture: Option<ID3D11Texture2D> = None;
             if let Err(e) = device.m_Device.CreateTexture2D(
@@ -328,7 +365,7 @@ impl EguiDebugRenderState {
             }
             let srv = srv?;
 
-            Some((texture, renderer.register_user_texture(srv)))
+            Some((texture, srv))
         }
     }
 
@@ -354,11 +391,14 @@ impl EguiDebugRenderState {
     fn uninstall(&mut self, renderer: Option<&mut egui_directx11::Renderer>) {
         match renderer {
             Some(renderer) => {
-                for slot in self
-                    .target_textures
-                    .iter_mut()
-                    .chain(self.main_color_textures.iter_mut())
-                {
+                // The eye captures carry an optional id: one created before the UI installed has
+                // never been registered, so there is nothing to unregister for it.
+                for slot in &mut self.target_textures {
+                    if let Some((_, Some(texture_id))) = slot.take() {
+                        renderer.unregister_user_texture(texture_id);
+                    }
+                }
+                for slot in &mut self.main_color_textures {
                     if let Some((_, texture_id)) = slot.take() {
                         renderer.unregister_user_texture(texture_id);
                     }

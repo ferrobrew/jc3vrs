@@ -61,7 +61,7 @@ pub fn egui_debug_previews(ui: &mut egui::Ui, renderer: &mut egui_directx11::Ren
                         .and_then(|c| c.egui_id)
                 };
                 let mc_id = |eye: usize| state.main_color_textures[eye].as_ref().map(|(_, id)| *id);
-                let bb_id = |eye: usize| state.target_textures[eye].as_ref().map(|(_, id)| *id);
+                let bb_id = |eye: usize| state.target_textures[eye].as_ref().and_then(|(_, id)| *id);
                 vec![
                     ("Scene", [mc_id(0), mc_id(1)]),
                     (POST_STAGE_LABELS[0], [post_id(0, 0), post_id(0, 1)]),

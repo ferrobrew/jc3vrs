@@ -239,12 +239,18 @@ fn update() {
             return;
         }
 
+        // The per-eye captures feed the VR blit, the desktop mirror, and the F10 capture composite.
+        // Driven here rather than from inside the egui closure below: they are what VR submits, and
+        // preparing them only as a side effect of the debug UI meant an `EguiState` that failed to
+        // install left VR with nothing to present and no indication why.
+        ui::render::EGUI_DEBUG_RENDER_STATE
+            .lock()
+            .ensure_eye_targets();
+
         if let Some(egui_state) = EguiState::get().as_mut() {
-            // While the F10 capture mode is active, keep input with the game (no egui capture
-            // toggle) but still run the egui window so the eye-texture maintenance in
-            // `prepare_if_necessary` keeps the per-eye captures sized correctly. The overlay
-            // itself is hidden by skipping `egui_state.render()` in `graphics_flip` while capture
-            // is active.
+            // While the F10 capture mode is active, keep input with the game rather than letting
+            // this toggle hand it to egui. The overlay itself is hidden by skipping
+            // `egui_state.render()` in `graphics_flip` while capture is active.
             if util::is_pressed(VK_F6) && !crate::capture::is_active() {
                 egui_state.toggle_game_input_capture();
             }
@@ -260,9 +266,9 @@ fn update() {
             }
 
             egui_state.run(|ctx, renderer| {
-                // The per-eye capture textures feed the VR blit, the desktop mirror, and the F10
-                // capture composite — they must be (re)created every frame, independent of which
-                // UI tabs or windows are visible (or whether the Debug window is collapsed).
+                // The UI-side half of capture upkeep: the Previews tab's own textures, and the egui
+                // registrations for surfaces the render thread created without a renderer. The eye
+                // captures themselves are prepared above, off this path.
                 ui::render::EGUI_DEBUG_RENDER_STATE
                     .lock()
                     .prepare_if_necessary(renderer);
