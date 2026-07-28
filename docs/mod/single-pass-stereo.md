@@ -220,7 +220,7 @@ write `o0` in raw NDC — which `M_eye` corrupts — and the bytecode cannot rel
 scene meshes. Substitution happens at shader creation, before the draw's pass is known, so the runtime
 pass gate cannot decide it. Reprojection is therefore gated on a **positive allowlist of
 scene-geometry families**, keyed on the shader name in `CreateVertexProgramParams`
-(`REPROJECT_NAME_PREFIXES` in `stereo/single_pass.rs`): unknown shaders stay double-drawn — correct,
+(`REPROJECT_NAME_PREFIXES` in `stereo/single_pass/shader_policy.rs`): unknown shaders stay double-drawn — correct,
 just slower — and no NDC writer is ever reprojected.
 
 ## The terrain tessellation path
@@ -247,6 +247,21 @@ closed costs a terrain draw its single-pass treatment, failing open would eye-tr
 draw.
 
 ## Payload integration
+
+`stereo::single_pass` is a directory module. The parent holds the capability probe, the `*_active()`
+gates, the routed-range guard, and the install and teardown that own every detour's lifetime; the rest
+is split by concern:
+
+| Module | What it owns |
+|---|---|
+| `shader_policy` | which transform each shader gets, the name tables, the census |
+| `cb13` | the per-eye constant buffer, from derivation through upload to release |
+| `viewport` | keeping both viewport slots on the eye halves, and off them outside the range |
+| `draw_detours` | the draw-path vtable entry points and their per-eye re-issues |
+| `shader_detours` | substitution, and tracking which shader is bound |
+| `per_eye_reissue` | blocks that bake their own transform and must draw twice |
+| `config_snapshot` | the per-frame and per-dispatch flag snapshots |
+| `instanced_exposure`, `frame_diagnostics` | measurement only; nothing here changes a draw |
 
 ### Hook points
 
@@ -393,7 +408,9 @@ demotion rule. Each run is masked with a **scissor**, not a half viewport, so th
 one-to-one NDC-to-pixel mapping and its G-buffer sampling stays correct; the per-eye basis comes from
 folding the full-target-NDC to eye-NDC remap into the substituted inverse. The demotion rule matters:
 a run that never masked has already drawn the whole target, so the split stops after one run rather
-than double-exposing an accumulating pass.
+than double-exposing an accumulating pass. It reports which of the three happened -- `Split`,
+`Demoted`, or `NotTaken` -- because a caller cannot infer it: only `NotTaken` means the pass still
+needs issuing, and the froxel split below needs to distinguish a demotion specifically.
 
 `CRenderBlockSSDecal` has the same defect without being a `PerspectiveFovInverse` consumer — its
 type-level `Setup` builds a basis inline into fragment `cb1[0..3]` and its pixel shader derives the
@@ -484,7 +501,7 @@ viewport before every draw in the range, regardless of what the engine actually 
 passes draw into a shared quarter-resolution off-screen target (engine `rendering.md` §9), and a draw
 into a `W × H/2` target handed a `2W × H` viewport is magnified 2x about the target origin and
 cropped to a quadrant — for the right eye, whose half starts at `x = W`, clipped away entirely. That
-is the clouds-and-smoke sliding. `collapse_viewport_follows_target` (**on**) keeps a second record that
+is the clouds-and-smoke sliding. `single_pass.collapse_viewport_follows_target` (**on**) keeps a second record that
 is always the live bind, so the split follows the bound target. The single record could not simply be
 made to follow the engine, because it is also the scene notion and following a half-resolution post
 target would have mis-split the scene itself.
@@ -520,9 +537,18 @@ applied, only the positional offset. It keeps its own flag because the differenc
 
 The split **declines itself**, leaving the un-split behaviour and logging once, when the eye seam
 would not fall on a whole tile column (double-wide width not a multiple of 128), when the bound
-assignment target is not the tile grid it sized for, or when the dispatch has no lights. If eye 0
-splits but the resolve turns out not to be maskable, the grid is rebuilt whole rather than left
-half-cleared.
+assignment target is not the tile grid it sized for, or when the dispatch has no lights.
+
+One decline is worth spelling out, because the two preconditions involved disagree. The resolve mask
+refuses unless the bound viewport is the collapse's double-wide target -- a pass binding anything else
+is not the one being split -- whereas the assignment split engages as soon as the bound target is the
+tile grid it sized for, which an off-scene dispatch can satisfy. When that happens the assignment fills
+eye 0's half and the resolve then proves unmaskable, so there is no second run to fill the rest, and
+because the grid is shared the missing half shows up on the main scene rather than on the dispatch
+responsible. Rebuilding it would mean re-issuing the whole block, resolve included, which is the double
+exposure the demotion rule exists to prevent. So the split stands down for that graphics context
+instead: maskability is a property of the pass rather than of the run, so one observation settles it,
+and the scene's own context -- which does mask -- is unaffected.
 
 ## Configuration
 
@@ -567,7 +593,7 @@ is marked with its actual default.
 | `single_pass.instanced_per_eye` | On | Per-eye re-issue of an already-instanced `DrawIndexedInstanced` with a patched shader bound. |
 | `single_pass.indirect_per_eye` | On | Per-eye re-issue of the GPU-indirect draws (mechanism 1). |
 | `single_pass.slot13_per_eye` | On | Per-eye re-issue of non-indexed world geometry, by pass allowlist (mechanism 1). |
-| `collapse_viewport_follows_target` | On | Derives the eye halves from the bound render target rather than the scene viewport (mechanism 4). |
+| `single_pass.collapse_viewport_follows_target` | On | Derives the eye halves from the bound render target rather than the scene viewport (mechanism 4). |
 | `single_pass.uniform_viewport_slots` | On | Puts both viewport slots back to one region once the G-buffer range ends, so a patched shader's instance parity is a no-op in the passes that are not eye-split. |
 
 ### Per-eye fullscreen and screen-space passes
@@ -738,8 +764,8 @@ reappear; it cannot move what already rendered. The log reports how many repairs
 
 ## The non-`cb0` shader census
 
-From a census of the shipped set (`m_Name` against the rewrite outcome; the payload re-dumps it by
-flipping `DUMP_VS_NAME_CENSUS`). **The census only sees shaders an area actually loads, so this list
+From a census of the shipped set (`m_Name` against the rewrite outcome; the payload re-dumps it on the next
+shader reload with `single_pass.dump_vs_name_census`). **The census only sees shaders an area actually loads, so this list
 may miss families from biomes or weather not visited; it is a floor, not a complete set.**
 
 **Reprojected — the scene-geometry allowlist** (`REPROJECT_NAME_PREFIXES`, matched by name prefix):
