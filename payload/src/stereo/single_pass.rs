@@ -840,7 +840,6 @@ pub fn set_ui_viewport_raw(context: *mut c_void, viewport: &D3D11_VIEWPORT) {
 /// vertex slot 1, and the eye-half viewport to render into.
 struct TerrainDetailEyePass {
     cb1: [f32; 16],
-    viewport: D3D11_VIEWPORT,
 }
 
 /// The per-eye passes for a terrain-detail draw, or `None` when the single-pass terrain intercept
@@ -892,10 +891,7 @@ unsafe fn terrain_detail_eye_passes(
         for (k, center) in cb1_center.iter().enumerate() {
             cb1[k * 4..k * 4 + 4].copy_from_slice(&m_eye[eye].mul_vec4(*center).to_array());
         }
-        TerrainDetailEyePass {
-            cb1,
-            viewport: eye_half_viewport(full, eye),
-        }
+        TerrainDetailEyePass { cb1 }
     });
     let mut cb1_center_rows = [0.0f32; 16];
     for (k, center) in cb1_center.iter().enumerate() {
@@ -1021,13 +1017,11 @@ pub unsafe fn terrain_detail_per_eye(
     };
     // SAFETY: `rc` is live per the caller contract.
     let ctx = unsafe { render_context_graphics_context(rc) };
-    for (eye, pass) in passes.iter().enumerate() {
-        let _reissue = PerEyeReissue::enter(eye);
+    per_eye_halves(full, d3d, &mut |eye| {
         // SAFETY: `ctx` is the render context's live graphics context; `cb1` is four float4 rows.
-        unsafe { SetVertexProgramConstants(ctx, 1, 0, pass.cb1.as_ptr(), 4) };
-        bind_both_viewport_slots(d3d, pass.viewport);
+        unsafe { SetVertexProgramConstants(ctx, 1, 0, passes[eye].cb1.as_ptr(), 4) };
         draw();
-    }
+    });
     // Put the centre transform back, as `screen_uv_cb_per_eye` does with the rows it biases. The
     // block type stages this constant once per pass rather than per draw, so leaving eye 1's
     // reprojection behind hands it to anything later in the pass that reads vertex `cb1[0..3]` --
@@ -1035,8 +1029,6 @@ pub unsafe fn terrain_detail_per_eye(
     // `BoundVsGate::Checked` reads the live bound-shader flag.
     // SAFETY: as above; `cb1_center` is the same four float4 rows, un-reprojected.
     unsafe { SetVertexProgramConstants(ctx, 1, 0, cb1_center.as_ptr(), 4) };
-    // Restore the collapse's full viewport for the draws that follow in this pass.
-    bind_both_viewport_slots(d3d, full);
     true
 }
 
@@ -1284,20 +1276,18 @@ pub unsafe fn reproject_baked_cb_per_eye_staged(
     };
     // SAFETY: `rc` is the live render context the detoured `Draw` received.
     let ctx = unsafe { render_context_graphics_context(rc) } as usize;
-    for (eye, &m) in m_eye.iter().enumerate() {
-        let _reissue = PerEyeReissue::enter(eye);
+    per_eye_halves(full, d3d, &mut |eye| {
         arm_reproject(ReprojectUpload {
             ctx,
             cb_index,
             reg_offset,
-            m_eye: m,
+            m_eye: m_eye[eye],
         });
-        bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
         render(eye);
         if !disarm_reproject() {
             warn_reproject_never_fired(cb_index, reg_offset);
         }
-    }
+    });
     bind_both_viewport_slots(d3d, full);
     true
 }
@@ -1342,22 +1332,19 @@ pub unsafe fn screen_uv_cb_per_eye(
     };
     // SAFETY: `rc` is live per the caller contract.
     let ctx = unsafe { render_context_graphics_context(rc) };
-    for eye in 0..2 {
-        let _reissue = PerEyeReissue::enter(eye);
+    per_eye_halves(full, d3d, &mut |eye| {
         let mut rows = base;
         for k in 0..4 {
             rows[k * 4] = base[k * 4].mul_add(0.5, base[k * 4 + 3] * 0.5 * eye as f32);
         }
         // SAFETY: `ctx` is the render context's live graphics context; `rows` is four float4 rows.
         unsafe { SetVertexProgramConstants(ctx, cb_index, reg_offset, rows.as_ptr(), 4) };
-        bind_both_viewport_slots(d3d, eye_half_viewport(full, eye));
         draw();
-    }
+    });
     // Put the type's own rows back. It stages them once per pass, ahead of every block it covers, so
     // leaving the second eye's bias behind would hand it to any later draw this intercept declines.
     // SAFETY: as above; `base` is the four rows the type staged.
     unsafe { SetVertexProgramConstants(ctx, cb_index, reg_offset, base.as_ptr(), 4) };
-    bind_both_viewport_slots(d3d, full);
     true
 }
 
