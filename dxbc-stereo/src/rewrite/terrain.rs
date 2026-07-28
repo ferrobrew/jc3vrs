@@ -56,6 +56,8 @@ const SWIZZLE_COMPONENT_2_MASK: u32 = 0x3 << 8;
 /// `vicp[0][reg].z` as a source: input-control-point register, 2D immediate index, select-1 component
 /// `.z`. The two index tokens (control point `0`, register `reg`) follow. The domain reprojection reads
 /// the eye from the free `.z` of the `TEXCOORD3` control-point lane.
+// Operand token layout: bits 12..20 = 25 (operand type: input-control-point), bits 20..22 = 2 (2D
+// index dimension), bits 4..6 = 1 (select-1 component mode), bits 0..2 = 2 (the selected component: .z).
 const OPERAND_VICP_SELECT_Z: u32 = 0x0021_902A;
 
 /// Rewrites the terrain tessellation **vertex** shader to originate the single-pass eye index: adds an

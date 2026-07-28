@@ -283,27 +283,30 @@ fn rewrite_instruction(
     let mut pos = insn.operands_start();
     while pos < insn.end {
         let (operand, next) = parse_operand(tokens, pos)?;
-        if is_per_eye_operand(&operand.kind) {
-            let row = match operand.kind {
-                OperandKind::ConstantBuffer { element, .. } => element,
-                _ => unreachable!("is_per_eye_operand only matches immediate cb0 refs"),
-            };
-            let tok = tokens[pos];
-            // Both index dimensions must be plain 32-bit immediates: the register index and the
-            // element index each occupy one token, at fixed offsets past any extended operand.
-            if (tok >> 22) & 0x7 != 0 || (tok >> 25) & 0x7 != 0 {
-                return Err(DxbcError::UnsupportedOperandEncoding);
+        let row = match &operand.kind {
+            OperandKind::ConstantBuffer {
+                register: 0,
+                element,
+            } if PER_EYE_CB0_ROWS.contains(element) => *element,
+            _ => {
+                out.extend_from_slice(&tokens[pos..next]);
+                pos = next;
+                continue;
             }
-            let extended = ((tok >> 31) & 1) as usize;
-            out.push(tok | (IDX_IMM32_PLUS_RELATIVE << 25));
-            out.extend_from_slice(&tokens[pos + 1..pos + 1 + extended]);
-            out.push(STEREO_CB_REGISTER);
-            out.push(if row == 4 { 4 } else { row - 29 });
-            out.push(OPERAND_TEMP_SELECT_X);
-            out.push(temp_register);
-        } else {
-            out.extend_from_slice(&tokens[pos..next]);
+        };
+        let tok = tokens[pos];
+        // Both index dimensions must be plain 32-bit immediates: the register index and the
+        // element index each occupy one token, at fixed offsets past any extended operand.
+        if (tok >> 22) & 0x7 != 0 || (tok >> 25) & 0x7 != 0 {
+            return Err(DxbcError::UnsupportedOperandEncoding);
         }
+        let extended = ((tok >> 31) & 1) as usize;
+        out.push(tok | (IDX_IMM32_PLUS_RELATIVE << 25));
+        out.extend_from_slice(&tokens[pos + 1..pos + 1 + extended]);
+        out.push(STEREO_CB_REGISTER);
+        out.push(if row == 4 { 4 } else { row - 29 });
+        out.push(OPERAND_TEMP_SELECT_X);
+        out.push(temp_register);
         pos = next;
     }
 

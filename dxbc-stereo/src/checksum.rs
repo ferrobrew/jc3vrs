@@ -26,6 +26,7 @@ pub fn refresh_checksum(blob: &mut [u8]) {
 fn dxbc_hash(data: &[u8]) -> [u8; 16] {
     let mut state = MD5_INIT;
     let n = data.len();
+    // The DXBC format stores a 32-bit bit-length, matching this u32 cast.
     let num_bits = (n as u32).wrapping_mul(8);
     let left_over = n % 64;
     let full = n - left_over;

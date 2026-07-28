@@ -113,6 +113,10 @@ pub(super) fn rewrite_reproject_instruction(
         let extended = ((tok >> 31) & 1) as usize;
         let rep = (tok >> 22) & 0x7;
         let reg_at = pos + 1 + extended;
+        // Assumes SV_Position is always a full .xyzw write. The corpus test
+        // `reprojected_vs_position_is_only_the_meye_epilogue` verifies this: it checks that every
+        // position writer becomes exactly four dp4s, so a masked or partial write would show up as a
+        // non-dp4 writer and fail the test.
         let is_position_write = operand_type == OPERAND_TYPE_OUTPUT
             && index_dim == 1
             && rep == 0 // IDX_IMM32
