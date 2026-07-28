@@ -1626,12 +1626,11 @@ fn drain_slot13_census() -> Vec<(u8, u32)> {
 /// three unequal windows and reported each as if it were a frame; the fold belongs here, where a
 /// frame actually begins.
 pub fn begin_frame() {
-    // The leaked-range clear belongs to the thread that raises and lowers the flag; [`begin_dispatch`]
-    // does it there. Clearing from here is kept only as the A/B arm, because with the frame tail
-    // deferred this thread runs concurrently with the previous frame's still-walking dispatch.
-    if !Config::lock_query(|c| c.stereo.single_pass_clear_range_on_dispatch) {
-        clear_gbuffer_range();
-    }
+    // The leaked-range clear deliberately does *not* happen here: it belongs to the thread that
+    // raises and lowers the flag, and [`begin_dispatch`] does it there. With the frame tail deferred
+    // this thread runs concurrently with the previous frame's still-walking dispatch, so clearing
+    // from here tears a live range out from under it.
+    //
     // The frame that just ended owns both the exposure fold and, if it was a diagnostic frame, the
     // trailing exposure line -- so it carries the same ordinal as its own range lines, which were
     // emitted before the ordinal advanced.
@@ -1660,9 +1659,7 @@ pub fn begin_frame() {
 /// collapse the game thread is already a frame ahead of it.
 pub fn begin_dispatch() {
     pin_dispatch_config_flags();
-    if Config::lock_query(|c| c.stereo.single_pass_clear_range_on_dispatch) {
-        clear_gbuffer_range();
-    }
+    clear_gbuffer_range();
 }
 
 /// Whether this frame is one the per-frame single-pass diagnostics log on.

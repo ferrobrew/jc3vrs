@@ -74,9 +74,9 @@ the game thread runs the next frame's sim and re-enters `UpdateRender`. The clea
 middle of a live range, and every draw after it is treated as out of range — no eye split, `cb13`
 mirrored instead of per-eye, the per-eye reprojection matrices dropped. How far the draw thread got by
 then varies frame to frame, so whole geometry families (instanced buildings, bark, foliage) blink in
-and out. `stereo.single_pass_clear_range_on_dispatch` (on by default) picks the draw-thread clear; off
-restores the old game-thread one for A/B. A guard that finds the flag already down when it drops
-counts a "torn" range and warns, which is the direct measurement of this happening.
+and out. The clear therefore belongs to the thread that raises and lowers the range flag, and happens
+in the draw thread's dispatch prologue. A guard that finds the flag already down when it drops counts
+a "torn" range and warns, which is the direct measurement of this happening.
 
 Why this is tractable at all: the blocker for retrofitting single-pass onto a deferred game is
 normally per-shader bespoke position math. JC3 has **one** scene view-projection —
@@ -539,7 +539,6 @@ validated. Each row below is marked with its actual default.
 | `single_pass_dual_eye` | Off | Makes the eyes diverge: distinct per-eye `cb13`, eye-half viewports, instance doubling. On its own (no collapse, no double-wide) each eye renders into half a per-eye target — squished; a bisection step. |
 | `single_pass_collapse` | Off | Collapses the per-eye double-draw to one `game.Draw` walk. Requires `single_pass_dual_eye`. |
 | `single_pass_double_wide` | Off | Re-creates the scene targets at 2x per-eye width so each eye half is full resolution. Requires `single_pass_collapse` and `vr.native_resolution`. |
-| `single_pass_clear_range_on_dispatch` | On | Clears a leaked routed range on the draw thread rather than the game thread. |
 
 ### Shader rewrites (need a shader reload to apply)
 
