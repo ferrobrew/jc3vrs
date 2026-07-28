@@ -53,7 +53,9 @@ fn atmospheric_scattering_draw(
     // SAFETY: `rc` is the live render context for this dispatch; the caller (the engine's draw
     // dispatch) guarantees it is valid for the duration of `Draw`.
     let ctx = unsafe { rc.as_ref() }.map(|rc| rc.m_Context);
-    if !reconstruction::split_fullscreen_pass(enabled, ctx, call) {
+    if reconstruction::split_fullscreen_pass(enabled, ctx, |_eye| call())
+        == reconstruction::SplitOutcome::NotTaken
+    {
         call();
     }
 }

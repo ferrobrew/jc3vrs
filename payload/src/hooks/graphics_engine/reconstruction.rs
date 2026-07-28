@@ -21,7 +21,8 @@
 //! Substituting one eye's inverse presumes the pass is drawing *for* one eye, which the single-pass
 //! collapse breaks: there the fullscreen quad covers both eye halves of the double-wide target in a
 //! single draw, so one basis is right for neither half and the resulting error turns with the camera.
-//! [`enter_per_eye_half`] is the seam for running such a pass once per eye instead --
+//! [`enter_per_eye_half_with`] is the seam for running such a pass once per eye instead, and
+//! [`split_fullscreen_pass`] wraps it with the preconditions and demotion rule every consumer needs --
 //! [`super::clustered_lighting`] drives it for the deferred resolve, which is where the sun shadow is
 //! sampled.
 //!
@@ -91,11 +92,6 @@ pub(super) fn hook_library() -> HookLibrary {
 /// [`Matrix4::PerspectiveFovInverse`] call arms the mask, so a pass that turns out not to reconstruct
 /// (an auxiliary camera, whose near/far are not the main view's) leaves the frame exactly as it found
 /// it -- see [`PerEyeHalf::masked`].
-pub(super) fn enter_per_eye_half(eye: usize, ctx: *mut HContext_t) -> PerEyeHalf {
-    enter_per_eye_half_with(MaskArming::OnReconstruction, eye, ctx)
-}
-
-/// [`enter_per_eye_half`] with the mask-arming rule named explicitly.
 ///
 /// Under [`MaskArming::AtEntry`] the mask goes up here, before the pass has drawn anything, and the
 /// returned guard's [`PerEyeHalf::masked`] answers immediately: `false` means the mask could not be
@@ -233,27 +229,44 @@ pub(crate) fn on_render_setup_bound() {
     }
 }
 
+/// What a [`split_fullscreen_pass`] / [`split_fullscreen_pass_policy`] call did with `draw`.
+///
+/// The three outcomes are the three counts of how many times `draw` ran: zero, one, or two. That count
+/// is what a caller actually needs to act correctly -- not "was the split taken" -- because a demoted
+/// single run has already drawn the whole target and must not be issued again, exactly like a completed
+/// split, while only a `NotTaken` precondition failure leaves the pass for the caller to issue itself.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SplitOutcome {
+    /// The preconditions failed before anything ran -- no live collapse, no context, or no second eye
+    /// to render -- so `draw` was never called. The caller must issue the pass itself, exactly once, as
+    /// it always did.
+    NotTaken,
+    /// A run started and drew unmasked -- the whole target, exactly as the un-split pass would -- and
+    /// the split stopped there rather than running a second eye that would draw the same full-width
+    /// image a second time, dimming everything the pass accumulates. `draw` ran exactly once. This is
+    /// sound for either run under [`MaskArming::OnReconstruction`] only because the arming condition is
+    /// a property of the pass rather than of the run: a first run that masks means the second one masks
+    /// too, so the whole-target case is the first run's.
+    Demoted,
+    /// Every run this call made was issued: ordinarily both eyes masked to their own half, or --
+    /// reachable only under [`MaskArming::AtEntry`] -- the first eye masked and the second covered the
+    /// rest whole-target because eye 0 had already drawn its half and there was no way back. `draw` ran
+    /// twice.
+    Split,
+}
+
 /// Run a fullscreen reconstruction pass once per eye half under the single-pass collapse, each run
 /// masked to that eye and handed that eye's basis.
 ///
-/// Returns whether `draw` was issued. `false` means the preconditions failed before anything ran and
-/// the caller must issue the pass itself, exactly once, as it always did. It does **not** mean the
-/// split was abandoned partway: a run that starts and then demotes has already drawn the whole
-/// target, so it reports `true` and the caller must not issue it again.
-///
-/// This is [`enter_per_eye_half`] plus the preconditions and the demotion rule that every consumer
-/// needs, so a block's detour is the call and nothing else. The demotion matters: a run that was
-/// never masked drew the whole target, so issuing the second eye would draw the same full-width image
-/// twice — dimming everything the pass accumulates. That case stops after one run, which is precisely
-/// the un-split behaviour.
-///
-/// `enabled` is the caller's own flag; the shared preconditions (a live collapse, a context, and a
-/// second eye to render) are checked here.
+/// This is [`enter_per_eye_half_with`] plus the preconditions and the demotion rule that every consumer
+/// needs, so a block's detour is the call and nothing else. `enabled` is the caller's own flag; the
+/// shared preconditions (a live collapse, a context, and a second eye to render) are checked here. See
+/// [`SplitOutcome`] for what the return value means to the caller.
 pub(super) fn split_fullscreen_pass(
     enabled: bool,
     ctx: Option<*mut HContext_t>,
-    draw: impl FnMut(),
-) -> bool {
+    draw: impl FnMut(usize),
+) -> SplitOutcome {
     split_fullscreen_pass_policy(
         SplitPolicy {
             arming: MaskArming::OnReconstruction,
@@ -268,6 +281,12 @@ pub(super) fn split_fullscreen_pass(
 /// [`split_fullscreen_pass`] generalized over [`SplitPolicy`], for a block that dispatches and whose
 /// compute work must be issued on one run of the split only -- see [`DispatchPhase`].
 ///
+/// `draw` is called once per run that actually executes, with that run's eye index, so a caller that
+/// needs to act on what a particular run did -- e.g. record something only when [`SplitOutcome::Demoted`]
+/// follows a run whose own work engaged -- can capture that out of `draw` itself into a variable the
+/// caller reads back afterward, the same way [`super::fullscreen_reconstruction`]'s SSAO caller captures
+/// its temporal-history snapshot across runs.
+///
 /// The gate covers every issue of `draw` this function makes, including the degenerate second-run one
 /// below, and nothing outside them: a caller that falls back to issuing the pass itself does so
 /// ungated, so the block dispatches exactly as it does with the split off.
@@ -275,18 +294,19 @@ pub(super) fn split_fullscreen_pass_policy(
     policy: SplitPolicy,
     enabled: bool,
     ctx: Option<*mut HContext_t>,
-    mut draw: impl FnMut(),
-) -> bool {
+    mut draw: impl FnMut(usize),
+) -> SplitOutcome {
     if !enabled || !crate::stereo::single_pass::collapse_active() {
-        return false;
+        return SplitOutcome::NotTaken;
     }
     let Some(ctx) = ctx else {
-        return false;
+        return SplitOutcome::NotTaken;
     };
     if crate::vr::render_params(1).is_none() {
-        return false;
+        return SplitOutcome::NotTaken;
     }
 
+    let mut draws = 0u32;
     for eye in 0..RUNS {
         let half = enter_per_eye_half_with(policy.arming, eye, ctx);
         if policy.arming == MaskArming::AtEntry && !half.masked() {
@@ -298,33 +318,40 @@ pub(super) fn split_fullscreen_pass_policy(
             // "once" is counted over the runs of the split and this is still the last of them.
             drop(half);
             if eye == 0 {
-                return false;
+                return SplitOutcome::NotTaken;
             }
             let _gate = DispatchGate::enter(policy.dispatches, eye);
-            draw();
-            return true;
+            draw(eye);
+            draws += 1;
+            return outcome_for(draws);
         }
         {
             let _gate = DispatchGate::enter(policy.dispatches, eye);
-            draw();
+            draw(eye);
+            draws += 1;
         }
         if !half.masked() {
             // Nothing was masked, so this run covered the whole target -- which is exactly what the
-            // un-split pass does. Stop, and report the pass as issued: `draw` has already run, so a
-            // caller that fell back to issuing it itself would draw it a second time. The `false`
-            // return is reserved for the precondition failures above, where `draw` has *not* run.
-            //
-            // This is sound for the second run as well as the first only because the arming condition
-            // is a property of the pass rather than of the run (see [`MaskArming::OnReconstruction`]):
-            // a first run that masked means the second one masks too, so the whole-target case is the
-            // first run's, where stopping leaves the frame with exactly one whole-target pass on it.
-            return true;
+            // un-split pass does. Stop, and report it: `draw` has already run, so a caller that fell
+            // back to issuing it itself would draw it a second time. `NotTaken` is reserved for the
+            // precondition failures above, where `draw` has *not* run.
+            return outcome_for(draws);
         }
     }
-    true
+    outcome_for(draws)
 }
 
-/// The scope opened by [`enter_per_eye_half`].
+/// [`SplitOutcome`] from a count of how many times `draw` ran -- see its doc comment for why the count
+/// is the whole story.
+fn outcome_for(draws: u32) -> SplitOutcome {
+    match draws {
+        0 => SplitOutcome::NotTaken,
+        1 => SplitOutcome::Demoted,
+        _ => SplitOutcome::Split,
+    }
+}
+
+/// The scope opened by [`enter_per_eye_half_with`].
 pub(super) struct PerEyeHalf(());
 
 impl PerEyeHalf {
@@ -481,7 +508,7 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<Matrix4> {
     result
 }
 
-/// The state [`enter_per_eye_half`] publishes for the reconstruction that runs inside it.
+/// The state [`enter_per_eye_half_with`] publishes for the reconstruction that runs inside it.
 #[derive(Clone, Copy)]
 struct PerEyeState {
     /// The eye this run renders.
