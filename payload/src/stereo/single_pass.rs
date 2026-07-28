@@ -858,7 +858,12 @@ struct TerrainDetailEyePass {
 unsafe fn terrain_detail_eye_passes(
     this: *const RenderBlockTerrainDetail,
     rc: *const RenderContext,
-) -> Option<([TerrainDetailEyePass; 2], D3D11_VIEWPORT, EngineContext)> {
+) -> Option<(
+    [TerrainDetailEyePass; 2],
+    [f32; 16],
+    D3D11_VIEWPORT,
+    EngineContext,
+)> {
     if !terrain_active() {
         return None;
     }
@@ -888,7 +893,11 @@ unsafe fn terrain_detail_eye_passes(
             viewport: eye_half_viewport(full, eye),
         }
     });
-    Some((passes, full, d3d))
+    let mut cb1_center_rows = [0.0f32; 16];
+    for (k, center) in cb1_center.iter().enumerate() {
+        cb1_center_rows[k * 4..k * 4 + 4].copy_from_slice(&center.to_array());
+    }
+    Some((passes, cb1_center_rows, full, d3d))
 }
 
 /// The graphics context (`HContext_t*`) a render block's `Draw` stages constants into, read from its
@@ -1002,7 +1011,8 @@ pub unsafe fn terrain_detail_per_eye(
     rc: *const RenderContext,
     mut draw: impl FnMut(),
 ) -> bool {
-    let Some((passes, full, d3d)) = (unsafe { terrain_detail_eye_passes(this, rc) }) else {
+    let Some((passes, cb1_center, full, d3d)) = (unsafe { terrain_detail_eye_passes(this, rc) })
+    else {
         return false;
     };
     // SAFETY: `rc` is live per the caller contract.
@@ -1014,6 +1024,13 @@ pub unsafe fn terrain_detail_per_eye(
         bind_both_viewport_slots(d3d, pass.viewport);
         draw();
     }
+    // Put the centre transform back, as `screen_uv_cb_per_eye` does with the rows it biases. The
+    // block type stages this constant once per pass rather than per draw, so leaving eye 1's
+    // reprojection behind hands it to anything later in the pass that reads vertex `cb1[0..3]` --
+    // including a terrain-detail draw this intercept declines, which it can do per draw, since
+    // `BoundVsGate::Checked` reads the live bound-shader flag.
+    // SAFETY: as above; `cb1_center` is the same four float4 rows, un-reprojected.
+    unsafe { SetVertexProgramConstants(ctx, 1, 0, cb1_center.as_ptr(), 4) };
     // Restore the collapse's full viewport for the draws that follow in this pass.
     bind_both_viewport_slots(d3d, full);
     true
@@ -1061,19 +1078,26 @@ fn per_eye_reissue_eye() -> Option<usize> {
     }
 }
 
-/// Raises [`PER_EYE_REISSUE`] for one eye for as long as it lives.
-struct PerEyeReissue;
+/// Raises [`PER_EYE_REISSUE`] for one eye for as long as it lives, carrying the previous marker so a
+/// nested re-issue restores rather than clears it.
+struct PerEyeReissue(usize);
 
 impl PerEyeReissue {
+    /// Saves and restores the previous marker rather than clearing it, the same shape
+    /// [`set_current_pass`] uses. Nothing today re-issues inside a re-issue -- no intercepted block's
+    /// `Draw` reaches another intercepted block's `Draw` -- but nothing states or enforces that
+    /// either, and clearing would un-guard the remainder of the outer loop the moment it stopped
+    /// holding: this module's own draw detours would start splitting geometry the outer re-issue had
+    /// already split, which is the doubled-geometry artifact the marker exists to prevent.
     fn enter(eye: usize) -> Self {
-        PER_EYE_REISSUE.store(eye + 1, Ordering::Release);
-        Self
+        let previous = PER_EYE_REISSUE.swap(eye + 1, Ordering::Release);
+        Self(previous)
     }
 }
 
 impl Drop for PerEyeReissue {
     fn drop(&mut self) {
-        PER_EYE_REISSUE.store(0, Ordering::Release);
+        PER_EYE_REISSUE.store(self.0, Ordering::Release);
     }
 }
 
