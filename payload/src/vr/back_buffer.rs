@@ -182,7 +182,6 @@ pub fn sync_swapchain_to_window() {
             window.1,
         )
     };
-    BYPASS_RESIZE_SUBSTITUTE.store(false, Ordering::Release);
 
     // Put the render size back. `device->m_BackBuffer`'s own dimensions keep the new swapchain size,
     // which is what they should now report.
@@ -192,6 +191,9 @@ pub fn sync_swapchain_to_window() {
         device.m_DeviceInfo.m_DisplayHeight = render_size.1;
         device.m_DeviceInfo.m_DisplayRatio = render_size.2;
     }
+    // Clear the bypass only after the device-info restore, so the flag covers the entire
+    // save-call-restore window and a concurrent resize substitute sees the original render size.
+    BYPASS_RESIZE_SUBSTITUTE.store(false, Ordering::Release);
 
     if ok {
         tracing::info!(
