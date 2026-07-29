@@ -1230,14 +1230,14 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                     "Eye viewports follow the bound target (clouds, smoke, spotlight volumetrics)",
                 )
                 .on_hover_text(
-                    "Splits the viewport of whatever render target the engine currently has bound,                      instead of always splitting the scene's double-wide one. The low-resolution                      clouds, particles, and spot-light cones render into a shared quarter-resolution                      buffer (half per axis); handing those draws a full-scene viewport magnifies them                      2x about the target's origin and crops them, which is also a 2x motion gain --                      clouds and smoke sliding at twice the camera's rate. A no-op everywhere else,                      since the two viewports agree outside those passes.",
+                    "Splits the viewport of whatever render target the engine currently has bound, instead of always splitting the scene's double-wide one. The low-resolution clouds, particles, and spot-light cones render into a shared quarter-resolution buffer (half per axis); handing those draws a full-scene viewport magnifies them 2x about the target's origin and crops them, which is also a 2x motion gain -- clouds and smoke sliding at twice the camera's rate. A no-op everywhere else, since the two viewports agree outside those passes.",
                 );
                 ui.checkbox(
                     &mut cfg.stereo.single_pass.slot13_per_eye,
                     "Non-indexed geometry per eye (decals, roads, skidmarks)",
                 )
                 .on_hover_text(
-                    "Re-issues a non-indexed Draw once per eye, with both viewport and cb13 eye slots                      pinned to that eye, for the passes known to submit geometry this way. Off, every                      slot-13 draw gets the whole double-wide viewport -- right for a fullscreen                      triangle, but it stretches decals and road layers 2x horizontally, which is a 2x                      motion gain and reads as them sliding over the world. Default off until the pass                      allowlist is confirmed: read the 'slot-13 by pass' census in the log to see which                      passes actually arrive here.",
+                    "Re-issues a non-indexed Draw once per eye, with both viewport and cb13 eye slots pinned to that eye, for the passes known to submit geometry this way. Off, every slot-13 draw gets the whole double-wide viewport -- right for a fullscreen triangle, but it stretches decals and road layers 2x horizontally, which is a 2x motion gain and reads as them sliding over the world. Default off until the pass allowlist is confirmed: read the 'slot-13 by pass' census in the log to see which passes actually arrive here.",
                 );
                 ui.checkbox(
                     &mut cfg.stereo.single_pass.atmospheric_per_eye,
@@ -1401,10 +1401,10 @@ pub fn egui_debug_render(ui: &mut egui::Ui) {
                 .text("Max peripheral drop fraction"),
         );
         ui.horizontal(|ui| {
-            ui.label("Foveated pass range (RenderPassId):");
-            ui.add(egui::DragValue::new(&mut cfg.foveation.foveal_first_pass).range(0..=0xFF));
+            ui.label("Foveated pass range:");
+            render_pass_combo_box(ui, "First", &mut cfg.foveation.foveal_first_pass);
             ui.label("..=");
-            ui.add(egui::DragValue::new(&mut cfg.foveation.foveal_last_pass).range(0..=0xFF));
+            render_pass_combo_box(ui, "Last", &mut cfg.foveation.foveal_last_pass);
         });
         ui.checkbox(
             &mut cfg.foveation.debug_show_mask,
@@ -1590,4 +1590,125 @@ fn render_pass_name(id: i16) -> &'static str {
             .to_str()
             .unwrap_or("(non-utf8)")
     }
+}
+
+/// A dropdown for selecting a [`RenderPassId`] from the scene-pass range, showing each variant's
+/// hex value and the engine's debug name.
+fn render_pass_combo_box(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut jc3gi::graphics_engine::render_engine::RenderPassId,
+) {
+    use jc3gi::graphics_engine::render_engine::RenderPassId;
+    // List the scene passes: the G-buffer and main-scene range that foveation operates on.
+    const SCENE_PASSES: [RenderPassId; 99] = [
+        RenderPassId::RP_ROAD_STENCIL,
+        RenderPassId::RP_TERRAINPATCH_DETAIL_MID,
+        RenderPassId::RP_TERRAINPATCH_DETAIL_LOW,
+        RenderPassId::RP_TERRAINPATCH_BASEMESH_TESSELLATE_NEAR,
+        RenderPassId::RP_TERRAINPATCH_BASEMESH_NEAR,
+        RenderPassId::RP_TERRAINPATCH_BASEMESH_TESSELLATE_FAR,
+        RenderPassId::RP_TERRAINPATCH_BASEMESH_FAR,
+        RenderPassId::RP_TERRAINPATCH_BASEMESH_TESSELLATE_COLOR,
+        RenderPassId::RP_TERRAINPATCH_BASEMESH_COLOR,
+        RenderPassId::RP_TERRAIN_APPLY_NEAR_DETAILED,
+        RenderPassId::RP_TERRAIN_APPLY_NEAR,
+        RenderPassId::RP_TERRAIN_APPLY_FAR,
+        RenderPassId::RP_MODELS_DYNAMIC,
+        RenderPassId::RP_MODELS_DYNAMIC_MASK_DAMAGE_POST_EFFECT,
+        RenderPassId::RP_MODELS_STATIC,
+        RenderPassId::RP_MODELS_REFLECTION,
+        RenderPassId::RP_UNDERWATER_VEGETATION,
+        RenderPassId::RP_VEGETATION_OPAQUE,
+        RenderPassId::RP_VEGETATIONFINS,
+        RenderPassId::RP_VEGETATIONGROUP,
+        RenderPassId::RP_VEGETATIONGROUP2,
+        RenderPassId::RP_TERRAIN_FOREST,
+        RenderPassId::RP_CREATURES,
+        RenderPassId::RP_UNDERWATER_FOG_GRADIENT,
+        RenderPassId::RP_Z_LOCK,
+        RenderPassId::RP_ROAD_JUNCTION,
+        RenderPassId::RP_ROAD_LAYERS,
+        RenderPassId::RP_ROAD_JUNCTION_OPAQUE,
+        RenderPassId::RP_DOWNSAMPLE_DEPTH,
+        RenderPassId::RP_DECALS,
+        RenderPassId::RP_SCREEN_SPACE_DECALS,
+        RenderPassId::RP_SCREEN_SPACE_ROAD_DECALS,
+        RenderPassId::RP_LAST_GBUFFER,
+        RenderPassId::RP_REFLECTIVE_WATER_PLANES,
+        RenderPassId::RP_AO_VOLUMES,
+        RenderPassId::RP_SSAO,
+        RenderPassId::RP_SCREEN_SPACE_REFLECTIONS,
+        RenderPassId::RP_GLOBAL_ILLUMINATION,
+        RenderPassId::RP_SCREEN_SPACE_SUBSURFACE_SKIN,
+        RenderPassId::RP_DEFERRED_LIGHTS,
+        RenderPassId::RP_DEBUG_GI,
+        RenderPassId::RP_LINES,
+        RenderPassId::RP_OCCLUDERS_DEBUG,
+        RenderPassId::RP_BILLBOARD,
+        RenderPassId::RP_OCCLUSION_QUERY,
+        RenderPassId::RP_LAST_OPAQUE,
+        RenderPassId::RP_STARS,
+        RenderPassId::RP_SUN,
+        RenderPassId::RP_MOON,
+        RenderPassId::RP_SKYBOX,
+        RenderPassId::RP_SKY_GRADIENT,
+        RenderPassId::RP_FOG_GRADIENT,
+        RenderPassId::RP_DEBUG_TRANSPARENCY,
+        RenderPassId::RP_UNDERWATER_CLOUDS,
+        RenderPassId::RP_UNDERWATER_VEGETATION_TRANSPARENT,
+        RenderPassId::RP_COPY_FRAMEBUFFER,
+        RenderPassId::RP_WATER,
+        RenderPassId::RP_POST_WATER,
+        RenderPassId::RP_SKIDMARKS,
+        RenderPassId::RP_PRE_CLOUDS,
+        RenderPassId::RP_LENSFLARE,
+        RenderPassId::RP_POST_CLOUDS,
+        RenderPassId::RP_APPLY_CLOUDS,
+        RenderPassId::RP_VEGETATION_TRANSPARENT_AOIT,
+        RenderPassId::RP_FOG_VOLUME_GENERATE,
+        RenderPassId::RP_FOG_VOLUME_UPSAMPLE,
+        RenderPassId::RP_FOG_VOLUME_APPLY,
+        RenderPassId::RP_MASK_WATER,
+        RenderPassId::RP_MODELS_TRANSPARENT,
+        RenderPassId::RP_VEGETATION_TRANSPARENT,
+        RenderPassId::RP_VEGETATION_POST_DRAW,
+        RenderPassId::RP_BB_RAIN,
+        RenderPassId::RP_MODELS_GLINT,
+        RenderPassId::RP_WATER_GODRAYS,
+        RenderPassId::RP_BULLETS,
+        RenderPassId::RP_CONTRAILS,
+        RenderPassId::RP_GROUNDHAZE,
+        RenderPassId::RP_PARTICLE_RIBBON,
+        RenderPassId::RP_MODEL_HALO_POST,
+        RenderPassId::RP_PARTICLE_LOWRES,
+        RenderPassId::RP_SPOTLIGHT_VOLUMETRICS,
+        RenderPassId::RP_WINDOW_DECALS,
+        RenderPassId::RP_MODELS_REFRACT,
+        RenderPassId::RP_PARTICLE_GENERAL,
+        RenderPassId::RP_PARTICLE_DISTORT,
+        RenderPassId::RP_PARTICLE_LOWRES_OVERLAY,
+        RenderPassId::RP_SCENE_CAPTURE,
+        RenderPassId::RP_Z_FINAL_TRANSPARENT,
+        RenderPassId::RP_CLEAR_SCREEN_SPACE_SUBSURFACE_SKIN,
+        RenderPassId::RP_CLEAR_STENCIL,
+        RenderPassId::RP_GHOST_EFFECT,
+        RenderPassId::RP_OUTLINE_MASK,
+        RenderPassId::RP_OUTLINE_EFFECT,
+        RenderPassId::RP_OUTLINE_EFFECT_NO_DEPTH,
+        RenderPassId::RP_OUTLINE_EFFECT_BLUR,
+        RenderPassId::RP_FINAL_TRANSPARENT,
+        RenderPassId::RP_PARTICLE_ONSCREEN,
+        RenderPassId::RP_POSTEFFECTS,
+        RenderPassId::RP_LAST_MAIN,
+    ];
+    let pass_label =
+        |pass: RenderPassId| format!("{:#04X}: {}", pass as i32, render_pass_name(pass as i16));
+    egui::ComboBox::from_label(label)
+        .selected_text(pass_label(*value))
+        .show_ui(ui, |ui| {
+            for pass in SCENE_PASSES {
+                ui.selectable_value(value, pass, pass_label(pass));
+            }
+        });
 }

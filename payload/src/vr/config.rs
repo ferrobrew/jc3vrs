@@ -2,6 +2,44 @@
 
 use serde::{Deserialize, Serialize};
 
+use jc3gi::graphics_engine::render_engine::RenderPassId;
+
+/// Serialize a [`RenderPassId`] as its `i32` discriminant, matching the pre-typing on-disk format
+/// (`0x41` etc.) so existing config files stay readable.
+fn serialize_render_pass_id<S: serde::Serializer>(
+    pass: &RenderPassId,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_i32(*pass as i32)
+}
+
+/// Deserialize a [`RenderPassId`] from an `i32`, accepting any value that falls within the enum's
+/// range. The config file stores the integer; an out-of-range value is a deserialization error.
+fn deserialize_render_pass_id<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RenderPassId, D::Error> {
+    let raw = i32::deserialize(deserializer)?;
+    render_pass_id_from_i32(raw).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "render pass id {raw:#x} is out of the RenderPassId range"
+        ))
+    })
+}
+
+/// Map an `i32` to the matching [`RenderPassId`] variant, or `None` if it is outside the enum range.
+///
+/// `RenderPassId` is `#[repr(i32)]` with contiguous discriminants `0..=157`
+/// (`RP_NONE` through `RP_RENDERPASS_COUNT`), so every value in that range is a valid variant.
+fn render_pass_id_from_i32(raw: i32) -> Option<RenderPassId> {
+    if (0..=157).contains(&raw) {
+        // SAFETY: `RenderPassId` is `#[repr(i32)]` and every value in `0..=157` is a named variant,
+        // so transmuting an in-range `i32` is sound.
+        Some(unsafe { std::mem::transmute::<i32, RenderPassId>(raw) })
+    } else {
+        None
+    }
+}
+
 /// Which depth convention the per-eye off-axis projection is written in, and where in the
 /// `SetupRenderCamera` sequence it lands (`docs/engine/rendering.md` §2.7, `docs/mod/vr-runtime.md` blocker 1).
 /// The coordinate/depth conventions are the least-verifiable part of the pipeline without a headset,
@@ -300,14 +338,22 @@ pub struct FoveationConfig {
     pub mask_bit: u32,
     /// The first [`RenderPassId`](jc3gi::graphics_engine::render_engine::RenderPassId) (inclusive) of the
     /// foveated shading range: the mask-write runs just before it, and the peripheral stencil test is
-    /// forced on from here. Default `0x41` (`RP_MODELS_DYNAMIC`) -- after the depth prepass, so the
+    /// forced on from here. Default `RP_MODELS_DYNAMIC` -- after the depth prepass, so the
     /// dropped pixels keep full-resolution depth. A tuning knob; widen it toward the lighting passes to
     /// save more, narrow it if an effect misbehaves.
-    pub foveal_first_pass: u32,
+    #[serde(
+        serialize_with = "serialize_render_pass_id",
+        deserialize_with = "deserialize_render_pass_id"
+    )]
+    pub foveal_first_pass: RenderPassId,
     /// The last [`RenderPassId`](jc3gi::graphics_engine::render_engine::RenderPassId) (inclusive) of the
     /// foveated shading range: the peripheral stencil test is forced through it, and the fill-in runs just
-    /// after. Default `0x4B` (`RP_CREATURES`).
-    pub foveal_last_pass: u32,
+    /// after. Default `RP_CREATURES`.
+    #[serde(
+        serialize_with = "serialize_render_pass_id",
+        deserialize_with = "deserialize_render_pass_id"
+    )]
+    pub foveal_last_pass: RenderPassId,
     /// Diagnostic: paint the dropped peripheral pixels magenta (in the fill-in pass) instead of
     /// reconstructing them, so the mask is directly visible. Off by default.
     pub debug_show_mask: bool,
@@ -320,14 +366,97 @@ impl FoveationConfig {
             outer_fraction: 0.55,
             max_drop: 0.8,
             mask_bit: 0x80,
-            foveal_first_pass: 0x41,
-            foveal_last_pass: 0x4B,
+            foveal_first_pass: RenderPassId::RP_MODELS_DYNAMIC,
+            foveal_last_pass: RenderPassId::RP_CREATURES,
             debug_show_mask: false,
         }
+    }
+
+    /// Validate the foveation configuration: the first pass must not exceed the last, and the mask
+    /// bit must be a single set bit (a power of two). Returns `Err` with a description of the first
+    /// problem found.
+    pub fn validate(&self) -> Result<(), FoveationConfigError> {
+        if self.foveal_first_pass > self.foveal_last_pass {
+            return Err(FoveationConfigError::PassRange {
+                first: self.foveal_first_pass as i32,
+                last: self.foveal_last_pass as i32,
+            });
+        }
+        if self.mask_bit == 0 || (self.mask_bit & (self.mask_bit - 1)) != 0 {
+            return Err(FoveationConfigError::MaskNotPowerOfTwo {
+                mask_bit: self.mask_bit,
+            });
+        }
+        Ok(())
     }
 }
 impl Default for FoveationConfig {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A configuration error found by [`FoveationConfig::validate`].
+#[derive(Debug)]
+pub enum FoveationConfigError {
+    /// The foveal pass range is inverted (`first > last`).
+    PassRange { first: i32, last: i32 },
+    /// The stencil mask bit is zero or not a single set bit.
+    MaskNotPowerOfTwo { mask_bit: u32 },
+}
+
+impl std::fmt::Display for FoveationConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FoveationConfigError::PassRange { first, last } => write!(
+                f,
+                "foveation: foveal_first_pass ({first:#x}) is greater than foveal_last_pass ({last:#x})"
+            ),
+            FoveationConfigError::MaskNotPowerOfTwo { mask_bit } => write!(
+                f,
+                "foveation: mask_bit ({mask_bit:#x}) must be a single set bit (a power of two)"
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn foveation_config_validate_accepts_defaults() {
+        let cfg = FoveationConfig::new();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn foveation_config_validate_rejects_inverted_range() {
+        let mut cfg = FoveationConfig::new();
+        cfg.foveal_first_pass = RenderPassId::RP_CREATURES;
+        cfg.foveal_last_pass = RenderPassId::RP_MODELS_DYNAMIC;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn foveation_config_validate_rejects_zero_mask_bit() {
+        let mut cfg = FoveationConfig::new();
+        cfg.mask_bit = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn foveation_config_validate_rejects_non_power_of_two_mask_bit() {
+        let mut cfg = FoveationConfig::new();
+        cfg.mask_bit = 0x60;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn foveation_config_validate_accepts_equal_range() {
+        let mut cfg = FoveationConfig::new();
+        cfg.foveal_first_pass = RenderPassId::RP_CREATURES;
+        cfg.foveal_last_pass = RenderPassId::RP_CREATURES;
+        assert!(cfg.validate().is_ok());
     }
 }

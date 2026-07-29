@@ -47,7 +47,8 @@ use windows::core::Interface as _;
 use crate::config::Config;
 
 pub use config::{
-    BlitGamma, FoveationConfig, FreezeMode, MirrorFraming, ProjectionConvention, VrConfig,
+    BlitGamma, FoveationConfig, FoveationConfigError, FreezeMode, MirrorFraming,
+    ProjectionConvention, VrConfig,
 };
 pub use frame::{
     EyeRenderParams, begin_render_frame, clear_render_params, cull_projection_standard,

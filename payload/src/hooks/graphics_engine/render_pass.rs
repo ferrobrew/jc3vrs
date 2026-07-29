@@ -272,6 +272,10 @@ fn foveation_plan(first: i32, last: i32) -> Option<FoveationPlan> {
     if !cfg.enabled {
         return None;
     }
+    if let Err(e) = cfg.validate() {
+        tracing::warn!("foveation disabled: {e}");
+        return None;
+    }
     let eye = usize::from(is_second_eye());
     let center_uv = foveal_center_uv(eye)?;
     let ff = cfg.foveal_first_pass as i32;
