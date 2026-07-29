@@ -4,10 +4,7 @@
 
 use std::{
     collections::BTreeSet,
-    sync::{
-        Mutex,
-        atomic::{AtomicI32, Ordering},
-    },
+    sync::atomic::{AtomicI32, Ordering},
 };
 
 use jc3gi::{
@@ -544,7 +541,8 @@ unsafe extern "system" fn render_block_type_always_disabled(
 
 /// The `IsEnabled` vtable slots currently patched to
 /// [`render_block_type_always_disabled`], keyed by slot address.
-static DISABLED_TYPE_SLOTS: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
+static DISABLED_TYPE_SLOTS: parking_lot::Mutex<BTreeSet<usize>> =
+    parking_lot::Mutex::new(BTreeSet::new());
 
 /// Render the render-block types the registry cannot reach.
 ///
@@ -601,6 +599,10 @@ fn show_unregistered_render_block_types(ui: &mut egui::Ui) {
             })
             .collect();
         rows.sort_by(|a, b| a.0.cmp(b.0));
+        // Deduplicate by slot address: two instances of the same unregistered type share a vtable
+        // and thus the same `IsEnabled` slot, so without this a duplicate checkbox appears per
+        // instance.
+        rows.dedup_by(|a, b| a.1 == b.1);
 
         if rows.is_empty() {
             ui.label(
@@ -616,7 +618,7 @@ fn show_unregistered_render_block_types(ui: &mut egui::Ui) {
             rows.len()
         ));
 
-        let mut disabled_slots = DISABLED_TYPE_SLOTS.lock().unwrap();
+        let mut disabled_slots = DISABLED_TYPE_SLOTS.lock();
         for (name, slot) in rows {
             let mut enabled = !disabled_slots.contains(&slot);
             if ui
@@ -664,7 +666,7 @@ fn show_render_block_type_registry(ui: &mut egui::Ui) {
              (vtable IsEnabled patch; auto-reverts on uninject)",
             entries.len()
         ));
-        let mut disabled_slots = DISABLED_TYPE_SLOTS.lock().unwrap();
+        let mut disabled_slots = DISABLED_TYPE_SLOTS.lock();
         // Sort by type name so the list is stable and scannable (the registry's own order is
         // registration order, which shuffles as the engine loads).
         let mut rows: Vec<(&str, usize, u32)> = entries
