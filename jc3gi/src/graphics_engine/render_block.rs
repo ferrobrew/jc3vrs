@@ -570,6 +570,46 @@ impl std::convert::AsMut<RenderBlockFoliage> for RenderBlockFoliage {
     }
 }
 #[repr(C, align(8))]
+/// The light-glow render block (`NGraphicsEngine::CRenderBlockLightGlow`, registered name
+/// `"LightGlow"`): a screen-space sprite for a point/spot light corona, drawn in
+/// `CModelInstanceManager::HaloTransparentPass` (`RP_MODEL_HALO_POST`). The shape is a fixed
+/// billboard quad (`SLightGlowVertex`); placement is driven entirely on the CPU. The draw reads the
+/// light world position and colour/scale from [`CRBIInfo`](crate::graphics_engine::render_block::RBIInfo), projects it through the render
+/// context's translation-bearing view-projection, converts the result to pixel coordinates, and
+/// uploads the screen-space sprite corners and scale to vertex constant buffer `cb1` registers 0..4
+/// and 5 before issuing a non-instanced [`DrawIndexed`](crate::graphics_engine::draw::DrawIndexed).
+pub struct RenderBlockLightGlow {}
+impl RenderBlockLightGlow {
+    pub const Draw_ADDRESS: usize = 0x14018F220;
+    /// Issues the screen-space light-glow sprite. The block's own vertex shader applies the
+    /// CPU-staged corners in `cb1` with no further transform, so the sprite position is fixed by the
+    /// render context's camera at the moment of this draw.
+    pub unsafe fn Draw(
+        &self,
+        render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+                render_context: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *const Self as _, render_context, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockLightGlow> for RenderBlockLightGlow {
+    fn as_ref(&self) -> &RenderBlockLightGlow {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockLightGlow> for RenderBlockLightGlow {
+    fn as_mut(&mut self) -> &mut RenderBlockLightGlow {
+        self
+    }
+}
+#[repr(C, align(8))]
 /// The occluder render block (`NGraphicsEngine::CRenderBlockOccluder`, registered name `"Occluder"`): a
 /// unit-cube depth proxy scaled per scene occluder, injected once per frame into `RP_Z_OCCLUDERS`
 /// (pass 47) to prime the main camera depth buffer so later Z and G-buffer passes early-Z reject

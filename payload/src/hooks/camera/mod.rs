@@ -252,6 +252,9 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         let mut stereo = STEREO_STATE.lock();
         let index = stereo.draw_index;
         stereo.vp_history.cur_eye[index] = Some(glam::Mat4::from(camera.m_ViewProjectionF));
+        stereo.vp_history.cur_eye_view[index] = Some(glam::Mat4::from(camera.m_View));
+        stereo.vp_history.cur_eye_projection_f[index] =
+            Some(glam::Mat4::from(camera.m_ProjectionF));
     }
 
     result

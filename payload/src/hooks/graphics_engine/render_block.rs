@@ -30,14 +30,15 @@ use jc3gi::{
     graphics_engine::{
         graphics_engine::{HContext_t, RenderContext},
         render_block::{
-            Matrix3x4, RBIInfo, RenderBlockCharacter, RenderBlockCharacterSkin, SkinBatch,
+            Matrix3x4, RBIInfo, RenderBlockCharacter, RenderBlockCharacterSkin,
+            RenderBlockLightGlow, SkinBatch,
         },
     },
     types::math::Matrix4,
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::{config::Config, stereo::STEREO_STATE};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -47,6 +48,7 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&RENDER_BLOCK_CHARACTER_SKIN_DRAW_Z_BINDER)
         .with_static_binder(&RENDER_BLOCK_CHARACTER_SET_MATRIX_PALETTE_BINDER)
         .with_static_binder(&RENDER_BLOCK_CHARACTER_SKIN_SET_MATRIX_PALETTE_BINDER)
+        .with_static_binder(&RENDER_BLOCK_LIGHT_GLOW_DRAW_BINDER)
 }
 
 /// One-shot diagnostics: while positive, each character-block draw near the player logs its
@@ -499,4 +501,91 @@ unsafe fn maybe_dump(
         translation.y,
         translation.z,
     );
+}
+
+/// The light-glow sprite is a screen-space billboard whose vertices are placed on the CPU by
+/// [`CRenderBlockLightGlow::Draw`], using the render context's translation-bearing view-projection.
+/// The halo pass (`RP_MODEL_HALO_POST`) draws from a per-pass snapshot of the camera manager's render
+/// camera taken in `CRenderPass::SaveRenderFrameData`, before the per-eye `SetupRenderCamera` hook
+/// applies the IPD offset. Without intervention the flare projects from the center camera for both
+/// eyes, producing the observed ~5 m symmetric world-space offset.
+///
+/// When stereo is active and not collapsed, this detour temporarily replaces the render context's
+/// view/projection with the current eye's patched matrices (already published by the
+/// `SetupRenderCamera` hook), recomputes the offset view-projection, calls the original draw, and
+/// restores the original matrices so later draws in the same pass see the unmodified context.
+#[detour(
+    address = jc3gi::graphics_engine::render_block::RenderBlockLightGlow::Draw_ADDRESS
+)]
+fn render_block_light_glow_draw(
+    this: *const RenderBlockLightGlow,
+    rc: *mut RenderContext,
+    info: *const RBIInfo,
+) {
+    let Some(rc) = (unsafe { rc.as_mut() }) else {
+        return RENDER_BLOCK_LIGHT_GLOW_DRAW
+            .get()
+            .unwrap()
+            .call(this, rc, info);
+    };
+    let Some(saved) = light_glow_patch_render_context(rc) else {
+        return RENDER_BLOCK_LIGHT_GLOW_DRAW
+            .get()
+            .unwrap()
+            .call(this, rc, info);
+    };
+    RENDER_BLOCK_LIGHT_GLOW_DRAW
+        .get()
+        .unwrap()
+        .call(this, rc, info);
+    light_glow_restore_render_context(rc, saved);
+}
+
+/// Saved render-context matrices for a single light-glow draw so the original values can be restored
+/// after the patched draw.
+struct SavedRenderContextMatrices {
+    view: Matrix4,
+    projection_f: Matrix4,
+    view_projection_f: Matrix4,
+    offset_view_projection: Matrix4,
+}
+
+/// Replace `rc`'s view/projection matrices with this eye's per-eye patched values if they are
+/// available. Returns the original matrices so the caller can restore them.
+fn light_glow_patch_render_context(rc: &mut RenderContext) -> Option<SavedRenderContextMatrices> {
+    if !crate::stereo::active() || crate::stereo::single_pass::collapse_active() {
+        return None;
+    }
+    let stereo = STEREO_STATE.lock();
+    let eye = stereo.draw_index;
+    let view = (*stereo.vp_history.cur_eye_view.get(eye)?)?;
+    let projection_f = (*stereo.vp_history.cur_eye_projection_f.get(eye)?)?;
+    drop(stereo);
+
+    let saved = SavedRenderContextMatrices {
+        view: rc.m_View,
+        projection_f: rc.m_ProjectionF,
+        view_projection_f: rc.m_ViewProjectionF,
+        offset_view_projection: rc.m_OffsetViewProjection,
+    };
+
+    rc.m_View = Matrix4::from(view);
+    rc.m_ProjectionF = Matrix4::from(projection_f);
+    rc.m_ViewProjectionF = Matrix4::from(view * projection_f);
+    unsafe {
+        jc3gi::graphics_engine::render_pass::CalculateOffsetViewProjectionMatrix(
+            &rc.m_View,
+            &rc.m_ProjectionF,
+            &mut rc.m_OffsetViewProjection,
+        );
+    }
+
+    Some(saved)
+}
+
+fn light_glow_restore_render_context(rc: &mut RenderContext, saved: SavedRenderContextMatrices) {
+    rc.m_View = saved.view;
+    rc.m_ProjectionF = saved.projection_f;
+    rc.m_ViewProjectionF = saved.view_projection_f;
+    rc.m_OffsetViewProjection = saved.offset_view_projection;
 }

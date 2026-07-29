@@ -81,6 +81,12 @@ pub struct VpHistory {
     pub cur_center: Option<glam::Mat4>,
     /// This frame's final per-eye view-projections (the matrices each dispatch rasterizes with).
     pub cur_eye: [Option<glam::Mat4>; 2],
+    /// This frame's final per-eye view matrices (jitter and eye offset applied). Used by CPU-side
+    /// projection paths such as the light-glow sprite, which cannot be fixed by shader constant remaps.
+    pub cur_eye_view: [Option<glam::Mat4>; 2],
+    /// This frame's final per-eye reverse-Z projections (jitter and eye offset applied). Paired with
+    /// [`cur_eye_view`](Self::cur_eye_view) for rebuilding the per-eye offset view-projection.
+    pub cur_eye_projection_f: [Option<glam::Mat4>; 2],
     /// The UV-space shift the previous frame's camera jitter applied to every projected position
     /// (zero when jitter was off) -- the previous-frame half of the motion-vector jitter
     /// cancellation.
@@ -95,6 +101,8 @@ impl VpHistory {
             prev_eye: [None, None],
             cur_center: None,
             cur_eye: [None, None],
+            cur_eye_view: [None, None],
+            cur_eye_projection_f: [None, None],
             prev_jitter_uv: (0.0, 0.0),
             cur_jitter_uv: (0.0, 0.0),
         }
@@ -105,6 +113,8 @@ impl VpHistory {
     pub fn rotate(&mut self) {
         self.prev_center = self.cur_center.take();
         self.prev_eye = [self.cur_eye[0].take(), self.cur_eye[1].take()];
+        self.cur_eye_view = [None, None];
+        self.cur_eye_projection_f = [None, None];
         self.prev_jitter_uv = std::mem::take(&mut self.cur_jitter_uv);
     }
 
