@@ -51,6 +51,8 @@
 //! `Context::m_Mutex`, serialized with the engine's render work, the same discipline as
 //! [`crate::capture`] and [`crate::vr::blit`].
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 use anyhow::Context as _;
 use parking_lot::Mutex;
 use windows::{
@@ -86,6 +88,14 @@ const PIXEL_DXBC: &[u8] = include_bytes!("../shaders/capture_ps.dxbc");
 /// runtime. Holds COM objects, which `windows` marks `Send`/`Sync`, so a `Mutex` static is sound.
 static MIRROR: Mutex<Option<Mirror>> = Mutex::new(None);
 
+/// Whether [`present_mirror`] is currently in a transient-failure streak, so repeated failures log a
+/// transition and a recovery instead of one line per frame. Mirrors the pattern in
+/// [`crate::vr::frame_begin`]'s `FRAME_BEGIN_FAILING`.
+static MIRROR_FAILING: AtomicBool = AtomicBool::new(false);
+/// Frames lost to the current (or just-ended) transient mirror-present failure streak. Paired with
+/// [`MIRROR_FAILING`].
+static MIRROR_FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
+
 /// Draw the configured eye's capture into the game swapchain's back buffer (framed to the window
 /// aspect per `vr.mirror_framing`), composite the egui overlay on top, and present the game swapchain
 /// unsynced.
@@ -103,7 +113,7 @@ pub fn present_mirror(eye: usize) {
     if let Err(e) = unsafe { present_mirror_inner(eye) } {
         // Device-removed errors are fatal: the D3D11 device is gone, so the mirror cannot recover.
         // Other errors (e.g. a transient occlusion, surface loss) may clear on the next frame, so
-        // log a warning but keep the mirror enabled for a retry.
+        // rate-limit the warning (transition + periodic reminder) rather than flooding the log.
         if let Some(win_err) = e
             .chain()
             .filter_map(|src| src.downcast_ref::<windows::core::Error>())
@@ -118,7 +128,17 @@ pub fn present_mirror(eye: usize) {
             crate::config::CONFIG.lock().vr.mirror = false;
             *MIRROR.lock() = None;
         } else {
-            tracing::warn!(target: "vr", "mirror present failed (transient); will retry next frame: {e:#}");
+            let count = MIRROR_FAIL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            if !MIRROR_FAILING.swap(true, Ordering::Relaxed) {
+                tracing::warn!(target: "vr", "mirror present failed (transient); will retry: {e:#}");
+            } else if count.is_multiple_of(90) {
+                tracing::warn!(target: "vr", count, "mirror present still failing: {e:#}");
+            }
+        }
+    } else {
+        if MIRROR_FAILING.swap(false, Ordering::Relaxed) {
+            let frames = MIRROR_FAIL_COUNT.swap(0, Ordering::Relaxed);
+            tracing::info!(target: "vr", frames, "mirror present recovered");
         }
     }
 }
