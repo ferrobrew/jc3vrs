@@ -2,8 +2,10 @@
 //!
 //! The exposure pipeline runs once per scene dispatch, so a stereo (twice-per-frame) render
 //! double-adapts and over-meters unless the per-eye work is gated to eye 0. These hooks pin the
-//! exposure for the A/B, gate the smoother and the histogram metering on eye 1, and read the
-//! exposure internals for tracing.
+//! exposure for the A/B, gate the smoother and the histogram metering on eye 1, gate the
+//! `ToneMappingEffect::Update` step itself under a separate toggle (it advances internal histogram
+//! ring indices that would otherwise step twice per real frame), and read the exposure internals
+//! for tracing.
 
 use std::ffi::c_void;
 
@@ -67,14 +69,21 @@ fn calc_histogram_mid_bright(
 // ToneMappingEffect::Update -- the per-frame exposure step (CPostEffectsManager::UpdateRender -> here).
 // With the real 3-arg signature this is the canonical place to (a) pin m_CurrentExposure for the A/B,
 // and (b) read the exposure internals. The target divisor is m_Histogram2's mid-point -- what the
-// converged exposure tracks, NOT m_Histogram. The whole exposure path is once-per-frame, so there is
-// no per-eye gating to do here.
+// converged exposure tracks, NOT m_Histogram. Update also advances internal histogram ring indices
+// (notably the occlusion-query slot selector at this+0x57C); running it on both eyes steps those
+// indices twice per real frame and can read back a stale histogram once head motion makes
+// consecutive frames diverge. Gate it to eye 0 under its own toggle so the effect is isolatable.
 #[detour(address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::Update_ADDRESS)]
 fn tonemapping_update(
     this: *mut ToneMappingEffect,
     manager: *mut c_void,
     ctx: *mut PostEffectContext,
 ) {
+    let gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate_update);
+    TraceState::record_eye(TraceEvent::ToneMappingUpdate { gated });
+    if gated {
+        return;
+    }
     TONEMAPPING_UPDATE.get().unwrap().call(this, manager, ctx);
     let Some(tme) = (unsafe { this.as_mut() }) else {
         return;

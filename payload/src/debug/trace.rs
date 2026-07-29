@@ -185,6 +185,8 @@ pub enum TraceEvent {
     SmoothedExposureUpdate { gated: bool, exposure: f32 },
     #[serde(rename = "CalcHistogramMidBright")]
     CalcHistogramMidBright { gated: bool },
+    #[serde(rename = "ToneMappingUpdate")]
+    ToneMappingUpdate { gated: bool },
     /// Per-frame exposure internals, read from inside `ToneMappingEffect::Update` (the canonical
     /// exposure write, with the live effect in hand). `divisor` is `m_Histogram2`'s mid-point -- the
     /// value the converged exposure actually tracks (`target = target_num / divisor`). The stereo

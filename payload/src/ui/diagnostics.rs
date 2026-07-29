@@ -382,6 +382,10 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
             "Auto-exposure (SmoothedExposure + Histogram)",
         );
         ui.checkbox(
+            &mut cfg.exposure.gate_update,
+            "ToneMappingEffect::Update ring-index step",
+        );
+        ui.checkbox(
             &mut cfg.stereo.gate_eye1_dt,
             "Eye-1 dt=0 (world fade / sun / heat-haze step once per frame)",
         );
