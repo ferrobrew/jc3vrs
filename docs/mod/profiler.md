@@ -22,11 +22,12 @@ feature off, the hooks and scopes do not exist.
   and the per-render-block-type draw counts sit under them.
 - **F9** starts the same capture without the overlay (usable in-headset). Progress shows in the
   collapsible; the result is logged.
-- Captures are written next to the payload DLL as `jc3vrs-profile-<timestamp>.json` in Chrome
-  trace-event format — open in [ui.perfetto.dev](https://ui.perfetto.dev) (or `chrome://tracing`).
-  Each puffin thread is a named lane ("game", "draw", "GPU"); timestamps are rebased to the
-  capture start. Serialization runs on a background thread (a capture is tens of megabytes of
-  JSON), so the game keeps rendering while the file is written.
+- Captures are written to the session's `profile/` directory
+  (`sessions/<timestamp>/profile/jc3vrs-profile-<stamp>.json`) in Chrome trace-event format — open
+  in [ui.perfetto.dev](https://ui.perfetto.dev) (or `chrome://tracing`). Each puffin thread is a
+  named lane ("game", "draw", "GPU"); timestamps are rebased to the capture start. Serialization
+  runs on a background thread (a capture is tens of megabytes of JSON), so the game keeps rendering
+  while the file is written.
 
 ## What is instrumented
 

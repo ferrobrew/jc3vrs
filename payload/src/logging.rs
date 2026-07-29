@@ -48,6 +48,7 @@ pub(super) fn install() {
         )
         .with(
             crate::session::dir()
+                .and_then(|r| r.ok())
                 .map(|dir| dir.join("jc3vrs.log"))
                 .and_then(|path| match std::fs::File::create(&path) {
                     Ok(file) => Some(file),

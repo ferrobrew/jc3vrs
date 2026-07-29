@@ -32,17 +32,16 @@ pub fn stamp() -> String {
 
 /// This session's output root (`sessions/<timestamp>/`), created if missing. For artifacts that live
 /// directly in the root -- the log and the crash log. `None` if the root is unavailable (the DLL path
-/// could not be resolved) or the directory could not be created.
-pub fn dir() -> Option<PathBuf> {
+/// could not be resolved); `Err` if the directory could not be created.
+pub fn dir() -> Option<Result<PathBuf, std::io::Error>> {
     let dir = root()?.clone();
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
+    Some(std::fs::create_dir_all(&dir).map(|_| dir))
 }
 
 /// A named subdirectory of the session root (`"profile"`, `"screenshots"`, `"traces"`, `"grapple"`),
 /// created if missing. For artifact kinds that emit several files. `None` if the root is unavailable
-/// or the directory could not be created.
-pub fn subdir(name: &str) -> Option<PathBuf> {
+/// (the DLL path could not be resolved); `Err` if the directory could not be created.
+pub fn subdir(name: &str) -> Option<Result<PathBuf, std::io::Error>> {
     debug_assert!(
         !name.contains(std::path::MAIN_SEPARATOR)
             && !name.contains('/')
@@ -51,8 +50,7 @@ pub fn subdir(name: &str) -> Option<PathBuf> {
         "session::subdir: name must be a simple directory name, got {name:?}"
     );
     let dir = root()?.join(name);
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
+    Some(std::fs::create_dir_all(&dir).map(|_| dir))
 }
 
 /// This session's output root: `sessions/<local-timestamp>/` beside the payload DLL, or `None` if the

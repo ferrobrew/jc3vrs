@@ -89,11 +89,14 @@ pub fn capture_if_requested(
 /// argument.
 #[must_use = "a writer that did not finish means the payload must stay mapped"]
 pub fn shutdown() -> bool {
-    for _ in 0..SHUTDOWN_POLLS {
+    for poll in 0..SHUTDOWN_POLLS {
         if PENDING_WRITES.load(Ordering::Acquire) == 0 {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
+        if poll > 0 && poll % 100 == 0 {
+            tracing::debug!("screenshot: writer still running, {} s elapsed", poll / 100,);
+        }
     }
     tracing::error!(
         "screenshot: a writer did not finish within {} s; leaving the payload mapped rather than \
@@ -248,6 +251,7 @@ fn write_screenshot(mut pending: PendingWrite) -> anyhow::Result<PathBuf> {
     // the render-trace layout; the stamp is taken once, on the first capture.
     let stamp = SCREENSHOT_STAMP.get_or_init(crate::session::stamp);
     let dir = crate::session::subdir("screenshots")
+        .and_then(|r| r.ok())
         .map(|base| base.join(stamp))
         .context("could not resolve the session screenshots directory")?;
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -276,10 +280,17 @@ fn write_screenshot(mut pending: PendingWrite) -> anyhow::Result<PathBuf> {
             .unwrap_or(serde_json::Value::Null),
     });
     let json_path = path.with_extension("json");
-    if let Err(e) = std::fs::write(
-        &json_path,
-        serde_json::to_string_pretty(&sidecar).unwrap_or_default(),
-    ) {
+    let json = match serde_json::to_string_pretty(&sidecar) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::warn!(
+                "screenshot: failed to serialize sidecar JSON for {}: {e}",
+                json_path.display()
+            );
+            String::new()
+        }
+    };
+    if let Err(e) = std::fs::write(&json_path, json) {
         tracing::warn!("screenshot: failed to write {}: {e}", json_path.display());
     }
 

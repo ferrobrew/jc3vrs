@@ -250,29 +250,38 @@ pub fn install() {
     // a record survives a fault that has already broken the normal logging path. It lives in the
     // session directory (see [`crate::session`]), opened append-only; each record is timestamped to
     // line up with the (UTC-stamped) tracing log of the run that produced it.
-    if let Some(path) = crate::session::dir().map(|dir| dir.join("jc3vrs-crash.log")) {
-        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-        wide.push(0);
-        // SAFETY: `wide` is a null-terminated UTF-16 path; all other arguments are plain flags.
-        let handle = unsafe {
-            CreateFileW(
-                PCWSTR(wide.as_ptr()),
-                FILE_APPEND_DATA.0,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                None,
-                OPEN_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL,
-                None,
-            )
-        };
-        if let Ok(handle) = handle
-            && !handle.is_invalid()
-        {
-            CRASH_LOG.store(handle.0 as isize, Ordering::Relaxed);
-            let mut line = Line::new();
-            line.str("=== session start ");
-            stamp(&mut line);
-            line.str("===").flush();
+    if let Some(dir_result) = crate::session::dir() {
+        match dir_result {
+            Ok(dir) => {
+                let path = dir.join("jc3vrs-crash.log");
+                let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+                wide.push(0);
+                // SAFETY: `wide` is a null-terminated UTF-16 path; all other arguments are plain flags.
+                let handle = unsafe {
+                    CreateFileW(
+                        PCWSTR(wide.as_ptr()),
+                        FILE_APPEND_DATA.0,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        None,
+                        OPEN_ALWAYS,
+                        FILE_ATTRIBUTE_NORMAL,
+                        None,
+                    )
+                };
+                if let Ok(handle) = handle
+                    && !handle.is_invalid()
+                {
+                    CRASH_LOG.store(handle.0 as isize, Ordering::Relaxed);
+                    let mut line = Line::new();
+                    line.str("=== session start ");
+                    stamp(&mut line);
+                    line.str("===").flush();
+                }
+            }
+            Err(e) => {
+                // The crash log itself cannot be opened; this runs at startup so just print to stderr.
+                eprintln!("crash: could not create session directory: {e}");
+            }
         }
     }
 

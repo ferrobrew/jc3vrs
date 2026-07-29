@@ -395,7 +395,7 @@ pub fn dump_vs_name_census() {
     if census.is_empty() {
         return;
     }
-    let Some(dir) = crate::session::dir() else {
+    let Some(dir) = crate::session::dir().and_then(|r| r.ok()) else {
         return;
     };
     let mut out = String::new();

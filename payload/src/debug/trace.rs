@@ -295,7 +295,7 @@ pub fn active_frames() -> i32 {
 /// collecting one capture's NDJSON and its per-frame screenshots together. `None` when the session
 /// directory is unavailable.
 fn trace_dir(stamp: &str) -> Option<std::path::PathBuf> {
-    let base = crate::session::subdir("traces")?;
+    let base = crate::session::subdir("traces")?.ok()?;
     Some(base.join(if stamp.is_empty() { "latest" } else { stamp }))
 }
 

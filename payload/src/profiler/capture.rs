@@ -209,8 +209,10 @@ fn write_capture(frames: &[Arc<FrameData>]) -> anyhow::Result<PathBuf> {
 /// A timestamped output path in the session's `profile/` directory,
 /// `jc3vrs-profile-<stamp>.json` (the per-file stamp disambiguates several captures in one run).
 fn capture_path() -> anyhow::Result<PathBuf> {
-    let dir = crate::session::subdir("profile").ok_or_else(|| {
-        anyhow::anyhow!("profiler: could not resolve the session profile directory")
-    })?;
+    let dir = crate::session::subdir("profile")
+        .and_then(|r| r.ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!("profiler: could not resolve the session profile directory")
+        })?;
     Ok(dir.join(format!("jc3vrs-profile-{}.json", crate::session::stamp())))
 }

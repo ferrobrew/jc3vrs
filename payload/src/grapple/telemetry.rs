@@ -144,6 +144,7 @@ fn write_row(kind: &str, fields: &str) {
 /// the path cannot be resolved or created.
 fn open_capture() -> Option<TelemetryWriter> {
     let Some(path) = crate::session::subdir("grapple")
+        .and_then(|r| r.ok())
         .map(|dir| dir.join(format!("jc3vrs-grapple-{}.csv", crate::session::stamp())))
     else {
         tracing::warn!("grapple telemetry: could not resolve the session grapple directory");
