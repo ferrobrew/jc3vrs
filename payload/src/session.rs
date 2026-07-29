@@ -95,15 +95,16 @@ mod tests {
 
     /// `subdir` must reject path separators and parent-directory components so a caller cannot
     /// escape the session root. Under `debug_assertions` the invalid names panic; in release builds
-    /// the test is skipped (the `debug_assert!` is a no-op there).
-    #[cfg(debug_assertions)]
+    /// the test is skipped (the `debug_assert!` is a no-op there). Gated on `panic = "unwind"`
+    /// because `should_panic` tests abort the test process under `panic = "abort"`.
+    #[cfg(all(debug_assertions, not(panic = "abort")))]
     #[test]
     #[should_panic(expected = "session::subdir: name must be a simple directory name")]
     fn subdir_rejects_path_separators() {
         let _ = super::subdir("../escape");
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, not(panic = "abort")))]
     #[test]
     #[should_panic(expected = "session::subdir: name must be a simple directory name")]
     fn subdir_rejects_nested_path() {

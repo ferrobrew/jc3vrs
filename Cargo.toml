@@ -41,6 +41,12 @@ detours-macro = { git = "https://github.com/ferrobrew/re-utilities.git" }
 # pyxis = { path = "../pyxis" }
 pyxis = { git = "https://github.com/ferrobrew/pyxis.git" }
 
+# Abort on panic rather than unwinding. The payload's detours hold raw pointers into engine state
+# that is not safe to drop through, and unwinding across a FFI boundary (the detour trampolines) is
+# UB. The panic hook in `crash.rs` still fires before the abort, so crash logs are written.
+[profile.dev]
+panic = "abort"
+
 # Optimize the PNG-encode chain even in dev builds: the render-trace screenshot diagnostic encodes
 # many full-resolution frames, and unoptimized deflate makes a capture crawl. These are third-party
 # crates, so optimizing them does not slow iteration on our own code.
@@ -64,3 +70,4 @@ opt-level = 3
 # image size, not speed.
 [profile.release]
 debug = 1
+panic = "abort"

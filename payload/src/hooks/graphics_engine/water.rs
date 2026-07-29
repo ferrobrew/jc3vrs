@@ -289,7 +289,15 @@ unsafe fn nv_water_per_eye(
     // SAFETY: as above.
     let saved_projection = unsafe { (*rc).m_ProjectionF };
 
-    let handled = crate::stereo::single_pass::draw_per_eye_half_ignoring_bound_vs(|eye| {
+    // The guard restores the render context's view/projection and clears the simulation-suppression
+    // flag on drop, so engine state is consistent even if the per-eye closure unwinds.
+    let _restore = RenderContextRestore {
+        rc,
+        center_view,
+        saved_projection,
+    };
+
+    crate::stereo::single_pass::draw_per_eye_half_ignoring_bound_vs(|eye| {
         // SAFETY: `rc` is live, and `this` is the live block whose `Setup` reads it. The two trailing
         // arguments are the draw-list sort ids, which this block's `Setup` override does not read.
         unsafe {
@@ -299,15 +307,7 @@ unsafe fn nv_water_per_eye(
             (*this).Setup(rc, 0, 0);
         }
         draw();
-    });
-
-    SUPPRESS_SIMULATION_STEP.store(false, Ordering::Relaxed);
-    // SAFETY: as above.
-    unsafe {
-        (*rc).m_View = center_view;
-        (*rc).m_ProjectionF = saved_projection;
-    }
-    handled
+    })
 }
 
 /// The passes whose `CNvWaterHighEndRenderBlock::Draw` body is not the water surface: the compute
@@ -322,6 +322,26 @@ const NV_WATER_AUXILIARY_PASSES: [i32; 3] = [
 
 /// Raised for the duration of the second eye's re-issue; see [`wave_works_simulation_step`].
 static SUPPRESS_SIMULATION_STEP: AtomicBool = AtomicBool::new(false);
+
+/// Restores the render context's view/projection and clears the simulation-suppression flag on drop,
+/// so engine state is consistent even if the per-eye closure in [`nv_water_per_eye`] unwinds.
+struct RenderContextRestore {
+    rc: *mut RenderContext,
+    center_view: Matrix4,
+    saved_projection: Matrix4,
+}
+
+impl Drop for RenderContextRestore {
+    fn drop(&mut self) {
+        SUPPRESS_SIMULATION_STEP.store(false, Ordering::Relaxed);
+        // SAFETY: `rc` is the live render context that was valid when the guard was constructed, and
+        // the render thread still owns it during drop on the same unwind path.
+        unsafe {
+            (*self.rc).m_View = self.center_view;
+            (*self.rc).m_ProjectionF = self.saved_projection;
+        }
+    }
+}
 
 /// One eye's substitute for the render context's camera matrices.
 struct EyeCamera {
