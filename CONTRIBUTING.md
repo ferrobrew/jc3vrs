@@ -91,7 +91,7 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - Use Rust 2024 edition.
 - Ensure the following checks pass at the end of each complete task (you do not need to do this for intermediate steps):
   - `cargo +nightly fmt --all -- --check`
-  - `cargo clippy -all --all-targets -- -D warnings` or `./scripts/xwin_clippy.sh` (if on Linux)
+  - `cargo clippy --all --all-targets -- -D warnings` or `./scripts/xwin_clippy.sh` (if on Linux)
   - `./scripts/xwin_test.sh` (if on Linux; see the unit-test note above)
 
 ### Type system patterns

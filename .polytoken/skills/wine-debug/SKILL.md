@@ -74,7 +74,7 @@ instructions + backtrace + a stack scan, tagging any address in the exe or the
 payload band.
 
 ```sh
-gdb --batch -x .claude/skills/wine-debug/scripts/catch_crash.py > /tmp/crash.out 2>&1 &
+gdb --batch -x .polytoken/skills/wine-debug/scripts/catch_crash.py > /tmp/crash.out 2>&1 &
 #   wait for "=== ATTACHED ... trigger the crash now ===", then trigger it; read /tmp/crash.out
 ```
 

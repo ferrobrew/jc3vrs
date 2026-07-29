@@ -25,8 +25,9 @@ python3 shader_names.py "$HOME/.steam/steam/steamapps/common/Just Cause 3/Shader
 under wine. Prerequisites (all already used elsewhere in this repo):
 
 - the xwin sysroot at `.xwin/xwin` — run `scripts/xwin_build.sh` once if absent;
-- the `d3dcompiler_47.dll` + wine prefix under `target/fsr-shader-build/` — run
-  `cargo run -p shadergen --target x86_64-unknown-linux-gnu` once to provision them;
+- the shared wine prefix and `d3dcompiler_47.dll`, provisioned by
+  `scripts/wine_prefix.sh` — source it and call `jc3vrs_ensure_wine_prefix` (run
+  `cargo run -p shadergen --target x86_64-unknown-linux-gnu` once to trigger provisioning);
 - `wine` on `PATH`.
 
 Any extracted `*.shaders/` dirs are gitignored (rebuilt on demand).
