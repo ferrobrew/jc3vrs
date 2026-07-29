@@ -86,7 +86,7 @@ pub fn reproject_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
         },
     )?;
 
-    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true))
+    reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true)
 }
 
 /// What the reprojection declaration scan learned: the `SV_Position` output to reproject, the free

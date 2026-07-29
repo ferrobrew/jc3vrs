@@ -260,8 +260,22 @@ pub(crate) const IDX_IMM32_PLUS_RELATIVE: u32 = 3;
 const IDX_IMM64_PLUS_RELATIVE: u32 = 4;
 
 /// Parses one operand starting at `tokens[pos]`; returns the decoded operand and the token index
-/// just past it. Recurses into relative-index operands.
+/// just past it. Recurses into relative-index operands, bounded by `depth` to prevent runaway
+/// recursion on malformed operands.
 pub(crate) fn parse_operand(tokens: &[u32], pos: usize) -> Result<(Operand, usize), DxbcError> {
+    parse_operand_depth(tokens, pos, 0)
+}
+
+const MAX_OPERAND_DEPTH: u8 = 32;
+
+fn parse_operand_depth(
+    tokens: &[u32],
+    pos: usize,
+    depth: u8,
+) -> Result<(Operand, usize), DxbcError> {
+    if depth >= MAX_OPERAND_DEPTH {
+        return Err(DxbcError::UnsupportedOperandEncoding);
+    }
     let tok = *tokens.get(pos).ok_or(DxbcError::UnexpectedEndOfTokens)?;
     let token_offset = pos;
     let mut p = pos + 1;
@@ -319,7 +333,7 @@ pub(crate) fn parse_operand(tokens: &[u32], pos: usize) -> Result<(Operand, usiz
         );
         if is_relative {
             // The relative index is itself an operand; recurse to skip it.
-            let (_, next) = parse_operand(tokens, p)?;
+            let (_, next) = parse_operand_depth(tokens, p, depth + 1)?;
             p = next;
         }
         if d == 0 {

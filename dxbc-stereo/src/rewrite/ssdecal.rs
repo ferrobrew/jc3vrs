@@ -78,7 +78,7 @@ pub fn bias_ssdecal_depth_uv(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
     out.extend_from_slice(&tokens[site.insert_at..]);
     out[site.cb1_size_token] = out[site.cb1_size_token].max(SSDECAL_EYE_BIAS_REGISTER + 1);
     // The token array carries the chunk header, so the length dword has to grow with the splice.
-    out[1] = out.len() as u32;
+    out[1] = u32::try_from(out.len()).map_err(|_| DxbcError::InstructionTooLong)?;
 
     let mut new_shex = Vec::with_capacity(out.len() * 4);
     for token in &out {
@@ -91,14 +91,14 @@ pub fn bias_ssdecal_depth_uv(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
     };
     // No signature or feature-flag change: the rewrite adds arithmetic and a constant-buffer row, so
     // the two signature chunks are handed back exactly as they came in.
-    Ok(super::common::reassemble(
+    super::common::reassemble(
         &dxbc,
         blob,
         chunk_body(b"ISGN"),
         chunk_body(b"OSGN"),
         new_shex,
         false,
-    ))
+    )
 }
 
 /// The dwords of the inserted `mad`: the opcode, a two-dword destination and two-dword temp source, a

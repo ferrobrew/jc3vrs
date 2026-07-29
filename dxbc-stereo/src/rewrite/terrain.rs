@@ -122,7 +122,7 @@ pub fn inject_eye_forward_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcErro
         0x8,
     )?;
 
-    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, false))
+    reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, false)
 }
 
 /// Rewrites the terrain tessellation **hull** shader to forward the single-pass eye index the vertex
@@ -182,7 +182,7 @@ pub fn forward_eye_hull_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
         0x8,
     )?;
 
-    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, false))
+    reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, false)
 }
 
 /// What the hull-shader eye-forward scan learned: the token indices of the three control-point-phase
@@ -354,7 +354,7 @@ pub fn reproject_domain_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
         },
     )?;
 
-    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true))
+    reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true)
 }
 
 /// What the terrain-DS reprojection scan learned.

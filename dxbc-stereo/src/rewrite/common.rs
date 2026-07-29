@@ -37,7 +37,7 @@ pub(super) fn reassemble(
     new_osgn: Vec<u8>,
     new_shex: Vec<u8>,
     add_viewport_sfi0: bool,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, DxbcError> {
     let mut chunks: Vec<([u8; 4], Vec<u8>)> = Vec::with_capacity(dxbc.chunks().len() + 1);
     let has_sfi0 = dxbc.chunk(b"SFI0").is_some();
     for chunk in dxbc.chunks() {
@@ -54,9 +54,9 @@ pub(super) fn reassemble(
         }
     }
 
-    let mut out = build_container(&chunks);
+    let mut out = build_container(&chunks)?;
     refresh_checksum(&mut out);
-    out
+    Ok(out)
 }
 
 /// Emits `o<pos> = M_eye · rClip` as four `dp4`s, one clip component each: `dp4 o<pos>.{x,y,z,w},
@@ -279,7 +279,12 @@ pub(super) fn widen_signature_mask(
     let table = u32::from_le_bytes(body[4..8].try_into().expect("4 bytes")) as usize;
     let mut out = body.to_vec();
     for i in 0..count {
-        let rec = table + i * SIGNATURE_ELEMENT_LEN;
+        let rec = table
+            .checked_add(
+                i.checked_mul(SIGNATURE_ELEMENT_LEN)
+                    .ok_or(DxbcError::MalformedSignature)?,
+            )
+            .ok_or(DxbcError::MalformedSignature)?;
         if rec + SIGNATURE_ELEMENT_LEN > body.len() {
             return Err(DxbcError::MalformedSignature);
         }
@@ -313,27 +318,40 @@ fn with_viewport_feature_bit(existing: &[u8]) -> Vec<u8> {
 /// Assembles a DXBC container from chunks in order: header (magic, zeroed digest for
 /// [`refresh_checksum`] to fill, version 1, total size, chunk count), the offset table, then the
 /// chunks.
-fn build_container(chunks: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+fn build_container(chunks: &[([u8; 4], Vec<u8>)]) -> Result<Vec<u8>, DxbcError> {
     let table_len = 0x20 + chunks.len() * 4;
     let total: usize = table_len + chunks.iter().map(|(_, body)| 8 + body.len()).sum::<usize>();
+    let total_u32 = u32::try_from(total).map_err(|_| DxbcError::InstructionTooLong)?;
 
     let mut out = Vec::with_capacity(total);
     out.extend_from_slice(b"DXBC");
     out.extend_from_slice(&[0u8; 16]);
     out.extend_from_slice(&1u32.to_le_bytes());
-    out.extend_from_slice(&(total as u32).to_le_bytes());
-    out.extend_from_slice(&(chunks.len() as u32).to_le_bytes());
+    out.extend_from_slice(&total_u32.to_le_bytes());
+    out.extend_from_slice(
+        &u32::try_from(chunks.len())
+            .map_err(|_| DxbcError::InstructionTooLong)?
+            .to_le_bytes(),
+    );
     let mut offset = table_len;
     for (_, body) in chunks {
-        out.extend_from_slice(&(offset as u32).to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(offset)
+                .map_err(|_| DxbcError::InstructionTooLong)?
+                .to_le_bytes(),
+        );
         offset += 8 + body.len();
     }
     for (tag, body) in chunks {
         out.extend_from_slice(tag);
-        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(body.len())
+                .map_err(|_| DxbcError::InstructionTooLong)?
+                .to_le_bytes(),
+        );
         out.extend_from_slice(body);
     }
-    out
+    Ok(out)
 }
 
 // SM4/5 opcodes.

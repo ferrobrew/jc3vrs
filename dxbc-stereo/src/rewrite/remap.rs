@@ -96,7 +96,7 @@ pub fn patch_vertex_shader(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
         },
     )?;
 
-    Ok(reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true))
+    reassemble(&dxbc, blob, new_isgn, new_osgn, new_shex, true)
 }
 
 /// What the declaration scan learned: where to inject, and which registers are free.
