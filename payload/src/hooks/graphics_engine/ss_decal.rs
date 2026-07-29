@@ -246,6 +246,11 @@ unsafe fn per_eye(rc: *mut RenderContext, mut draw: impl FnMut()) -> bool {
         // basis once per pass, ahead of every decal it covers, so leaving the second eye's behind
         // would hand it to any later decal this intercept declines -- and the staging array the
         // offset register lives in is shared with every other block type in the frame.
+        //
+        // Not behind a drop guard: this is per-draw staging data that the next `Draw` in the
+        // block-type run restages from its own `Setup` before any shader reads it, so an unwind that
+        // skips the restore leaves stale rows that are overwritten before use, not persistent engine
+        // state like the water render context in `water.rs`.
         // SAFETY: as above; `view` and `m_ProjectionF` are the matrices `Setup` itself composed.
         unsafe {
             stage(

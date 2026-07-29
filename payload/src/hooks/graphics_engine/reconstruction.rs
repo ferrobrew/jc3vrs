@@ -639,6 +639,12 @@ fn arm_eye_half_scissor(state: &PerEyeState) -> bool {
     if set_eye_half_scissor(full, state.eye).is_none() {
         return false;
     }
+    // `SetScissorEnable` is a pyxis-generated binding to the engine's own function, not a D3D11 API
+    // method: it writes the context's rasterizer-state key field (`ctx->m_RasterizerStateKey`)
+    // directly rather than issuing `RSSetScissorEnable`. The render thread owns the context at this
+    // point -- the detour runs inside a `Draw` that the engine dispatched on it -- so there is no
+    // race with an engine state flush. Routing it through `with_immediate_context` would add a
+    // critical-section acquire on every per-draw call for no safety benefit.
     // SAFETY: `ctx` is the graphics context the bracketed pass draws on, live for the guard's scope.
     unsafe { SetScissorEnable(state.ctx, true) };
     PER_EYE.set(Some(PerEyeState {

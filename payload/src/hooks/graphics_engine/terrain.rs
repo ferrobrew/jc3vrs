@@ -91,8 +91,10 @@ const BUDGET_SITES: [(u64, u32); 5] = [
 pub fn process_budget_request() {
     let scale = Config::lock_query(|c| c.stereo.terrain_detail_budget_scale).clamp(1, 16);
     // The automatic once-per-session apply: the first frame-start after injection, when the engine
-    // singletons are guaranteed live. Skipped at scale 1 (the shipped sizes).
-    let startup = !STARTUP_APPLY_DONE.swap(true, Ordering::Relaxed) && scale > 1;
+    // singletons are guaranteed live. Skipped at scale 1 (the shipped sizes). The flag is set only
+    // after the patcher and engine-singleton checks succeed, so an early return leaves it unset and
+    // retries next frame.
+    let startup = !STARTUP_APPLY_DONE.load(Ordering::Relaxed) && scale > 1;
     if !BUDGET_APPLY_REQUESTED.swap(false, Ordering::Relaxed) && !startup {
         return;
     }
@@ -109,6 +111,9 @@ pub fn process_budget_request() {
                 patcher.patch(site as usize, &(shipped * scale).to_le_bytes());
             }
         }
+    }
+    if startup {
+        STARTUP_APPLY_DONE.store(true, Ordering::Relaxed);
     }
     // SAFETY: runs at frame start on the game thread; the engine singletons are live. The draw is
     // drained before the types destroy and re-create their GPU buffers (the same discipline as the
