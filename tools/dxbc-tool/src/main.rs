@@ -29,7 +29,7 @@ fn main() -> ExitCode {
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("dxbc-tool: {err}");
+            eprintln!("{err}");
             ExitCode::from(err.exit_code())
         }
     }
@@ -60,9 +60,9 @@ fn run(args: &[String]) -> Result<(), ToolError> {
 /// in the returned error, mirroring what `fxc` prints.
 fn compile(file: &str, entry: &str, target: &str) -> Result<ID3DBlob, ToolError> {
     let src = read_file(file)?;
-    let name = cstring(file);
-    let entry = cstring(entry);
-    let target = cstring(target);
+    let name = cstring(file, file)?;
+    let entry = cstring(entry, file)?;
+    let target = cstring(target, file)?;
 
     let mut code: Option<ID3DBlob> = None;
     let mut errors: Option<ID3DBlob> = None;
@@ -129,9 +129,12 @@ fn read_file(path: &str) -> Result<Vec<u8>, ToolError> {
     })
 }
 
-/// Builds a NUL-terminated C string, replacing any interior NUL so the conversion cannot fail.
-fn cstring(s: &str) -> CString {
-    CString::new(s.replace('\0', "")).expect("no interior NUL after stripping")
+/// Builds a NUL-terminated C string, erroring on any interior NUL byte rather than silently stripping
+/// it, since a NUL in a shader source or entry point is almost certainly a mistake.
+fn cstring(s: &str, path: &str) -> Result<CString, ToolError> {
+    CString::new(s).map_err(|_| ToolError::InteriorNul {
+        path: path.to_string(),
+    })
 }
 
 /// A tool error, carrying the exit code its category maps to.
@@ -142,6 +145,7 @@ enum ToolError {
     Compile { hr: i32, diagnostics: String },
     Disassemble { hr: i32 },
     EmptyOutput { op: &'static str },
+    InteriorNul { path: String },
 }
 
 impl ToolError {
@@ -150,7 +154,8 @@ impl ToolError {
             ToolError::Usage | ToolError::Read { .. } | ToolError::Stdout(_) => 2,
             ToolError::Compile { .. }
             | ToolError::Disassemble { .. }
-            | ToolError::EmptyOutput { .. } => 4,
+            | ToolError::EmptyOutput { .. }
+            | ToolError::InteriorNul { .. } => 4,
         }
     }
 }
@@ -158,25 +163,38 @@ impl ToolError {
 impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ToolError::Usage => {
-                f.write_str("usage: compile <file.hlsl> <entry> <target> | disasm <file.dxbc>")
+            ToolError::Usage => f.write_str(
+                "dxbc-tool: usage: compile <file.hlsl> <entry> <target> | disasm <file.dxbc>",
+            ),
+            ToolError::Read { path, source } => {
+                write!(f, "dxbc-tool: cannot read {path}: {source}")
             }
-            ToolError::Read { path, source } => write!(f, "cannot read {path}: {source}"),
-            ToolError::Stdout(source) => write!(f, "writing to stdout failed: {source}"),
+            ToolError::Stdout(source) => {
+                write!(f, "dxbc-tool: writing to stdout failed: {source}")
+            }
             ToolError::Compile { hr, diagnostics } if diagnostics.is_empty() => {
-                write!(f, "compile: D3DCompile failed (hr=0x{hr:08x})")
+                write!(f, "dxbc-tool: compile: D3DCompile failed (hr=0x{hr:08x})")
             }
             ToolError::Compile { hr, diagnostics } => {
                 write!(
                     f,
-                    "compile: D3DCompile failed (hr=0x{hr:08x}):\n{diagnostics}"
+                    "dxbc-tool: compile: D3DCompile failed (hr=0x{hr:08x}):\n{diagnostics}"
                 )
             }
             ToolError::Disassemble { hr } => {
-                write!(f, "disasm: D3DDisassemble failed (hr=0x{hr:08x})")
+                write!(
+                    f,
+                    "dxbc-tool: disasm: D3DDisassemble failed (hr=0x{hr:08x})"
+                )
             }
             ToolError::EmptyOutput { op } => {
-                write!(f, "{op} succeeded but produced no output blob")
+                write!(f, "dxbc-tool: {op} succeeded but produced no output blob")
+            }
+            ToolError::InteriorNul { path } => {
+                write!(
+                    f,
+                    "dxbc-tool: the shader source at {path} contains a NUL byte"
+                )
             }
         }
     }
