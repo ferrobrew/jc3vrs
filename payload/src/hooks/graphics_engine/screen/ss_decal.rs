@@ -93,7 +93,7 @@ pub(super) fn hook_library() -> HookLibrary {
 /// sampled at shader-creation time, so a toggle only reaches the permutations at the next shader
 /// reload; the debug UI requests one when the flag changes, and [`ss_decal_draw`] keeps the interval
 /// in between bounded.
-pub(super) fn shader_rewrite_enabled() -> bool {
+pub(crate) fn shader_rewrite_enabled() -> bool {
     let enabled = crate::stereo::single_pass::collapse_active()
         && Config::lock_query(|c| c.stereo.single_pass.ssdecal_per_eye);
     if enabled {
