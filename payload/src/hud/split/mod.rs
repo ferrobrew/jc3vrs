@@ -6,14 +6,14 @@
 //! complete history of the three mechanisms tried, the constraints they established, and the
 //! diagnostic next step if this is revived. Nothing outside this module (and its gated call
 //! sites) depends on the split; the clip-handle registry it uses lives with the Scaleform
-//! plumbing in [`super::scaleform`], because overlay suppression (issue #8) shares it and ships
+//! plumbing in [`crate::hud::scaleform`], because overlay suppression (issue #8) shares it and ships
 //! independently.
 
 pub mod roots;
 
 use windows::Win32::Graphics::Direct3D11::{ID3D11DepthStencilView, ID3D11RenderTargetView};
 
-pub use super::scaleform::LAYER_COUNT;
+pub use crate::hud::scaleform::LAYER_COUNT;
 
 /// The HUD layers, in composite order (bottom to top). Each is one texture; the render-root
 /// partition redraws every layer every frame.

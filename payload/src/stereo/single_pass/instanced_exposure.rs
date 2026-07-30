@@ -12,7 +12,7 @@ use std::{
 
 use parking_lot::Mutex;
 
-use super::{
+use crate::stereo::single_pass::{
     BOUND_VS, DIAGNOSTIC_FRAME_CADENCE, PATCHED_VS_NAMES, VIEWPORT_UNIFIED, diagnostic_frame,
 };
 

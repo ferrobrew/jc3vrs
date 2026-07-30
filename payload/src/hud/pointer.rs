@@ -2,10 +2,10 @@
 //! interactive egui panel, issue #24) into egui pointer events.
 //!
 //! The MVP source is the desktop mouse: the window client-pixel position (tracked by the `WndProc`
-//! detour into [`super::cursor`]) normalized against the window and fed to egui as if it were the
+//! detour into [`crate::hud::cursor`]) normalized against the window and fed to egui as if it were the
 //! pointer, so the panel is driven by the same mouse the flat overlay uses. This is deliberately a
 //! narrow seam: a future VR controller-ray source would add a ray-vs-panel-plane intersection here
-//! (reusing [`super::quad::compute_world_corners`]'s corner layout, UV `(0, 0)` = the texture's
+//! (reusing [`crate::hud::quad::compute_world_corners`]'s corner layout, UV `(0, 0)` = the texture's
 //! top-left) and produce the same `(u, v)` the mouse path produces, leaving everything downstream
 //! unchanged.
 //!
@@ -15,7 +15,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::cursor;
+use crate::hud::cursor;
 
 /// The panel-texture UV of the desktop mouse this frame, or `None` when no mouse position or window
 /// size is known yet. Shared by the egui event pump and the panel's own cursor dot so they agree.

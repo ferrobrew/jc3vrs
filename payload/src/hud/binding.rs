@@ -4,7 +4,7 @@
 use jc3gi::ui::ui_manager::GetIUIManager;
 use windows::core::Interface as _;
 
-use super::target::HudTarget;
+use crate::hud::target::HudTarget;
 
 /// Rebind the UI to render into `target` at `width` x `height` pixels. Returns whether it took: the
 /// UI singleton must be live.

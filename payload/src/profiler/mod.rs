@@ -262,7 +262,7 @@ impl Drop for EngineScope {
 pub mod type_scope {
     use std::cell::RefCell;
 
-    use super::EngineScope;
+    use crate::profiler::EngineScope;
 
     thread_local! {
         static ACTIVE: RefCell<Option<EngineScope>> = const { RefCell::new(None) };

@@ -62,7 +62,7 @@ pub fn handles_hud_fresh() -> bool {
 }
 
 /// The number of HUD layers the registry groups containers into (see
-/// [`HudLayer`](super::split::HudLayer)).
+/// [`HudLayer`](crate::hud::split::HudLayer)).
 pub const LAYER_COUNT: usize = 3;
 
 /// The authored top-level containers of `hud.gfx` assigned to each layer. Paths are relative to

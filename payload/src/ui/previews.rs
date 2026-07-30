@@ -1,15 +1,15 @@
 //! The Previews tab: the per-eye pipeline thumbnails, the fusable stereo pair, and the live
-//! render-target views, all fed by the capture state in [`super::render`].
+//! render-target views, all fed by the capture state in [`crate::ui::render`].
 
 use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
 use windows::core::Interface;
 
-use super::render::{EGUI_DEBUG_RENDER_STATE, EguiDebugRenderState, STEREO_CROSS_EYED};
+use crate::ui::render::{EGUI_DEBUG_RENDER_STATE, EguiDebugRenderState, STEREO_CROSS_EYED};
 
 /// Labels for the post-effect stages captured per eye, in chain order (indices
-/// [`super::render::POST_STAGE_DOF`] and [`super::render::POST_STAGE_MB`]).
+/// [`crate::ui::render::POST_STAGE_DOF`] and [`crate::ui::render::POST_STAGE_MB`]).
 const POST_STAGE_LABELS: [&str; 2] = ["after DoF", "after MB"];
 
 /// Preview thumbnail width (px); user-controllable via a slider.

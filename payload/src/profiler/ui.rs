@@ -1,12 +1,12 @@
 //! The profiler's Performance-tab UI: a collapsible holding the enable toggle, the trace-capture
 //! control, and — when scope collection is on — puffin's live flame graph.
 
-use super::capture::{self, DEFAULT_CAPTURE_SECS};
+use crate::profiler::capture::{self, DEFAULT_CAPTURE_SECS};
 
 /// Renders the profiler section, as a collapsible under the existing Performance readout.
 pub fn egui_profiler(ui: &mut egui::Ui) {
     ui.collapsing("Profiler (issue #34)", |ui| {
-        let mut enabled = super::ui_enabled();
+        let mut enabled = crate::profiler::ui_enabled();
         if ui
             .checkbox(&mut enabled, "Collect scopes (live flame graph)")
             .on_hover_text(
@@ -15,10 +15,10 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
             )
             .changed()
         {
-            super::set_ui_enabled(enabled);
+            crate::profiler::set_ui_enabled(enabled);
         }
 
-        let mut per_draw = super::per_draw_scopes();
+        let mut per_draw = crate::profiler::per_draw_scopes();
         if ui
             .checkbox(&mut per_draw, "Per-draw render-block scopes")
             .on_hover_text(
@@ -29,10 +29,10 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
             )
             .changed()
         {
-            super::set_per_draw_scopes(per_draw);
+            crate::profiler::set_per_draw_scopes(per_draw);
         }
 
-        let mut pass_timestamps = super::gpu::pass_timestamps_enabled();
+        let mut pass_timestamps = crate::profiler::gpu::pass_timestamps_enabled();
         if ui
             .checkbox(&mut pass_timestamps, "GPU per-pass timestamps")
             .on_hover_text(
@@ -43,14 +43,14 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
             )
             .changed()
         {
-            super::gpu::set_pass_timestamps_enabled(pass_timestamps);
+            crate::profiler::gpu::set_pass_timestamps_enabled(pass_timestamps);
         }
 
         capture_controls(ui);
         gpu_summary(ui);
         block_counts(ui);
 
-        if super::ui_enabled() {
+        if crate::profiler::ui_enabled() {
             ui.separator();
             puffin_egui::profiler_ui(ui);
         } else if capture::is_recording() {
@@ -63,7 +63,7 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
 /// The last completed GPU summary window: the busy/starved decomposition and the CPU submit span
 /// it has to be read against. Mirrors the periodic log line, for reading in-headset.
 fn gpu_summary(ui: &mut egui::Ui) {
-    let Some(summary) = super::gpu::summary() else {
+    let Some(summary) = crate::profiler::gpu::summary() else {
         return;
     };
     ui.separator();
@@ -87,7 +87,7 @@ fn gpu_summary(ui: &mut egui::Ui) {
 
 /// The busiest render-block types of the last summary window, by blocks drawn.
 fn block_counts(ui: &mut egui::Ui) {
-    let counts = super::blocks::snapshot();
+    let counts = crate::profiler::blocks::snapshot();
     if counts.is_empty() {
         return;
     }

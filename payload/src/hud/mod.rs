@@ -467,7 +467,7 @@ pub fn install() {
 
 #[cfg(test)]
 mod tests {
-    use super::hud_target_size;
+    use crate::hud::hud_target_size;
 
     /// The derived size keys off the geometric mean of the per-eye target, so a tall per-eye render
     /// target does not inflate the HUD the way keying off its longer axis did.

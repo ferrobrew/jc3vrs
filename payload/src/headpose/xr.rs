@@ -1,7 +1,7 @@
 //! The VR headpose source: the OpenXR HMD pose, composed into the same world frame the [`sim`]
 //! produces.
 //!
-//! [`sim`]: super::sim
+//! [`sim`]: crate::headpose::sim
 //!
 //! When an OpenXR session is running, this source replaces the sim as the headpose publisher (the
 //! sim continues to own flatscreen). The VR runtime (`crate::vr`) locates the per-eye views each
@@ -17,7 +17,7 @@
 //!   is added downstream by the camera hook (`camera_position`), reusing the anchor machinery the
 //!   headpose already exposes rather than a parallel one.
 //!
-//! The pose is published as a tick-spaced pair ([`super::set_pose_pair`], via [`publish_pair`]): the
+//! The pose is published as a tick-spaced pair ([`crate::headpose::set_pose_pair`], via [`publish_pair`]): the
 //! sim-driven part (the body frame and the animated head-bone anchor) advances at the engine's sim
 //! tick rate, so its previous-tick and current-tick values feed the engine's `dtf` lerp and smooth
 //! the sub-tick frames — without this the camera stepped at the tick rate in vehicles and while
@@ -71,8 +71,8 @@ pub fn compose(
 /// cockpit delta — identical on both sides — passes through with zero added latency (see the module
 /// docs).
 pub fn publish_pair(prev: HeadPose, cur: HeadPose) {
-    super::set_source(super::Source::Vr);
-    super::set_pose_pair(prev, cur);
+    crate::headpose::set_source(crate::headpose::Source::Vr);
+    crate::headpose::set_pose_pair(prev, cur);
 }
 
 /// The HMD's head pose in the cockpit frame: its position delta and orientation relative to the
@@ -90,7 +90,7 @@ pub struct CockpitPose {
 }
 
 /// The latest cockpit-frame HMD pose (see [`CockpitPose`]), published each rendered VR frame by
-/// [`super::super::vr::begin_render_frame`]. `None` until the first VR frame renders.
+/// [`crate::vr::begin_render_frame`]. `None` until the first VR frame renders.
 static COCKPIT_POSE: Mutex<Option<CockpitPose>> = Mutex::new(None);
 
 /// Publish the cockpit-frame HMD pose for the frame in flight (see [`CockpitPose`]). Called by the VR
@@ -111,7 +111,7 @@ pub fn cockpit_pose() -> Option<CockpitPose> {
 
 /// Advance the VR body-yaw accumulator from this input tick's look delta, and expose the resulting
 /// heading through [`body_yaw_target`]. Driven on the input tick (the game's input cadence) by
-/// [`super::sim::on_input_tick`] under the VR source, since the HMD owns the head and the look
+/// [`crate::headpose::sim::on_input_tick`] under the VR source, since the HMD owns the head and the look
 /// effectors are free to turn the body.
 ///
 /// The accumulator is a world yaw. It is seeded from the character's current facing on the first
@@ -179,7 +179,7 @@ pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &
 
 /// The desired body forward on the ground plane from the VR body-yaw accumulator, or `None` before
 /// the accumulator has seeded (off foot, or the first on-foot tick has not run yet). Read by the
-/// locomotion hook via [`super::body_yaw_target`], exactly as the flatscreen latch target is.
+/// locomotion hook via [`crate::headpose::body_yaw_target`], exactly as the flatscreen latch target is.
 pub fn body_yaw_target() -> Option<Vec3> {
     BODY_YAW.lock().yaw.map(sim::yaw_forward)
 }

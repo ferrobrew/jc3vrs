@@ -10,7 +10,7 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CLEAR_DEPTH, D3D11_CLEAR_STENCIL, ID3D11DeviceContext,
 };
 
-use super::{
+use crate::hud::{
     binding,
     markers::MarkerDepth,
     quad::HudQuad,
@@ -54,7 +54,7 @@ pub struct HudState {
     /// The marker-layer warp pass, built lazily on the first warped draw.
     warp: Option<HudWarp>,
     /// The dynamic-distance depth sampler, built lazily on the first enabled frame.
-    depth_shift: Option<super::depth::DepthShift>,
+    depth_shift: Option<crate::hud::depth::DepthShift>,
     /// The frame's warp inputs (eye 0), or `None` when the warp is off this frame.
     warp_frame: Option<WarpFrame>,
     /// Lazy-follow damping state for the floating panel (gameplay HUD mode).
@@ -75,7 +75,7 @@ pub struct HudState {
     /// eyes project the same world position through their own per-eye VP (correct stereo depth).
     cached_corners: Option<[Vec4; 4]>,
     /// The virtual mouse cursor's world-space corners, computed once per frame on eye 0 alongside
-    /// the panel corners; `None` while the cursor is hidden (see [`super::cursor`]).
+    /// the panel corners; `None` while the cursor is hidden (see [`crate::hud::cursor`]).
     cursor_corners: Option<[Vec4; 4]>,
     /// While split: per-layer world-space corners and their distances, chosen on eye 0. Index
     /// matches [`split::LAYERS`]. The static and center entries are recomputed every frame
@@ -106,7 +106,7 @@ impl FollowState {
     /// slerp: `alpha = 1 - 2^(-dt/halflife); current = slerp(current, target, alpha)`. No deadzone
     /// -- the panel always follows, with the halflife controlling the lag. Returns the damped
     /// quaternion for the quad's world-space orientation.
-    fn update(&mut self, head_rotation: Quat, config: &super::config::FollowConfig) -> Quat {
+    fn update(&mut self, head_rotation: Quat, config: &crate::hud::config::FollowConfig) -> Quat {
         let dt = self
             .last_time
             .map(|t| t.elapsed().as_secs_f32())
@@ -266,19 +266,19 @@ impl HudState {
     }
 
     /// The frame's dynamic panel distance: dispatch the depth-histogram pass, pick up the async
-    /// readback, and ease toward the policy's target (see [`super::depth`]). Falls back to
+    /// readback, and ease toward the policy's target (see [`crate::hud::depth`]). Falls back to
     /// `base` when the pipeline cannot be built. Call once per frame (eye 0) with the engine
     /// context mutex held.
     pub fn depth_distance(
         &mut self,
         context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
         device: &jc3gi::graphics_engine::device::Device,
-        cfg: &super::config::DepthShiftConfig,
-        mode: super::HudMode,
+        cfg: &crate::hud::config::DepthShiftConfig,
+        mode: crate::hud::HudMode,
         base: f32,
     ) -> f32 {
         if self.depth_shift.is_none() {
-            match super::depth::DepthShift::new(device) {
+            match crate::hud::depth::DepthShift::new(device) {
                 Ok(shift) => self.depth_shift = Some(shift),
                 Err(e) => {
                     // Log the build failure once, not per frame; the next attempt happens on the
@@ -311,7 +311,7 @@ impl HudState {
                 &hud_srv,
             ) {
                 (true, Some(corners), Some((pos, _)), Some(srv)) => {
-                    Some(super::depth::MaskInputs {
+                    Some(crate::hud::depth::MaskInputs {
                         camera_pos: pos,
                         corners,
                         hud_srv: srv,
@@ -325,10 +325,10 @@ impl HudState {
     }
 
     /// The dynamic-distance state's live snapshot, for the debug UI.
-    pub fn depth_status(&self) -> Option<super::depth::DepthShiftStatus> {
+    pub fn depth_status(&self) -> Option<crate::hud::depth::DepthShiftStatus> {
         self.depth_shift
             .as_ref()
-            .map(super::depth::DepthShift::status)
+            .map(crate::hud::depth::DepthShift::status)
     }
 
     /// Choose the panel pose `(position, rotation)` for the current frame from the head pose, caching
@@ -344,7 +344,7 @@ impl HudState {
         freeze: bool,
         head_pos: Vec3,
         head_rotation: Quat,
-        follow: &super::config::FollowConfig,
+        follow: &crate::hud::config::FollowConfig,
     ) -> (Vec3, Quat) {
         let pose = if freeze {
             *self.latched_pose.get_or_insert((head_pos, head_rotation))
@@ -365,9 +365,9 @@ impl HudState {
 
     /// Compute the panel's world-space corners from the current camera and follow state, caching
     /// the result for both eyes. Call once per frame (eye 0); eye 1 reuses the cached corners.
-    pub fn compute_world_corners(&mut self, params: &super::quad::PanelParams) {
+    pub fn compute_world_corners(&mut self, params: &crate::hud::quad::PanelParams) {
         self.cached_corners = None;
-        if let Some(corners) = super::quad::compute_world_corners(params) {
+        if let Some(corners) = crate::hud::quad::compute_world_corners(params) {
             self.cached_corners = Some(corners);
         }
     }
@@ -384,7 +384,7 @@ impl HudState {
 
     /// The redirected texture's size, or `None` while the redirect is not applied. The mouse
     /// cursor's coordinate mapping rescales to this (movie rectangle = texture; see
-    /// [`super::cursor`]).
+    /// [`crate::hud::cursor`]).
     pub(super) fn redirected_size(&self) -> Option<(u32, u32)> {
         if !self.redirected {
             return None;
@@ -398,7 +398,7 @@ impl HudState {
     pub fn set_split_frame(
         &mut self,
         active: bool,
-        params: Option<[super::quad::PanelParams; split::LAYER_COUNT]>,
+        params: Option<[crate::hud::quad::PanelParams; split::LAYER_COUNT]>,
     ) {
         self.split_composite = active;
         self.cached_layer_corners = [None, None, None];
@@ -406,7 +406,7 @@ impl HudState {
             return;
         };
         for (slot, params) in self.cached_layer_corners.iter_mut().zip(params.iter()) {
-            *slot = super::quad::compute_world_corners(params).map(|c| (c, params.distance));
+            *slot = crate::hud::quad::compute_world_corners(params).map(|c| (c, params.distance));
         }
     }
 

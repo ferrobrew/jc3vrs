@@ -37,8 +37,10 @@ use windows::{
     core::Interface as _,
 };
 
-use super::{HudLayer, LAYER_COUNT, LayerViews};
-use crate::hud::scaleform::ClipHandle;
+use crate::hud::{
+    scaleform::ClipHandle,
+    split::{HudLayer, LAYER_COUNT, LayerViews},
+};
 
 /// The number of extra roots (every layer beyond the static one, which stays in the movie's own
 /// root).

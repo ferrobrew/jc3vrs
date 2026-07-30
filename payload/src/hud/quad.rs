@@ -9,10 +9,10 @@
 //! with the depth test disabled, drawn onto the linear back buffer at the end of the eye's draw.
 //!
 //! World-space corners are computed once per frame (eye 0) via [`compute_world_corners`] and cached
-//! by [`super::state::HudState`]; both eyes then project the same world-space quad through their own
+//! by [`crate::hud::state::HudState`]; both eyes then project the same world-space quad through their own
 //! per-eye VP. Geometry comes from [`crate::hud::config::HudConfig`]; the panel pose (head-following
 //! or world-static, per the [`crate::hud::HudMode`]) is chosen by
-//! [`super::state::HudState::update_pose`].
+//! [`crate::hud::state::HudState::update_pose`].
 
 use anyhow::Context as _;
 use glam::{Quat, Vec3, Vec4};
@@ -379,14 +379,14 @@ pub(crate) fn compute_world_corners(params: &PanelParams) -> Option<[Vec4; 4]> {
 
 /// Compute the virtual mouse cursor's world-space corners: a small square quad centered on the
 /// cursor's UV position on the panel, lifted off the panel surface toward the camera
-/// ([`CursorConfig::lift`](super::config::CursorConfig)), sized as a fraction of the panel
+/// ([`CursorConfig::lift`](crate::hud::config::CursorConfig)), sized as a fraction of the panel
 /// distance so it keeps a constant apparent (angular) size like the panel. Call once per frame
 /// (eye 0) with the same [`PanelParams`] the panel's own corners were built from, so the cursor
 /// rides exactly the surface the UI is drawn on. Returns `None` for a degenerate aspect or size.
 pub(crate) fn compute_cursor_corners(
     params: &PanelParams,
-    frame: super::cursor::CursorFrame,
-    cfg: &super::config::CursorConfig,
+    frame: crate::hud::cursor::CursorFrame,
+    cfg: &crate::hud::config::CursorConfig,
 ) -> Option<[Vec4; 4]> {
     if params.aspect <= 0.0 || cfg.size <= 0.0 {
         return None;

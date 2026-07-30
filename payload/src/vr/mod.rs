@@ -1658,7 +1658,7 @@ fn mid_pose(a: xr::Posef, b: xr::Posef) -> xr::Posef {
 
 #[cfg(test)]
 mod tests {
-    use super::{EYE_WIDTH_ALIGNMENT, align_up, scaled_eye_size};
+    use crate::vr::{EYE_WIDTH_ALIGNMENT, align_up, scaled_eye_size};
 
     /// The whole point of the alignment: whatever the runtime recommends, the doubled width the
     /// collapse renders into must land on a whole froxel tile column, i.e. be a multiple of twice the

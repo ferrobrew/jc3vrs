@@ -27,7 +27,7 @@
 //! # The per-eye resolve under the single-pass collapse
 //!
 //! `DrawClustered` ends with the deferred resolve: a fullscreen triangle whose vertex shader builds a
-//! view ray from the `ViewProjInv` the [`super::reconstruction`] detour substitutes, and whose pixel
+//! view ray from the `ViewProjInv` the [`crate::hooks::graphics_engine::reconstruction`] detour substitutes, and whose pixel
 //! shader samples the sun-shadow cascade over the world positions that ray reconstructs. Under the
 //! collapse that one draw spans **both** eye halves of the double-wide target while the substituted
 //! basis describes one eye's frustum, so neither half reconstructs correctly and the error rotates
@@ -93,8 +93,10 @@ use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 use windows::Win32::Graphics::Direct3D11::D3D11_VIEWPORT;
 
-use super::reconstruction::{self, with_immediate_context};
-use crate::config::Config;
+use crate::{
+    config::Config,
+    hooks::graphics_engine::reconstruction::{self, with_immediate_context},
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()

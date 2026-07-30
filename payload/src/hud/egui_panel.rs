@@ -3,11 +3,11 @@
 //! In VR the flat egui overlay that rides the game back buffer is invisible -- the desktop cursor
 //! lands in neither eye and the overlay is suppressed by `BLOCK_FLIP` -- so the debug UI is redirected
 //! into an offscreen texture and drawn back into the scene as a head-following floating quad, exactly
-//! like the gameplay HUD panel (see [`super::quad`]), and driven by the desktop mouse re-sourced onto
-//! the panel surface (see [`super::pointer`]).
+//! like the gameplay HUD panel (see [`crate::hud::quad`]), and driven by the desktop mouse re-sourced onto
+//! the panel surface (see [`crate::hud::pointer`]).
 //!
 //! This is a wholly independent panel: its own render target, its own lazy-follow damping, and its own
-//! eye-0-cached corners, so it never touches [`super::state::HUD_STATE`] and cannot perturb the
+//! eye-0-cached corners, so it never touches [`crate::hud::state::HUD_STATE`] and cannot perturb the
 //! gameplay HUD. The whole feature is gated behind [`is_active`] -- an OpenXR session running *and* the
 //! opt-in [`EguiPanelConfig::enabled`](crate::hud::config) flag -- and defaults off, so with it off
 //! every path is byte-identical to the flat overlay baseline.
@@ -24,7 +24,7 @@ use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11ShaderResourceView};
 
-use super::{
+use crate::hud::{
     config::EguiPanelConfig,
     cursor::CursorFrame,
     quad::{HudQuad, PanelParams, compute_cursor_corners, compute_world_corners},
@@ -130,7 +130,7 @@ impl EguiPanelState {
         context: &ID3D11DeviceContext,
         device: &Device,
         cfg: &EguiPanelConfig,
-        cursor_cfg: &super::config::CursorConfig,
+        cursor_cfg: &crate::hud::config::CursorConfig,
     ) {
         self.cached_corners = None;
         self.cursor_corners = None;
@@ -156,7 +156,7 @@ impl EguiPanelState {
             egui_state.render_to(context, target.color_rtv());
         }
 
-        let Some((head_pos, head_rotation)) = super::render_camera_pose() else {
+        let Some((head_pos, head_rotation)) = crate::hud::render_camera_pose() else {
             return;
         };
         // World-lock: latch the pose the first frame the panel is shown and hold it, so it stays put
@@ -168,10 +168,10 @@ impl EguiPanelState {
             rot,
             aspect,
             distance: cfg.distance,
-            panel_height: super::panel_height(cfg.scale, cfg.distance, aspect),
+            panel_height: crate::hud::panel_height(cfg.scale, cfg.distance, aspect),
         };
         self.cached_corners = compute_world_corners(&params);
-        self.cursor_corners = super::pointer::window_uv()
+        self.cursor_corners = crate::hud::pointer::window_uv()
             .and_then(|(u, v)| compute_cursor_corners(&params, CursorFrame { u, v }, cursor_cfg));
     }
 

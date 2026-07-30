@@ -23,7 +23,7 @@
 //! single draw, so one basis is right for neither half and the resulting error turns with the camera.
 //! [`enter_per_eye_half_with`] is the seam for running such a pass once per eye instead, and
 //! [`split_fullscreen_pass`] wraps it with the preconditions and demotion rule every consumer needs --
-//! [`super::clustered_lighting`] drives it for the deferred resolve, which is where the sun shadow is
+//! [`crate::hooks::graphics_engine::clustered_lighting`] drives it for the deferred resolve, which is where the sun shadow is
 //! sampled.
 //!
 //! A per-eye half raises its mask under one of two [`MaskArming`] rules. The original one,
@@ -281,7 +281,7 @@ pub(super) fn split_fullscreen_pass(
 /// `draw` is called once per run that actually executes, with that run's eye index, so a caller that
 /// needs to act on what a particular run did -- e.g. record something only when [`SplitOutcome::Demoted`]
 /// follows a run whose own work engaged -- can capture that out of `draw` itself into a variable the
-/// caller reads back afterward, the same way [`super::fullscreen_reconstruction`]'s SSAO caller captures
+/// caller reads back afterward, the same way [`crate::hooks::graphics_engine::fullscreen_reconstruction`]'s SSAO caller captures
 /// its temporal-history snapshot across runs.
 ///
 /// The gate covers every issue of `draw` this function makes, including the degenerate second-run one

@@ -35,7 +35,7 @@
 //!
 //! Cost: the patches in the margin are tessellated and rasterized instead of dropped, bounded by
 //! whatever the CPU-side patch cull already admitted (itself widened to the binocular union in
-//! [`super::culling`]). Back-facing triangles still die at the rasterizer, and out-of-frustum ones at
+//! [`crate::hooks::graphics_engine::culling`]). Back-facing triangles still die at the rasterizer, and out-of-frustum ones at
 //! the clipper.
 
 use detours_macro::detour;

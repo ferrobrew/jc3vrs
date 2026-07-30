@@ -7,7 +7,6 @@ use jc3gi::{
     input::locomotion::{get_LocoUtil_NoAimStrafeMaxAngle, get_LocoUtil_NoAimStrafeMaxAngleAlt},
 };
 
-use super::util::{patch_slider, patchbox};
 use crate::{
     config,
     hooks::{
@@ -17,6 +16,7 @@ use crate::{
             SHIMMED_CALLS, SKIPPED_STARTS, SLIDE_CALLS,
         },
     },
+    ui::util::{patch_slider, patchbox},
 };
 
 pub fn egui_debug_game(ui: &mut egui::Ui) {

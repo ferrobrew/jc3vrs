@@ -2,11 +2,11 @@
 //!
 //! [`crate::vr::VrConfig::freeze_mode`] selects *which* pose is held:
 //!
-//! - [`CockpitPose`](super::FreezeMode::CockpitPose) captures the first frame's located eye views
+//! - [`CockpitPose`](crate::vr::FreezeMode::CockpitPose) captures the first frame's located eye views
 //!   (plus the sim-driven body frame and head anchor) and reuses them every frame. That pins the
 //!   **head's contribution** to the camera -- everything the HMD feeds in -- but not the camera
 //!   itself: a camera the game moves still moves.
-//! - [`FullCamera`](super::FreezeMode::FullCamera) captures the scene render camera's **world
+//! - [`FullCamera`](crate::vr::FreezeMode::FullCamera) captures the scene render camera's **world
 //!   transform** at the last point before the engine consumes it, and rewrites it every Draw.
 //!   Nothing upstream can move the view: not the head, not the body, not the animated head-bone
 //!   anchor, not the game's own camera. The per-eye render parameters are held with it (see
@@ -44,7 +44,7 @@
 use glam::{EulerRot, Quat, Vec3};
 use parking_lot::Mutex;
 
-use super::EyeView;
+use crate::vr::EyeView;
 
 /// The euler convention for the frozen pose: yaw about +Y, then pitch about +X, then roll about +Z.
 /// Matches the flatscreen head sim's composition (`headpose::sim`), so a yaw/pitch/roll reading means
@@ -53,7 +53,7 @@ pub const EULER: EulerRot = EulerRot::YXZ;
 
 /// A pose as the pose-control UI holds it: position in metres and orientation as degrees of
 /// yaw/pitch/roll under [`EULER`]. The frame is the active
-/// [`FreezeMode`](super::FreezeMode)'s -- cockpit-relative or world -- so a reading only means
+/// [`FreezeMode`](crate::vr::FreezeMode)'s -- cockpit-relative or world -- so a reading only means
 /// something alongside the mode it was taken in.
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub struct PoseValues {
@@ -96,7 +96,7 @@ pub struct FrozenFrame {
 }
 
 /// The frozen cockpit-frame pose for this frame
-/// ([`CockpitPose`](super::FreezeMode::CockpitPose)), capturing the current one via `capture` (the
+/// ([`CockpitPose`](crate::vr::FreezeMode::CockpitPose)), capturing the current one via `capture` (the
 /// live eye views, body rotation, and anchor) if nothing of this kind is captured yet -- so engaging
 /// the freeze pins the pose you were looking from. The returned eye views carry the edited centre
 /// pose with each eye's captured offset and canting re-applied.
@@ -116,7 +116,7 @@ pub fn frozen_frame(capture: impl FnOnce() -> ([EyeView; 2], Quat, Vec3)) -> Fro
 }
 
 /// The frozen world-space render-camera transform for this frame
-/// ([`FullCamera`](super::FreezeMode::FullCamera)), capturing the live one via `capture` if nothing
+/// ([`FullCamera`](crate::vr::FreezeMode::FullCamera)), capturing the live one via `capture` if nothing
 /// of this kind is captured yet. The returned transform is the edited one: the caller writes it
 /// straight into the render camera.
 ///
@@ -326,6 +326,8 @@ impl CockpitCapture {
 mod tests {
     use super::*;
 
+    use crate::vr::projection::{Fov, OffAxisProjection};
+
     /// Serializes the tests that drive the process-wide [`STATE`], which the capture APIs share.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -447,8 +449,8 @@ mod tests {
                 angle_up: 1.0,
                 angle_down: -1.0,
             },
-            projection: super::super::OffAxisProjection::new(
-                super::super::Fov {
+            projection: OffAxisProjection::new(
+                Fov {
                     left: -1.0,
                     right: 1.0,
                     up: 1.0,

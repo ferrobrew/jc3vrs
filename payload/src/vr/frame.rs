@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 
 use crate::{config, grapple, headpose};
 
-use super::{
+use crate::vr::{
     Fov, FrameContext, FreezeMode, OffAxisProjection, VrConfig,
     config::ProjectionConvention,
     pose_control::{self, pose_orientation, pose_position},
@@ -138,7 +138,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // eyes rather than on one of them. On canted panels the eyes' orientations differ, so anchoring
     // the center on one eye would bias the head (and everything keyed to it -- aim, the recenter
     // baseline) toward that eye and split the per-eye canting asymmetrically. Matches the runtime
-    // head-pose stand-in ([`super::mid_pose`]), which is likewise the slerp-mid.
+    // head-pose stand-in ([`crate::vr::mid_pose`]), which is likewise the slerp-mid.
     let center_orientation = pose_orientation(eye0.pose).slerp(pose_orientation(eye1.pose), 0.5);
 
     let body_rotation = frozen.map_or_else(headpose::xr::body_rotation, |f| f.body_rotation);
@@ -240,7 +240,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
         (c.stereo.symmetrize_eye_frusta, c.stereo.mirror_eye0_to_both)
     });
 
-    let eye_params = |eye: super::EyeView, eye_position: Vec3| {
+    let eye_params = |eye: crate::vr::EyeView, eye_position: Vec3| {
         let projection = if symmetrize {
             symmetric_projection(eye.fov, near_clip, far_clip)
         } else {

@@ -117,7 +117,7 @@ fn md5_transform(state: &mut [u32; 4], block: &[u8; 64]) {
 
 #[cfg(test)]
 mod tests {
-    use super::dxbc_hash;
+    use crate::checksum::dxbc_hash;
 
     /// Vectors generated from a reference implementation that reproduces the stored checksum of the
     /// game's own shader blobs, covering both final-block branches (`left_over < 56` and `>= 56`).

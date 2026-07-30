@@ -42,7 +42,7 @@ use jc3gi::graphics_engine::device::Device;
 
 use crate::ui::render::EGUI_DEBUG_RENDER_STATE;
 
-use super::{FrameContext, VrConfig, config::BlitGamma};
+use crate::vr::{FrameContext, VrConfig, config::BlitGamma};
 
 /// The committed, precompiled blit shaders. The vertex shader is the shared fullscreen-triangle from
 /// the capture composite (entry point `main`); the pixel shader is VR-specific (gamma bridge).
@@ -326,7 +326,7 @@ impl VrBlit {
         &mut self,
         device: &Device,
         context: &ID3D11DeviceContext,
-        image: &super::EyeImage,
+        image: &crate::vr::EyeImage,
         src: &ID3D11Texture2D,
     ) -> anyhow::Result<()> {
         // Wrap the runtime-owned swapchain texture borrowed (no AddRef); do not release it.
@@ -373,7 +373,7 @@ impl VrBlit {
         &mut self,
         device: &Device,
         swapchain_tex: &ID3D11Texture2D,
-        image: &super::EyeImage,
+        image: &crate::vr::EyeImage,
     ) -> anyhow::Result<ID3D11RenderTargetView> {
         let key = (image.texture as usize, image.array_index);
         if let Some((_, _, rtv)) = self

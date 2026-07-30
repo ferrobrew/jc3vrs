@@ -17,13 +17,13 @@ use jc3gi::{
     },
 };
 
-use super::camera::matrix_grid;
 use crate::{
     config,
     debug::{
         camera::{CAMERA_SNAPSHOTS, CameraSnapshot},
         trace,
     },
+    ui::camera::matrix_grid,
 };
 
 /// The frame count for the editable "Dump N frames" trace button, persisted across UI frames.

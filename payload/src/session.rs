@@ -70,7 +70,7 @@ fn root() -> Option<&'static PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::stamp;
+    use crate::session::stamp;
 
     /// The format string is parsed at run time, so a directive the version of `jiff` in use does not
     /// accept would surface as a malformed session path on the startup path rather than as a build
@@ -101,13 +101,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "session::subdir: name must be a simple directory name")]
     fn subdir_rejects_path_separators() {
-        let _ = super::subdir("../escape");
+        let _ = crate::session::subdir("../escape");
     }
 
     #[cfg(all(debug_assertions, not(panic = "abort")))]
     #[test]
     #[should_panic(expected = "session::subdir: name must be a simple directory name")]
     fn subdir_rejects_nested_path() {
-        let _ = super::subdir("a/b");
+        let _ = crate::session::subdir("a/b");
     }
 }

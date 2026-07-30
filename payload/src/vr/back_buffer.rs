@@ -151,7 +151,7 @@ pub fn sync_swapchain_to_window() {
         u32::from(back_buffer.m_Width),
         u32::from(back_buffer.m_Height),
     );
-    let Some(window) = super::window::client_size() else {
+    let Some(window) = crate::vr::window::client_size() else {
         return;
     };
     if current == window {
@@ -159,7 +159,7 @@ pub fn sync_swapchain_to_window() {
     }
 
     // Drop the mirror's render-target view over buffer 0 before the resize; it is rebuilt lazily.
-    super::mirror::teardown();
+    crate::vr::mirror::teardown();
 
     // The real `ResizeBuffers` writes the device info as well as the DXGI buffers -- it is the same
     // write Hook B stands in for. Here that is wrong: the device info must keep meaning "the render

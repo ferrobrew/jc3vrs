@@ -31,7 +31,7 @@ impl WinePrefix {
     /// git-ignored `target/`) holding the downloaded DLL and the prefix across runs.
     pub fn provision(work: &Path) -> Result<Self, String> {
         let wine = std::env::var("WINE").unwrap_or_else(|_| "wine".to_string());
-        let prefix = super::env_path("WINEPREFIX").unwrap_or_else(|| work.join("wineprefix"));
+        let prefix = crate::env_path("WINEPREFIX").unwrap_or_else(|| work.join("wineprefix"));
         let dll = obtain_d3dcompiler(work)?;
         install_into_prefix(&wine, &prefix, &dll)?;
         Ok(WinePrefix { wine, prefix })
@@ -50,7 +50,7 @@ impl WinePrefix {
 /// Obtain a native `d3dcompiler_47.dll`, caching it under `work/`. Honors `D3DCOMPILER_DLL` if set;
 /// otherwise downloads the Firefox redist and extracts the DLL once (both in-process).
 fn obtain_d3dcompiler(work: &Path) -> Result<PathBuf, String> {
-    if let Some(p) = super::env_path("D3DCOMPILER_DLL") {
+    if let Some(p) = crate::env_path("D3DCOMPILER_DLL") {
         if !p.exists() {
             return Err(format!(
                 "D3DCOMPILER_DLL points at a missing file: {}",

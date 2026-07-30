@@ -25,7 +25,7 @@ use crate::{
     stereo::STEREO_STATE,
 };
 
-use super::graphics_engine::{
+use crate::hooks::graphics_engine::{
     self,
     graphics_engine::{BLOCK_FLIP, log_hook_thread},
 };
@@ -44,7 +44,7 @@ pub(super) fn hook_library() -> HookLibrary {
 #[detour(address = jc3gi::game::Game::Update_ADDRESS)]
 fn game_update(game: *const Game) -> bool {
     // Start of a real frame: re-arm the once-per-frame CClock::Update gate.
-    super::clock::UPDATED_THIS_FRAME.store(false, Ordering::Relaxed);
+    crate::hooks::clock::UPDATED_THIS_FRAME.store(false, Ordering::Relaxed);
     // `crate::update` advances the puffin frame (closing the previous one); the frame scope opens
     // after it so it belongs to the new frame and spans the whole original update.
     crate::update();
@@ -93,7 +93,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         crate::hud::scaleform::process_requests();
 
         // New game frame: the next grapple-reticle projection is the frame's aim position.
-        super::ui::begin_frame_aim_recording();
+        crate::hooks::ui::begin_frame_aim_recording();
 
         // The vehicle-attach state drives the HUD's near shift; it reads game-thread animation
         // state, so it is polled here and read by the render side.
@@ -242,7 +242,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 tracing::info!(
                     target: "stereo",
                     "restore diag: ssao_ptr_null={} ssao_snap={:?} gi_snap={:?}",
-                    super::graphics_engine::ssao::ssao_pass().is_null(),
+                    crate::hooks::graphics_engine::ssao::ssao_pass().is_null(),
                     ssao_history,
                     gi_cascade,
                 );
@@ -322,7 +322,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                     *get_current_add_buffer() = saved_add_buffer;
                 }
 
-                super::draw_count::DRAW_COUNTS.clear();
+                crate::hooks::draw_count::DRAW_COUNTS.clear();
                 graphics_engine::post_effects::reset_post_block_gate();
                 TraceState::record(TraceEvent::DrawBegin { eye });
                 {
@@ -385,7 +385,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 }
                 TraceState::record(TraceEvent::DrawEnd {
                     eye,
-                    counts: super::draw_count::DRAW_COUNTS.snapshot(),
+                    counts: crate::hooks::draw_count::DRAW_COUNTS.snapshot(),
                 });
             }
             TraceState::end_frame();

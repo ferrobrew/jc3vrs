@@ -162,7 +162,7 @@ unsafe extern "system" fn capture_wndproc(
     match msg {
         WM_CLOSE => LRESULT(0),
         WM_DESTROY => {
-            super::on_window_destroyed();
+            crate::capture::on_window_destroyed();
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },

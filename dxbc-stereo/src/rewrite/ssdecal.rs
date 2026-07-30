@@ -37,7 +37,7 @@ use crate::{
     tokens::{ShaderStage, TokenStream, parse_operand},
 };
 
-use super::common::{OPERAND_IMM32_SCALAR, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELECT_X};
+use crate::rewrite::common::{OPERAND_IMM32_SCALAR, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELECT_X};
 
 /// The fragment `cb1` register the inserted `mad` reads its horizontal offset from. The `ssdecal*`
 /// permutations declare `cb1[13]`, so register 13 is the first one past what they already use, and the
@@ -91,7 +91,7 @@ pub fn bias_ssdecal_depth_uv(blob: &[u8]) -> Result<Vec<u8>, DxbcError> {
     };
     // No signature or feature-flag change: the rewrite adds arithmetic and a constant-buffer row, so
     // the two signature chunks are handed back exactly as they came in.
-    super::common::reassemble(
+    crate::rewrite::common::reassemble(
         &dxbc,
         blob,
         chunk_body(b"ISGN"),
@@ -372,7 +372,7 @@ mod tests {
     /// see `rewrite::remap::patch_vertex_shader`, `rewrite::reproject::reproject_vertex_shader`, and
     /// `rewrite::terrain`. Before this guard, [`bias_ssdecal_depth_uv`] fell through to
     /// [`Dxbc::shader_chunk`], which accepts `SHDR` as a fallback, and silently reassembled the
-    /// original bytes unmodified because [`super::common::reassemble`] only substitutes an `SHEX` body.
+    /// original bytes unmodified because [`crate::rewrite::common::reassemble`] only substitutes an `SHEX` body.
     #[test]
     fn an_sm4_container_is_rejected() {
         assert_eq!(

@@ -321,7 +321,7 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
             // head-tracking for the *view* is applied to the render camera copy in `setup_render_camera`
             // (which the streaming system does not read); absolute placement resumes and the
             // auto-recenter re-bases onto Rico's updated head once gameplay returns.
-            if !super::in_gameplay() {
+            if !crate::hooks::in_gameplay() {
                 CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
                 return;
             }
@@ -450,7 +450,7 @@ fn write_camera_transform(target: &mut Matrix4, orientation: glam::Quat, positio
 /// `setup_render_camera`) and the floating panel's world-lock in `crate::hud`, so the render camera and
 /// the panel always agree on when it is active and hand off together.
 pub fn vr_loading_view_active() -> bool {
-    !super::in_gameplay()
+    !crate::hooks::in_gameplay()
         && crate::headpose::source() == crate::headpose::Source::Vr
         && LOADING_BASE.lock().is_some()
 }
@@ -540,7 +540,7 @@ fn game_camera_manager_get_camera_matrix(manager: *const GameCameraManager, matr
     // the last gameplay pose, which no longer matches where the engine has moved its camera for the
     // teleport. Feeding that stale pose to the sim-phase readers would desync them from the engine's
     // own camera during the transition, so let the engine's value pass through (issue #27).
-    if !super::in_gameplay() {
+    if !crate::hooks::in_gameplay() {
         return;
     }
     if let Some(data) = *LAST_CAMERA_WORLD.lock()
@@ -606,7 +606,7 @@ fn camera_tree_update_render_contexts(
         // its teleport can move the camera to the destination and stream the world from it. Absolute
         // placement stops entirely here; the player's head-tracking for the view is applied to the
         // render camera copy in `setup_render_camera`, which does not touch these contexts.
-        if !super::in_gameplay() {
+        if !crate::hooks::in_gameplay() {
             return;
         }
 

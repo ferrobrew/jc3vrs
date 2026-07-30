@@ -3,7 +3,7 @@
 //! [`crate::session`]) for offline analysis (`ui.perfetto.dev` or `chrome://tracing`).
 //!
 //! A capture is a puffin frame *sink*: while recording, every finished frame's data is cloned into
-//! a buffer. The state machine is driven once per real frame from [`super::new_frame`] via
+//! a buffer. The state machine is driven once per real frame from [`crate::profiler::new_frame`] via
 //! [`tick`], and started from the UI button or the F9 hotkey via [`start`]. Because a capture
 //! forces scope collection on for its duration, a trace can be taken even with the profiler panel
 //! closed and in-headset.
@@ -23,7 +23,7 @@ use puffin::{FrameData, FrameSinkId, GlobalProfiler};
 /// The default capture duration, in seconds (~450 frames at 90 Hz).
 pub const DEFAULT_CAPTURE_SECS: f32 = 5.0;
 
-/// Whether a capture is actively recording frames (drives [`super::apply_scopes_on`]).
+/// Whether a capture is actively recording frames (drives [`crate::profiler::apply_scopes_on`]).
 static RECORDING: AtomicBool = AtomicBool::new(false);
 
 pub fn is_recording() -> bool {
@@ -82,7 +82,7 @@ pub fn start(duration_secs: f32) -> bool {
         duration_secs,
     });
     RECORDING.store(true, Ordering::Relaxed);
-    super::apply_scopes_on();
+    crate::profiler::apply_scopes_on();
     tracing::info!("profiler: capturing {duration_secs:.1}s of frames");
     true
 }
@@ -124,7 +124,7 @@ fn finish() {
         return;
     };
     RECORDING.store(false, Ordering::Relaxed);
-    super::apply_scopes_on();
+    crate::profiler::apply_scopes_on();
 
     GlobalProfiler::lock().remove_sink(state.sink_id);
 
@@ -202,7 +202,11 @@ const SHUTDOWN_POLLS: u32 = 1000;
 
 fn write_capture(frames: &[Arc<FrameData>]) -> anyhow::Result<PathBuf> {
     let path = capture_path()?;
-    super::chrome_trace::write_chrome_trace(&path, frames, super::scope_details())?;
+    crate::profiler::chrome_trace::write_chrome_trace(
+        &path,
+        frames,
+        crate::profiler::scope_details(),
+    )?;
     Ok(path)
 }
 

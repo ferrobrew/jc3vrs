@@ -17,7 +17,7 @@ use std::{
 use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
-use super::filter_snapshot;
+use crate::grapple::filter_snapshot;
 
 /// Whether the capture is running.
 pub fn log_enabled() -> bool {
@@ -33,7 +33,7 @@ pub fn set_log_enabled(enabled: bool) {
 }
 
 /// Log one input tick's filter state (no-op when disabled). Called from
-/// [`crate::headpose::sim::on_input_tick`] after [`super::advance`]; `dt` is the engine's tick
+/// [`crate::headpose::sim::on_input_tick`] after [`crate::grapple::advance`]; `dt` is the engine's tick
 /// delta.
 pub fn log_tick(body: Quat, dt: f32) {
     if !log_enabled() {
@@ -42,7 +42,7 @@ pub fn log_tick(body: Quat, dt: f32) {
     let (mode, blend, held) = filter_snapshot();
     let fields = format!(
         "{state},{mode:?},{blend:.4},{dt:.5},{raw},{filt},{held},{empty}",
-        state = super::hook_snapshot().map_or_else(
+        state = crate::grapple::hook_snapshot().map_or_else(
             || "None".to_string(),
             |h| format!(
                 "{:?}{}{}",
@@ -53,7 +53,7 @@ pub fn log_tick(body: Quat, dt: f32) {
         ),
         blend = blend,
         raw = csv_quat(body),
-        filt = csv_quat(super::filter_with(body, mode, held, blend)),
+        filt = csv_quat(crate::grapple::filter_with(body, mode, held, blend)),
         held = csv_quat(held),
         empty = ",".repeat(16),
     );

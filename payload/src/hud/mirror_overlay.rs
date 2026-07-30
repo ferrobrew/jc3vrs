@@ -16,7 +16,7 @@ use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11ShaderResourceView};
 
-use super::target::HudTarget;
+use crate::hud::target::HudTarget;
 
 /// The overlay texture, sized to the window client rect, holding this frame's egui output.
 static OVERLAY: Mutex<Option<HudTarget>> = Mutex::new(None);

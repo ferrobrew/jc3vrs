@@ -3,8 +3,8 @@
 //! depth-of-field prepass.
 //!
 //! Cross-referencing `CMatrix4f::PerspectiveFovInverse` gives a closed set of seven consumers. The
-//! deferred resolve ([`super::clustered_lighting`]) and the aerial perspective
-//! ([`super::atmospheric_scattering`]) are split per eye in their own modules; the wireframe-only
+//! deferred resolve ([`crate::hooks::graphics_engine::clustered_lighting`]) and the aerial perspective
+//! ([`crate::hooks::graphics_engine::atmospheric_scattering`]) are split per eye in their own modules; the wireframe-only
 //! `DrawPassThrough` never runs during shaded rendering; these are the rest. Collapsed, each of them
 //! is one draw spanning **both** eye halves of the double-wide target while the substituted basis
 //! describes one eye's frustum, so neither half reconstructs correctly and the error turns with the
@@ -69,8 +69,7 @@ use jc3gi::graphics_engine::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use super::reconstruction;
-use crate::config::Config;
+use crate::{config::Config, hooks::graphics_engine::reconstruction};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -269,5 +268,5 @@ fn restore_ssao_history(history: SsaoHistory) {
 }
 
 fn ssao_pass() -> *mut SSAOPass {
-    super::ssao::ssao_pass()
+    crate::hooks::graphics_engine::ssao::ssao_pass()
 }

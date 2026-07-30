@@ -179,8 +179,8 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
         u32::from(back_buffer.m_Height),
     );
     let (src_w, src_h) = unsafe { texture_size(&eye_texture) };
-    let window_size =
-        super::window::client_size().context("vr: the game window client rect is unavailable")?;
+    let window_size = crate::vr::window::client_size()
+        .context("vr: the game window client rect is unavailable")?;
     let (framing, zoom) =
         crate::config::Config::lock_query(|c| (c.vr.mirror_framing, c.vr.mirror_zoom));
     let viewport = mirror_viewport(

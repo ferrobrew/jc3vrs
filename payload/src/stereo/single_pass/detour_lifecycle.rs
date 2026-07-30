@@ -13,7 +13,9 @@ use retour::{Function, GenericDetour};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use windows::{Win32::Foundation::RECT, core::Interface};
 
-use super::{active, draw_detours::*, per_eye_reissue::*, shader_detours::*, viewport::*};
+use crate::stereo::single_pass::{
+    active, draw_detours::*, per_eye_reissue::*, shader_detours::*, viewport::*,
+};
 
 /// A slot for a detour that is installed once and removed on eject.
 ///

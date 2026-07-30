@@ -6,7 +6,7 @@
 
 use parking_lot::Mutex;
 
-use super::SubstitutionStats;
+use crate::stereo::single_pass::SubstitutionStats;
 
 /// A serializable snapshot of one eye's single-pass matrices, dumped in the F12 screenshot's JSON
 /// sidecar so the exact `cb13` state can be inspected offline.

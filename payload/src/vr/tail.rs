@@ -10,7 +10,7 @@
 //!
 //! Synchronization is by construction rather than by flushing:
 //!
-//! - The [`super::FrameContext`] in the job holds the VR runtime lock (`parking_lot` with
+//! - The [`crate::vr::FrameContext`] in the job holds the VR runtime lock (`parking_lot` with
 //!   `send_guard` makes the guard movable). The next frame's `vr::update` / `frame_begin` block on
 //!   that lock, so no next-frame VR work — and nothing downstream of it, including the next
 //!   dispatches — can start before the tail submits.
@@ -31,7 +31,7 @@ use std::{
 use jc3gi::{cpu_fragment::CpuPrimaryCount, graphics_engine::graphics_engine::GraphicsEngine};
 use windows::Win32::{Foundation::HANDLE, System::Threading::WaitForSingleObject};
 
-use super::{FrameContext, config::VrConfig};
+use crate::vr::{FrameContext, config::VrConfig};
 
 /// One deferred frame tail.
 pub struct TailJob {
@@ -193,14 +193,14 @@ fn run_tail(job: TailJob) {
     if job.mirror {
         #[cfg(feature = "profiler")]
         puffin::profile_scope!("Desktop mirror (tail)");
-        super::present_mirror(usize::from(job.vr_cfg.mirror_eye));
+        crate::vr::present_mirror(usize::from(job.vr_cfg.mirror_eye));
     }
 
     let should_render = job.frame.should_render();
     {
         #[cfg(feature = "profiler")]
         puffin::profile_scope!("VR present + submit (tail)");
-        super::present_and_submit(job.frame, &job.vr_cfg);
+        crate::vr::present_and_submit(job.frame, &job.vr_cfg);
     }
     crate::hooks::game::log_vr_frame_health(should_render);
 }
