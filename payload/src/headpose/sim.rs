@@ -34,9 +34,7 @@ use std::sync::atomic::Ordering;
 use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
-use crate::{config::Config, grapple};
-
-use crate::{headpose::HeadPose, hooks::input::locomotion};
+use crate::{config::Config, grapple, headpose::HeadPose, hooks::input::locomotion};
 
 /// The latch state (on-foot only).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

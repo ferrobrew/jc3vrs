@@ -47,8 +47,6 @@ mod target;
 mod warp;
 
 pub use config::{HudConfig, ReticleAlign};
-pub use state::HUD_STATE;
-
 use glam::{Mat3, Mat4, Quat, Vec3};
 use jc3gi::{
     camera::camera_manager::CameraManager,
@@ -56,6 +54,7 @@ use jc3gi::{
     types::math::Matrix4,
     ui::ui_manager::GetIUIManager,
 };
+pub use state::HUD_STATE;
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 
 /// Which presentation the HUD is in this frame. Drives the panel's aspect (gameplay vs full-screen

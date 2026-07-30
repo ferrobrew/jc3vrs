@@ -34,10 +34,9 @@
 
 use crate::{
     container::{Dxbc, DxbcError},
+    rewrite::common::{OPERAND_IMM32_SCALAR, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELECT_X},
     tokens::{ShaderStage, TokenStream, parse_operand},
 };
-
-use crate::rewrite::common::{OPERAND_IMM32_SCALAR, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELECT_X};
 
 /// The fragment `cb1` register the inserted `mad` reads its horizontal offset from. The `ssdecal*`
 /// permutations declare `cb1[13]`, so register 13 is the first one past what they already use, and the

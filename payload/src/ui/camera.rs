@@ -3,9 +3,10 @@
 use egui::Slider;
 use jc3gi::types::math::Matrix4;
 
-use crate::{config, grapple, headpose, hooks, vr};
-
-use crate::{headpose::config::VrTurnMode, hooks::character::BodyIkConfig, vr::FreezeMode};
+use crate::{
+    config, grapple, headpose, headpose::config::VrTurnMode, hooks, hooks::character::BodyIkConfig,
+    vr, vr::FreezeMode,
+};
 
 pub fn egui_debug_camera(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();

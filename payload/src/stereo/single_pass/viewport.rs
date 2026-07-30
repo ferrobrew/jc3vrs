@@ -10,9 +10,9 @@
 //! or a patched shader surviving into a shadow or reflection pass sends its odd instances into a half
 //! that pass never bound.
 
-use super::*;
-
 use windows::Win32::Foundation::RECT;
+
+use super::*;
 
 /// Bind `viewport` to both viewport slots of the immediate context. Binding two slots (rather than
 /// one) passes the collapse viewport detour through untouched -- it only special-cases a single-slot

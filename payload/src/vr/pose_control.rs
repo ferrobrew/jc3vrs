@@ -325,7 +325,6 @@ impl CockpitCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::vr::projection::{Fov, OffAxisProjection};
 
     /// Serializes the tests that drive the process-wide [`STATE`], which the capture APIs share.

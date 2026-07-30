@@ -66,7 +66,6 @@ use parking_lot::Mutex;
 use puffin::ScopeId;
 
 use crate::profiler::gpu::queries::{DispatchLane, GpuProfiler, IntervalLabel, SendPtr};
-
 pub use crate::profiler::gpu::stats::summary;
 
 /// The coarse render seams bracketed on the GPU timeline, in draw order.

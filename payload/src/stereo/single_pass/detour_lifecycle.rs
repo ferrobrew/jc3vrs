@@ -5,12 +5,14 @@
 //! `draw_detours.rs`, `shader_detours.rs`, `per_eye_reissue.rs`); this module owns the install
 //! orchestration that publishes and enables them as a batch.
 
-use std::ffi::c_void;
+use std::{
+    ffi::c_void,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 
 use jc3gi::graphics_engine::graphics_engine::GraphicsEngine;
 use parking_lot::Mutex;
 use retour::{Function, GenericDetour};
-use std::sync::atomic::{AtomicPtr, Ordering};
 use windows::{Win32::Foundation::RECT, core::Interface};
 
 use crate::stereo::single_pass::{

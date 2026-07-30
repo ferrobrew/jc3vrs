@@ -13,12 +13,13 @@
 
 use std::ffi::CString;
 
-use crate::hud::split::roots;
 use jc3gi::ui::{
     scaleform::{AmpMovieObjectDesc, DisplayInfo, Movie, MovieImpl, Value},
     ui_manager::UIManager,
 };
 use parking_lot::Mutex;
+
+use crate::hud::split::roots;
 
 /// A queued Scaleform debug operation. Queued from the UI thread, executed on the game thread.
 enum Request {

@@ -11,7 +11,6 @@ use jc3gi::input::{
     input_action_map::{Action, EffectorState, LocalPlayerActionMap},
     input_device_manager::InputDeviceManager,
 };
-
 use re_utilities::hook_library::HookLibrary;
 
 use crate::headpose;

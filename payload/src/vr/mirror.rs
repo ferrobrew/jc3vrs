@@ -54,6 +54,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use anyhow::Context as _;
+use jc3gi::graphics_engine::device::Device;
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -74,8 +75,6 @@ use windows::{
     },
     core::Interface as _,
 };
-
-use jc3gi::graphics_engine::device::Device;
 
 use crate::{ui::render::EGUI_DEBUG_RENDER_STATE, vr::config::MirrorFraming};
 

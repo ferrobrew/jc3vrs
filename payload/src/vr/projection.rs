@@ -124,8 +124,9 @@ fn remap_col_z(col: Vec4) -> Vec4 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use glam::Mat4 as GlamMat4;
+
+    use super::*;
 
     /// `m[row * 4 + col]` for the row-major matrices this module produces, reading through the
     /// engine-row == glam-column equivalence.

@@ -31,6 +31,7 @@ use std::{
 };
 
 use anyhow::Context as _;
+use jc3gi::graphics_engine::{device::Device, graphics_engine::HContext_t};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -53,8 +54,6 @@ use windows::{
     },
     core::Interface as _,
 };
-
-use jc3gi::graphics_engine::{device::Device, graphics_engine::HContext_t};
 
 /// Raised by the render-pass hook for exactly the foveated shading range, so [`apply_force_test`] injects
 /// the peripheral stencil test only into those draws.

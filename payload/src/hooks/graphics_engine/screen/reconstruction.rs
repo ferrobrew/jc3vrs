@@ -50,7 +50,6 @@ use std::{
 };
 
 use detours_macro::detour;
-
 use jc3gi::{
     graphics_engine::{draw::SetScissorEnable, graphics_engine::HContext_t},
     types::math::Matrix4,

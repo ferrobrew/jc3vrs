@@ -12,12 +12,13 @@ use glam::{Quat, Vec3};
 use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
-use crate::{config, grapple, headpose};
-
-use crate::vr::{
-    Fov, FrameContext, FreezeMode, OffAxisProjection, VrConfig,
-    config::ProjectionConvention,
-    pose_control::{self, pose_orientation, pose_position},
+use crate::{
+    config, grapple, headpose,
+    vr::{
+        Fov, FrameContext, FreezeMode, OffAxisProjection, VrConfig,
+        config::ProjectionConvention,
+        pose_control::{self, pose_orientation, pose_position},
+    },
 };
 
 /// The per-eye render parameters the `SetupRenderCamera` hook applies while a VR frame is in flight.

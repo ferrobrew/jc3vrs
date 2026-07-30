@@ -46,11 +46,10 @@
 //! (`vr.native_resolution = false`, logged) and the original size is restored; the mod continues at
 //! desktop resolution. Never crashes, never wedges.
 
-use parking_lot::Mutex;
-
 use jc3gi::{
     camera::camera_manager::CameraManager, graphics_engine::graphics_engine::GraphicsEngine,
 };
+use parking_lot::Mutex;
 
 use crate::config::Config;
 

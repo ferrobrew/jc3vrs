@@ -66,13 +66,12 @@ use windows::{
     core::PCWSTR,
 };
 
+pub use crate::crash::breadcrumbs::{Phase, mark};
 use crate::crash::{
     line::{CRASH_LOG, Line, stamp},
     memory::{readable, resolve_probe_host_bases},
     report::{log_backtrace, record_exception},
 };
-
-pub use crate::crash::breadcrumbs::{Phase, mark};
 
 pub fn install() {
     // Open the crash log with a raw handle. It is a *separate* file from `jc3vrs.log` because the

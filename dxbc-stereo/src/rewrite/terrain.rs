@@ -8,21 +8,20 @@
 
 use crate::{
     container::{Dxbc, DxbcError},
+    rewrite::common::{
+        CB_ACCESS_DYNAMIC_INDEXED, OPCODE_AND, OPCODE_DCL_CONSTANT_BUFFER, OPCODE_DCL_INPUT,
+        OPCODE_DCL_INPUT_SGV, OPCODE_DCL_OUTPUT, OPCODE_DCL_OUTPUT_SGV, OPCODE_DCL_OUTPUT_SIV,
+        OPCODE_DCL_TEMPS, OPCODE_IMUL, OPCODE_MOV, OPCODE_RET, OPCODE_RETC, OPERAND_CB_2D_IMM,
+        OPERAND_IMM32_SCALAR, OPERAND_INPUT_MASK_X, OPERAND_INPUT_SELECT_X, OPERAND_NULL,
+        OPERAND_OUTPUT_MASK_X, OPERAND_OUTPUT_MASK_Z, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELECT_X,
+        OPERAND_TYPE_OUTPUT, SB_NAME_INSTANCE_ID, SB_NAME_POSITION, SB_NAME_VIEWPORT_ARRAY_INDEX,
+        SIGNATURE_COMPONENT_UINT32, SIGNATURE_SYSVALUE_INSTANCE_ID,
+        SIGNATURE_SYSVALUE_VIEWPORT_ARRAY_INDEX, STEREO_CB_REGISTER, STEREO_REPROJ_CB_ROWS,
+        SignatureElement, append_signature_element, declared_register, emit_meye_epilogue,
+        max_signature_register, reassemble, rewrite_reproject_instruction, signature_register,
+        widen_signature_mask,
+    },
     tokens::{Instruction, ShaderStage, TokenStream},
-};
-
-use crate::rewrite::common::{
-    CB_ACCESS_DYNAMIC_INDEXED, OPCODE_AND, OPCODE_DCL_CONSTANT_BUFFER, OPCODE_DCL_INPUT,
-    OPCODE_DCL_INPUT_SGV, OPCODE_DCL_OUTPUT, OPCODE_DCL_OUTPUT_SGV, OPCODE_DCL_OUTPUT_SIV,
-    OPCODE_DCL_TEMPS, OPCODE_IMUL, OPCODE_MOV, OPCODE_RET, OPCODE_RETC, OPERAND_CB_2D_IMM,
-    OPERAND_IMM32_SCALAR, OPERAND_INPUT_MASK_X, OPERAND_INPUT_SELECT_X, OPERAND_NULL,
-    OPERAND_OUTPUT_MASK_X, OPERAND_OUTPUT_MASK_Z, OPERAND_TEMP_MASK_X, OPERAND_TEMP_SELECT_X,
-    OPERAND_TYPE_OUTPUT, SB_NAME_INSTANCE_ID, SB_NAME_POSITION, SB_NAME_VIEWPORT_ARRAY_INDEX,
-    SIGNATURE_COMPONENT_UINT32, SIGNATURE_SYSVALUE_INSTANCE_ID,
-    SIGNATURE_SYSVALUE_VIEWPORT_ARRAY_INDEX, STEREO_CB_REGISTER, STEREO_REPROJ_CB_ROWS,
-    SignatureElement, append_signature_element, declared_register, emit_meye_epilogue,
-    max_signature_register, reassemble, rewrite_reproject_instruction, signature_register,
-    widen_signature_mask,
 };
 
 /// The output semantic that carries the single-pass eye index through the terrain tessellation

@@ -14,6 +14,7 @@
 //! [`crate::vr::config::BlitGamma`] and `vr_blit_ps.hlsl`.
 
 use anyhow::Context as _;
+use jc3gi::graphics_engine::device::Device;
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -38,11 +39,10 @@ use windows::{
     core::Interface as _,
 };
 
-use jc3gi::graphics_engine::device::Device;
-
-use crate::ui::render::EGUI_DEBUG_RENDER_STATE;
-
-use crate::vr::{FrameContext, VrConfig, config::BlitGamma};
+use crate::{
+    ui::render::EGUI_DEBUG_RENDER_STATE,
+    vr::{FrameContext, VrConfig, config::BlitGamma},
+};
 
 /// The committed, precompiled blit shaders. The vertex shader is the shared fullscreen-triangle from
 /// the capture composite (entry point `main`); the pixel shader is VR-specific (gamma bridge).

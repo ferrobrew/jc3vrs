@@ -1,8 +1,7 @@
 //! VR runtime configuration. See [`crate::vr`] and `docs/mod/vr-runtime.md`.
 
-use serde::{Deserialize, Serialize};
-
 use jc3gi::graphics_engine::render_engine::RenderPassId;
+use serde::{Deserialize, Serialize};
 
 /// Serialize a [`RenderPassId`] as its `i32` discriminant, matching the pre-typing on-disk format
 /// (`0x41` etc.) so existing config files stay readable.

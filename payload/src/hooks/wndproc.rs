@@ -1,5 +1,7 @@
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
+#[cfg(feature = "profiler")]
+use windows::Win32::UI::Input::KeyboardAndMouse::VK_F9;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     UI::{
@@ -10,9 +12,6 @@ use windows::Win32::{
         },
     },
 };
-
-#[cfg(feature = "profiler")]
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_F9;
 
 use crate::{hooks::graphics_engine::shader, hud::cursor};
 

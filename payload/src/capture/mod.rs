@@ -15,16 +15,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Context as _;
+use composite::CaptureComposite;
 use parking_lot::Mutex;
+use window::CaptureWindow;
 use windows::{
     Win32::Graphics::Direct3D11::{ID3D11ShaderResourceView, ID3D11Texture2D},
     core::Interface,
 };
 
 use crate::ui::render::EGUI_DEBUG_RENDER_STATE;
-
-use composite::CaptureComposite;
-use window::CaptureWindow;
 
 mod composite;
 mod window;

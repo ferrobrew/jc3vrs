@@ -33,8 +33,6 @@
 
 pub mod projection;
 
-use openxr as xr;
-
 pub use config::{
     BlitGamma, FoveationConfig, FoveationConfigError, FreezeMode, MirrorFraming,
     ProjectionConvention, VrConfig,
@@ -43,6 +41,7 @@ pub use frame::{
     EyeRenderParams, begin_render_frame, clear_render_params, cull_projection_standard,
     render_params,
 };
+use openxr as xr;
 pub use projection::{Fov, OffAxisProjection};
 
 mod back_buffer;

@@ -22,13 +22,12 @@ use re_utilities::hook_library::HookLibrary;
 use crate::{
     crash::Phase,
     debug::trace::{TraceEvent, TraceState},
+    hooks::graphics_engine::{
+        self,
+        graphics_engine::{BLOCK_FLIP, log_hook_thread},
+        ssao,
+    },
     stereo::STEREO_STATE,
-};
-
-use crate::hooks::graphics_engine::{
-    self,
-    graphics_engine::{BLOCK_FLIP, log_hook_thread},
-    ssao,
 };
 
 pub(super) fn hook_library() -> HookLibrary {
