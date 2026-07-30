@@ -57,6 +57,8 @@ use jc3gi::{
 pub use state::HUD_STATE;
 use windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext;
 
+use crate::{config::Config, hooks::in_gameplay};
+
 /// Which presentation the HUD is in this frame. Drives the panel's aspect (gameplay vs full-screen
 /// UI). Placement (head-following vs world-locked) is chosen separately by
 /// [`menu_world_lock`], which only freezes for in-game menus with a valid camera.
@@ -74,7 +76,7 @@ pub enum HudMode {
 /// full-screen, as is an in-game modal menu (the pause / mission / reward screens, detected via the
 /// UI's static background grab).
 pub fn current_mode() -> HudMode {
-    if !crate::hooks::in_gameplay() {
+    if !in_gameplay() {
         return HudMode::Movie;
     }
     // SAFETY: GetIUIManager returns the live UI singleton (or null before it exists);
@@ -98,7 +100,7 @@ pub fn current_mode() -> HudMode {
 pub fn menu_world_lock() -> bool {
     // SAFETY: GetIUIManager returns the live UI singleton (or null); IsUsingStaticBackGround is a
     // const getter.
-    crate::hooks::in_gameplay()
+    in_gameplay()
         && unsafe {
             GetIUIManager()
                 .as_ref()
@@ -118,7 +120,7 @@ fn aspect_for(cfg: &HudConfig, mode: HudMode) -> f32 {
 /// The effective HUD aspect for the current frame. Used by the marker hook and panel VP, which run
 /// outside [`tick`]/[`draw_quad`] and so re-derive the mode.
 pub fn current_aspect() -> f32 {
-    let cfg = crate::config::Config::lock_query(|c| c.hud);
+    let cfg = Config::lock_query(|c| c.hud);
     aspect_for(&cfg, current_mode())
 }
 
@@ -148,7 +150,7 @@ pub fn panel_height(scale: f32, distance: f32, aspect: f32) -> f32 {
 /// mod's choice (see [`hud_target_size`]), as is its aspect.
 pub fn tick(device: &Device, window_width: u32, window_height: u32) {
     let mut hud = HUD_STATE.lock();
-    let cfg = crate::config::Config::lock_query(|c| c.hud);
+    let cfg = Config::lock_query(|c| c.hud);
     let render = crate::stereo::render_size().unwrap_or((window_width, window_height));
     if cfg.redirect {
         let aspect = aspect_for(&cfg, current_mode());
@@ -180,7 +182,7 @@ pub fn tick(device: &Device, window_width: u32, window_height: u32) {
 /// full-screen UI, or the partition not live yet). Snapshotted under the state lock so the
 /// detour never holds it across the render.
 pub fn split_inputs() -> Option<split::LayerViews> {
-    let cfg = crate::config::Config::lock_query(|c| c.hud);
+    let cfg = Config::lock_query(|c| c.hud);
     if !cfg.redirect || !cfg.split || current_mode() != HudMode::Hud || !split::roots::live() {
         return None;
     }
@@ -227,7 +229,7 @@ fn hud_target_size(
 /// 1). Then draws and clears. Called from the render-thread post-draw hook, before the back buffer is
 /// captured/presented, with the engine context mutex held.
 pub fn draw_quad(context: &ID3D11DeviceContext, device: &Device, target: &Texture, eye: usize) {
-    let cfg = crate::config::Config::lock_query(|c| c.hud);
+    let cfg = Config::lock_query(|c| c.hud);
     if !cfg.redirect || !cfg.quad {
         return;
     }
@@ -389,7 +391,7 @@ pub fn compute_panel_vp(symmetric: bool) -> Option<(Matrix4, Matrix4)> {
     // markers project onto exactly the panel the quad drew.
     let (pos, rot) = HUD_STATE.lock().panel_pose()?;
     let aspect = current_aspect();
-    let panel_scale = crate::config::Config::lock_query(|c| c.hud.panel_scale);
+    let panel_scale = Config::lock_query(|c| c.hud.panel_scale);
 
     let projection = unsafe {
         let cm = CameraManager::get()?;

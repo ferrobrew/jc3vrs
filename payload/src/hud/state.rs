@@ -12,8 +12,9 @@ use windows::Win32::Graphics::Direct3D11::{
 
 use crate::hud::{
     binding,
+    config::FollowConfig,
     markers::MarkerDepth,
-    quad::HudQuad,
+    quad::{HudQuad, PanelParams},
     split,
     target::HudTarget,
     warp::{HudWarp, WarpInputs},
@@ -106,7 +107,7 @@ impl FollowState {
     /// slerp: `alpha = 1 - 2^(-dt/halflife); current = slerp(current, target, alpha)`. No deadzone
     /// -- the panel always follows, with the halflife controlling the lag. Returns the damped
     /// quaternion for the quad's world-space orientation.
-    fn update(&mut self, head_rotation: Quat, config: &crate::hud::config::FollowConfig) -> Quat {
+    fn update(&mut self, head_rotation: Quat, config: &FollowConfig) -> Quat {
         let dt = self
             .last_time
             .map(|t| t.elapsed().as_secs_f32())
@@ -344,7 +345,7 @@ impl HudState {
         freeze: bool,
         head_pos: Vec3,
         head_rotation: Quat,
-        follow: &crate::hud::config::FollowConfig,
+        follow: &FollowConfig,
     ) -> (Vec3, Quat) {
         let pose = if freeze {
             *self.latched_pose.get_or_insert((head_pos, head_rotation))
@@ -365,7 +366,7 @@ impl HudState {
 
     /// Compute the panel's world-space corners from the current camera and follow state, caching
     /// the result for both eyes. Call once per frame (eye 0); eye 1 reuses the cached corners.
-    pub fn compute_world_corners(&mut self, params: &crate::hud::quad::PanelParams) {
+    pub fn compute_world_corners(&mut self, params: &PanelParams) {
         self.cached_corners = None;
         if let Some(corners) = crate::hud::quad::compute_world_corners(params) {
             self.cached_corners = Some(corners);
@@ -398,7 +399,7 @@ impl HudState {
     pub fn set_split_frame(
         &mut self,
         active: bool,
-        params: Option<[crate::hud::quad::PanelParams; split::LAYER_COUNT]>,
+        params: Option<[PanelParams; split::LAYER_COUNT]>,
     ) {
         self.split_composite = active;
         self.cached_layer_corners = [None, None, None];

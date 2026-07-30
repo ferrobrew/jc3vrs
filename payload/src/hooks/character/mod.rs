@@ -26,6 +26,8 @@ use crate::{config::Config, headpose, hooks::graphics_engine::render_block};
 pub(crate) mod config;
 pub(crate) use config::BodyIkConfig;
 
+use crate::hooks;
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&CHARACTER_UPDATE_PASS_FINALIZE_POSE_PARALLEL_BINDER)
@@ -161,7 +163,7 @@ unsafe fn capture_anchors_and_queue_body_ik(character: *mut Character) {
         if !cfg.enabled
             || !headpose::is_active()
             || headpose::anchor().is_none()
-            || !crate::hooks::in_gameplay()
+            || !hooks::in_gameplay()
         {
             return;
         }
@@ -376,7 +378,7 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         // solve *and* after CalculateModelSpacePose, so a capture here would read the IK-solved head
         // and chase the very target HIK pulls it toward (the feedback loop). This hook only consumes
         // the published anchors and applies the head override on top of the solved pose.
-        let hide_scale = crate::config::Config::lock_query(|c| c.camera.hide_head_scale);
+        let hide_scale = Config::lock_query(|c| c.camera.hide_head_scale);
         let scale = 0.001;
         let mut joint = Joint::default();
         animation_controller.GetJoint(head_index, &mut joint);
@@ -403,7 +405,7 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         // "set the exact head orientation" — identical to the no-IK case — with HIK's spine/neck
         // bend sitting underneath it. When body_ik is off the pre-IK and post-IK orientations match,
         // so the fallback to the freshly read orientation preserves the flatscreen path exactly.
-        let body_ik_enabled = crate::config::Config::lock_query(|c| c.body_ik.enabled);
+        let body_ik_enabled = Config::lock_query(|c| c.body_ik.enabled);
         let pre_ik = body_ik_enabled
             .then(|| {
                 PRE_IK_POSE
@@ -420,7 +422,7 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         // Only drive the head/neck from the headpose while gameplay owns the character. Outside
         // E_GAME_RUN the engine repositions Rico for a teleport (issue #27), so the mod stops driving
         // his pose and lets the animation/engine place him; the head-hide above still applies.
-        let in_gameplay = crate::hooks::in_gameplay();
+        let in_gameplay = hooks::in_gameplay();
 
         // Only override the pose once a valid anchor exists; until then (loading screens, garbage
         // bone data) the bone keeps its animated pose and only the legacy scale-hide applies.

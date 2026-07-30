@@ -25,7 +25,10 @@ use jc3gi::graphics_engine::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::{config::Config, hooks::graphics_engine::reconstruction};
+use crate::{
+    config::Config, debug::pipeline_probes::record_main_color_mean,
+    hooks::graphics_engine::reconstruction,
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new().with_static_binder(&ATMOSPHERIC_SCATTERING_DRAW_BINDER)
@@ -55,7 +58,7 @@ fn atmospheric_scattering_draw(
         unsafe { rc.as_ref() }.is_some_and(|r| r.m_ActiveRenderPass == SCENE_COMPOSITE_PASS);
     if scene_pass {
         crate::debug::pipeline_probes::record_global_constants("scene");
-        crate::debug::pipeline_probes::record_main_color_mean("pre_atmosphere");
+        record_main_color_mean("pre_atmosphere");
     }
 
     // SAFETY: `rc` is the live render context for this dispatch; the caller (the engine's draw
@@ -68,7 +71,7 @@ fn atmospheric_scattering_draw(
     }
 
     if scene_pass {
-        crate::debug::pipeline_probes::record_main_color_mean("post_atmosphere");
+        record_main_color_mean("post_atmosphere");
     }
 }
 

@@ -7,6 +7,7 @@
 //! re-issue that has to submit each eye separately.
 
 use super::*;
+use crate::vr::render_params;
 
 /// The stereo constant buffer's register slot (`b13`, free across the game's vertex shaders) and its
 /// size in float4 rows (five per eye: four view-projection rows then the camera position, two eyes).
@@ -146,7 +147,7 @@ fn compute_dual_eye_rows(engine: &RenderEngine) -> Option<[Vector4; STEREO_CB_TO
     let mut forwards = [glam::Vec3::ZERO; 2];
     let mut m_eyes = [glam::Mat4::IDENTITY; 2];
     for eye in 0..2 {
-        let params = crate::vr::render_params(eye)?;
+        let params = render_params(eye)?;
 
         let mut eye_world = center_world;
         eye_world.w_axis += params.world_offset.extend(0.0);
@@ -198,7 +199,7 @@ fn compute_dual_eye_rows(engine: &RenderEngine) -> Option<[Vector4; STEREO_CB_TO
     // Diagnostic (rate-limited): the angle between the two eyes' forward vectors. A stereo pair should
     // diverge only by the display cant (a few degrees on the Index) -- a large value means a per-eye
     // matrix bug rather than the canted-runtime views that merely look divergent on a flat capture.
-    if let (Some(p0), Some(p1)) = (crate::vr::render_params(0), crate::vr::render_params(1)) {
+    if let (Some(p0), Some(p1)) = (render_params(0), render_params(1)) {
         let diverge = forwards[0]
             .dot(forwards[1])
             .clamp(-1.0, 1.0)

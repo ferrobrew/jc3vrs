@@ -20,6 +20,8 @@ use std::{
 use parking_lot::Mutex;
 use puffin::{FrameData, FrameSinkId, GlobalProfiler};
 
+use crate::profiler::apply_scopes_on;
+
 /// The default capture duration, in seconds (~450 frames at 90 Hz).
 pub const DEFAULT_CAPTURE_SECS: f32 = 5.0;
 
@@ -82,7 +84,7 @@ pub fn start(duration_secs: f32) -> bool {
         duration_secs,
     });
     RECORDING.store(true, Ordering::Relaxed);
-    crate::profiler::apply_scopes_on();
+    apply_scopes_on();
     tracing::info!("profiler: capturing {duration_secs:.1}s of frames");
     true
 }
@@ -124,7 +126,7 @@ fn finish() {
         return;
     };
     RECORDING.store(false, Ordering::Relaxed);
-    crate::profiler::apply_scopes_on();
+    apply_scopes_on();
 
     GlobalProfiler::lock().remove_sink(state.sink_id);
 

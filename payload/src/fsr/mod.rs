@@ -33,6 +33,8 @@ use windows::{
     core::Interface,
 };
 
+use crate::{config::Config, stereo::STEREO_STATE};
+
 /// Per-eye FSR state, recreated together when the render size changes.
 struct EyeState {
     context: Context,
@@ -107,24 +109,20 @@ pub fn dispatch_eye(
     let output_res: ID3D11Resource = eye_state.output.cast().expect("texture is a resource");
 
     // Snapshot the MV settings.
-    let (mv_enabled, mv_sign, mv_correction, mv_jitter_cancel) =
-        crate::config::Config::lock_query(|c| {
-            (
-                c.fsr.motion_vectors,
-                c.fsr.mv_sign,
-                c.fsr.mv_stereo_correction && c.stereo.cameras,
-                c.fsr.mv_jitter_cancel,
-            )
-        });
+    let (mv_enabled, mv_sign, mv_correction, mv_jitter_cancel) = Config::lock_query(|c| {
+        (
+            c.fsr.motion_vectors,
+            c.fsr.mv_sign,
+            c.fsr.mv_stereo_correction && c.stereo.cameras,
+            c.fsr.mv_jitter_cancel,
+        )
+    });
 
     // The stereo motion-vector correction's reprojection matrices for this eye (None outside stereo
     // disparity, or until a full frame of view-projection history exists -- the decode then runs
     // uncorrected, which is the correct no-op).
     let reprojection = if mv_correction && crate::stereo::active() {
-        crate::stereo::STEREO_STATE
-            .lock()
-            .vp_history
-            .reprojection_matrices(eye)
+        STEREO_STATE.lock().vp_history.reprojection_matrices(eye)
     } else {
         None
     };
@@ -137,7 +135,7 @@ pub fn dispatch_eye(
     // history-validation verdicts over steep depth gradients (region-scale one-frame pops at the
     // Halton cadence).
     let jitter_uv = if mv_jitter_cancel {
-        let state = crate::stereo::STEREO_STATE.lock();
+        let state = STEREO_STATE.lock();
         let (jc, jp) = (
             state.vp_history.cur_jitter_uv,
             state.vp_history.prev_jitter_uv,
@@ -331,8 +329,7 @@ pub fn current_jitter(render_width: u32, render_height: u32) -> Option<(f32, f32
     if render_width == 0 || render_height == 0 {
         return None;
     }
-    let (enabled, scale) =
-        crate::config::Config::lock_query(|c| (c.fsr.jitter, c.fsr.jitter_scale));
+    let (enabled, scale) = Config::lock_query(|c| (c.fsr.jitter, c.fsr.jitter_scale));
     if !enabled {
         return None;
     }
@@ -361,7 +358,7 @@ pub fn current_jitter(render_width: u32, render_height: u32) -> Option<(f32, f32
 /// vector carries it as a constant per-frame offset.
 pub fn current_camera_jitter_ndc(render_width: u32, render_height: u32) -> Option<(f32, f32)> {
     let (jx, jy) = current_jitter(render_width, render_height)?;
-    let (sign_x, sign_y) = crate::config::Config::lock_query(|c| c.fsr.jitter_sign);
+    let (sign_x, sign_y) = Config::lock_query(|c| c.fsr.jitter_sign);
     Some((
         sign_x * 2.0 * jx / render_width as f32,
         sign_y * -2.0 * jy / render_height as f32,

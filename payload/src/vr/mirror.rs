@@ -76,7 +76,7 @@ use windows::{
     core::Interface as _,
 };
 
-use crate::{ui::render::EGUI_DEBUG_RENDER_STATE, vr::config::MirrorFraming};
+use crate::{config::Config, ui::render::EGUI_DEBUG_RENDER_STATE, vr::config::MirrorFraming};
 
 /// The committed, precompiled shaders shared with the capture composite: the fullscreen-triangle
 /// vertex shader and the plain-sample (no gamma) pixel shader. See the module gamma note.
@@ -180,8 +180,7 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
     let (src_w, src_h) = unsafe { texture_size(&eye_texture) };
     let window_size = crate::vr::window::client_size()
         .context("vr: the game window client rect is unavailable")?;
-    let (framing, zoom) =
-        crate::config::Config::lock_query(|c| (c.vr.mirror_framing, c.vr.mirror_zoom));
+    let (framing, zoom) = Config::lock_query(|c| (c.vr.mirror_framing, c.vr.mirror_zoom));
     let viewport = mirror_viewport(
         AspectSize {
             width: src_w,
@@ -225,7 +224,7 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
         // alpha-blended overlay. Never `EguiState::render` (a second egui pass that mutates shared
         // state), so this is safe from the deferred frame tail's thread as well as inline.
         if !crate::capture::is_active() {
-            let panel = crate::config::Config::lock_query(|c| c.hud.egui_panel);
+            let panel = Config::lock_query(|c| c.hud.egui_panel);
             if panel.enabled {
                 // With `show_on_mirror` off, the panel stays in the headset only, leaving the desktop
                 // mirror showing the unobstructed scene.

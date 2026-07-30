@@ -24,11 +24,14 @@ use jc3gi::graphics_engine::{device::Device, texture::Texture};
 use parking_lot::Mutex;
 use windows::Win32::Graphics::Direct3D11::{ID3D11DeviceContext, ID3D11ShaderResourceView};
 
-use crate::hud::{
-    config::EguiPanelConfig,
-    cursor::CursorFrame,
-    quad::{HudQuad, PanelParams, compute_cursor_corners, compute_world_corners},
-    target::HudTarget,
+use crate::{
+    config::Config,
+    hud::{
+        config::EguiPanelConfig,
+        cursor::CursorFrame,
+        quad::{HudQuad, PanelParams, compute_cursor_corners, compute_world_corners},
+        target::HudTarget,
+    },
 };
 
 /// The panel pipeline and per-frame cache. Locked briefly on the render thread (and, for the SRV
@@ -50,14 +53,13 @@ static WAS_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// slot (a separate lock, published per frame precisely so draw-thread hooks can read it), not the
 /// runtime lock.
 pub(crate) fn is_active() -> bool {
-    crate::config::Config::lock_query(|c| c.hud.egui_panel.enabled)
-        && crate::vr::render_params(0).is_some()
+    Config::lock_query(|c| c.hud.egui_panel.enabled) && crate::vr::render_params(0).is_some()
 }
 
 /// The panel texture size when the panel is active, or `None` otherwise. The egui layout is sized to
 /// this ([`crate::egui_impl::EguiState::set_panel_mode`]) and the pointer maps into it.
 pub(crate) fn active_size() -> Option<(u32, u32)> {
-    is_active().then(|| crate::config::Config::lock_query(|c| c.hud.egui_panel.resolution))
+    is_active().then(|| Config::lock_query(|c| c.hud.egui_panel.resolution))
 }
 
 /// A clone of the panel texture's shader-resource view for the desktop mirror composite, or `None`
@@ -89,7 +91,7 @@ pub(crate) fn draw_quad(
         return;
     }
     WAS_ACTIVE.store(true, Ordering::Relaxed);
-    let cfg = crate::config::Config::lock_query(|c| c.hud);
+    let cfg = Config::lock_query(|c| c.hud);
     let mut panel = EGUI_PANEL.lock();
     if eye == 0 {
         panel.prepare(context, device, &cfg.egui_panel, &cfg.cursor);

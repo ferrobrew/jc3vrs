@@ -28,6 +28,12 @@ use crate::{
 pub(crate) mod config;
 pub(crate) use config::CameraConfig;
 
+use crate::{
+    fsr::apply_jitter_to_projection,
+    headpose::{anchor, is_active, query, query_prev},
+    hooks::in_gameplay,
+};
+
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&CAMERA_UPDATE_RENDER_BINDER)
@@ -154,8 +160,8 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
                 && let Some(mc) = ge.m_MainColorBuffer.as_ref()
             {
                 let (w, h) = (u32::from(mc.m_Width), u32::from(mc.m_Height));
-                crate::fsr::apply_jitter_to_projection(&mut camera.m_Projection, w, h);
-                crate::fsr::apply_jitter_to_projection(&mut camera.m_ProjectionF, w, h);
+                apply_jitter_to_projection(&mut camera.m_Projection, w, h);
+                apply_jitter_to_projection(&mut camera.m_ProjectionF, w, h);
                 // Publish the UV-space shift this jitter applies to every projected position, for
                 // the motion-vector jitter cancellation (the velocity pass measures curUV under the
                 // jittered projection, so every vector carries this shift as a constant offset).
@@ -321,15 +327,14 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
             // head-tracking for the *view* is applied to the render camera copy in `setup_render_camera`
             // (which the streaming system does not read); absolute placement resumes and the
             // auto-recenter re-bases onto Rico's updated head once gameplay returns.
-            if !crate::hooks::in_gameplay() {
+            if !in_gameplay() {
                 CAMERA_UPDATE_RENDER.get().unwrap().call(camera, dt, dtf);
                 return;
             }
 
             // The headpose path needs a valid anchor; until one exists (loading screens), fall
             // back to the translation-only bone-derived placement below.
-            let headpose_active =
-                crate::headpose::is_active() && crate::headpose::anchor().is_some();
+            let headpose_active = is_active() && anchor().is_some();
 
             if headpose_active {
                 // Both position and orientation come from the tick-spaced pose pair, so the
@@ -337,8 +342,8 @@ fn camera_update_render(camera: *mut Camera, dt: f32, dtf: f32) {
                 // (`GetSafeBoneMatrix`) only carry the finalized sim-rate pose, and placing T0/T1
                 // from them stepped the camera at the tick rate even though the mesh itself
                 // interpolates via the skinning-palette pose pair.
-                let cur = crate::headpose::query();
-                let prev = crate::headpose::query_prev();
+                let cur = query();
+                let prev = query_prev();
                 let character_t1_matrix = glam::Mat4::from(local_character.m_WorldMatrixT1);
                 write_camera_transform(
                     &mut camera.m_TransformT1,
@@ -450,7 +455,7 @@ fn write_camera_transform(target: &mut Matrix4, orientation: glam::Quat, positio
 /// `setup_render_camera`) and the floating panel's world-lock in `crate::hud`, so the render camera and
 /// the panel always agree on when it is active and hand off together.
 pub fn vr_loading_view_active() -> bool {
-    !crate::hooks::in_gameplay()
+    !in_gameplay()
         && crate::headpose::source() == crate::headpose::Source::Vr
         && LOADING_BASE.lock().is_some()
 }
@@ -533,14 +538,14 @@ fn game_camera_manager_get_camera_matrix(manager: *const GameCameraManager, matr
         .get()
         .unwrap()
         .call(manager, matrix);
-    if !crate::headpose::is_active() {
+    if !is_active() {
         return;
     }
     // Outside gameplay the render-phase hooks stop absolute placement and `LAST_CAMERA_WORLD` holds
     // the last gameplay pose, which no longer matches where the engine has moved its camera for the
     // teleport. Feeding that stale pose to the sim-phase readers would desync them from the engine's
     // own camera during the transition, so let the engine's value pass through (issue #27).
-    if !crate::hooks::in_gameplay() {
+    if !in_gameplay() {
         return;
     }
     if let Some(data) = *LAST_CAMERA_WORLD.lock()
@@ -606,7 +611,7 @@ fn camera_tree_update_render_contexts(
         // its teleport can move the camera to the destination and stream the world from it. Absolute
         // placement stops entirely here; the player's head-tracking for the view is applied to the
         // render camera copy in `setup_render_camera`, which does not touch these contexts.
-        if !crate::hooks::in_gameplay() {
+        if !in_gameplay() {
             return;
         }
 
@@ -620,11 +625,11 @@ fn camera_tree_update_render_contexts(
         // The previous contexts get the previous-tick headpose placement and the next contexts
         // the current one, mirroring the T0/T1 pair in `camera_update_render`; without the
         // headpose (or before a valid anchor exists), the bone-derived positions apply.
-        let headpose_active = crate::headpose::is_active() && crate::headpose::anchor().is_some();
+        let headpose_active = is_active() && anchor().is_some();
         let (previous_position, next_position, previous_orientation, next_orientation) =
             if headpose_active {
-                let cur = crate::headpose::query();
-                let prev = crate::headpose::query_prev();
+                let cur = query();
+                let prev = query_prev();
                 (
                     camera_position(&prev, character_t0_matrix, &camera_settings),
                     camera_position(&cur, character_t1_matrix, &camera_settings),

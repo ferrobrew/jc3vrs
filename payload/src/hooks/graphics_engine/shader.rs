@@ -37,7 +37,11 @@ use jc3gi::graphics_engine::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::{config::Config, hooks::graphics_engine::ss_decal, stereo::single_pass::VsTransform};
+use crate::{
+    config::Config,
+    hooks::graphics_engine::ss_decal,
+    stereo::single_pass::{VsTransform, is_terrain_shadow_pass, set_patch_pending, terrain_active},
+};
 
 /// The 16-byte `dp2` immediate `l(12.9898, 78.233, 0, 0)` -- the screen-pixel PCF rotation seed. The
 /// first eight bytes are the two multiplier constants; zeroing them makes the dot product (and thus
@@ -194,10 +198,10 @@ fn create_vertex_program(
     // so `BOUND_VS_PATCHED` stays false and its draw is never doubled -- it renders in one eye.
     if saved.is_some() {
         crate::stereo::single_pass::ensure_viewport_detours();
-        crate::stereo::single_pass::set_patch_pending(true, name.as_deref());
+        set_patch_pending(true, name.as_deref());
     }
     let result = CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params);
-    crate::stereo::single_pass::set_patch_pending(false, None);
+    set_patch_pending(false, None);
 
     if let Some((original_code, original_size, _copy)) = saved
         && let Some(p) = unsafe { params.as_mut() }
@@ -292,7 +296,7 @@ fn create_fragment_program(
 #[detour(address = jc3gi::graphics_engine::draw::CreateHullProgram_ADDRESS)]
 fn create_hull_program(device: *mut c_void, params: *mut CreateHullProgramParams) -> *mut c_void {
     let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
-    if crate::stereo::single_pass::terrain_active()
+    if terrain_active()
         && let Some(p) = unsafe { params.as_mut() }
         && !p.m_Code.is_null()
         && p.m_Size >= 4
@@ -300,7 +304,7 @@ fn create_hull_program(device: *mut c_void, params: *mut CreateHullProgramParams
         let name = program_name(p.m_Name);
         // Skip shadow-pass terrain: it renders from the light's view, so eye-forwarding its lane feeds
         // a shadow-atlas draw an eye it must not have.
-        if !crate::stereo::single_pass::is_terrain_shadow_pass(name.as_deref()) {
+        if !is_terrain_shadow_pass(name.as_deref()) {
             let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
             if let Ok(blob) = dxbc_stereo::forward_eye_hull_shader(code) {
                 let len = blob.len() as u64;
@@ -335,7 +339,7 @@ fn create_domain_program(
     params: *mut CreateDomainProgramParams,
 ) -> *mut c_void {
     let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
-    if crate::stereo::single_pass::terrain_active()
+    if terrain_active()
         && let Some(p) = unsafe { params.as_mut() }
         && !p.m_Code.is_null()
         && p.m_Size >= 4
@@ -343,7 +347,7 @@ fn create_domain_program(
         let name = program_name(p.m_Name);
         // Skip shadow-pass terrain: reprojecting a shadow-atlas draw by the eye M_eye (and routing it to
         // a per-eye viewport that does not exist in the shadow pass) corrupts the shadow map.
-        if !crate::stereo::single_pass::is_terrain_shadow_pass(name.as_deref()) {
+        if !is_terrain_shadow_pass(name.as_deref()) {
             let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
             if let Ok(blob) = dxbc_stereo::reproject_domain_shader(code) {
                 let len = blob.len() as u64;

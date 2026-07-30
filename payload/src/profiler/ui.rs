@@ -1,12 +1,15 @@
 //! The profiler's Performance-tab UI: a collapsible holding the enable toggle, the trace-capture
 //! control, and — when scope collection is on — puffin's live flame graph.
 
-use crate::profiler::capture::{self, DEFAULT_CAPTURE_SECS};
+use crate::profiler::{
+    capture::{self, DEFAULT_CAPTURE_SECS},
+    ui_enabled,
+};
 
 /// Renders the profiler section, as a collapsible under the existing Performance readout.
 pub fn egui_profiler(ui: &mut egui::Ui) {
     ui.collapsing("Profiler (issue #34)", |ui| {
-        let mut enabled = crate::profiler::ui_enabled();
+        let mut enabled = ui_enabled();
         if ui
             .checkbox(&mut enabled, "Collect scopes (live flame graph)")
             .on_hover_text(
@@ -50,7 +53,7 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
         gpu_summary(ui);
         block_counts(ui);
 
-        if crate::profiler::ui_enabled() {
+        if ui_enabled() {
             ui.separator();
             puffin_egui::profiler_ui(ui);
         } else if capture::is_recording() {

@@ -74,7 +74,7 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::{config::Config, vr::render_params};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new().with_static_binder(&SS_DECAL_DRAW_BINDER)
@@ -297,7 +297,7 @@ unsafe fn stage(ctx: *mut HContext_t, register: u32, data: &[f32], rows: u32) {
 /// Both eyes' reconstruction bases, or `None` when no VR frame is in flight (flatscreen, or a frame
 /// the runtime asked to skip) and there is therefore no per-eye projection to build them from.
 fn eye_bases(view: &Matrix4) -> Option<[[f32; 16]; 2]> {
-    let params = [crate::vr::render_params(0)?, crate::vr::render_params(1)?];
+    let params = [render_params(0)?, render_params(1)?];
     // `m_ProjectionF` carries the reverse-Z remap `SetupRenderCamera` applies, so the per-eye stand-in
     // for it is the reverse-Z off-axis matrix, not the standard-depth one.
     Some(params.map(|p| reconstruction_basis(view, &p.projection_reverse_z)))

@@ -41,7 +41,7 @@ use windows::{
 
 use crate::{
     ui::render::EGUI_DEBUG_RENDER_STATE,
-    vr::{FrameContext, VrConfig, config::BlitGamma},
+    vr::{EyeImage, FrameContext, VrConfig, config::BlitGamma},
 };
 
 /// The committed, precompiled blit shaders. The vertex shader is the shared fullscreen-triangle from
@@ -326,7 +326,7 @@ impl VrBlit {
         &mut self,
         device: &Device,
         context: &ID3D11DeviceContext,
-        image: &crate::vr::EyeImage,
+        image: &EyeImage,
         src: &ID3D11Texture2D,
     ) -> anyhow::Result<()> {
         // Wrap the runtime-owned swapchain texture borrowed (no AddRef); do not release it.
@@ -373,7 +373,7 @@ impl VrBlit {
         &mut self,
         device: &Device,
         swapchain_tex: &ID3D11Texture2D,
-        image: &crate::vr::EyeImage,
+        image: &EyeImage,
     ) -> anyhow::Result<ID3D11RenderTargetView> {
         let key = (image.texture as usize, image.array_index);
         if let Some((_, _, rtv)) = self

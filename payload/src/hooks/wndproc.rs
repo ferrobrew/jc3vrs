@@ -13,7 +13,7 @@ use windows::Win32::{
     },
 };
 
-use crate::{hooks::graphics_engine::shader, hud::cursor};
+use crate::{config::CONFIG, egui_impl::EguiState, hooks::graphics_engine::shader, hud::cursor};
 
 /// Whether F10 toggles the fullscreen stereo capture mode. Off for now: the capture window's
 /// fullscreen toggle is finicky under some setups. The F12 screenshot path covers diagnosis meanwhile.
@@ -49,7 +49,7 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if !previous_down {
             // Release egui's input capture if held, so the game retains input while the overlay is
             // hidden.
-            if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut()
+            if let Some(egui_state) = EguiState::get().as_mut()
                 && egui_state.is_input_captured()
             {
                 egui_state.toggle_game_input_capture();
@@ -82,11 +82,11 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         let previous_down = (lparam.0 & 0x4000_0000) != 0;
         if !previous_down {
             let enabled = {
-                let mut cfg = crate::config::CONFIG.lock();
+                let mut cfg = CONFIG.lock();
                 cfg.hud.egui_panel.enabled = !cfg.hud.egui_panel.enabled;
                 cfg.hud.egui_panel.enabled
             };
-            if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut()
+            if let Some(egui_state) = EguiState::get().as_mut()
                 && egui_state.is_input_captured() != enabled
             {
                 egui_state.toggle_game_input_capture();
@@ -106,7 +106,7 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         let previous_down = (lparam.0 & 0x4000_0000) != 0;
         if !previous_down {
             let now_on = {
-                let mut cfg = crate::config::CONFIG.lock();
+                let mut cfg = CONFIG.lock();
                 cfg.stereo.patch_shadow_pcf_hash = !cfg.stereo.patch_shadow_pcf_hash;
                 cfg.stereo.patch_shadow_pcf_hash
             };
@@ -163,7 +163,7 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         cursor::set_mouse_pos((x, y));
     }
 
-    if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {
+    if let Some(egui_state) = EguiState::get().as_mut() {
         egui_state.wndproc(hwnd, msg, wparam, lparam);
     }
     WNDPROC.get().unwrap().call(hwnd, msg, wparam, lparam)

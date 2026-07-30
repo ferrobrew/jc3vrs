@@ -36,6 +36,8 @@ pub mod xr;
 
 pub use config::HeadPoseConfig;
 
+use crate::config::Config;
+
 /// Which source currently owns the published headpose. The flatscreen [`sim`] and the VR [`xr`]
 /// source are mutually exclusive publishers; the arbiter is a plain atomic so the sim's per-tick
 /// gate and [`set_anchors`] can read it without taking the runtime lock (the VR frame loop holds the
@@ -143,7 +145,7 @@ pub fn set_anchors(anchors: Anchors) {
     {
         return;
     }
-    let offset = crate::config::Config::lock_query(|c| c.headpose.position_offset);
+    let offset = Config::lock_query(|c| c.headpose.position_offset);
     let mut s = state().lock();
     let previous_anchor = s.anchor;
     s.anchor = Some(anchors.head);
@@ -219,7 +221,7 @@ pub fn body_yaw_target() -> Option<Vec3> {
 
 /// Whether headpose-driven head control is enabled.
 pub fn is_active() -> bool {
-    crate::config::Config::lock_query(|c| c.headpose.enabled)
+    Config::lock_query(|c| c.headpose.enabled)
 }
 
 #[derive(Default)]

@@ -51,7 +51,7 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::{config::Config, vr::cull_projection_standard};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -140,7 +140,7 @@ fn is_active_camera(camera: *const Camera) -> bool {
 /// Returns `None` on flatscreen (no cull projection published) or if the camera is null. The caller is
 /// responsible for restoring the saved value when a temporary widen is needed.
 fn stamp_union_projection(camera: *const Camera) -> Option<Matrix4> {
-    let cull = crate::vr::cull_projection_standard()?;
+    let cull = cull_projection_standard()?;
     // SAFETY: `camera` is the live active camera the engine passes by const reference; the projection
     // field is written and the previous value returned for restoration.
     let cam = unsafe { (camera as *mut Camera).as_mut()? };
@@ -191,7 +191,7 @@ fn terrain_patch_system_update(handle: *mut STerrainPatchSystem, ctx: *mut c_voi
     if !Config::lock_query(|c| c.stereo.widen_terrain_cull) {
         return;
     }
-    let Some(cull) = crate::vr::cull_projection_standard() else {
+    let Some(cull) = cull_projection_standard() else {
         return;
     };
     // SAFETY: the original just populated the patch system; `m_TerrainCamera` is a fresh copy of the
@@ -235,7 +235,7 @@ fn camera_update_frustum(this: *mut Camera, transform: *const Matrix4) {
     if !Config::lock_query(|c| c.stereo.widen_model_cull) {
         return;
     }
-    let Some(union) = crate::vr::cull_projection_standard() else {
+    let Some(union) = cull_projection_standard() else {
         return;
     };
     // Scope the widen to the active camera -- other cameras (terrain, reflection, shadow) rebuild their

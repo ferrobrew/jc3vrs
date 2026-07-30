@@ -51,7 +51,7 @@ use jc3gi::{
 };
 use parking_lot::Mutex;
 
-use crate::config::Config;
+use crate::{config::Config, vr::back_buffer};
 
 /// How many frames to wait for a requested deferred resize to be serviced before treating it as a
 /// fault. A resize is serviced in the very next `Draw` prologue, so this is a generous ceiling that
@@ -186,7 +186,7 @@ pub fn apply_native_resolution() {
     // render setups the substitution swaps (and, on release, what puts the engine's own back). So a
     // toggle at an unchanged size still issues a resize -- otherwise flipping `vr.own_back_buffer`
     // mid-session would appear to do nothing until the next resolution change.
-    let ownership_change = want_owned != crate::vr::back_buffer::owned();
+    let ownership_change = want_owned != back_buffer::owned();
     if (desired == current && !ownership_change) || st.pending.is_some() {
         return;
     }
@@ -196,9 +196,9 @@ pub fn apply_native_resolution() {
     // rebuilds the engine's own objects, so the engine is never left bound to a texture the mod is
     // about to free.
     if want_owned {
-        crate::vr::back_buffer::enable();
+        back_buffer::enable();
     } else {
-        crate::vr::back_buffer::disable();
+        back_buffer::disable();
     }
 
     issue_resize(&mut st, ge, current, desired);
@@ -217,7 +217,7 @@ fn on_shutdown() {
     // path: the engine frees the substitutes it allocated and rebuilds its own alias and render
     // setups over the live swapchain. Clearing it afterwards would leave the engine bound to a
     // texture we are about to free (see `crate::vr::back_buffer`).
-    crate::vr::back_buffer::disable();
+    back_buffer::disable();
 
     restore_display_size();
 
@@ -232,7 +232,7 @@ fn on_shutdown() {
         // SAFETY: ownership is cleared; the release checks for itself whether the engine still holds
         // the substitutes.
         if let Some(ge) = unsafe { GraphicsEngine::get() } {
-            unsafe { crate::vr::back_buffer::release_backing_texture(ge) };
+            unsafe { back_buffer::release_backing_texture(ge) };
         }
     }
 }
@@ -270,7 +270,7 @@ fn restore_display_size() {
     let Some(ge) = (unsafe { GraphicsEngine::get() }) else {
         // No engine to resize means no way to rebuild its aliases either: if a substitution is still
         // installed, it is about to become permanent (see `back_buffer::release_backing_texture`).
-        if crate::vr::back_buffer::installed() {
+        if back_buffer::installed() {
             tracing::error!(
                 target: "vr",
                 "native resolution: shutdown restore found no graphics engine while a back-buffer \
@@ -281,7 +281,7 @@ fn restore_display_size() {
         return;
     };
     if !ge.m_HasBeenInitialized {
-        if crate::vr::back_buffer::installed() {
+        if back_buffer::installed() {
             tracing::error!(
                 target: "vr",
                 "native resolution: shutdown restore found an uninitialized graphics engine while a \
@@ -293,7 +293,7 @@ fn restore_display_size() {
     }
     let current = {
         let Some(device) = (unsafe { ge.m_Device.as_ref() }) else {
-            if crate::vr::back_buffer::installed() {
+            if back_buffer::installed() {
                 tracing::error!(
                     target: "vr",
                     "native resolution: shutdown restore found no graphics device while a back-buffer \
@@ -314,7 +314,7 @@ fn restore_display_size() {
     // -- it is not being issued to change the size, but to make the engine rebuild its own aliases and
     // hand the swapchain back. Skipping it because "nothing to resize" is exactly what leaves the
     // substitution installed after the DLL unloads.
-    let force_for_installed_substitution = crate::vr::back_buffer::installed();
+    let force_for_installed_substitution = back_buffer::installed();
     if current == original && !force_for_installed_substitution {
         return;
     }

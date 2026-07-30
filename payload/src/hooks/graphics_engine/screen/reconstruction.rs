@@ -64,6 +64,7 @@ use crate::{
     config::Config,
     debug::trace::{TraceEvent, TraceState},
     stereo::engine_context::EngineContext,
+    vr::render_params,
 };
 
 pub(super) fn hook_library() -> HookLibrary {
@@ -298,7 +299,7 @@ pub(super) fn split_fullscreen_pass_policy(
     let Some(ctx) = ctx else {
         return SplitOutcome::NotTaken;
     };
-    if crate::vr::render_params(1).is_none() {
+    if render_params(1).is_none() {
         return SplitOutcome::NotTaken;
     }
 
@@ -439,7 +440,7 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<Matrix4> {
     // disagree with.
     let enabled = toggle || half.is_some();
     let eye = half.map_or_else(crate::stereo::draw_index, |state| state.eye);
-    let params = crate::vr::render_params(eye);
+    let params = render_params(eye);
     // Recognize the main-view depth passes by the engine's ACTUAL active-camera planes, the single
     // source of truth ([`crate::hooks::camera::main_camera_planes_or`]), not a hardcoded config value:
     // the engine writes a runtime far (~40 km) that differs from the constructor default the config

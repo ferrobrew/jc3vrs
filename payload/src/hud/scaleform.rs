@@ -19,7 +19,7 @@ use jc3gi::ui::{
 };
 use parking_lot::Mutex;
 
-use crate::hud::split::roots;
+use crate::{config::Config, hud::split::roots};
 
 /// A queued Scaleform debug operation. Queued from the UI thread, executed on the game thread.
 enum Request {
@@ -317,8 +317,7 @@ pub fn process_requests() {
     // handle registry; request the initial discovery when either wants it. While the partition
     // is live the registry must stay stable (a rebuild would tear the partition down for a
     // frame), so the periodic refresh only runs before the partition takes.
-    let handles_needed =
-        crate::config::Config::lock_query(|c| c.hud.split || c.hud.suppress_overlays);
+    let handles_needed = Config::lock_query(|c| c.hud.split || c.hud.suppress_overlays);
     let handles_live = CLIP_HANDLES.lock().is_some();
     if handles_needed
         && (!handles_live
@@ -417,7 +416,7 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
         // with the configured prefix applied. This is the ground truth for the split partition
         // and the overlay suppression (a suppressed clip that still shows means the effect lives
         // at a different path).
-        let prefix = crate::config::Config::lock_query(|c| c.hud.split_path_prefix);
+        let prefix = Config::lock_query(|c| c.hud.split_path_prefix);
         let prefix = prefix.as_str();
         tracing::info!("scaleform: split path probe (prefix {prefix:?})");
         let containers = LAYER_CONTAINERS.iter().flat_map(|layer| layer.iter());

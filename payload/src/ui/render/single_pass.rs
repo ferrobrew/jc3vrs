@@ -3,6 +3,7 @@
 
 use crate::{
     config,
+    far_field::FarFieldMode,
     hooks::graphics_engine::shader,
     stereo::single_pass::{self, Capability},
 };
@@ -46,8 +47,8 @@ pub(super) fn section(ui: &mut egui::Ui, cfg: &mut config::Config) {
             cfg.stereo.single_pass.occluder = on;
             cfg.stereo.single_pass.patch_dryrun = false;
             cfg.vr.native_resolution = on;
-            if on && cfg.far_field.mode == crate::far_field::FarFieldMode::Share {
-                cfg.far_field.mode = crate::far_field::FarFieldMode::Collect;
+            if on && cfg.far_field.mode == FarFieldMode::Share {
+                cfg.far_field.mode = FarFieldMode::Collect;
             }
             shader::request_reload();
         }
@@ -119,9 +120,9 @@ pub(super) fn section(ui: &mut egui::Ui, cfg: &mut config::Config) {
                 }
                 if collapse_changed
                     && cfg.stereo.single_pass.collapse
-                    && cfg.far_field.mode == crate::far_field::FarFieldMode::Share
+                    && cfg.far_field.mode == FarFieldMode::Share
                 {
-                    cfg.far_field.mode = crate::far_field::FarFieldMode::Collect;
+                    cfg.far_field.mode = FarFieldMode::Collect;
                 }
                 if ui
                     .checkbox(
