@@ -380,6 +380,13 @@ impl Foveation {
             context.PSSetShader(pixel_shader, None);
             context.PSSetConstantBuffers(0, Some(&[Some(self.params_cb.clone())]));
             context.RSSetState(&self.rasterizer);
+            // Opaque blend, explicitly: this raw pass otherwise inherits whatever blend state the
+            // engine's last block left on the context. An inherited additive/alpha state makes the
+            // fill *add* its full-screen reconstruction on top of the already-shaded scene instead
+            // of replacing the dropped pixels -- a whole-frame ~2x brightness step that latches for
+            // as long as the scene keeps handing this pass the same leftover state (the
+            // pose-latched global brightness flips).
+            context.OMSetBlendState(None, None, 0xFFFF_FFFF);
         }
     }
 
