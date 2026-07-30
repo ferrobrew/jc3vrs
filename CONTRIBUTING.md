@@ -83,6 +83,7 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - **Never** use title case in headings and titles. Always use sentence case.
 - Always use the Oxford comma.
 - Don't omit articles ("a", "an", "the"). Write "the file has a newer version" not "file has newer version".
+- Comments describe the present state. Reserve past-tense narration for the rare case where history explains a standing "why".
 
 ## Code style
 
@@ -122,25 +123,39 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - Do not introduce async to a project without async.
 - Use `tokio` for async runtime (multi-threaded).
 - Use async for I/O and concurrency, keep other code synchronous.
+- Use `parking_lot::Mutex` for synchronous locks (the default); its guard is non-poisoning and must never be held across an `.await`.
 
 ### Logging
 
 - Use `tracing` for diagnostic and operational logging throughout, emitting at meaningful points, not noisily.
 - Install the subscriber only in binaries, and send logs to stderr.
-- The CLI is an operator/diagnostic tool, so its output goes through `tracing` too — the user-facing interface is the web frontend. Reserve `stdout`/`println!` for genuine machine-readable command output if a command ever needs it.
+- The injector and tools are operator/diagnostic programs, so their output goes through `tracing` too — the user-facing surface is the game plus the in-game debug UI. Reserve `stdout`/`println!` for genuine machine-readable command output if a tool ever needs it.
 
 ### Module organization
 
 - Use `mod.rs` files to re-export public items.
-- Keep module boundaries strict with restricted visibility.
+- Keep module boundaries strict with restricted visibility, but prefer `pub(crate)` and `pub(super)` over `pub(in <path>)`. The `pub(in ...)` form scopes to a named ancestor, which is precise but reads as a smell; reach for it only when neither `pub(crate)` nor `pub(super)` expresses the intended scope.
 - Use `#[cfg(unix)]` and `#[cfg(windows)]` for conditional compilation.
 - **Always** import types or functions at the very top of the module, with the one exception being `cfg()`-gated functions. Never import types or modules within function contexts, other than this `cfg()`-gated exception.
 - It is okay to import enum variants for pattern matching, though.
+- When a path is used more than once in a module, import it at the top of the module (the specific items, not the module) rather than repeating the fully-qualified path at each call site. A path used only once may stay fully-qualified — unless it is unwieldy (more than three module segments deep), in which case import it regardless of use count. And when the module already imports a sibling from the same parent, import the new item alongside it rather than writing it inline.
+- **Always** anchor intra-crate paths at `crate::`, never `super::`. Write `crate::stereo::config::StereoConfig`, not `super::config::StereoConfig`. The one exception is a test module, where `use super::*;` (pulling the parent module into the `#[cfg(test)]` block) is the idiomatic form and stays.
 
 Within each module, organize code as follows:
 1. **Public API first** - all `pub` structs, enums, and functions at the top
 2. **Private implementation below** - constants, helper functions, and internal types
 3. **Order by use** - private items should appear in the order they're called/used by the public API (topological order)
+
+### Code organization
+
+- **Keep files under the size threshold.** Split a file into multiple files within a folder when it exceeds 1000 lines. Use `mod.rs` to re-export public items so consumers see a stable API. Existing oversized files are grandfathered: split them when a change touches them substantially, not in drive-by churn.
+- **Split by concern, not by size alone.** A file should be split along natural seams — distinct data types, feature groups, or functional areas — not arbitrarily at the line limit. A cohesive single-concern file that slightly exceeds the threshold is preferable to a fragmented one.
+- **Organize wide folders into subfolders.** When a folder accumulates many direct children, group them by domain or role. A flat folder of 20+ files is a signal that subfolders are needed.
+- **Test files follow the same threshold.** A long test file is split by concern group, with shared helpers in the test module's `mod.rs`.
+
+### Reaching through smart pointers
+
+- To borrow the value inside a lock guard, a `Box`, or an `Arc`, prefer `.as_ref()` / `.as_mut()` over a manual double-deref: write `state.lock().as_ref()`, not `&**state.lock()`. The named form reads as "borrow the value" rather than as deref bookkeeping. The same applies to an `Arc<dyn Trait>`: `model.as_ref()`, not `&**model`.
 
 ### Memory and performance
 
@@ -148,3 +163,16 @@ Within each module, organize code as follows:
 - Use `smol_str` for efficient small string storage.
 - Careful attention to cloning referencing. Avoid cloning if code has a natural tree structure.
 - Stream data (e.g. iterators) where possible rather than buffering.
+
+## Testing
+
+### Testing tools
+
+- **test-case**: For parameterized tests.
+- **proptest**: For property-based testing.
+- **pretty_assertions**: For better assertion output.
+
+### Testing conventions
+
+- Do not write a test that only exercises serde or a derive. A round-trip earns its place only when it guards a real wire: a versioned payload or a file format.
+- No personal names in fixtures. Anonymize every test to invented placeholders; do not seed one from any real person's name, handles, or details, even when live data reproduces the behavior under test — reproduce the *shape* of what you observed, never the actual content.
