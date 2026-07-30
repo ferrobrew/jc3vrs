@@ -149,9 +149,9 @@ fn tonemapping_apply(
     // MainColor still holds this dispatch's clean lit scene here (the post chain has not recycled
     // it), so this seam is the `pre_post` brightness bracket and feeds the armed brightness-step
     // auto-capture.
-    crate::debug::rt_hash::record_main_color_mean("pre_post");
+    crate::debug::pipeline_probes::record_main_color_mean("pre_post");
     if !is_second_eye() {
-        crate::debug::rt_hash::armed_brightness_probe();
+        crate::debug::pipeline_probes::armed_brightness_probe();
     }
     // The histogram reads the final HDR scene (MainColor) for auto-exposure, so this is the first
     // point in the post chain where MainColor still holds this dispatch's clean scene -- grab it for

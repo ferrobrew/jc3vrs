@@ -317,7 +317,7 @@ fn draw_clustered(
         }
     }
 
-    crate::debug::rt_hash::record_main_color_mean("post_resolve");
+    crate::debug::pipeline_probes::record_main_color_mean("post_resolve");
 }
 
 /// What one `run_draw_clustered` is asked to do.

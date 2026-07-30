@@ -108,7 +108,7 @@ fn render_block_post_effects_draw(this: *mut c_void, ctx: *mut c_void, info: *mu
     let skip = repeat && Config::lock_query(|c| c.stereo.dedupe_post_block);
     TraceState::record_eye(TraceEvent::PostEffectsBlockDraw { repeat, skip });
     if !repeat {
-        crate::debug::rt_hash::record_main_color_mean("post_block_entry");
+        crate::debug::pipeline_probes::record_main_color_mean("post_block_entry");
     }
     if skip {
         return 0;

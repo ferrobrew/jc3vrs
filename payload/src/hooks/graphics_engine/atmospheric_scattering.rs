@@ -55,8 +55,8 @@ fn atmospheric_scattering_draw(
     let scene_pass =
         unsafe { rc.as_ref() }.is_some_and(|r| r.m_ActiveRenderPass == SCENE_COMPOSITE_PASS);
     if scene_pass {
-        crate::debug::rt_hash::record_global_constants("scene");
-        crate::debug::rt_hash::record_main_color_mean("pre_atmosphere");
+        crate::debug::pipeline_probes::record_global_constants("scene");
+        crate::debug::pipeline_probes::record_main_color_mean("pre_atmosphere");
     }
 
     // SAFETY: `rc` is the live render context for this dispatch; the caller (the engine's draw
@@ -69,7 +69,7 @@ fn atmospheric_scattering_draw(
     }
 
     if scene_pass {
-        crate::debug::rt_hash::record_main_color_mean("post_atmosphere");
+        crate::debug::pipeline_probes::record_main_color_mean("post_atmosphere");
     }
 }
 

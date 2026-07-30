@@ -61,7 +61,7 @@ fn render_pass_draw(this: *mut RenderPass) {
     if !even_frame {
         return;
     }
-    crate::debug::rt_hash::record_pass_sweep_mean(format!("pass{id:#04x}"));
+    crate::debug::pipeline_probes::record_pass_sweep_mean(format!("pass{id:#04x}"));
 }
 
 /// The late-scene pass ids the sweep covers: `RP_SKY_GRADIENT` through `RP_PARTICLE_ONSCREEN`.

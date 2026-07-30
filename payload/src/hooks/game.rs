@@ -380,7 +380,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 });
                 if !far_phase {
                     crate::debug::rt_hash::hash_engine_rts();
-                    crate::debug::rt_hash::record_global_constants("frame_end");
+                    crate::debug::pipeline_probes::record_global_constants("frame_end");
                     crate::debug::camera::capture_render_camera(eye);
                 }
                 TraceState::record(TraceEvent::DrawEnd {
