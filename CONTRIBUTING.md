@@ -105,7 +105,9 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
   `clippy::too_many_arguments` threshold, bundle the cohesive parameters into a struct (a request
   struct, or a shared seam like `Engine { store, graph, clock }` that several call shapes pass
   along) rather than threading more positional arguments. **Never** silence the lint with
-  `#[allow(clippy::too_many_arguments)]`; the lint firing means a struct is wanted. Recognized
+  `#[allow(clippy::too_many_arguments)]`; the lint firing means a struct is wanted. The one
+  exception is a detour: its signature mirrors the hooked function's ABI and cannot be bundled, so
+  there the `allow` is the honest annotation. Recognized
   closed sets of values (relation labels, tags) likewise ride as enums, not bare strings.
 
 ### Error handling
