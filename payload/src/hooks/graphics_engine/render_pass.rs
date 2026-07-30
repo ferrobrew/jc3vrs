@@ -27,6 +27,7 @@ use crate::{
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
+        .with_static_binder(&RENDER_PASS_DRAW_BINDER)
         .with_static_binder(&SETUP_RENDER_FRAME_DATA_BINDER)
         .with_static_binder(&DO_DRAW_BINDER)
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
@@ -38,6 +39,33 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&COMMIT_RENDER_PASS_SETTINGS_BINDER)
         .with_static_binder(&SHADOW_MANAGER_UPDATE_RENDER_BINDER)
 }
+
+// RenderPass::Draw -- the per-pass draw entry. Under `stereo.diagnose_pass_sweep`, record the
+// MainColor mean after each late-scene pass (fog gradient through the particle/transparent tail),
+// so a global change walks itself to the pass that injects it. Eye 0, every 2nd frame, to bound
+// the readback stalls.
+#[detour(address = jc3gi::graphics_engine::render_pass::RenderPass::Draw_ADDRESS)]
+fn render_pass_draw(this: *mut RenderPass) {
+    RENDER_PASS_DRAW.get().unwrap().call(this);
+    if !crate::debug::trace::tracing_active() || crate::stereo::draw_index() != 0 {
+        return;
+    }
+    let Some(pass) = (unsafe { this.as_ref() }) else {
+        return;
+    };
+    let id = pass.m_Index;
+    if !SWEEP_PASS_RANGE.contains(&id) {
+        return;
+    }
+    let even_frame = TraceState::screenshot_target().is_some_and(|(_, frame)| frame % 2 == 0);
+    if !even_frame {
+        return;
+    }
+    crate::debug::rt_hash::record_pass_sweep_mean(format!("pass{id:#04x}"));
+}
+
+/// The late-scene pass ids the sweep covers: `RP_SKY_GRADIENT` through `RP_PARTICLE_ONSCREEN`.
+const SWEEP_PASS_RANGE: std::ops::RangeInclusive<i16> = 0x67..=0x95;
 
 // RenderPass::SetupRenderFrameData -- the per-batch list *build*: appends `count` render-block-items
 // to the active add-list. Runs on worker threads during the sim, not during our Draw calls, so the

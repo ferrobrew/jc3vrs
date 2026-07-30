@@ -145,6 +145,13 @@ fn generate_histogram(
     let eye1_gated = is_second_eye() && gate_exposure;
     let skip = skip_histogram || eye1_gated;
     TraceState::record_eye(TraceEvent::GenerateHistogram { skip });
+    // MainColor still holds this dispatch's clean lit scene here (the post chain has not recycled
+    // it), so this seam is the `pre_post` brightness bracket and feeds the armed brightness-step
+    // auto-capture.
+    crate::debug::rt_hash::record_main_color_mean("pre_post");
+    if !is_second_eye() {
+        crate::debug::rt_hash::armed_brightness_probe();
+    }
     // The histogram reads the final HDR scene (MainColor) for auto-exposure, so this is the first
     // point in the post chain where MainColor still holds this dispatch's clean scene -- grab it for
     // the per-eye "Scene" preview before the chain recycles it. Debug-only: gated on the Previews tab

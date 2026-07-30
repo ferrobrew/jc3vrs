@@ -430,6 +430,23 @@ pub struct StereoConfig {
     /// per-frame visual artifacts (e.g. the shadow flicker) the numeric trace cannot place spatially.
     /// Heavy (a full readback + PNG encode per frame); only meaningful during a manual trace.
     pub diagnose_rt_screenshots: bool,
+    /// Diagnostic: while tracing, record the MainColor mean at the fixed pipeline stage brackets
+    /// (after the deferred resolve, around the aerial-perspective composite, at the post block
+    /// entry, and at the post-chain start). Bracketing a global change between two stages names the
+    /// frame segment that injects it. Each sample drains the GPU, so traces run slower.
+    pub diagnose_main_color_means: bool,
+    /// Diagnostic: while tracing, record the MainColor mean after every late-scene render pass
+    /// (`0x67..=0x95`, eye 0, every 2nd frame) -- the per-pass ladder that walks a global change to
+    /// the pass that injects it. Much heavier than the stage brackets.
+    pub diagnose_pass_sweep: bool,
+    /// Diagnostic: while tracing, dump the render engine's FP/VP global constant staging blocks at
+    /// the scene composite and at frame end, for good-vs-bad frame diffing.
+    pub diagnose_global_constants: bool,
+    /// Automatically start a render trace when the raw-brightness histogram mid-point (the
+    /// auto-exposure divisor) jumps against its recent median -- the CPU-visible signature of the
+    /// latched global-brightness step, which lags the visual flip by only a few frames. Saves
+    /// having to time a manual capture to a spontaneous flip.
+    pub auto_trace_brightness_step: bool,
     /// Diagnostic: skip the SSAO pass on both eyes in stereo, to confirm whether SSAO drives the
     /// "stronger in one eye" darkening. (Equivalent to lowering the in-game AO setting, but toggleable
     /// live.)
@@ -771,6 +788,10 @@ impl StereoConfig {
             diagnose_stereo_draw_diff: false,
             diagnose_rt_hashes: false,
             diagnose_rt_screenshots: true,
+            diagnose_main_color_means: false,
+            diagnose_pass_sweep: false,
+            diagnose_global_constants: false,
+            auto_trace_brightness_step: false,
             disable_ssao: false,
             ssao_eye0_only: false,
             restore_cb_ring: false,

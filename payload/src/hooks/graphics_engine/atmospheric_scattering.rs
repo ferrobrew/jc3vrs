@@ -50,6 +50,15 @@ fn atmospheric_scattering_draw(
             .call(this, rc, info)
     };
 
+    // Pipeline diagnostics: the scene aerial-perspective composite (pass 102) is the reference
+    // point for the scene-time constant staging and the mid-scene brightness bracket.
+    let scene_pass =
+        unsafe { rc.as_ref() }.is_some_and(|r| r.m_ActiveRenderPass == SCENE_COMPOSITE_PASS);
+    if scene_pass {
+        crate::debug::rt_hash::record_global_constants("scene");
+        crate::debug::rt_hash::record_main_color_mean("pre_atmosphere");
+    }
+
     // SAFETY: `rc` is the live render context for this dispatch; the caller (the engine's draw
     // dispatch) guarantees it is valid for the duration of `Draw`.
     let ctx = unsafe { rc.as_ref() }.map(|rc| rc.m_Context);
@@ -58,4 +67,11 @@ fn atmospheric_scattering_draw(
     {
         call();
     }
+
+    if scene_pass {
+        crate::debug::rt_hash::record_main_color_mean("post_atmosphere");
+    }
 }
+
+/// The render-pass id the atmosphere block's scene aerial-perspective composite draws in.
+const SCENE_COMPOSITE_PASS: i32 = 102;

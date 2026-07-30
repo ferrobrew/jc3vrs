@@ -27,7 +27,7 @@ use crate::{
 };
 
 /// The frame count for the editable "Dump N frames" trace button, persisted across UI frames.
-static TRACE_FRAME_COUNT: AtomicI32 = AtomicI32::new(60);
+pub(crate) static TRACE_FRAME_COUNT: AtomicI32 = AtomicI32::new(60);
 
 pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
@@ -62,6 +62,22 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
             ui.label("(writes to traces/<stamp>/)");
         }
     });
+    ui.checkbox(
+        &mut cfg.stereo.auto_trace_brightness_step,
+        "Auto-capture a trace when the frame brightness steps (one-shot; disarms after firing)",
+    );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_main_color_means,
+        "Record MainColor means at the pipeline stage brackets (slower traces)",
+    );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_pass_sweep,
+        "Record MainColor means after every late-scene pass (per-pass ladder; much slower)",
+    );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_global_constants,
+        "Dump the FP/VP global constant staging into the trace (scene + frame end)",
+    );
     ui.checkbox(
         &mut cfg.stereo.diagnose_rt_hashes,
         "Hash engine RTs per eye into the trace (run with cameras off)",

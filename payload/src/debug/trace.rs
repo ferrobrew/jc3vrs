@@ -209,6 +209,27 @@ pub enum TraceEvent {
         pingpong: u32,
         forced: bool,
     },
+    /// The render engine's CPU staging copies of the global shader constant buffers: `fp` is the
+    /// 95-row fragment `GlobalConstants` block (lighting, wetness, shadow, per-view camera rows),
+    /// `vp` the 49-row vertex block (view-projection, fog, and atmospheric-scattering rows), each
+    /// flattened row-major. The blocks are re-staged per pass, so `at` names the sample point
+    /// (`scene` at the aerial-perspective composite, `frame_end` after the draw drains). Diffing a
+    /// good frame against a bad one identifies which row a latched change rides in. Gated on
+    /// `stereo.diagnose_global_constants`.
+    #[serde(rename = "GlobalConstants")]
+    GlobalConstants {
+        at: String,
+        fp: Vec<f32>,
+        vp: Vec<f32>,
+    },
+    /// The subsampled linear mean of the HDR MainColor buffer at a named pipeline stage
+    /// (`post_resolve`, `pre_atmosphere`, `post_atmosphere`, `post_block_entry`, `pre_post`, or a
+    /// `pass0xNN` label from the per-pass sweep). Bracketing a global change between two stages
+    /// names the frame segment that injects it -- the instrument that localized the foveation
+    /// blend-state latch. Gated on `stereo.diagnose_main_color_means` (stage brackets) and
+    /// `stereo.diagnose_pass_sweep` (the per-pass ladder).
+    #[serde(rename = "MainColorMean")]
+    MainColorMean { at: String, r: f32, g: f32, b: f32 },
     #[serde(rename = "GenerateHistogram")]
     GenerateHistogram { skip: bool },
     #[serde(rename = "DrawHistogramWindow")]
