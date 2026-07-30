@@ -1,19 +1,19 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 /// The game world object manager: owns the character occlusion BFBC state and drives the per-frame
-/// character occlusion cull. Each frame, [`StartCommitAddRemove`](GameWorldObjectManager::StartCommitAddRemove)
-/// copies the camera manager's active camera into [`m_OcclusionCamera`](GameWorldObjectManager::m_OcclusionCamera)
-/// and dispatches [`ProcessCharacterOcclusion`](GameWorldObjectManager::ProcessCharacterOcclusion) via a
+/// character occlusion cull. Each frame, [`StartCommitAddRemove`](crate::game_world_object_manager::GameWorldObjectManager::StartCommitAddRemove)
+/// copies the camera manager's active camera into [`m_OcclusionCamera`](crate::game_world_object_manager::GameWorldObjectManager::m_OcclusionCamera)
+/// and dispatches [`ProcessCharacterOcclusion`](crate::game_world_object_manager::GameWorldObjectManager::ProcessCharacterOcclusion) via a
 /// CPU fragment. That function builds a BFBC cull frustum from the active camera via
-/// [`GetBFBCFrustumParamsForCameraAndTime`](graphics_engine::graphics_engine::OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime),
+/// [`GetBFBCFrustumParamsForCameraAndTime`](crate::graphics_engine::graphics_engine::OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime),
 /// then runs `BFBCProcess` with `E_BFBC_PROCESSFUNCTION_FRUSTUM_CULL` to cull character occlusion —
 /// hiding characters the frustum rejects. The frustum is built from the single active camera's
 /// projection.
 pub struct GameWorldObjectManager {
     _field_0: [u8; 2552],
     /// The camera the character occlusion cull builds its BFBC frustum against. Set each frame by
-    /// [`StartCommitAddRemove`](GameWorldObjectManager::StartCommitAddRemove) from
-    /// [`CameraManager::m_ActiveCamera`](camera::camera_manager::CameraManager::m_ActiveCamera).
+    /// [`StartCommitAddRemove`](crate::game_world_object_manager::GameWorldObjectManager::StartCommitAddRemove) from
+    /// [`CameraManager::m_ActiveCamera`](crate::camera::camera_manager::CameraManager::m_ActiveCamera).
     pub m_OcclusionCamera: *const crate::camera::camera::Camera,
     _field_a00: [u8; 65680],
     /// The BFBC cull context for character occlusion.
@@ -36,9 +36,9 @@ impl GameWorldObjectManager {
 impl GameWorldObjectManager {
     pub const StartCommitAddRemove_ADDRESS: usize = 0x1404BB8B0;
     /// Copies the camera manager's active camera into
-    /// [`m_OcclusionCamera`](GameWorldObjectManager::m_OcclusionCamera), along with its frustum planes
+    /// [`m_OcclusionCamera`](crate::game_world_object_manager::GameWorldObjectManager::m_OcclusionCamera), along with its frustum planes
     /// and transform, then dispatches
-    /// [`ProcessCharacterOcclusion`](GameWorldObjectManager::ProcessCharacterOcclusion) via a CPU
+    /// [`ProcessCharacterOcclusion`](crate::game_world_object_manager::GameWorldObjectManager::ProcessCharacterOcclusion) via a CPU
     /// fragment (`CallProxy`).
     pub unsafe fn StartCommitAddRemove(&mut self) {
         unsafe {
@@ -49,11 +49,11 @@ impl GameWorldObjectManager {
         }
     }
     pub const ProcessCharacterOcclusion_ADDRESS: usize = 0x1404BB7E0;
-    /// Builds a BFBC cull frustum from [`m_OcclusionCamera`](GameWorldObjectManager::m_OcclusionCamera)
-    /// via [`GetBFBCFrustumParamsForCameraAndTime`](graphics_engine::graphics_engine::OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime),
+    /// Builds a BFBC cull frustum from [`m_OcclusionCamera`](crate::game_world_object_manager::GameWorldObjectManager::m_OcclusionCamera)
+    /// via [`GetBFBCFrustumParamsForCameraAndTime`](crate::graphics_engine::graphics_engine::OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime),
     /// then runs `BFBCProcess` with `E_BFBC_PROCESSFUNCTION_FRUSTUM_CULL` to cull character occlusion.
     /// Dispatched asynchronously from
-    /// [`StartCommitAddRemove`](GameWorldObjectManager::StartCommitAddRemove).
+    /// [`StartCommitAddRemove`](crate::game_world_object_manager::GameWorldObjectManager::StartCommitAddRemove).
     pub unsafe fn ProcessCharacterOcclusion(&mut self) -> u64 {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) -> u64 = ::std::mem::transmute(

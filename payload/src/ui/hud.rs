@@ -3,7 +3,10 @@
 
 use parking_lot::Mutex;
 
-use crate::config;
+use crate::{
+    config,
+    hud::{HUD_STATE, scaleform::request_set_clip_visible},
+};
 
 /// Preview size (px) for the redirected HUD texture, independent of the Render tab's preview size.
 static HUD_PREVIEW_WIDTH: Mutex<f32> = Mutex::new(512.0);
@@ -15,7 +18,7 @@ static SCALEFORM_CLIP_PATH: Mutex<String> = Mutex::new(String::new());
 pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
     // Live dynamic-distance readout, taken before the CONFIG lock (HUD_STATE and CONFIG are
     // never nested in the draw path, but keeping them disjoint here avoids the question).
-    let depth_status = crate::hud::HUD_STATE.lock().depth_status();
+    let depth_status = HUD_STATE.lock().depth_status();
 
     // Redirect toggle and the quad placement/follow parameters. The CONFIG lock is scoped to this
     // block and dropped before HUD_STATE is locked for the preview.
@@ -30,9 +33,32 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
             ui.add(
                 egui::Slider::new(&mut cfg.hud.movie_aspect, 0.5..=2.5).text("Movie aspect (w/h)"),
             );
-            ui.add(
-                egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0).text("Render scale (x)"),
-            );
+            let mut pinned = cfg.hud.render_resolution.is_some();
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut pinned, "Pin resolution")
+                    .on_hover_text(
+                        "Set the HUD texture's longer axis in pixels outright, instead of scaling it \
+                         from the per-eye render resolution. The HUD is a fixed-apparent-size panel, \
+                         so its texel budget need not follow the scene's.",
+                    );
+                if pinned {
+                    let mut pixels = cfg.hud.render_resolution.unwrap_or(3072);
+                    ui.add(egui::Slider::new(&mut pixels, 512..=8192).text("px"));
+                    cfg.hud.render_resolution = Some(pixels);
+                } else {
+                    cfg.hud.render_resolution = None;
+                }
+            });
+            ui.add_enabled_ui(!pinned, |ui| {
+                ui.add(
+                    egui::Slider::new(&mut cfg.hud.render_scale, 0.1..=2.0)
+                        .text("Render scale (x)"),
+                )
+                .on_hover_text(
+                    "Multiplies the geometric mean of the per-eye render resolution to give the HUD \
+                     texture's longer axis.",
+                );
+            });
             ui.checkbox(&mut cfg.hud.quad, "Draw the HUD as a floating quad per eye");
             ui.checkbox(
                 &mut cfg.hud.suppress_overlays,
@@ -280,7 +306,7 @@ pub fn egui_debug_hud(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer
             ui.add(egui::Slider::new(&mut *w, 48.0..=4096.0).text("Preview size (px)"));
             *w
         };
-        let mut hud = crate::hud::HUD_STATE.lock();
+        let mut hud = HUD_STATE.lock();
         ui.collapsing("HUD texture", |ui| match hud.preview_id(renderer) {
             Some(id) => {
                 // The preview matches the HUD aspect (width / height).
@@ -350,10 +376,10 @@ fn scaleform_debug_ui(ui: &mut egui::Ui) {
             ui.label("Clip path");
             ui.text_edit_singleline(&mut *path);
             if ui.button("Hide").clicked() {
-                crate::hud::scaleform::request_set_clip_visible(path.clone(), false);
+                request_set_clip_visible(path.clone(), false);
             }
             if ui.button("Show").clicked() {
-                crate::hud::scaleform::request_set_clip_visible(path.clone(), true);
+                request_set_clip_visible(path.clone(), true);
             }
         });
     });

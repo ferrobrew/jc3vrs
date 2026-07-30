@@ -2,7 +2,7 @@
 //! then submit the frame.
 //!
 //! The game renders each eye into `m_BackBufferLinear` and the mod captures it after the resolve
-//! (`docs/engine/rendering.md` §12); those captures live in [`EGUI_DEBUG_RENDER_STATE`] as
+//! (`docs/engine/rendering/rendering.md` §12); those captures live in [`EGUI_DEBUG_RENDER_STATE`] as
 //! `R8G8B8A8_UNORM` textures sized to the game's back buffer. The OpenXR swapchain is a 2-slice
 //! texture array sized to the runtime's recommended per-eye resolution in a negotiated (usually
 //! `_SRGB`) format. Sizes and formats generally differ, so this is a **shader blit** (fullscreen
@@ -14,6 +14,7 @@
 //! [`crate::vr::config::BlitGamma`] and `vr_blit_ps.hlsl`.
 
 use anyhow::Context as _;
+use jc3gi::graphics_engine::device::Device;
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -38,11 +39,10 @@ use windows::{
     core::Interface as _,
 };
 
-use jc3gi::graphics_engine::device::Device;
-
-use crate::ui::render::EGUI_DEBUG_RENDER_STATE;
-
-use super::{FrameContext, VrConfig, config::BlitGamma};
+use crate::{
+    ui::render::EGUI_DEBUG_RENDER_STATE,
+    vr::{EyeImage, FrameContext, VrConfig, config::BlitGamma},
+};
 
 /// The committed, precompiled blit shaders. The vertex shader is the shared fullscreen-triangle from
 /// the capture composite (entry point `main`); the pixel shader is VR-specific (gamma bridge).
@@ -326,7 +326,7 @@ impl VrBlit {
         &mut self,
         device: &Device,
         context: &ID3D11DeviceContext,
-        image: &super::EyeImage,
+        image: &EyeImage,
         src: &ID3D11Texture2D,
     ) -> anyhow::Result<()> {
         // Wrap the runtime-owned swapchain texture borrowed (no AddRef); do not release it.
@@ -373,7 +373,7 @@ impl VrBlit {
         &mut self,
         device: &Device,
         swapchain_tex: &ID3D11Texture2D,
-        image: &super::EyeImage,
+        image: &EyeImage,
     ) -> anyhow::Result<ID3D11RenderTargetView> {
         let key = (image.texture as usize, image.array_index);
         if let Some((_, _, rtv)) = self

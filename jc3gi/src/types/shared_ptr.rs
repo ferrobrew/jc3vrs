@@ -2,7 +2,7 @@
 #[repr(C, align(8))]
 /// A `boost::shared_ptr<T>`: the owned object pointer (`px`) and its reference-count control block
 /// (`pn`). Sixteen bytes on this build. Use `as_ref` / `as_mut` to borrow the pointee, or
-/// [`exists`](SharedPtr::exists) to test it.
+/// [`exists`](crate::types::shared_ptr::SharedPtr::exists) to test it.
 pub struct SharedPtr<T> {
     /// The owned object (`px`), or null. Prefer `as_ref` / `as_mut` over dereferencing this directly.
     pub px: *mut T,

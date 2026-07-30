@@ -19,6 +19,8 @@ use jc3gi::ui::{
 };
 use parking_lot::Mutex;
 
+use crate::{config::Config, hud::split::roots};
+
 /// A queued Scaleform debug operation. Queued from the UI thread, executed on the game thread.
 enum Request {
     /// Log the movie's full display tree, one line per clip.
@@ -62,7 +64,7 @@ pub fn handles_hud_fresh() -> bool {
 }
 
 /// The number of HUD layers the registry groups containers into (see
-/// [`HudLayer`](super::split::HudLayer)).
+/// [`HudLayer`](crate::hud::split::HudLayer)).
 pub const LAYER_COUNT: usize = 3;
 
 /// The authored top-level containers of `hud.gfx` assigned to each layer. Paths are relative to
@@ -273,7 +275,7 @@ pub fn request_release_handles() {
 fn release_clip_handles() {
     // The render-root partition resolved its nodes through these handles; restore the render
     // tree before they go away (rebuilt from the fresh registry on the next capture).
-    crate::hud::split::roots::teardown_now();
+    roots::teardown_now();
     if let Some(mut handles) = CLIP_HANDLES.lock().take() {
         // SAFETY: called on the capture thread; each handle releases through its own interface.
         unsafe {
@@ -315,12 +317,11 @@ pub fn process_requests() {
     // handle registry; request the initial discovery when either wants it. While the partition
     // is live the registry must stay stable (a rebuild would tear the partition down for a
     // frame), so the periodic refresh only runs before the partition takes.
-    let handles_needed =
-        crate::config::Config::lock_query(|c| c.hud.split || c.hud.suppress_overlays);
+    let handles_needed = Config::lock_query(|c| c.hud.split || c.hud.suppress_overlays);
     let handles_live = CLIP_HANDLES.lock().is_some();
     if handles_needed
         && (!handles_live
-            || (!crate::hud::split::roots::live()
+            || (!roots::live()
                 && LAST_DISCOVERY
                     .lock()
                     .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0)))
@@ -415,7 +416,7 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
         // with the configured prefix applied. This is the ground truth for the split partition
         // and the overlay suppression (a suppressed clip that still shows means the effect lives
         // at a different path).
-        let prefix = crate::config::Config::lock_query(|c| c.hud.split_path_prefix);
+        let prefix = Config::lock_query(|c| c.hud.split_path_prefix);
         let prefix = prefix.as_str();
         tracing::info!("scaleform: split path probe (prefix {prefix:?})");
         let containers = LAYER_CONTAINERS.iter().flat_map(|layer| layer.iter());

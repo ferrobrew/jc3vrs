@@ -29,7 +29,7 @@ impl InputDeviceManager {
     }
     pub const Update_ADDRESS: usize = 0x1402F20C0;
     /// The per-frame device poll: reads all devices, refreshes their effector states, and then runs
-    /// [`UpdateForceClicks`](InputDeviceManager::UpdateForceClicks). Effector writes injected before
+    /// [`UpdateForceClicks`](crate::input::input_device_manager::InputDeviceManager::UpdateForceClicks). Effector writes injected before
     /// this are overwritten by the poll, so inject after it instead.
     pub unsafe fn Update(&mut self, dt: f32) {
         unsafe {

@@ -7,7 +7,7 @@ impl LightManager {
     pub const CopyLightsToUpdate_ADDRESS: usize = 0x1400C6860;
     /// Copies the frame's visible point and spot lights into the parity-buffered update lists and
     /// configures the volumetric-lighting passes. Reads
-    /// [`enable_low_res_spot_light_volume`] (and whether any volumetric spot lights are present this
+    /// [`enable_low_res_spot_light_volume`](get_enable_low_res_spot_light_volume) (and whether any volumetric spot lights are present this
     /// frame) to select the reduced- or full-resolution spot-light-cone render setup, toggle the
     /// low-res upsampling pass, and set the spot-light-cone block type's low-res flag. `reserved_slots`
     /// is the count of shadow-atlas slices reserved for other casters; `dt` drives the per-light fade.
@@ -38,7 +38,7 @@ impl std::convert::AsMut<LightManager> for LightManager {
 /// upsampling pass, and sets the cone block type's low-res flag; when clear, the cones render at full
 /// resolution into the main render setup. It is also treated as clear for any frame that has no
 /// visible volumetric spot lights. Read once per frame by
-/// [`LightManager::CopyLightsToUpdate`](LightManager::CopyLightsToUpdate).
+/// [`LightManager::CopyLightsToUpdate`](crate::graphics_engine::light_manager::LightManager::CopyLightsToUpdate).
 pub unsafe fn get_enable_low_res_spot_light_volume() -> &'static mut bool {
     unsafe { &mut *(0x142D3A6F2 as *mut bool) }
 }

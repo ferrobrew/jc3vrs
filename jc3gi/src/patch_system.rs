@@ -1,15 +1,15 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 /// The argument block passed to a patch map's per-patch CPU update fragment. Partial: only the
-/// fields the base-terrain fragment ([`TerrainPatchUpdate`]) reads are mapped; `0x30` holds the
+/// fields the base-terrain fragment ([`TerrainPatchUpdate`](crate::patch_system::TerrainPatchUpdate)) reads are mapped; `0x30` holds the
 /// patch map's type context (for the terrain maps, the render-pass pointer table the fragment
 /// submits into).
 pub struct PatchContext {
     _field_0: [u8; 8],
-    /// The view description for this update; see [`PatchViewDesc`].
+    /// The view description for this update; see [`PatchViewDesc`](crate::patch_system::PatchViewDesc).
     pub m_ViewDesc: *const crate::patch_system::PatchViewDesc,
     _field_10: [u8; 8],
-    /// The patch's header; see [`PatchHeader`].
+    /// The patch's header; see [`PatchHeader`](crate::patch_system::PatchHeader).
     pub m_Header: *mut crate::patch_system::PatchHeader,
     _field_20: [u8; 8],
     /// The patch's per-patch constant memory. For the base terrain maps this is the patch's
@@ -44,7 +44,7 @@ pub struct PatchHeader {
     /// The patch's X coordinate in its map grid. The patch's world X derives as
     /// `(m_PatchX << m_Lod) + world_origin_x`, scaled by the world context's inverse XZ scale.
     pub m_PatchX: i16,
-    /// The patch's Z coordinate in its map grid; see [`m_PatchX`](PatchHeader::m_PatchX).
+    /// The patch's Z coordinate in its map grid; see [`m_PatchX`](crate::patch_system::PatchHeader::m_PatchX).
     pub m_PatchZ: i16,
     /// Patch lifecycle status bits: `0x1` = constructed, `0x2` = destruction pending, `0x4` =
     /// construction pending, `0x8` = destruction complete, `0x10` = construction complete, `0x20` =
@@ -60,7 +60,7 @@ pub struct PatchHeader {
     _field_1b: [u8; 1],
     /// Per-frustum visibility bits, written by the patch system's BFBC cull step each update: bit
     /// `i` is set when the patch's AABB passed the cull for frustum entry `i` of the update's view
-    /// description ([`PatchViewDesc::m_FrustumIDs`] maps entries to frustum ids). The patch-update
+    /// description ([`PatchViewDesc::m_FrustumIDs`](crate::patch_system::PatchViewDesc::m_FrustumIDs) maps entries to frustum ids). The patch-update
     /// fragments read these to decide which render passes receive the patch's render block.
     pub m_VisibilityBits: u16,
     _field_1e: [u8; 10],
@@ -96,7 +96,7 @@ impl std::convert::AsMut<PatchHeader> for PatchHeader {
 pub struct PatchViewDesc {
     _field_0: [u8; 48],
     /// The frustum id for each entry, indexed by the same entry index as the patch's
-    /// [`PatchHeader::m_VisibilityBits`] bit.
+    /// [`PatchHeader::m_VisibilityBits`](crate::patch_system::PatchHeader::m_VisibilityBits) bit.
     pub m_FrustumIDs: *const u32,
     /// The number of frustum entries this update (also the number of populated visibility bits).
     pub m_FrustumCount: u32,
@@ -121,12 +121,12 @@ impl std::convert::AsMut<PatchViewDesc> for PatchViewDesc {
 }
 pub const TerrainPatchUpdate_ADDRESS: usize = 0x1410C98A0;
 /// The per-patch CPU fragment for the base VolumetricTerrain patch maps (registered against the
-/// `TerrainPatchUpdate` hash by `OldTerrainPatchSystem::TerrainPatchSystemCreateLayers`). It
+/// [`TerrainPatchUpdate`](crate::patch_system::TerrainPatchUpdate) hash by `OldTerrainPatchSystem::TerrainPatchSystemCreateLayers`). It
 /// advances patch construction and destruction (creating or destroying the patch's
-/// [`RenderBlockTerrain`](graphics_engine::render_block::RenderBlockTerrain) constant buffers,
+/// [`RenderBlockTerrain`](crate::graphics_engine::render_block::RenderBlockTerrain) constant buffers,
 /// updating the global terrain mask, and adjusting per-LOD memory statistics), and for constructed
 /// patches it updates the block's alpha fade, sort id, and tessellated index count, then submits
-/// the block to one render pass per set [`PatchHeader::m_VisibilityBits`] bit: frustum id 0 routes
+/// the block to one render pass per set [`PatchHeader::m_VisibilityBits`](crate::patch_system::PatchHeader::m_VisibilityBits) bit: frustum id 0 routes
 /// to the color passes (the near-detail pass for base-LOD tiles within one tile of the camera, the
 /// near pass for other tiles at the context's high-detail LOD, and the far pass otherwise), ids
 /// 1..=8 to the static shadow passes (only when the terrain type renders to shadow maps), ids
@@ -146,10 +146,10 @@ pub unsafe fn TerrainPatchUpdate(
 pub const TerrainPatchSystemFragment_ADDRESS: usize = 0x1410CAC50;
 /// The per-patch CPU fragment for the volumetric-patch terrain maps (the
 /// `CRenderBlockTerrainPatch` system — the terrain renderer active in the retail world; the
-/// [`TerrainPatchUpdate`] maps are dormant there). Structurally parallel to [`TerrainPatchUpdate`]:
+/// [`TerrainPatchUpdate`](crate::patch_system::TerrainPatchUpdate) maps are dormant there). Structurally parallel to [`TerrainPatchUpdate`](crate::patch_system::TerrainPatchUpdate):
 /// it advances patch construction and destruction, and for constructed patches updates the block's
 /// alpha fade and tessellated index count, then submits the patch's render blocks to one render
-/// pass per set [`PatchHeader::m_VisibilityBits`] bit with the same frustum-id routing (id 0 →
+/// pass per set [`PatchHeader::m_VisibilityBits`](crate::patch_system::PatchHeader::m_VisibilityBits) bit with the same frustum-id routing (id 0 →
 /// color passes, ids 1..=8 → shadow passes, ids 9..=11 → reflective shadow passes, id 12 → the
 /// depth prepass). Base-LOD (9) patches within the camera's 2×2 quadrant additionally submit
 /// per-quadrant sub-blocks to the near/tessellation passes.

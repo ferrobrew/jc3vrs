@@ -4,10 +4,7 @@
 
 use std::{
     collections::BTreeSet,
-    sync::{
-        Mutex,
-        atomic::{AtomicI32, Ordering},
-    },
+    sync::atomic::{AtomicI32, Ordering},
 };
 
 use jc3gi::{
@@ -16,21 +13,22 @@ use jc3gi::{
         render_block::{
             RenderBlockTypeTerrain as BaseTerrain, RenderBlockTypeTerrainPatch as TerrainPatch,
         },
-        render_engine::RenderBlockTypeRegistry,
+        render_engine::{RenderBlockTypeInstances, RenderBlockTypeRegistry},
     },
 };
 
-use super::camera::matrix_grid;
 use crate::{
     config,
     debug::{
         camera::{CAMERA_SNAPSHOTS, CameraSnapshot},
         trace,
     },
+    hooks::graphics_engine::terrain,
+    ui::camera::matrix_grid,
 };
 
 /// The frame count for the editable "Dump N frames" trace button, persisted across UI frames.
-static TRACE_FRAME_COUNT: AtomicI32 = AtomicI32::new(60);
+pub(crate) static TRACE_FRAME_COUNT: AtomicI32 = AtomicI32::new(60);
 
 pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
@@ -66,6 +64,22 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
         }
     });
     ui.checkbox(
+        &mut cfg.stereo.auto_trace_brightness_step,
+        "Auto-capture a trace when the frame brightness steps (one-shot; disarms after firing)",
+    );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_main_color_means,
+        "Record MainColor means at the pipeline stage brackets (slower traces)",
+    );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_pass_sweep,
+        "Record MainColor means after every late-scene pass (per-pass ladder; much slower)",
+    );
+    ui.checkbox(
+        &mut cfg.stereo.diagnose_global_constants,
+        "Dump the FP/VP global constant staging into the trace (scene + frame end)",
+    );
+    ui.checkbox(
         &mut cfg.stereo.diagnose_rt_hashes,
         "Hash engine RTs per eye into the trace (run with cameras off)",
     );
@@ -84,7 +98,7 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
     ui.separator();
 
     // The #31 flicker-isolation A/B levers -- all default off; enable one at a time to localize the
-    // whole-terrain sun-shadow flicker. See `crate::config::StereoConfig`.
+    // whole-terrain sun-shadow flicker. See `crate::stereo::config::StereoConfig`.
     ui.collapsing("Flicker isolation (#31)", |ui| {
             ui.checkbox(
                 &mut cfg.stereo.symmetrize_eye_frusta,
@@ -105,15 +119,10 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
                 "Renders both eyes with eye 0's projection and offset (mono), removing all per-eye \
                  divergence while keeping the off-axis projection and its reconstruction.",
             );
-            ui.checkbox(
-                &mut cfg.stereo.freeze_render_camera,
-                "C: Freeze render camera (pins m_TransformF/m_View; splits sun-driven vs camera-idle \
-                 flicker)",
-            )
-            .on_hover_text(
-                "Pins the game render camera to the pose captured when enabled, so the camera holds \
-                 still while the sun keeps moving. Unlike Freeze pose (VR tab), this freezes the actual \
-                 engine camera the shadow cascade fits from. The view locks in place -- diagnostic only.",
+            ui.label(
+                "C: Freeze render camera -- moved to the Camera tab's \"Frozen pose (diagnostic)\" \
+                 section, as the \"Full camera (world)\" freeze mode. It pins the same \
+                 m_TransformF/m_View, and the held pose can be driven by hand from there.",
             );
             ui.checkbox(
                 &mut cfg.stereo.shadow_update_every_frame,
@@ -311,21 +320,9 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
                 .button("Re-apply (patch sizes + recreate setup buffers)")
                 .clicked()
             {
-                crate::hooks::graphics_engine::terrain::request_detail_budget_apply();
+                terrain::request_detail_budget_apply();
             }
         });
-        ui.checkbox(
-            &mut cfg.stereo.force_terrain_hull_clip,
-            "Force the water-clip hull type (type 2; ruled out for #40)",
-        );
-        ui.add(
-            egui::Slider::new(&mut cfg.stereo.terrain_hull_clip_value, 0..=2)
-                .text("Replacement clip type for type 2"),
-        )
-        .on_hover_text(
-            "Clip type 2 is the below-water discard for base-LOD tiles when the camera is above \
-             water -- not the LOD clip",
-        );
     });
 
     // The engine's render-block-type registry: every registered type by name, with its engine-native
@@ -335,6 +332,7 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
         "Render block types (engine registry; disable to bisect)",
         |ui| {
             show_render_block_type_registry(ui);
+            show_unregistered_render_block_types(ui);
         },
     );
 
@@ -401,6 +399,10 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
             "Auto-exposure (SmoothedExposure + Histogram)",
         );
         ui.checkbox(
+            &mut cfg.exposure.gate_update,
+            "ToneMappingEffect::Update ring-index step",
+        );
+        ui.checkbox(
             &mut cfg.stereo.gate_eye1_dt,
             "Eye-1 dt=0 (world fade / sun / heat-haze step once per frame)",
         );
@@ -414,7 +416,7 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
         );
     });
 
-    ui.collapsing("Exposure A/B (pin m_CurrentExposure)", |ui| {
+    ui.collapsing("Exposure A/B (pin the applied exposure)", |ui| {
         ui.checkbox(
             &mut cfg.exposure.force,
             "Force exposure (pin after the engine's Update)",
@@ -560,7 +562,103 @@ unsafe extern "system" fn render_block_type_always_disabled(
 
 /// The `IsEnabled` vtable slots currently patched to
 /// [`render_block_type_always_disabled`], keyed by slot address.
-static DISABLED_TYPE_SLOTS: Mutex<BTreeSet<usize>> = Mutex::new(BTreeSet::new());
+static DISABLED_TYPE_SLOTS: parking_lot::Mutex<BTreeSet<usize>> =
+    parking_lot::Mutex::new(BTreeSet::new());
+
+/// Render the render-block types the registry cannot reach.
+///
+/// The registry list above is not "every type". A render block whose `InitType` stores its type in a
+/// global and returns *without* calling `AddType` never enters the registry, so it does not get a row
+/// -- while `CRenderPass::DoDraw` still dispatches its `IsEnabled` through the vtable exactly as it
+/// does for a registered type. Particles are the case in practice: unticking every row in the registry
+/// list leaves smoke and every other particle effect still drawing, which reads as a broken kill
+/// switch rather than a missing entry, and quietly invalidates any bisect run through that list.
+///
+/// The set is computed rather than listed: every render-block type enters
+/// [`RenderBlockTypeInstances`] when it is constructed, so the instance table minus the registry *is*
+/// the unreachable set, and a type that stops (or starts) registering shows up here on its own. Each
+/// row uses the same vtable patch, the same bookkeeping, and the same restore path as the registry
+/// rows.
+fn show_unregistered_render_block_types(ui: &mut egui::Ui) {
+    ui.separator();
+
+    // SAFETY: the instance table is static engine storage within the loaded module image, and its
+    // slots are live type objects or null. The vtable slot write is an aligned qword store through
+    // the patcher while the render thread may read it -- acceptable for a diagnostic toggle, as for
+    // the registry rows.
+    unsafe {
+        let Some(reg) = RenderBlockTypeRegistry::get() else {
+            ui.label("registry not reachable; cannot tell registered types from unregistered ones");
+            return;
+        };
+        let entries = reg.as_slice();
+        if entries.len() > 256 {
+            ui.label(format!(
+                "registry not initialized or invalid ({} entries); cannot tell registered types \
+                 from unregistered ones",
+                entries.len()
+            ));
+            return;
+        }
+        let registered: BTreeSet<usize> =
+            entries.iter().map(|entry| entry.m_Type as usize).collect();
+
+        // The table is not compacted -- a destroyed type leaves a null hole with live slots after
+        // it -- so every slot is visited and nulls are skipped rather than treated as the end.
+        let mut rows: Vec<(&str, usize)> = RenderBlockTypeInstances::as_slice()
+            .iter()
+            .filter_map(|ptr| {
+                let ty = ptr.as_mut()?;
+                if registered.contains(&(*ptr as usize)) {
+                    return None;
+                }
+                let name = ty.get_type_name_str().unwrap_or("(unnamed)");
+                // The patch target: the address of the vtable's `IsEnabled` entry, with the field
+                // offset taken from the generated vftable type.
+                let slot = (&raw const (*ty.vftable()).IsEnabled) as usize;
+                Some((name, slot))
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(b.0));
+        // Deduplicate by slot address: two instances of the same unregistered type share a vtable
+        // and thus the same `IsEnabled` slot, so without this a duplicate checkbox appears per
+        // instance.
+        rows.dedup_by(|a, b| a.1 == b.1);
+
+        if rows.is_empty() {
+            ui.label(
+                "No unregistered types: every live render-block type is in the registry list \
+                 above, so unticking all of it reaches every type",
+            );
+            return;
+        }
+        ui.label(format!(
+            "{} type(s) the registry does not list (their InitType never calls AddType, so the \
+             list above cannot reach them -- but their draws are gated identically). Computed as \
+             the engine's live-instance table minus the registry.",
+            rows.len()
+        ));
+
+        let mut disabled_slots = DISABLED_TYPE_SLOTS.lock();
+        for (name, slot) in rows {
+            let mut enabled = !disabled_slots.contains(&slot);
+            if ui
+                .checkbox(&mut enabled, format!("{name} (unregistered)"))
+                .changed()
+                && let Some(mut patcher) = crate::hooks::patcher()
+            {
+                if enabled {
+                    patcher.unpatch(slot);
+                    disabled_slots.remove(&slot);
+                } else {
+                    let stub = render_block_type_always_disabled as *const () as usize;
+                    patcher.patch(slot, &stub.to_le_bytes());
+                    disabled_slots.insert(slot);
+                }
+            }
+        }
+    }
+}
 
 /// Render the engine render-block-type registry: one row per registered type, name from the type's
 /// own `GetTypeName`, and a checkbox that patches the type's `IsEnabled` vtable slot to a
@@ -589,22 +687,29 @@ fn show_render_block_type_registry(ui: &mut egui::Ui) {
              (vtable IsEnabled patch; auto-reverts on uninject)",
             entries.len()
         ));
-        let mut disabled_slots = DISABLED_TYPE_SLOTS.lock().unwrap();
+        let mut disabled_slots = DISABLED_TYPE_SLOTS.lock();
+        // Sort by type name so the list is stable and scannable (the registry's own order is
+        // registration order, which shuffles as the engine loads).
+        let mut rows: Vec<(&str, usize, u32)> = entries
+            .iter()
+            .filter_map(|entry| {
+                let ty = entry.m_Type.as_mut()?;
+                let name = ty.get_type_name_str().unwrap_or("(unnamed)");
+                // The patch target: the address of the vtable's `IsEnabled` entry, with the field
+                // offset taken from the generated vftable type.
+                let slot = (&raw const (*ty.vftable()).IsEnabled) as usize;
+                Some((name, slot, entry.m_Hash))
+            })
+            .collect();
+        rows.sort_by(|a, b| a.0.cmp(b.0));
         egui::ScrollArea::vertical()
             .id_salt("render_block_type_registry")
             .max_height(240.0)
             .show(ui, |ui| {
-                for entry in entries {
-                    let Some(ty) = entry.m_Type.as_mut() else {
-                        continue;
-                    };
-                    let name = ty.get_type_name_str().unwrap_or("(unnamed)");
-                    // The patch target: the address of the vtable's `IsEnabled` entry, with the
-                    // field offset taken from the generated vftable type.
-                    let slot = (&raw const (*ty.vftable()).IsEnabled) as usize;
+                for (name, slot, hash) in rows {
                     let mut enabled = !disabled_slots.contains(&slot);
                     if ui
-                        .checkbox(&mut enabled, format!("{name} ({:#010x})", entry.m_Hash))
+                        .checkbox(&mut enabled, format!("{name} ({hash:#010x})"))
                         .changed()
                     {
                         let Some(mut patcher) = crate::hooks::patcher() else {

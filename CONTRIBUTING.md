@@ -34,12 +34,14 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - **Platform**: Targeting the Windows DX11 build of JC3, run through Proton/Wine.
 - **Debugging**: Primarily log review via `tracing`. Attaching a debugger is difficult due to the Proton/Wine virtualization layers.
 - **Hook placement**: New hooks should generally follow the `pyxis-defs` hierarchy for a 1:1 connection between defined types and hooked code.
-- **Documentation**: The `docs/` directory is organized by nature — `docs/engine/` for reverse-engineered ground truth about the game as it is, `docs/mod/` for the mod's design and implementation, and `docs/issues/` for issue-scoped investigations; `docs/README.md` is the index. New findings go in the directory matching their nature, and a doc that would mix both should be split along that line.
+- **The wine prefix**: every tool that runs a Windows binary on Linux shares one prefix, resolved and provisioned by `scripts/wine_prefix.sh` (source it, call `jc3vrs_ensure_wine_prefix`). It lives under `target/`, so it is disposable — delete it and the next run rebuilds it — and it is provisioned with a native `d3dcompiler_47.dll`, because wine's built-in reimplementation mis-parses some of the game's shaders. One prefix rather than one per tool: the requirements differ, and a prefix that satisfies only some of them fails in ways that look like a bug in the caller. The game's own Proton prefix is separate and belongs to Steam; reach it through `scripts/proton_run.sh`.
+- **Unit tests**: The payload targets Windows, so its tests are cross-compiled and run under wine. On Linux use `./scripts/xwin_test.sh` (which forwards its arguments to `cargo xwin test`), not `cargo test` — the payload does not build for a Linux target. Much of the payload needs a live game to exercise, so the tests cover the pure logic that does not: projection and viewport math, pose composition, and similar.
+- **Documentation**: The `docs/` directory is organized by nature, then by subject. The top split is `docs/engine/` for reverse-engineered ground truth about the game as it is, `docs/mod/` for the mod's design and implementation, and `docs/issues/` for issue-scoped investigations; within `engine/` and `mod/`, subject subdirectories mirror each other and the payload's module map (`rendering/`, `performance/`, `stereo/`, `body/`, `input/`, ...), with single-doc subjects staying at the split's root. `docs/README.md` is the index. New findings go in the directory matching their nature and subject, and a doc that would mix engine and mod material should be split along the nature line.
 - **Reverse-engineering**: Done through IDA Pro with its MCP integration, alongside a folder of decompiler output from a debug build of the game. The IDB and decompiler output locations can be provided on request.
 - **Shader compilation**: Payload shaders (`.hlsl` files in `payload/src/shaders/`) are compiled to `.dxbc` bytecode and committed alongside their sources. After modifying a shader, recompile with:
   - Windows: `cargo run -p shadergen`
   - Linux: `cargo run -p shadergen --target x86_64-unknown-linux-gnu` (requires `wine` on PATH)
-- **Game shader reverse-engineering**: To extract, disassemble, and interpret the game's own shaders (the `.shader_bundle` files), and for how the mod patches them in memory, see `docs/engine/shaders.md` and the tooling in `tools/shaders/`.
+- **Game shader reverse-engineering**: To extract, disassemble, and interpret the game's own shaders (the `.shader_bundle` files), and for how the mod patches them in memory, see `docs/engine/rendering/shaders.md` and the tooling in `tools/shaders/`.
 
 ---
 
@@ -81,6 +83,7 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - **Never** use title case in headings and titles. Always use sentence case.
 - Always use the Oxford comma.
 - Don't omit articles ("a", "an", "the"). Write "the file has a newer version" not "file has newer version".
+- Comments describe the present state. Reserve past-tense narration for the rare case where history explains a standing "why".
 
 ## Code style
 
@@ -89,7 +92,8 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - Use Rust 2024 edition.
 - Ensure the following checks pass at the end of each complete task (you do not need to do this for intermediate steps):
   - `cargo +nightly fmt --all -- --check`
-  - `cargo clippy -all --all-targets -- -D warnings` or `./scripts/xwin_clippy.sh` (if on Linux)
+  - `cargo clippy --all --all-targets -- -D warnings` or `./scripts/xwin_clippy.sh` (if on Linux)
+  - `./scripts/xwin_test.sh` (if on Linux; see the unit-test note above)
 
 ### Type system patterns
 
@@ -101,7 +105,9 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
   `clippy::too_many_arguments` threshold, bundle the cohesive parameters into a struct (a request
   struct, or a shared seam like `Engine { store, graph, clock }` that several call shapes pass
   along) rather than threading more positional arguments. **Never** silence the lint with
-  `#[allow(clippy::too_many_arguments)]`; the lint firing means a struct is wanted. Recognized
+  `#[allow(clippy::too_many_arguments)]`; the lint firing means a struct is wanted. The one
+  exception is a detour: its signature mirrors the hooked function's ABI and cannot be bundled, so
+  there the `allow` is the honest annotation. Recognized
   closed sets of values (relation labels, tags) likewise ride as enums, not bare strings.
 
 ### Error handling
@@ -119,25 +125,39 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - Do not introduce async to a project without async.
 - Use `tokio` for async runtime (multi-threaded).
 - Use async for I/O and concurrency, keep other code synchronous.
+- Use `parking_lot::Mutex` for synchronous locks (the default); its guard is non-poisoning and must never be held across an `.await`.
 
 ### Logging
 
 - Use `tracing` for diagnostic and operational logging throughout, emitting at meaningful points, not noisily.
 - Install the subscriber only in binaries, and send logs to stderr.
-- The CLI is an operator/diagnostic tool, so its output goes through `tracing` too — the user-facing interface is the web frontend. Reserve `stdout`/`println!` for genuine machine-readable command output if a command ever needs it.
+- The injector and tools are operator/diagnostic programs, so their output goes through `tracing` too — the user-facing surface is the game plus the in-game debug UI. Reserve `stdout`/`println!` for genuine machine-readable command output if a tool ever needs it.
 
 ### Module organization
 
 - Use `mod.rs` files to re-export public items.
-- Keep module boundaries strict with restricted visibility.
+- Keep module boundaries strict with restricted visibility, but prefer `pub(crate)` and `pub(super)` over `pub(in <path>)`. The `pub(in ...)` form scopes to a named ancestor, which is precise but reads as a smell; reach for it only when neither `pub(crate)` nor `pub(super)` expresses the intended scope.
 - Use `#[cfg(unix)]` and `#[cfg(windows)]` for conditional compilation.
 - **Always** import types or functions at the very top of the module, with the one exception being `cfg()`-gated functions. Never import types or modules within function contexts, other than this `cfg()`-gated exception.
 - It is okay to import enum variants for pattern matching, though.
+- When a path is used more than once in a module, import it at the top of the module (the specific items, not the module) rather than repeating the fully-qualified path at each call site. A path used only once may stay fully-qualified — unless it is unwieldy (more than three module segments deep), in which case import it regardless of use count. And when the module already imports a sibling from the same parent, import the new item alongside it rather than writing it inline.
+- **Always** anchor intra-crate paths at `crate::`, never `super::`. Write `crate::stereo::config::StereoConfig`, not `super::config::StereoConfig`. The one exception is a test module, where `use super::*;` (pulling the parent module into the `#[cfg(test)]` block) is the idiomatic form and stays.
 
 Within each module, organize code as follows:
 1. **Public API first** - all `pub` structs, enums, and functions at the top
 2. **Private implementation below** - constants, helper functions, and internal types
 3. **Order by use** - private items should appear in the order they're called/used by the public API (topological order)
+
+### Code organization
+
+- **Keep files under the size threshold.** Split a file into multiple files within a folder when it exceeds 1000 lines. Use `mod.rs` to re-export public items so consumers see a stable API. Existing oversized files are grandfathered: split them when a change touches them substantially, not in drive-by churn.
+- **Split by concern, not by size alone.** A file should be split along natural seams — distinct data types, feature groups, or functional areas — not arbitrarily at the line limit. A cohesive single-concern file that slightly exceeds the threshold is preferable to a fragmented one.
+- **Organize wide folders into subfolders.** When a folder accumulates many direct children, group them by domain or role. A flat folder of 20+ files is a signal that subfolders are needed.
+- **Test files follow the same threshold.** A long test file is split by concern group, with shared helpers in the test module's `mod.rs`.
+
+### Reaching through smart pointers
+
+- To borrow the value inside a lock guard, a `Box`, or an `Arc`, prefer `.as_ref()` / `.as_mut()` over a manual double-deref: write `state.lock().as_ref()`, not `&**state.lock()`. The named form reads as "borrow the value" rather than as deref bookkeeping. The same applies to an `Arc<dyn Trait>`: `model.as_ref()`, not `&**model`.
 
 ### Memory and performance
 
@@ -145,3 +165,16 @@ Within each module, organize code as follows:
 - Use `smol_str` for efficient small string storage.
 - Careful attention to cloning referencing. Avoid cloning if code has a natural tree structure.
 - Stream data (e.g. iterators) where possible rather than buffering.
+
+## Testing
+
+### Testing tools
+
+- **test-case**: For parameterized tests.
+- **proptest**: For property-based testing.
+- **pretty_assertions**: For better assertion output.
+
+### Testing conventions
+
+- Do not write a test that only exercises serde or a derive. A round-trip earns its place only when it guards a real wire: a versioned payload or a file format.
+- No personal names in fixtures. Anonymize every test to invented placeholders; do not seed one from any real person's name, handles, or details, even when live data reproduces the behavior under test — reproduce the *shape* of what you observed, never the actual content.

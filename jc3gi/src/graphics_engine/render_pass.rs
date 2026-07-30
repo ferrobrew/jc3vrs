@@ -31,7 +31,7 @@ impl std::convert::AsMut<ConstantBufferPool> for ConstantBufferPool {
 pub struct LRParticleRenderPass {}
 impl LRParticleRenderPass {
     pub const Draw_ADDRESS: usize = 0x1400A4170;
-    /// Binds the reduced-resolution render setup, runs the base [`RenderPass::DoDraw`] over the routed
+    /// Binds the reduced-resolution render setup, runs the base [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) over the routed
     /// particle blocks, and restores the previously bound render setup.
     pub unsafe fn Draw(&mut self) {
         unsafe {
@@ -70,8 +70,8 @@ impl std::convert::AsMut<RBIInfo> for RBIInfo {
 #[repr(C, align(8))]
 /// One of a render pass's double-buffered render-block-item lists.
 ///
-/// [`Add`](RBILists::Add) appends entries; on overflow (`m_NumElements >= m_ListSize`) it spills into
-/// the global overflow list. [`DoDraw`](RenderPass::DoDraw) reads `min(m_ListSize, m_NumElements)`
+/// [`Add`](crate::graphics_engine::render_pass::RBILists::Add) appends entries; on overflow (`m_NumElements >= m_ListSize`) it spills into
+/// the global overflow list. [`DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) reads `min(m_ListSize, m_NumElements)`
 /// entries and never writes `m_NumElements`, so a populated list can be redrawn any number of times.
 pub struct RBILists {
     /// The array of entries.
@@ -136,7 +136,7 @@ impl RenderBlock {
     ) -> *const crate::graphics_engine::render_pass::RenderBlockVftable {
         self.vftable as *const crate::graphics_engine::render_pass::RenderBlockVftable
     }
-    /// Returns the block's [`RenderBlockTypeBase`]. [`RenderPass::DoDraw`] calls this per
+    /// Returns the block's [`RenderBlockTypeBase`](crate::graphics_engine::render_engine::RenderBlockTypeBase). [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) calls this per
     /// entry to detect type runs and drive the type-level setup/restore.
     pub unsafe fn GetType(
         &mut self,
@@ -148,7 +148,7 @@ impl RenderBlock {
     }
     /// Returns the block's 64-bit sort identifier (typically derived from its shaders and
     /// material so equal-state blocks batch together). The sort-ID computation passes store
-    /// the result in [`RenderInstance::m_SortID`].
+    /// the result in [`RenderInstance::m_SortID`](crate::graphics_engine::render_pass::RenderInstance::m_SortID).
     pub unsafe fn GetSortID(
         &mut self,
         sc: *const crate::graphics_engine::render_pass::SortContext,
@@ -160,9 +160,9 @@ impl RenderBlock {
         }
     }
     /// Returns the squared distance from the instance's world translation
-    /// (`info.m_Transform[sc.m_RenderFrameIndex]`) to [`SortContext::m_CameraPosition`]. The
+    /// (`info.m_Transform[sc.m_RenderFrameIndex]`) to [`SortContext::m_CameraPosition`](crate::graphics_engine::render_pass::SortContext::m_CameraPosition). The
     /// depth-aware sort-ID computations store the result (or its depth-bucket index) in
-    /// [`RenderInstance::m_Depth`].
+    /// [`RenderInstance::m_Depth`](crate::graphics_engine::render_pass::RenderInstance::m_Depth).
     pub unsafe fn GetSqDistanceToCamera(
         &mut self,
         sc: *const crate::graphics_engine::render_pass::SortContext,
@@ -173,7 +173,7 @@ impl RenderBlock {
             f(self as *mut Self as _, sc, info)
         }
     }
-    /// Per-block state setup for the colour path, called by [`RenderPass::DoDraw`] when the
+    /// Per-block state setup for the colour path, called by [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) when the
     /// block pointer changes within a type run.
     pub unsafe fn Setup(
         &mut self,
@@ -280,7 +280,7 @@ pub struct RenderBlockVftable {
     _vfunc_11: unsafe extern "system" fn(
         this: *mut crate::graphics_engine::render_pass::RenderBlock,
     ),
-    /// Returns the block's [`RenderBlockTypeBase`]. [`RenderPass::DoDraw`] calls this per
+    /// Returns the block's [`RenderBlockTypeBase`](crate::graphics_engine::render_engine::RenderBlockTypeBase). [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) calls this per
     /// entry to detect type runs and drive the type-level setup/restore.
     pub GetType: unsafe extern "system" fn(
         this: *mut crate::graphics_engine::render_pass::RenderBlock,
@@ -326,22 +326,22 @@ pub struct RenderBlockVftable {
     ),
     /// Returns the block's 64-bit sort identifier (typically derived from its shaders and
     /// material so equal-state blocks batch together). The sort-ID computation passes store
-    /// the result in [`RenderInstance::m_SortID`].
+    /// the result in [`RenderInstance::m_SortID`](crate::graphics_engine::render_pass::RenderInstance::m_SortID).
     pub GetSortID: unsafe extern "system" fn(
         this: *mut crate::graphics_engine::render_pass::RenderBlock,
         sc: *const crate::graphics_engine::render_pass::SortContext,
         info: *const crate::graphics_engine::render_pass::RBIInfo,
     ) -> u64,
     /// Returns the squared distance from the instance's world translation
-    /// (`info.m_Transform[sc.m_RenderFrameIndex]`) to [`SortContext::m_CameraPosition`]. The
+    /// (`info.m_Transform[sc.m_RenderFrameIndex]`) to [`SortContext::m_CameraPosition`](crate::graphics_engine::render_pass::SortContext::m_CameraPosition). The
     /// depth-aware sort-ID computations store the result (or its depth-bucket index) in
-    /// [`RenderInstance::m_Depth`].
+    /// [`RenderInstance::m_Depth`](crate::graphics_engine::render_pass::RenderInstance::m_Depth).
     pub GetSqDistanceToCamera: unsafe extern "system" fn(
         this: *mut crate::graphics_engine::render_pass::RenderBlock,
         sc: *const crate::graphics_engine::render_pass::SortContext,
         info: *const crate::graphics_engine::render_pass::RBIInfo,
     ) -> f32,
-    /// Per-block state setup for the colour path, called by [`RenderPass::DoDraw`] when the
+    /// Per-block state setup for the colour path, called by [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) when the
     /// block pointer changes within a type run.
     pub Setup: unsafe extern "system" fn(
         this: *mut crate::graphics_engine::render_pass::RenderBlock,
@@ -401,19 +401,19 @@ impl std::convert::AsMut<RenderBlockVftable> for RenderBlockVftable {
 /// info and the sort keys the per-frame sort orders it by.
 pub struct RenderInstance {
     /// The block's sort identifier, written per frame by the sort-ID computation in
-    /// [`RenderPass::SortList`] from [`GetSortID`](RenderBlock::GetSortID). The final ordering key
+    /// [`RenderPass::SortList`](crate::graphics_engine::render_pass::RenderPass::SortList) from [`GetSortID`](crate::graphics_engine::render_pass::RenderBlock::GetSortID). The final ordering key
     /// after depth and type.
     pub m_SortID: u64,
     /// The render block.
     pub m_RenderBlock: *mut crate::graphics_engine::render_pass::RenderBlock,
     /// The per-instance info handed to the block's draw call.
     pub m_Info: *mut crate::graphics_engine::render_pass::RBIInfo,
-    /// The block's type index, the second ordering key. Written by [`RBILists::Add`].
+    /// The block's type index, the second ordering key. Written by [`RBILists::Add`](crate::graphics_engine::render_pass::RBILists::Add).
     pub m_RenderBlockType: i32,
     /// The primary ordering key, written per frame by the sort-ID computation in
-    /// [`RenderPass::SortList`]: zero for non-depth sorts, the raw squared camera distance for
+    /// [`RenderPass::SortList`](crate::graphics_engine::render_pass::RenderPass::SortList): zero for non-depth sorts, the raw squared camera distance for
     /// `FrontToBack`/`BackToFront`, or the depth-bucket index (see
-    /// [`RenderPass::m_DepthSqTable`]) for `FrontToBackBucketed`.
+    /// [`RenderPass::m_DepthSqTable`](crate::graphics_engine::render_pass::RenderPass::m_DepthSqTable)) for `FrontToBackBucketed`.
     pub m_Depth: f32,
 }
 fn _RenderInstance_size_check() {
@@ -439,37 +439,37 @@ impl std::convert::AsMut<RenderInstance> for RenderInstance {
 pub struct RenderPass {
     _field_0: [u8; 40],
     /// The list that new render-block-items append to this frame. Each rotation,
-    /// [`SaveRenderFrameData`](RenderPass::SaveRenderFrameData) re-points it at the new parity's list
+    /// [`SaveRenderFrameData`](crate::graphics_engine::render_pass::RenderPass::SaveRenderFrameData) re-points it at the new parity's list
     /// and zeroes its count; zeroing that count is how a pass's draw-time additions are reset.
     pub m_CurrentAddList: *mut crate::graphics_engine::render_pass::RBILists,
-    /// The list [`DoDraw`](RenderPass::DoDraw) draws this frame: the other parity's list, populated
+    /// The list [`DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) draws this frame: the other parity's list, populated
     /// by last rotation's adds. Re-pointed alongside
-    /// [`m_CurrentAddList`](RenderPass::m_CurrentAddList) by
-    /// [`SaveRenderFrameData`](RenderPass::SaveRenderFrameData).
+    /// [`m_CurrentAddList`](crate::graphics_engine::render_pass::RenderPass::m_CurrentAddList) by
+    /// [`SaveRenderFrameData`](crate::graphics_engine::render_pass::RenderPass::SaveRenderFrameData).
     pub m_CurrentDrawList: *mut crate::graphics_engine::render_pass::RBILists,
     _field_38: [u8; 16],
     /// Whether the pass renders back-to-front (the alpha-blend render setting). The `Auto` sort
     /// method resolves to `BackToFront` when set, `FrontToBackBucketed` otherwise.
     pub m_RenderBackToFront: i32,
     _field_4c: [u8; 66],
-    /// Pass state flags. [`m_Enabled`](RenderPassState::m_Enabled) gates whether the pass draws;
-    /// [`ShadowManager::CommitRenderPassSettings`](graphics_engine::shadow_manager::ShadowManager::CommitRenderPassSettings)
+    /// Pass state flags. [`m_Enabled`](crate::graphics_engine::render_pass::RenderPassState::m_Enabled) gates whether the pass draws;
+    /// [`ShadowManager::CommitRenderPassSettings`](crate::graphics_engine::shadow_manager::ShadowManager::CommitRenderPassSettings)
     /// drives it per dispatch for the shadow passes.
     pub m_StateFlags: crate::graphics_engine::render_pass::RenderPassState,
     _field_90: [u8; 12],
-    /// List/sort state flags; carries the [`m_Sorted`](RenderPassSortState::m_Sorted) latch.
+    /// List/sort state flags; carries the [`m_Sorted`](crate::graphics_engine::render_pass::RenderPassSortState::m_Sorted) latch.
     pub m_SortStateFlags: crate::graphics_engine::render_pass::RenderPassSortState,
-    /// The pass's [`RenderPassId`], stored narrow.
+    /// The pass's [`RenderPassId`](crate::graphics_engine::render_engine::RenderPassId), stored narrow.
     pub m_Index: i16,
     _field_a0: [u8; 1976],
-    /// The spinlock serializing [`SortList`](RenderPass::SortList) against concurrent callers
-    /// (the render-engine sort task and the lazy sort in [`DoDraw`](RenderPass::DoDraw)).
+    /// The spinlock serializing [`SortList`](crate::graphics_engine::render_pass::RenderPass::SortList) against concurrent callers
+    /// (the render-engine sort task and the lazy sort in [`DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw)).
     pub m_SortLock: *mut ::std::ffi::c_void,
     _field_860: [u8; 24],
-    /// How [`SortList`](RenderPass::SortList) orders the draw list. Most passes leave the
+    /// How [`SortList`](crate::graphics_engine::render_pass::RenderPass::SortList) orders the draw list. Most passes leave the
     /// constructor default (`Auto`); passes that opt out set `None`.
     pub m_SortMethod: crate::graphics_engine::render_pass::RenderPassSortMethod,
-    /// The number of live entries in [`m_DepthSqTable`](RenderPass::m_DepthSqTable). The
+    /// The number of live entries in [`m_DepthSqTable`](crate::graphics_engine::render_pass::RenderPass::m_DepthSqTable). The
     /// constructor initializes a single zero bucket; with one bucket the bucketed sort computes no
     /// depth keys.
     pub m_NumDepthBuckets: u16,
@@ -512,7 +512,7 @@ impl RenderPass {
     pub const SetRenderContextCamera_ADDRESS: usize = 0x140187430;
     /// Fills the per-view render context from `camera` (the render camera, or a shadow or reflective
     /// light camera selected by the pass flags): the view, projection, and translation-free offset
-    /// view-projection via [`CalculateOffsetViewProjectionMatrix`], the separate camera world
+    /// view-projection via [`CalculateOffsetViewProjectionMatrix`](crate::graphics_engine::render_pass::CalculateOffsetViewProjectionMatrix), the separate camera world
     /// position, and the parity-buffered shadow matrices. Static.
     pub unsafe fn SetRenderContextCamera(
         ctx: *mut crate::graphics_engine::graphics_engine::RenderContext,
@@ -542,11 +542,11 @@ impl RenderPass {
     /// The virtual per-pass draw entry (vtable slot 0): when the pass has work, it runs
     /// `SetupRenderContext`, selects the pass camera (the pass's external camera if set, else the
     /// render camera) into the context via
-    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera), refreshes and uploads the
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera), refreshes and uploads the
     /// global constant buffers
-    /// ([`SetGlobalShaderProgramCameraConstants`](graphics_engine::render_engine::RenderEngine::SetGlobalShaderProgramCameraConstants)
+    /// ([`SetGlobalShaderProgramCameraConstants`](crate::graphics_engine::render_engine::RenderEngine::SetGlobalShaderProgramCameraConstants)
     /// then
-    /// [`SetAllGlobalShaderProgramConstants`](graphics_engine::render_engine::RenderEngine::SetAllGlobalShaderProgramConstants),
+    /// [`SetAllGlobalShaderProgramConstants`](crate::graphics_engine::render_engine::RenderEngine::SetAllGlobalShaderProgramConstants),
     /// under the `"SetGlobals"` marker), binds the pass's render setup and the global textures,
     /// and vtable-dispatches the pass body (slots 1 and 2).
     pub unsafe fn Draw(&mut self) {
@@ -560,8 +560,8 @@ impl RenderPass {
     pub const DoDraw_ADDRESS: usize = 0x1401AC7A0;
     /// Draws the current draw list, walking `min(m_ListSize, m_NumElements)` blocks and
     /// vtable-dispatching each. Non-destructive -- never writes `m_NumElements`. Calls
-    /// [`SortList`](RenderPass::SortList) lazily before drawing. Consecutive blocks of one type
-    /// form a type run: [`ChangeRenderBlockType`](RenderPass::ChangeRenderBlockType) switches
+    /// [`SortList`](crate::graphics_engine::render_pass::RenderPass::SortList) lazily before drawing. Consecutive blocks of one type
+    /// form a type run: [`ChangeRenderBlockType`](crate::graphics_engine::render_pass::RenderPass::ChangeRenderBlockType) switches
     /// between runs, and the tail closes the final run (its type-level restore and its scope
     /// marker).
     pub unsafe fn DoDraw(
@@ -579,12 +579,12 @@ impl RenderPass {
         }
     }
     pub const ChangeRenderBlockType_ADDRESS: usize = 0x140187310;
-    /// Switches the active render-block type between type runs in [`DoDraw`](RenderPass::DoDraw):
+    /// Switches the active render-block type between type runs in [`DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw):
     /// restores `prev` (dispatching the Z, colour, or glint restore variant selected by the pass
     /// id) and closes its scope marker (`Graphics::EndScopeMarker`), then re-applies the
     /// pass render states, sets up `next`, and opens a scope marker (`Graphics::BeginScopeMarker`)
     /// named by its
-    /// [`GetTypeName`](graphics_engine::render_engine::RenderBlockTypeBase::GetTypeName). Either
+    /// [`GetTypeName`](crate::graphics_engine::render_engine::RenderBlockTypeBase::GetTypeName). Either
     /// pointer may be null at a run boundary. `inout_count` is the pass's running drawn-block
     /// counter, zeroed on a type switch.
     pub unsafe fn ChangeRenderBlockType(
@@ -606,15 +606,15 @@ impl RenderPass {
         }
     }
     pub const SortList_ADDRESS: usize = 0x1401A87C0;
-    /// Sorts the current draw list by ([`m_Depth`](RenderInstance::m_Depth),
-    /// [`m_RenderBlockType`](RenderInstance::m_RenderBlockType),
-    /// [`m_SortID`](RenderInstance::m_SortID)) according to
-    /// [`m_SortMethod`](RenderPass::m_SortMethod), first recomputing each entry's depth and
+    /// Sorts the current draw list by ([`m_Depth`](crate::graphics_engine::render_pass::RenderInstance::m_Depth),
+    /// [`m_RenderBlockType`](crate::graphics_engine::render_pass::RenderInstance::m_RenderBlockType),
+    /// [`m_SortID`](crate::graphics_engine::render_pass::RenderInstance::m_SortID)) according to
+    /// [`m_SortMethod`](crate::graphics_engine::render_pass::RenderPass::m_SortMethod), first recomputing each entry's depth and
     /// sort-ID keys through the block vtable
-    /// ([`GetSortID`](RenderBlock::GetSortID) / [`GetSqDistanceToCamera`](RenderBlock::GetSqDistanceToCamera)).
-    /// Latches [`m_Sorted`](RenderPassSortState::m_Sorted) under [`m_SortLock`](RenderPass::m_SortLock),
+    /// ([`GetSortID`](crate::graphics_engine::render_pass::RenderBlock::GetSortID) / [`GetSqDistanceToCamera`](crate::graphics_engine::render_pass::RenderBlock::GetSqDistanceToCamera)).
+    /// Latches [`m_Sorted`](crate::graphics_engine::render_pass::RenderPassSortState::m_Sorted) under [`m_SortLock`](crate::graphics_engine::render_pass::RenderPass::m_SortLock),
     /// so the sort runs at most once per list rotation; both the render-engine sort task
-    /// (`CRenderEngine::SortRenderPasses`) and the lazy call in [`DoDraw`](RenderPass::DoDraw)
+    /// (`CRenderEngine::SortRenderPasses`) and the lazy call in [`DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw)
     /// funnel here.
     pub unsafe fn SortList(
         &mut self,
@@ -682,12 +682,12 @@ fn _RenderPassState_size_check() {
 #[derive(Copy, Clone)]
 #[repr(C, align(8))]
 /// The camera context a render pass sorts against (`NGraphicsEngine::IRenderBlock::SSortContext`).
-/// [`RenderPass::SortList`] receives it from either of its two callers:
+/// [`RenderPass::SortList`](crate::graphics_engine::render_pass::RenderPass::SortList) receives it from either of its two callers:
 /// `CRenderEngine::SortRenderPasses` builds it from the pass's sort camera (its external camera if
-/// set, else the render camera), and [`RenderPass::DoDraw`]'s lazy call builds it from the render
+/// set, else the render camera), and [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw)'s lazy call builds it from the render
 /// context's camera fields.
 pub struct SortContext {
-    /// The [`RenderPassId`] of the pass being sorted.
+    /// The [`RenderPassId`](crate::graphics_engine::render_engine::RenderPassId) of the pass being sorted.
     pub m_RenderPassIndex: i32,
     /// The `%3` render-frame ring index selecting which of the info's buffered world transforms
     /// the distance query reads.

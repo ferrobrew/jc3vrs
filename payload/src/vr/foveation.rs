@@ -22,7 +22,7 @@
 //! D3D passes borrow the engine's immediate context under `Context::m_Mutex`, the same discipline as
 //! [`crate::vr::blit`] and `crate::capture::composite`. On by default, but still experimental;
 //! disabling it skips the two passes and the per-draw index rewrite; see
-//! [`crate::config::FoveationConfig`].
+//! [`crate::vr::FoveationConfig`].
 
 use std::{
     ffi::c_void,
@@ -31,6 +31,7 @@ use std::{
 };
 
 use anyhow::Context as _;
+use jc3gi::graphics_engine::{device::Device, graphics_engine::HContext_t};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -53,8 +54,6 @@ use windows::{
     },
     core::Interface as _,
 };
-
-use jc3gi::graphics_engine::{device::Device, graphics_engine::HContext_t};
 
 /// Raised by the render-pass hook for exactly the foveated shading range, so [`apply_force_test`] injects
 /// the peripheral stencil test only into those draws.
@@ -380,6 +379,13 @@ impl Foveation {
             context.PSSetShader(pixel_shader, None);
             context.PSSetConstantBuffers(0, Some(&[Some(self.params_cb.clone())]));
             context.RSSetState(&self.rasterizer);
+            // Opaque blend, explicitly: this raw pass otherwise inherits whatever blend state the
+            // engine's last block left on the context. An inherited additive/alpha state makes the
+            // fill *add* its full-screen reconstruction on top of the already-shaded scene instead
+            // of replacing the dropped pixels -- a whole-frame ~2x brightness step that latches for
+            // as long as the scene keeps handing this pass the same leftover state (the
+            // pose-latched global brightness flips).
+            context.OMSetBlendState(None, None, 0xFFFF_FFFF);
         }
     }
 

@@ -27,7 +27,7 @@ use windows::Win32::Graphics::{
     Dxgi::Common::DXGI_FORMAT_R32_UINT,
 };
 
-use super::{HudMode, config::DepthShiftConfig};
+use crate::hud::{HudMode, config::DepthShiftConfig};
 
 /// The committed, precompiled histogram compute shader (entry point `main`).
 const COMPUTE_DXBC: &[u8] = include_bytes!("../shaders/depth_histogram_cs.dxbc");
@@ -290,7 +290,7 @@ impl DepthShift {
                 }
                 None => (0u32, [0.0; 4], [0.0; 4], [0.0; 4], [0.0; 4]),
             };
-            let inv_view_projection = match super::quad::fetch_view_projection() {
+            let inv_view_projection = match crate::hud::quad::fetch_view_projection() {
                 Some(vp) if mask_by_hud != 0 => {
                     // Invert in f64: the view-projection carries world-scale translations that
                     // lose precision in f32 (see the stereo reprojection).

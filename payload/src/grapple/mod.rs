@@ -387,8 +387,9 @@ fn reel_flags() -> (bool, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use glam::EulerRot;
+
+    use super::*;
 
     /// At full blend, hold-view replaces the live body frame with the held one: the composed view
     /// stays wherever it was at reel start, no matter how the body rotates.

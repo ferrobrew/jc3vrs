@@ -1,10 +1,10 @@
 //! The marker-layer warp pass: draw the marker texture as a depth-warped grid mesh.
 //!
-//! Same overlay pipeline as [`super::quad::HudQuad`] (alpha blend, no depth test, no culling),
+//! Same overlay pipeline as [`crate::hud::quad::HudQuad`] (alpha blend, no depth test, no culling),
 //! but the vertex shader tessellates the panel into a grid and displaces each vertex along its
 //! panel-anchor ray by a marker-blended depth field
 //! ([`hud_layer_vs`](../shaders/hud_layer_vs.hlsl)); the pixel shader is shared with the plain
-//! quad. See [`super::markers`] for where the marker data comes from.
+//! quad. See [`crate::hud::markers`] for where the marker data comes from.
 
 use anyhow::Context as _;
 use glam::{Vec3, Vec4};
@@ -24,7 +24,7 @@ use windows::Win32::Graphics::{
     },
 };
 
-use super::markers::{MARKER_CAPACITY, MarkerDepth};
+use crate::hud::markers::{MARKER_CAPACITY, MarkerDepth};
 
 /// The committed, precompiled shaders: the grid-warp vertex shader plus the shared quad pixel
 /// shader (entry point `main`).
@@ -187,7 +187,7 @@ impl HudWarp {
             return false;
         }
 
-        let Some(view_projection) = super::quad::fetch_view_projection() else {
+        let Some(view_projection) = crate::hud::quad::fetch_view_projection() else {
             return false;
         };
 

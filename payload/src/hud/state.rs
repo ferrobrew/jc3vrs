@@ -10,10 +10,11 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CLEAR_DEPTH, D3D11_CLEAR_STENCIL, ID3D11DeviceContext,
 };
 
-use super::{
+use crate::hud::{
     binding,
+    config::FollowConfig,
     markers::MarkerDepth,
-    quad::HudQuad,
+    quad::{HudQuad, PanelParams},
     split,
     target::HudTarget,
     warp::{HudWarp, WarpInputs},
@@ -40,11 +41,11 @@ pub struct HudState {
     target: Option<HudTarget>,
     /// Whether the redirect is currently applied to the UI's render buffer.
     redirected: bool,
-    /// The last back-buffer size seen by [`ensure_redirected`]. A change means the engine re-ran
+    /// The last engine render size seen by [`ensure_redirected`]. A change means the engine re-ran
     /// `InitPlatformRT` (its device/reset path), rebuilding `m_RenderBuffer` from the engine surface
     /// and discarding our rebind -- so the redirect must be re-applied even though our target texture
-    /// is independent of the back buffer.
-    back_buffer_size: Option<(u32, u32)>,
+    /// is independent of the engine's own targets.
+    render_size: Option<(u32, u32)>,
     /// The egui texture id for the HUD preview, registered lazily on the UI thread.
     preview_id: Option<egui::TextureId>,
     /// The egui texture ids for the marker/center layer previews, registered lazily.
@@ -54,7 +55,7 @@ pub struct HudState {
     /// The marker-layer warp pass, built lazily on the first warped draw.
     warp: Option<HudWarp>,
     /// The dynamic-distance depth sampler, built lazily on the first enabled frame.
-    depth_shift: Option<super::depth::DepthShift>,
+    depth_shift: Option<crate::hud::depth::DepthShift>,
     /// The frame's warp inputs (eye 0), or `None` when the warp is off this frame.
     warp_frame: Option<WarpFrame>,
     /// Lazy-follow damping state for the floating panel (gameplay HUD mode).
@@ -75,7 +76,7 @@ pub struct HudState {
     /// eyes project the same world position through their own per-eye VP (correct stereo depth).
     cached_corners: Option<[Vec4; 4]>,
     /// The virtual mouse cursor's world-space corners, computed once per frame on eye 0 alongside
-    /// the panel corners; `None` while the cursor is hidden (see [`super::cursor`]).
+    /// the panel corners; `None` while the cursor is hidden (see [`crate::hud::cursor`]).
     cursor_corners: Option<[Vec4; 4]>,
     /// While split: per-layer world-space corners and their distances, chosen on eye 0. Index
     /// matches [`split::LAYERS`]. The static and center entries are recomputed every frame
@@ -106,7 +107,7 @@ impl FollowState {
     /// slerp: `alpha = 1 - 2^(-dt/halflife); current = slerp(current, target, alpha)`. No deadzone
     /// -- the panel always follows, with the halflife controlling the lag. Returns the damped
     /// quaternion for the quad's world-space orientation.
-    fn update(&mut self, head_rotation: Quat, config: &super::config::FollowConfig) -> Quat {
+    fn update(&mut self, head_rotation: Quat, config: &FollowConfig) -> Quat {
         let dt = self
             .last_time
             .map(|t| t.elapsed().as_secs_f32())
@@ -126,7 +127,7 @@ impl HudState {
         Self {
             target: None,
             redirected: false,
-            back_buffer_size: None,
+            render_size: None,
             preview_id: None,
             layer_preview_ids: [None, None],
             quad: None,
@@ -145,8 +146,8 @@ impl HudState {
     }
 
     /// Ensure the HUD is redirected into a target at `texture_width` x `texture_height`, (re)creating
-    /// the target on a config-size change and applying the rebind once. A back-buffer size change
-    /// (`back_buffer_width`/`back_buffer_height`) forces a re-apply without recreating the target,
+    /// the target on a config-size change and applying the rebind once. A render-size change
+    /// (`render_width`/`render_height`) forces a re-apply without recreating the target,
     /// because the engine re-runs `InitPlatformRT` on a device/reset and discards our rebind. A failed
     /// target build or a not-yet-live UI leaves the state unredirected, so the next tick retries.
     pub(super) fn ensure_redirected(
@@ -154,8 +155,8 @@ impl HudState {
         device: &Device,
         texture_width: u32,
         texture_height: u32,
-        back_buffer_width: u32,
-        back_buffer_height: u32,
+        render_width: u32,
+        render_height: u32,
     ) {
         if texture_width == 0 || texture_height == 0 {
             return;
@@ -178,11 +179,11 @@ impl HudState {
             }
         }
 
-        // A back-buffer size change means the engine re-ran `InitPlatformRT` (its device/reset path),
+        // A render-size change means the engine re-ran `InitPlatformRT` (its device/reset path),
         // which rebuilds `m_RenderBuffer` from the engine surface and discards our rebind. Re-apply it
-        // even though our target texture is independent of the back buffer.
-        if self.back_buffer_size != Some((back_buffer_width, back_buffer_height)) {
-            self.back_buffer_size = Some((back_buffer_width, back_buffer_height));
+        // even though our target texture is independent of the engine's own targets.
+        if self.render_size != Some((render_width, render_height)) {
+            self.render_size = Some((render_width, render_height));
             self.redirected = false;
         }
 
@@ -255,30 +256,30 @@ impl HudState {
     }
 
     /// Restore the engine's own binding and drop our target, so the UI no longer renders into our
-    /// texture. A no-op when not redirected. `back_buffer_width`/`back_buffer_height` are the
-    /// back-buffer dimensions `InitPlatformRT` and the viewport expect.
-    pub(super) fn restore(&mut self, back_buffer_width: u32, back_buffer_height: u32) {
+    /// texture. A no-op when not redirected. `render_width`/`render_height` are the engine render
+    /// dimensions `InitPlatformRT` and the viewport expect.
+    pub(super) fn restore(&mut self, render_width: u32, render_height: u32) {
         if self.redirected {
-            binding::restore_engine_binding(back_buffer_width, back_buffer_height);
+            binding::restore_engine_binding(render_width, render_height);
             self.redirected = false;
         }
         self.target = None;
     }
 
     /// The frame's dynamic panel distance: dispatch the depth-histogram pass, pick up the async
-    /// readback, and ease toward the policy's target (see [`super::depth`]). Falls back to
+    /// readback, and ease toward the policy's target (see [`crate::hud::depth`]). Falls back to
     /// `base` when the pipeline cannot be built. Call once per frame (eye 0) with the engine
     /// context mutex held.
     pub fn depth_distance(
         &mut self,
         context: &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
         device: &jc3gi::graphics_engine::device::Device,
-        cfg: &super::config::DepthShiftConfig,
-        mode: super::HudMode,
+        cfg: &crate::hud::config::DepthShiftConfig,
+        mode: crate::hud::HudMode,
         base: f32,
     ) -> f32 {
         if self.depth_shift.is_none() {
-            match super::depth::DepthShift::new(device) {
+            match crate::hud::depth::DepthShift::new(device) {
                 Ok(shift) => self.depth_shift = Some(shift),
                 Err(e) => {
                     // Log the build failure once, not per frame; the next attempt happens on the
@@ -311,7 +312,7 @@ impl HudState {
                 &hud_srv,
             ) {
                 (true, Some(corners), Some((pos, _)), Some(srv)) => {
-                    Some(super::depth::MaskInputs {
+                    Some(crate::hud::depth::MaskInputs {
                         camera_pos: pos,
                         corners,
                         hud_srv: srv,
@@ -325,10 +326,10 @@ impl HudState {
     }
 
     /// The dynamic-distance state's live snapshot, for the debug UI.
-    pub fn depth_status(&self) -> Option<super::depth::DepthShiftStatus> {
+    pub fn depth_status(&self) -> Option<crate::hud::depth::DepthShiftStatus> {
         self.depth_shift
             .as_ref()
-            .map(super::depth::DepthShift::status)
+            .map(crate::hud::depth::DepthShift::status)
     }
 
     /// Choose the panel pose `(position, rotation)` for the current frame from the head pose, caching
@@ -344,7 +345,7 @@ impl HudState {
         freeze: bool,
         head_pos: Vec3,
         head_rotation: Quat,
-        follow: &super::config::FollowConfig,
+        follow: &FollowConfig,
     ) -> (Vec3, Quat) {
         let pose = if freeze {
             *self.latched_pose.get_or_insert((head_pos, head_rotation))
@@ -365,9 +366,9 @@ impl HudState {
 
     /// Compute the panel's world-space corners from the current camera and follow state, caching
     /// the result for both eyes. Call once per frame (eye 0); eye 1 reuses the cached corners.
-    pub fn compute_world_corners(&mut self, params: &super::quad::PanelParams) {
+    pub fn compute_world_corners(&mut self, params: &PanelParams) {
         self.cached_corners = None;
-        if let Some(corners) = super::quad::compute_world_corners(params) {
+        if let Some(corners) = crate::hud::quad::compute_world_corners(params) {
             self.cached_corners = Some(corners);
         }
     }
@@ -384,7 +385,7 @@ impl HudState {
 
     /// The redirected texture's size, or `None` while the redirect is not applied. The mouse
     /// cursor's coordinate mapping rescales to this (movie rectangle = texture; see
-    /// [`super::cursor`]).
+    /// [`crate::hud::cursor`]).
     pub(super) fn redirected_size(&self) -> Option<(u32, u32)> {
         if !self.redirected {
             return None;
@@ -398,7 +399,7 @@ impl HudState {
     pub fn set_split_frame(
         &mut self,
         active: bool,
-        params: Option<[super::quad::PanelParams; split::LAYER_COUNT]>,
+        params: Option<[PanelParams; split::LAYER_COUNT]>,
     ) {
         self.split_composite = active;
         self.cached_layer_corners = [None, None, None];
@@ -406,7 +407,7 @@ impl HudState {
             return;
         };
         for (slot, params) in self.cached_layer_corners.iter_mut().zip(params.iter()) {
-            *slot = super::quad::compute_world_corners(params).map(|c| (c, params.distance));
+            *slot = crate::hud::quad::compute_world_corners(params).map(|c| (c, params.distance));
         }
     }
 

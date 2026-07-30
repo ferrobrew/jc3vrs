@@ -28,7 +28,7 @@ impl std::convert::AsMut<Context> for Context {
 pub struct Device {
     pub m_Context: *mut crate::graphics_engine::device::Context,
     /// The presentable back-buffer surface owned by the DXGI swapchain, returned by
-    /// `GetDeviceSurface``(BackBuffer)`. `ResizeBuffers` recreates its RTV/SRV/texture on a
+    /// [`GetDeviceSurface`](crate::graphics_engine::device::GetDeviceSurface)``(BackBuffer). [`ResizeBuffers`](crate::graphics_engine::device::ResizeBuffers) recreates its RTV/SRV/texture on a
     /// swapchain resize.
     pub m_BackBuffer: *mut crate::graphics_engine::texture::Texture,
     _field_10: [u8; 16],
@@ -37,10 +37,10 @@ pub struct Device {
     _field_30: [u8; 8],
     pub m_DXGIOutput: crate::graphics_engine::device::IDXGIOutput,
     _field_40: [u8; 336],
-    /// The device's live mode descriptor. `ResizeBuffers` writes its display dimensions/ratio on a
-    /// swapchain resize; `GetDeviceInfo` returns a copy of it. Subsystems that re-size their own
-    /// render targets read their dimensions from here (via `GetDeviceInfo`), so it is the
-    /// device-side source of the display size independent of the [`CreateRenderSetups`](graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups)
+    /// The device's live mode descriptor. [`ResizeBuffers`](crate::graphics_engine::device::ResizeBuffers) writes its display dimensions/ratio on a
+    /// swapchain resize; [`GetDeviceInfo`](crate::graphics_engine::device::GetDeviceInfo) returns a copy of it. Subsystems that re-size their own
+    /// render targets read their dimensions from here (via [`GetDeviceInfo`](crate::graphics_engine::device::GetDeviceInfo)), so it is the
+    /// device-side source of the display size independent of the [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups)
     /// parameter.
     pub m_DeviceInfo: crate::graphics_engine::device::DeviceInfo,
     _field_1c8: [u8; 88],
@@ -67,10 +67,10 @@ impl std::convert::AsMut<Device> for Device {
 }
 #[derive(Copy, Clone)]
 #[repr(C, align(8))]
-/// The device's cached mode/capability descriptor. `GetDeviceInfo` returns a copy of the device's own
-/// instance ([`Device::m_DeviceInfo`]), and [`CreateRenderSetups`](graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups)
+/// The device's cached mode/capability descriptor. [`GetDeviceInfo`](crate::graphics_engine::device::GetDeviceInfo) returns a copy of the device's own
+/// instance ([`Device::m_DeviceInfo`](crate::graphics_engine::device::Device::m_DeviceInfo)), and [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups)
 /// sizes every scene render target from a caller-supplied copy's
-/// [`m_DisplayWidth`](DeviceInfo::m_DisplayWidth)/[`m_DisplayHeight`](DeviceInfo::m_DisplayHeight).
+/// [`m_DisplayWidth`](crate::graphics_engine::device::DeviceInfo::m_DisplayWidth)/[`m_DisplayHeight`](crate::graphics_engine::device::DeviceInfo::m_DisplayHeight).
 pub struct DeviceInfo {
     _field_0: [u8; 16],
     /// The display width in pixels. The source of every scene render target's width.
@@ -102,8 +102,8 @@ impl std::convert::AsMut<DeviceInfo> for DeviceInfo {
 }
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// The surface a device exposes to `GetDeviceSurface`. The presentable back buffer is
-/// [`BackBuffer`](DeviceSurface::BackBuffer); the eye-specific variants are for stereo output devices.
+/// The surface a device exposes to [`GetDeviceSurface`](crate::graphics_engine::device::GetDeviceSurface). The presentable back buffer is
+/// [`BackBuffer`](crate::graphics_engine::device::DeviceSurface::BackBuffer); the eye-specific variants are for stereo output devices.
 pub enum DeviceSurface {
     FrontBuffer = 0isize as _,
     BackBuffer = 1isize as _,
@@ -142,7 +142,7 @@ pub unsafe fn GetMasterContext(
     }
 }
 pub const GetDeviceInfo_ADDRESS: usize = 0x1419525F0;
-/// Copies the device's [`m_DeviceInfo`](Device::m_DeviceInfo) into `out` (a plain `memcpy` of the
+/// Copies the device's [`m_DeviceInfo`](crate::graphics_engine::device::Device::m_DeviceInfo) into `out` (a plain `memcpy` of the
 /// `0x38`-byte descriptor).
 pub unsafe fn GetDeviceInfo(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
@@ -157,9 +157,9 @@ pub unsafe fn GetDeviceInfo(
     }
 }
 pub const GetDeviceSurface_ADDRESS: usize = 0x141956260;
-/// Returns one of the device's presentable surfaces. Only [`BackBuffer`](DeviceSurface::BackBuffer)
-/// resolves (to [`Device::m_BackBuffer`]); the other selectors return null on this non-stereo device.
-/// [`CreateRenderSetups`](graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) uses it
+/// Returns one of the device's presentable surfaces. Only [`BackBuffer`](crate::graphics_engine::device::DeviceSurface::BackBuffer)
+/// resolves (to [`Device::m_BackBuffer`](crate::graphics_engine::device::Device::m_BackBuffer)); the other selectors return null on this non-stereo device.
+/// [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) uses it
 /// to alias `BackBufferLinear` and the back-buffer render setups onto the live swapchain surface.
 pub unsafe fn GetDeviceSurface(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
@@ -178,9 +178,9 @@ pub unsafe fn GetDeviceSurface(
 pub const ResizeBuffers_ADDRESS: usize = 0x141952400;
 /// Resizes the DXGI swapchain's buffers. Unbinds render targets, releases and recreates the back
 /// buffer's texture/RTV/SRV via `IDXGISwapChain::ResizeBuffers`, and updates
-/// [`Device::m_DeviceInfo`]'s display dimensions and [`Device::m_WasResized`]. This is the swapchain
+/// [`Device::m_DeviceInfo`](crate::graphics_engine::device::Device::m_DeviceInfo)'s display dimensions and [`Device::m_WasResized`](crate::graphics_engine::device::Device::m_WasResized). This is the swapchain
 /// half of a resize, distinct from re-creating the scene render targets in
-/// [`CreateRenderSetups`](graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups).
+/// [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups).
 pub unsafe fn ResizeBuffers(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
     width: u32,

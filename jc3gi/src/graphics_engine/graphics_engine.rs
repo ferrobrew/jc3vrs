@@ -16,7 +16,7 @@ fn _ActiveCursor_size_check() {
 }
 #[repr(C, align(8))]
 /// The per-camera beam-frustum-based-culling parameters cached by
-/// [`GetBFBCFrustumParamsForCameraAndTime`](OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime),
+/// [`GetBFBCFrustumParamsForCameraAndTime`](crate::graphics_engine::graphics_engine::OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime),
 /// pointed at by its `out_params`.
 pub struct BFBCFrustumCullParameters {
     _field_0: [u8; 4736],
@@ -72,7 +72,7 @@ impl std::convert::AsMut<D3D11Viewport> for D3D11Viewport {
 }
 #[repr(C, align(8))]
 /// The opaque parameter block passed to
-/// [`HandleDrawThreadTask`](GraphicsEngine::HandleDrawThreadTask).
+/// [`HandleDrawThreadTask`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleDrawThreadTask).
 pub struct DrawThreadTaskParam {}
 impl DrawThreadTaskParam {}
 impl std::convert::AsRef<DrawThreadTaskParam> for DrawThreadTaskParam {
@@ -116,7 +116,7 @@ impl std::convert::AsMut<EffectInfo> for EffectInfo {
 }
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
-/// The result status of [`QueryTimeStampFrequency`].
+/// The result status of [`QueryTimeStampFrequency`](crate::graphics_engine::graphics_engine::QueryTimeStampFrequency).
 pub enum FrequencyStatus {
     Ok = 0isize as _,
     Disjoint = 1isize as _,
@@ -131,55 +131,55 @@ fn _FrequencyStatus_size_check() {
 #[repr(C, align(8))]
 pub struct GraphicsEngine {
     _field_0: [u8; 8],
-    /// Whether the engine has finished its system initialisation. [`ResizeBuffers`](GraphicsEngine::ResizeBuffers)
+    /// Whether the engine has finished its system initialisation. [`ResizeBuffers`](crate::graphics_engine::graphics_engine::GraphicsEngine::ResizeBuffers)
     /// only applies a resize inline once this is set.
     pub m_HasBeenInitialized: bool,
     _field_9: [u8; 11],
-    /// Set by the tail of [`HandleDrawThreadTask`](GraphicsEngine::HandleDrawThreadTask) once the
+    /// Set by the tail of [`HandleDrawThreadTask`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleDrawThreadTask) once the
     /// frame's CPU draw has completed (just before
-    /// [`m_CPUFinishedDrawingEvent`](GraphicsEngine::m_CPUFinishedDrawingEvent) is signalled).
-    /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) returns immediately when
+    /// [`m_CPUFinishedDrawingEvent`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_CPUFinishedDrawingEvent) is signalled).
+    /// [`WaitForCPUDrawToFinish`](crate::graphics_engine::graphics_engine::GraphicsEngine::WaitForCPUDrawToFinish) returns immediately when
     /// set and otherwise waits on the event.
     pub m_CPUDrawFinished: bool,
     _field_15: [u8; 3],
     /// The Win32 event `HandleDrawThreadTask` signals at its tail;
-    /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) waits on it (infinite)
-    /// while [`m_CPUDrawFinished`](GraphicsEngine::m_CPUDrawFinished) is clear.
+    /// [`WaitForCPUDrawToFinish`](crate::graphics_engine::graphics_engine::GraphicsEngine::WaitForCPUDrawToFinish) waits on it (infinite)
+    /// while [`m_CPUDrawFinished`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_CPUDrawFinished) is clear.
     pub m_CPUFinishedDrawingEvent: *mut ::std::ffi::c_void,
     /// When a draw fragment is outstanding, points at its completion signal (a `u32` that the
     /// fragment sets non-zero); null otherwise.
-    /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) drains it first, via the
+    /// [`WaitForCPUDrawToFinish`](crate::graphics_engine::graphics_engine::GraphicsEngine::WaitForCPUDrawToFinish) drains it first, via the
     /// work-stealing `cpu_fragment::CpuFragmentWaitUntilSignalIsNonZero`.
     pub m_DrawFragmentSignal: *mut u32,
     _field_28: [u8; 8],
     /// Completion signal for the async draw-dispatch CPU fragment that
-    /// [`DispatchDraw`](GraphicsEngine::DispatchDraw) kicks to run the render passes. The fragment sets
+    /// [`DispatchDraw`](crate::graphics_engine::graphics_engine::GraphicsEngine::DispatchDraw) kicks to run the render passes. The fragment sets
     /// it non-zero on completion; the engine waits on it (via
     /// `cpu_fragment::CpuFragmentWaitUntilSignalIsNonZero`, gated by `CpuPrimaryCount() > 1`) only at the
-    /// *next* [`Draw`](GraphicsEngine::Draw)'s entry.
-    /// [`WaitForCPUDrawToFinish`](GraphicsEngine::WaitForCPUDrawToFinish) does *not* wait on it.
+    /// *next* [`Draw`](crate::graphics_engine::graphics_engine::GraphicsEngine::Draw)'s entry.
+    /// [`WaitForCPUDrawToFinish`](crate::graphics_engine::graphics_engine::GraphicsEngine::WaitForCPUDrawToFinish) does *not* wait on it.
     pub m_DrawThreadWorkSignal: u32,
     _field_34: [u8; 212],
     /// The display-mode state machine serviced once per frame by
-    /// [`HandleModeChange`](GraphicsEngine::HandleModeChange): while idle it applies a deferred
+    /// [`HandleModeChange`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleModeChange): while idle it applies a deferred
     /// window resize, and while a mode change is pending it applies the fullscreen/adapter change.
     pub m_DisplayModeChangeState: u32,
     _field_10c: [u8; 12],
-    /// Set at the tail of [`ApplyResize`](GraphicsEngine::ApplyResize) once a resize has been applied
+    /// Set at the tail of [`ApplyResize`](crate::graphics_engine::graphics_engine::GraphicsEngine::ApplyResize) once a resize has been applied
     /// and a valid display mode is in effect.
     pub m_HasNewValidDisplayMode: bool,
     _field_119: [u8; 3],
-    /// The pending deferred-resize width, stashed by [`ResizeBuffers`](GraphicsEngine::ResizeBuffers)
-    /// and consumed by [`HandleModeChange`](GraphicsEngine::HandleModeChange).
+    /// The pending deferred-resize width, stashed by [`ResizeBuffers`](crate::graphics_engine::graphics_engine::GraphicsEngine::ResizeBuffers)
+    /// and consumed by [`HandleModeChange`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleModeChange).
     pub m_WindowWidth: u32,
     /// The pending deferred-resize height.
     pub m_WindowHeight: u32,
-    /// When set, [`ResizeBuffers`](GraphicsEngine::ResizeBuffers) applies a resize inline rather than
+    /// When set, [`ResizeBuffers`](crate::graphics_engine::graphics_engine::GraphicsEngine::ResizeBuffers) applies a resize inline rather than
     /// deferring it; the fullscreen/adapter path sets it around its device reset.
     pub m_SynchronousResize: bool,
-    /// Set when a deferred resize is pending in [`m_WindowWidth`](GraphicsEngine::m_WindowWidth)/
-    /// [`m_WindowHeight`](GraphicsEngine::m_WindowHeight), consumed by
-    /// [`HandleModeChange`](GraphicsEngine::HandleModeChange).
+    /// Set when a deferred resize is pending in [`m_WindowWidth`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_WindowWidth)/
+    /// [`m_WindowHeight`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_WindowHeight), consumed by
+    /// [`HandleModeChange`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleModeChange).
     pub m_HasNewWindowSettings: bool,
     _field_126: [u8; 2],
     pub m_ActiveCursor: crate::graphics_engine::graphics_engine::ActiveCursor,
@@ -188,12 +188,14 @@ pub struct GraphicsEngine {
     pub m_ShadowManager: *mut crate::graphics_engine::shadow_manager::ShadowManager,
     _field_160: [u8; 16],
     /// The engine-owned scene render camera: a by-value copy rebuilt each
-    /// [`Draw`](GraphicsEngine::Draw) by `Camera::SetupRenderCamera` (reverse-Z + jitter, then the
+    /// [`Draw`](crate::graphics_engine::graphics_engine::GraphicsEngine::Draw) by `Camera::SetupRenderCamera` (reverse-Z + jitter, then the
     /// view-projection products from `m_View`). This is the camera the render passes consume;
-    /// distinct from the `CameraManager`'s camera objects, which are pointers to the gameplay
+    /// distinct from the [`CameraManager`](crate::camera::camera_manager::CameraManager)'s camera objects, which are pointers to the gameplay
     /// cameras.
     pub m_RenderCamera: crate::camera::camera::Camera,
-    _field_720: [u8; 1936],
+    /// The engine-owned render context handed to the render passes: the per-view camera matrices,
+    /// the graphics context, and the currently-installed render setup.
+    pub m_RenderContext: crate::graphics_engine::graphics_engine::RenderContext,
     pub m_Device: *mut crate::graphics_engine::device::Device,
     _field_eb8: [u8; 16],
     /// Deferred-shading render targets ("GBuffer0".."GBuffer3").
@@ -202,14 +204,19 @@ pub struct GraphicsEngine {
     /// Motion-blur velocity buffer.
     pub m_VelocityBufferTexture: *mut crate::graphics_engine::texture::Texture,
     _field_fa8: [u8; 168],
-    /// The final composite render setup: colour → [`m_BackBufferLinear`](GraphicsEngine::m_BackBufferLinear),
+    /// The final composite render setup: colour → [`m_BackBufferLinear`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferLinear),
     /// depth → the main depth surface. Built by
-    /// [`CreateRenderSetups`](GraphicsEngine::CreateRenderSetups) against the live swapchain back
+    /// [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) against the live swapchain back
     /// buffer and stored as the render context's setup; the HUD and the scene resolve target it.
     pub m_BackBufferRenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
     /// Main scene depth ("MainDepthBuffer").
     pub m_MainDepthTexture: *mut crate::graphics_engine::texture::Texture,
-    _field_1060: [u8; 8],
+    /// The render-target surface over [`m_MainDepthTexture`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_MainDepthTexture), built by
+    /// [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) with
+    /// [`GetRenderTarget`](crate::graphics_engine::surface::GetRenderTarget). It is the depth target of
+    /// the scene and back-buffer render setups, and the depth-stencil view the UI binds alongside
+    /// [`m_BackBufferLinear`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferLinear).
+    pub m_MainDepthSurface: *mut crate::graphics_engine::texture::Texture,
     /// Main scene HDR color ("MainColorBuffer").
     pub m_MainColorBuffer: *mut crate::graphics_engine::texture::Texture,
     _field_1070: [u8; 8],
@@ -220,9 +227,15 @@ pub struct GraphicsEngine {
     pub m_EffectInfo: [crate::graphics_engine::graphics_engine::EffectInfo; 5],
     /// Final linear back buffer ("BackBufferLinear").
     pub m_BackBufferLinear: *mut crate::graphics_engine::texture::Texture,
-    _field_1238: [u8; 134],
-    /// Whether [`HandleDrawThreadTask`](GraphicsEngine::HandleDrawThreadTask) renders the 3D scene
-    /// this frame (GBuffer, world, post-effects) rather than only the UI. [`Draw`](GraphicsEngine::Draw)
+    /// The post-effect render setup: colour[0] is the raw device back-buffer surface, with no
+    /// depth. Built by [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) alongside
+    /// [`m_BackBufferRenderSetup`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferRenderSetup) and bound by
+    /// [`HandleDrawThreadTask`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleDrawThreadTask) for the world filters and the
+    /// post-effect stack.
+    pub m_PostEffectRenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
+    _field_1240: [u8; 126],
+    /// Whether [`HandleDrawThreadTask`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleDrawThreadTask) renders the 3D scene
+    /// this frame (GBuffer, world, post-effects) rather than only the UI. [`Draw`](crate::graphics_engine::graphics_engine::GraphicsEngine::Draw)
     /// sets it from the game state and the UI's static-background grab: it is cleared while a
     /// full-screen UI with a static background is shown (pause / map / menus), in which case the draw
     /// thread clears the target to transparent instead of rendering the scene.
@@ -232,7 +245,7 @@ pub struct GraphicsEngine {
     pub m_EffectInfoIndex: u32,
     _field_12cc: [u8; 52],
     /// The currently-loaded shader bundle name, compared by
-    /// [`LoadShaderBundle`](GraphicsEngine::LoadShaderBundle) to skip a same-name reload. The
+    /// [`LoadShaderBundle`](crate::graphics_engine::graphics_engine::GraphicsEngine::LoadShaderBundle) to skip a same-name reload. The
     /// bundle names are `"Shaders"` / `"ShadersLowShadows"` (and the Intel `"ShadersConstMath*"`
     /// variants).
     pub m_CurrentBundleName: crate::types::std_string::String,
@@ -255,11 +268,11 @@ impl GraphicsEngine {
 impl GraphicsEngine {
     pub const WaitForCPUDrawToFinish_ADDRESS: usize = 0x1400C4690;
     /// Blocks until the frame's CPU draw has completed: first drains an outstanding draw
-    /// fragment via [`m_DrawFragmentSignal`](GraphicsEngine::m_DrawFragmentSignal) (a
+    /// fragment via [`m_DrawFragmentSignal`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_DrawFragmentSignal) (a
     /// work-stealing wait -- see
     /// `cpu_fragment::CpuFragmentWaitUntilSignalIsNonZero`),
-    /// then waits on [`m_CPUFinishedDrawingEvent`](GraphicsEngine::m_CPUFinishedDrawingEvent)
-    /// unless [`m_CPUDrawFinished`](GraphicsEngine::m_CPUDrawFinished) is already set. Because of
+    /// then waits on [`m_CPUFinishedDrawingEvent`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_CPUFinishedDrawingEvent)
+    /// unless [`m_CPUDrawFinished`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_CPUDrawFinished) is already set. Because of
     /// the work-stealing drain, only threads the fragment system knows may call it.
     pub unsafe fn WaitForCPUDrawToFinish(&mut self) {
         unsafe {
@@ -316,7 +329,7 @@ impl GraphicsEngine {
     }
     pub const TextureCachePlatformUpdate_ADDRESS: usize = 0x1400C46D0;
     /// A draw-prologue step. Copies the active camera into the engine-owned render-camera slot, runs
-    /// [`Camera::SetupRenderCamera`] on it, publishes it as the camera manager's render camera, then
+    /// [`Camera::SetupRenderCamera`](crate::camera::camera::Camera::SetupRenderCamera) on it, publishes it as the camera manager's render camera, then
     /// runs the per-frame texture-cache update under the context lock.
     pub unsafe fn TextureCachePlatformUpdate(
         &mut self,
@@ -336,15 +349,20 @@ impl GraphicsEngine {
     /// Creates every scene render target and render setup. Each scene target
     /// (main depth/colour, the four GBuffers, velocity, downsampled depth, the reflection-proxy
     /// targets, the AO volume, and the `VfxDepthCopy_%d` slots) is sized from
-    /// `device_info`'s [`m_DisplayWidth`](graphics_engine::device::DeviceInfo::m_DisplayWidth)/
-    /// [`m_DisplayHeight`](graphics_engine::device::DeviceInfo::m_DisplayHeight) (some at half
+    /// `device_info`'s [`m_DisplayWidth`](crate::graphics_engine::device::DeviceInfo::m_DisplayWidth)/
+    /// [`m_DisplayHeight`](crate::graphics_engine::device::DeviceInfo::m_DisplayHeight) (some at half
     /// resolution), so it can be re-run at any size by passing a modified copy. The final
-    /// `BackBufferLinear` alias plus [`m_BackBufferRenderSetup`](GraphicsEngine::m_BackBufferRenderSetup)
+    /// `BackBufferLinear` alias plus [`m_BackBufferRenderSetup`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferRenderSetup)
     /// and the post-effect setup are instead built against the live swapchain surface via
     /// `GetDeviceSurface(BackBuffer)`, independent of
     /// `device_info`. Per-pass viewports follow the bound target's size, so no per-pass viewport
     /// changes are needed. Assumes the previously created setups have been torn down
-    /// ([`DestroyRenderSetups`](GraphicsEngine::DestroyRenderSetups)) and that no draw is in flight.
+    /// ([`DestroyRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::DestroyRenderSetups)) and that no draw is in flight.
+    ///
+    /// **The release build leaves the return value undefined.** The declared C++ return type is
+    /// `bool`, but release codegen dropped the final `return 1`: the last instruction before the
+    /// epilogue is the trailing [`CreateRenderSetup`](crate::graphics_engine::surface::CreateRenderSetup) call, so `al` carries the low byte of the
+    /// pointer it returned. Callers must ignore the result.
     pub unsafe fn CreateRenderSetups(
         &mut self,
         device_info: *const crate::graphics_engine::device::DeviceInfo,
@@ -359,7 +377,7 @@ impl GraphicsEngine {
     }
     pub const DestroyRenderSetups_ADDRESS: usize = 0x1400C4090;
     /// Destroys every scene render target, surface, and render setup created by
-    /// [`CreateRenderSetups`](GraphicsEngine::CreateRenderSetups), including the `BackBufferLinear`
+    /// [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups), including the `BackBufferLinear`
     /// alias, after first unbinding the active setup. The swapchain back buffer itself is not touched.
     /// Pass-owned render targets (post-effect, SSAO, SSR, anti-aliasing pools) are not freed here — the
     /// registered resize callbacks re-allocate those.
@@ -373,11 +391,11 @@ impl GraphicsEngine {
     }
     pub const ApplyResize_ADDRESS: usize = 0x1400CFA90;
     /// Applies a resize: tears down the render setups, has the UI drop its references, resizes the
-    /// swapchain (the device-level `ResizeBuffers`), re-creates the render
-    /// setups at the new size ([`CreateRenderSetups`](GraphicsEngine::CreateRenderSetups)), runs every
+    /// swapchain (the device-level [`ResizeBuffers`](crate::graphics_engine::device::ResizeBuffers)), re-creates the render
+    /// setups at the new size ([`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups)), runs every
     /// registered resize callback (which re-sizes the pass-owned pools), restores the UI, and updates
     /// the camera aspect and window params. Called from
-    /// [`HandleModeChange`](GraphicsEngine::HandleModeChange) in the [`Draw`](GraphicsEngine::Draw)
+    /// [`HandleModeChange`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleModeChange) in the [`Draw`](crate::graphics_engine::graphics_engine::GraphicsEngine::Draw)
     /// prologue, so it runs on the main thread with no draw in flight.
     pub unsafe fn ApplyResize(&mut self, width: u32, height: u32) {
         unsafe {
@@ -389,12 +407,12 @@ impl GraphicsEngine {
     }
     pub const ResizeBuffers_ADDRESS: usize = 0x1400D43C0;
     /// The resize request entry. Applies the resize inline via
-    /// [`ApplyResize`](GraphicsEngine::ApplyResize) when
-    /// [`m_SynchronousResize`](GraphicsEngine::m_SynchronousResize) and
-    /// [`m_HasBeenInitialized`](GraphicsEngine::m_HasBeenInitialized) are set; otherwise it stashes the
-    /// dimensions in [`m_WindowWidth`](GraphicsEngine::m_WindowWidth)/
-    /// [`m_WindowHeight`](GraphicsEngine::m_WindowHeight) and defers to the next
-    /// [`HandleModeChange`](GraphicsEngine::HandleModeChange).
+    /// [`ApplyResize`](crate::graphics_engine::graphics_engine::GraphicsEngine::ApplyResize) when
+    /// [`m_SynchronousResize`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_SynchronousResize) and
+    /// [`m_HasBeenInitialized`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_HasBeenInitialized) are set; otherwise it stashes the
+    /// dimensions in [`m_WindowWidth`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_WindowWidth)/
+    /// [`m_WindowHeight`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_WindowHeight) and defers to the next
+    /// [`HandleModeChange`](crate::graphics_engine::graphics_engine::GraphicsEngine::HandleModeChange).
     pub unsafe fn ResizeBuffers(&mut self, width: u32, height: u32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, width: u32, height: u32) = ::std::mem::transmute(
@@ -404,8 +422,8 @@ impl GraphicsEngine {
         }
     }
     pub const HandleModeChange_ADDRESS: usize = 0x1400F40C0;
-    /// Services the display-mode state machine once per frame from the [`Draw`](GraphicsEngine::Draw)
-    /// prologue: applies a deferred resize ([`ApplyResize`](GraphicsEngine::ApplyResize)) when one is
+    /// Services the display-mode state machine once per frame from the [`Draw`](crate::graphics_engine::graphics_engine::GraphicsEngine::Draw)
+    /// prologue: applies a deferred resize ([`ApplyResize`](crate::graphics_engine::graphics_engine::GraphicsEngine::ApplyResize)) when one is
     /// pending, or the fullscreen/adapter change when a mode change is pending, then reconciles the
     /// flip interval. It runs after the previous frame's draw dispatch has drained and before the
     /// current frame is dispatched.
@@ -417,9 +435,31 @@ impl GraphicsEngine {
             f(self as *mut Self as _)
         }
     }
+    pub const SaveScreen_ADDRESS: usize = 0x1400DEC90;
+    /// Writes the pending screenshot to disk: saves `surface` to the requested colour filename
+    /// (and, when the request asked for depth, `depth_texture` to the depth filename) through the
+    /// device's texture-to-file writer, marks the screenshot request done, and clears a filename
+    /// whose write failed. Called from the draw thread once the frame the request was made on has
+    /// finished compositing, with the engine's
+    /// [`m_BackBufferLinear`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferLinear) as the surface. The release build's symbol
+    /// table labels this address `NGraphicsEngine::CGPUProfiler::EndFrame`.
+    pub unsafe fn SaveScreen(
+        &mut self,
+        surface: *mut crate::graphics_engine::texture::Texture,
+        depth_texture: *mut crate::graphics_engine::texture::Texture,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                surface: *mut crate::graphics_engine::texture::Texture,
+                depth_texture: *mut crate::graphics_engine::texture::Texture,
+            ) = ::std::mem::transmute(Self::SaveScreen_ADDRESS);
+            f(self as *mut Self as _, surface, depth_texture)
+        }
+    }
     pub const LoadShaderBundle_ADDRESS: usize = 0x1400DE9A0;
     /// Loads (or reloads) the named shader bundle and re-creates every shader holder from it, but only
-    /// if `name` differs from [`m_CurrentBundleName`](GraphicsEngine::m_CurrentBundleName).
+    /// if `name` differs from [`m_CurrentBundleName`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_CurrentBundleName).
     /// Re-creating the holders routes every shader through
     /// `Graphics::CreateFragmentProgram`. The bundle names are `"Shaders"` / `"ShadersLowShadows"`
     /// (and the Intel `"ShadersConstMath*"` variants), selected by shadow quality in
@@ -433,9 +473,9 @@ impl GraphicsEngine {
         }
     }
     pub const SetCursor_ADDRESS: usize = 0x1400A1AB0;
-    /// Sets [`m_ActiveCursor`](GraphicsEngine::m_ActiveCursor) and, when it changed, posts
-    /// `WM_SETCURSOR` to the game window so `WndProc` runs
-    /// [`UpdateCursor`](GraphicsEngine::UpdateCursor). `COverlayUI` drives it: `Arrow` when the
+    /// Sets [`m_ActiveCursor`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_ActiveCursor) and, when it changed, posts
+    /// `WM_SETCURSOR` to the game window so [`WndProc`](crate::window::WndProc) runs
+    /// [`UpdateCursor`](crate::graphics_engine::graphics_engine::GraphicsEngine::UpdateCursor). `COverlayUI` drives it: `Arrow` when the
     /// overlay cursor becomes visible, `None` when it hides.
     pub unsafe fn SetCursor(
         &mut self,
@@ -450,11 +490,11 @@ impl GraphicsEngine {
         }
     }
     pub const UpdateCursor_ADDRESS: usize = 0x1400A1AF0;
-    /// Applies [`m_ActiveCursor`](GraphicsEngine::m_ActiveCursor) to the OS: for `None` it sets a
+    /// Applies [`m_ActiveCursor`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_ActiveCursor) to the OS: for `None` it sets a
     /// null `HCURSOR` and clips the cursor to the client rect (when the window is foreground);
     /// otherwise it unclips and sets `GraphicsParams::m_Cursors[cursor]`. The four entries are
     /// loaded at startup as the system `IDC_ARROW`, `IDC_CROSS`, `IDC_HAND`, and `IDC_NO`
-    /// cursors. Called from `WndProc` on `WM_SETCURSOR`.
+    /// cursors. Called from [`WndProc`](crate::window::WndProc) on `WM_SETCURSOR`.
     pub unsafe fn UpdateCursor(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -514,12 +554,12 @@ impl std::convert::AsMut<GraphicsParams> for GraphicsParams {
 }
 #[repr(C, align(8))]
 /// A GPU context handle: the engine's wrapper over the D3D11 immediate context, carrying the deferred,
-/// dirty-tracked pipeline state that [`SetupRenderStates`] flushes to D3D before each draw. Partial:
+/// dirty-tracked pipeline state that [`SetupRenderStates`](crate::graphics_engine::graphics_engine::SetupRenderStates) flushes to D3D before each draw. Partial:
 /// only the depth-stencil state index and stencil ref are mapped.
 pub struct HContext_t {
     _field_0: [u8; 36032],
     /// The packed depth-stencil state index staged by the granular stencil/depth setters and flushed by
-    /// [`SetupRenderStates`] into a cached `ID3D11DepthStencilState`. Bit layout, low dword: bit0
+    /// [`SetupRenderStates`](crate::graphics_engine::graphics_engine::SetupRenderStates) into a cached `ID3D11DepthStencilState`. Bit layout, low dword: bit0
     /// `DepthEnable`, bit1 `DepthWriteMask`, bits2-5 `DepthFunc`, bit6 `StencilEnable`, bits7-10
     /// `StencilFunc`, bits11-18 `StencilReadMask`, bits19-26 `StencilWriteMask`, bits27-30
     /// `StencilFailOp`; high dword bits0-3 `StencilDepthFailOp`, bits4-7 `StencilPassOp`. The D3D enum
@@ -563,16 +603,16 @@ impl std::convert::AsMut<HDevice_t> for HDevice_t {
 pub use windows::Win32::UI::WindowsAndMessaging::HICON as HICON;
 #[repr(C, align(8))]
 /// A render-target configuration a pass draws into: the output views bound via `OMSetRenderTargets`,
-/// and optionally a fixed viewport. Applied by [`SetRenderSetup`]. Partial: only the viewport fields
+/// and optionally a fixed viewport. Applied by [`SetRenderSetup`](crate::graphics_engine::graphics_engine::SetRenderSetup). Partial: only the viewport fields
 /// are mapped; the type extends past them (`min_size` is the 8-aligned bound just past the last field).
 pub struct HRenderSetup_t {
     _field_0: [u8; 216],
-    /// When set, [`SetRenderSetup`] applies [`m_Viewport`](HRenderSetup_t::m_Viewport) as the
+    /// When set, [`SetRenderSetup`](crate::graphics_engine::graphics_engine::SetRenderSetup) applies [`m_Viewport`](crate::graphics_engine::graphics_engine::HRenderSetup_t::m_Viewport) as the
     /// rasterizer viewport; when clear, it synthesizes a viewport covering the full render target.
     pub m_HasCustomViewport: bool,
     _field_d9: [u8; 3],
     /// The fixed rasterizer viewport applied when
-    /// [`m_HasCustomViewport`](HRenderSetup_t::m_HasCustomViewport) is set.
+    /// [`m_HasCustomViewport`](crate::graphics_engine::graphics_engine::HRenderSetup_t::m_HasCustomViewport) is set.
     pub m_Viewport: crate::graphics_engine::graphics_engine::D3D11Viewport,
     _field_f4: [u8; 4],
 }
@@ -637,12 +677,27 @@ impl std::convert::AsMut<HTimeStampQuery_t> for HTimeStampQuery_t {
         self
     }
 }
+#[repr(C, align(8))]
+/// A vertex-declaration handle: the input layout a render block binds before its draws, passed to the
+/// render block types' `Setup` and on to `Graphics::SetVertexDeclaration`.
+pub struct HVertexDeclaration_t {}
+impl HVertexDeclaration_t {}
+impl std::convert::AsRef<HVertexDeclaration_t> for HVertexDeclaration_t {
+    fn as_ref(&self) -> &HVertexDeclaration_t {
+        self
+    }
+}
+impl std::convert::AsMut<HVertexDeclaration_t> for HVertexDeclaration_t {
+    fn as_mut(&mut self) -> &mut HVertexDeclaration_t {
+        self
+    }
+}
 pub use windows::Win32::Foundation::HWND as HWND;
 #[repr(C, align(8))]
 /// The scene occluder / beam-frustum-based-culling manager. Its cull frustum is built (and cached
 /// per camera and time) from a camera's `m_View` and `m_ProjectionF`, and every scene-geometry,
 /// terrain, streaming, and occlusion consumer reads it through
-/// [`GetBFBCFrustumParamsForCameraAndTime`](OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime).
+/// [`GetBFBCFrustumParamsForCameraAndTime`](crate::graphics_engine::graphics_engine::OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime).
 pub struct OccluderCollectionManager {}
 impl OccluderCollectionManager {
     pub const GetBFBCFrustumParamsForCameraAndTime_ADDRESS: usize = 0x1400D68B0;
@@ -650,7 +705,7 @@ impl OccluderCollectionManager {
     /// derived from `camera.m_View` combined with `camera.m_ProjectionF`, so overwriting the camera's
     /// `m_ProjectionF` before this runs widens the resulting cull frustum without touching the view.
     /// `out_params` and `out_state` receive pointers into the manager's per-camera cache slot;
-    /// `*out_params` is the [`BFBCFrustumCullParameters`].
+    /// `*out_params` is the [`BFBCFrustumCullParameters`](crate::graphics_engine::graphics_engine::BFBCFrustumCullParameters).
     pub unsafe fn GetBFBCFrustumParamsForCameraAndTime(
         &mut self,
         camera: *const crate::camera::camera::Camera,
@@ -685,15 +740,31 @@ impl std::convert::AsMut<OccluderCollectionManager> for OccluderCollectionManage
 #[repr(C, align(8))]
 /// The per-view render context the render passes read: the camera matrices (view, projection, the
 /// translation-free offset view-projection, and the separate camera world position), shadow data, and
-/// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`].
+/// per-frame flags. Filled each dispatch by [`RenderPass::SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera).
 pub struct RenderContext {
-    _field_0: [u8; 88],
-    /// The projection matrix for this dispatch, copied from [`Camera::m_ProjectionF`] by
-    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera). The deferred-lighting
+    _field_0: [u8; 24],
+    /// The world→view matrix for this dispatch, copied from [`Camera::m_View`](crate::camera::camera::Camera::m_View) by
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera). Row 3 carries the camera
+    /// translation; [`CalculateOffsetViewProjectionMatrix`](crate::graphics_engine::render_pass::CalculateOffsetViewProjectionMatrix) zeroes it before
+    /// multiplying by [`m_ProjectionF`](crate::graphics_engine::graphics_engine::RenderContext::m_ProjectionF) to produce
+    /// [`m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection). The clustered deferred-lighting
+    /// pass uploads rows 0..2 with a `(0, 0, 0, 1)` fourth row as the light-assignment vertex
+    /// shader's `ViewMatrix`, which transforms light proxy vertices the CPU has already made
+    /// relative to [`m_RenderCameraPosition`](crate::graphics_engine::graphics_engine::RenderContext::m_RenderCameraPosition) into view space.
+    pub m_View: crate::types::math::Matrix4,
+    /// The projection matrix for this dispatch, copied from [`Camera::m_ProjectionF`](crate::camera::camera::Camera::m_ProjectionF) by
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera). The deferred-lighting
     /// clustered pass reads it to build the geometry proxy transform (cb0) and the froxel tile
     /// bounds (cb1).
     pub m_ProjectionF: crate::types::math::Matrix4,
-    _field_98: [u8; 64],
+    /// The world→clip view-projection for this dispatch, copied verbatim from
+    /// [`Camera::m_ViewProjectionF`](crate::camera::camera::Camera::m_ViewProjectionF) by
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera) — the reverse-Z projection
+    /// applied to the translation-bearing view, so it maps absolute world positions to clip space.
+    /// Distinct from [`m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection), which drops the camera
+    /// translation and is what the camera-relative geometry paths bake. The water block types build
+    /// their screen-space reflection/refraction lookup from it.
+    pub m_ViewProjectionF: crate::types::math::Matrix4,
     /// The translation-free view-projection for this dispatch (the rotation and projection without the
     /// camera world translation). The tessellation constant buffers bake it directly (e.g.
     /// [`RenderBlockTypeTerrain::SetupConstantBuffers`](crate::graphics_engine::render_block::RenderBlockTypeTerrain)),
@@ -701,20 +772,29 @@ pub struct RenderContext {
     pub m_OffsetViewProjection: crate::types::math::Matrix4,
     _field_118: [u8; 256],
     /// The camera world position for this dispatch, copied from the camera's transform translation
-    /// by [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera). Camera-relative geometry
-    /// subtracts it per object, and [`RenderPass::DoDraw`] hands it to
-    /// [`SortList`](RenderPass::SortList) as the sort camera position.
+    /// by [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera). Camera-relative geometry
+    /// subtracts it per object, and [`RenderPass::DoDraw`](crate::graphics_engine::render_pass::RenderPass::DoDraw) hands it to
+    /// [`SortList`](crate::graphics_engine::render_pass::RenderPass::SortList) as the sort camera position.
     pub m_CameraPosition: crate::types::math::Vector3,
-    _field_224: [u8; 216],
-    /// The vertical field of view in radians, copied from [`Camera::m_FOV`] by
-    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera).
+    _field_224: [u8; 100],
+    /// The world position of the camera manager's render camera — the translation row of
+    /// `CCameraManager::GetRenderCamera()`'s `m_TransformF` — written each pass by
+    /// `CRenderPass::SetupRenderContext`. Distinct from
+    /// [`m_CameraPosition`](crate::graphics_engine::graphics_engine::RenderContext::m_CameraPosition), which follows whichever camera the pass draws
+    /// with (a light camera during the shadow passes); this always holds the main scene camera's
+    /// position. `CLightManager::SetupLightingData` and the clustered deferred-lighting pass
+    /// subtract it from each light's world position to build the camera-relative light proxies.
+    pub m_RenderCameraPosition: crate::types::math::Vector3,
+    _field_294: [u8; 104],
+    /// The vertical field of view in radians, copied from [`Camera::m_FOV`](crate::camera::camera::Camera::m_FOV) by
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera).
     pub CameraFOV: f32,
     _field_300: [u8; 4],
-    /// The near clip plane distance, copied from [`Camera::m_Near`] by
-    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera).
+    /// The near clip plane distance, copied from [`Camera::m_Near`](crate::camera::camera::Camera::m_Near) by
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera).
     pub CameraNear: f32,
-    /// The far clip plane distance, copied from [`Camera::m_Far`] by
-    /// [`SetRenderContextCamera`](RenderPass::SetRenderContextCamera).
+    /// The far clip plane distance, copied from [`Camera::m_Far`](crate::camera::camera::Camera::m_Far) by
+    /// [`SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera).
     pub CameraFar: f32,
     /// The display width in pixels. The clustered deferred-lighting pass derives the froxel tile
     /// count from this (width / 64).
@@ -725,27 +805,79 @@ pub struct RenderContext {
     /// The display aspect ratio (`m_DisplayWidth / m_DisplayHeight`).
     pub m_DisplayRatio: f32,
     /// The graphics context this dispatch draws through. The render blocks' draw paths and the
-    /// scope markers ([`BeginScopeMarker`] / [`EndScopeMarker`]) read it off the render context.
+    /// scope markers ([`BeginScopeMarker`](crate::graphics_engine::graphics_engine::BeginScopeMarker) / [`EndScopeMarker`](crate::graphics_engine::graphics_engine::EndScopeMarker)) read it off the render context.
     pub m_Context: *mut crate::graphics_engine::graphics_engine::HContext_t,
-    _field_320: [u8; 280],
+    _field_320: [u8; 16],
+    /// The composite environment cube map (static env blended with the dynamic sky cube), the
+    /// ambient specular source the material shaders sample. Written per frame from the render
+    /// engine's composite cube.
+    pub m_EnvCubeTexture: *mut ::std::ffi::c_void,
+    _field_338: [u8; 76],
+    pub m_Flags: crate::graphics_engine::graphics_engine::RenderContextFlags,
+    _field_385: [u8; 3],
+    /// The night-light reference level for the current time of day, interpolated from the
+    /// atmosphere's 24-entry per-hour table and copied in per frame from the light manager's
+    /// frame-info ring.
+    pub m_CurrentNightLightReference: f32,
+    _field_38c: [u8; 4],
+    /// The frame delta time in seconds.
+    pub m_Dt: f32,
+    /// The time of day in hours (0-24), copied per frame from the world time.
+    pub m_TimeOfDay: f32,
+    /// The emissive intensity scale for the current time of day.
+    pub m_TimeOfDayEmissiveScale: f32,
+    _field_39c: [u8; 4],
+    /// The clustered-lighting frame constant buffer, copied per frame from the light manager.
+    pub m_LightBuffer: *mut ::std::ffi::c_void,
+    /// The clustered light-grid lookup texture for this frame, copied from the light manager's
+    /// three-slot per-frame ring (indexed by the render context frame counter modulo three).
+    pub m_LightLookup: *mut ::std::ffi::c_void,
+    /// The clustered light index buffer for this frame, from the same three-slot ring as
+    /// [`m_LightLookup`](crate::graphics_engine::graphics_engine::RenderContext::m_LightLookup).
+    pub m_LightIndexBuffer: *mut ::std::ffi::c_void,
+    /// The lighting tuning constant buffer.
+    pub m_LightTuningBuffer: *mut ::std::ffi::c_void,
+    /// The first of the paired terrain horizon maps (large-scale sky-visibility occlusion).
+    pub m_HorizonMap0: *mut ::std::ffi::c_void,
+    /// The second of the paired terrain horizon maps.
+    pub m_HorizonMap1: *mut ::std::ffi::c_void,
+    _field_3d0: [u8; 24],
+    /// The number of point lights active for this render frame, copied by
+    /// `CRenderPass::SetupRenderContext` from
+    /// `CLightManager::GetActiveRenderPointLightCount`. The clustered deferred-lighting pass uses it
+    /// as the instance count of its sphere-proxy draw, and skips the whole light-assignment phase
+    /// (including its render-target clear) when it and
+    /// [`m_ActiveSpotLightCount`](crate::graphics_engine::graphics_engine::RenderContext::m_ActiveSpotLightCount) are both zero.
+    pub m_ActivePointLightCount: i32,
+    _field_3ec: [u8; 12],
+    /// The number of spot lights active for this render frame, copied by
+    /// `CRenderPass::SetupRenderContext` from
+    /// `CLightManager::GetActiveRenderSpotLightCount`. The clustered deferred-lighting pass uses it
+    /// as the instance count of its cone-proxy draw.
+    pub m_ActiveSpotLightCount: i32,
+    /// The direction toward the global light (the sun, or the moon at night) for this dispatch.
+    /// The atmospheric-scattering scene composite uploads it directly and derives its sky and fog
+    /// brightness factors from the elevation (`y`) component.
+    pub m_GlobalLightVector: crate::types::math::Vector3,
+    _field_408: [u8; 48],
     /// The id (`ERenderPass`, see `render_engine::RenderPassId`) of the pass currently drawing
     /// through this context, written by `SetupRenderContext` from the pass's index. `RP_NONE` (0)
     /// outside a pass body.
     pub m_ActiveRenderPass: i32,
     _field_43c: [u8; 12],
-    /// The per-real-frame stamp for this dispatch, set from [`get_render_frame_counters`]'s `m_FrameIndex`
+    /// The per-real-frame stamp for this dispatch, set from [`render_frame_counters`](get_render_frame_counters)'s `m_FrameIndex`
     /// during render-context setup. Passes that cache per-frame state key on it — the terrain
     /// tessellation blocks compare it against their per-slot
-    /// [`m_WasCBApplied`](graphics_engine::render_block::RenderBlockTypeTerrain::m_WasCBApplied) stamp
+    /// [`m_WasCBApplied`](crate::graphics_engine::render_block::RenderBlockTypeTerrain::m_WasCBApplied) stamp
     /// to decide whether to re-upload the constant buffer.
     pub m_RenderFrameNo: u32,
     /// The 8 per-atlas-slice projective shadow transforms, copied per dispatch from the shadow
     /// manager's parity storage. The deferred lighting shaders index them dynamically by a light's
     /// packed slice index (`cb0[63 + 4*slice .. 66 + 4*slice]` in the GlobalConstants) to project a
     /// light-relative position into its shadow-atlas slice; the sun resolve uses
-    /// [`m_ShadowCascades`](RenderContext::m_ShadowCascades) instead.
+    /// [`m_ShadowCascades`](crate::graphics_engine::graphics_engine::RenderContext::m_ShadowCascades) instead.
     /// The instance-transform slot the render blocks pass to
-    /// [`RBIInfo::GetMatrix`](graphics_engine::render_block::RBIInfo::GetMatrix) for the current
+    /// [`RBIInfo::GetMatrix`](crate::graphics_engine::render_block::RBIInfo::GetMatrix) for the current
     /// dispatch.
     pub m_TransformIndex: u32,
     _field_450: [u8; 4],
@@ -753,7 +885,7 @@ pub struct RenderContext {
     /// The forward-material cascaded sun-shadow transform + cascade box-test parameters.
     pub m_ShadowCascades: crate::graphics_engine::graphics_engine::ShadowCascades,
     /// The number of active cascades this frame, copied per dispatch from the shadow manager's
-    /// parity storage (a byte store in [`RenderPass::SetRenderContextCamera`]).
+    /// parity storage (a byte store in [`RenderPass::SetRenderContextCamera`](crate::graphics_engine::render_pass::RenderPass::SetRenderContextCamera)).
     pub m_ActiveCascadeCount: u8,
     _field_775: [u8; 3],
     /// The pass-family status bits for the current draw: `0x1` default, `0x2` static shadow map,
@@ -761,10 +893,17 @@ pub struct RenderContext {
     /// path versus the full material path.
     pub m_RenderStatus: u32,
     _field_77c: [u8; 4],
+    /// The render setup this context draws into. On the graphics engine's own context this is the
+    /// context's copy of [`GraphicsEngine::m_BackBufferRenderSetup`](crate::graphics_engine::graphics_engine::GraphicsEngine::m_BackBufferRenderSetup), written by
+    /// [`CreateRenderSetups`](crate::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups) immediately after the engine
+    /// field.
+    pub m_RenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
+    /// The render setup the translucent pass draws into.
+    pub m_TranslucentRenderSetup: *mut crate::graphics_engine::graphics_engine::HRenderSetup_t,
 }
 fn _RenderContext_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x780], RenderContext>([0u8; 0x780]);
+        ::std::mem::transmute::<[u8; 0x790], RenderContext>([0u8; 0x790]);
     }
     unreachable!()
 }
@@ -779,9 +918,21 @@ impl std::convert::AsMut<RenderContext> for RenderContext {
         self
     }
 }
+crate::__bitflags! {
+    #[doc =
+    " Per-frame packed state bits carried by a [`RenderContext`](crate::graphics_engine::graphics_engine::RenderContext) (the packed bools that follow the"]
+    #[doc = " aniso field)."] pub struct RenderContextFlags : u8 { const
+    m_CameraUnderwater = 1usize as _; }
+}
+fn _RenderContextFlags_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x1], RenderContextFlags>([0u8; 0x1]);
+    }
+    unreachable!()
+}
 #[derive(Copy, Clone)]
 #[repr(C, align(4))]
-/// Per-real-frame counters, advanced once in the [`GraphicsEngine::Draw`] prologue. `m_FrameIndex`
+/// Per-real-frame counters, advanced once in the [`GraphicsEngine::Draw`](crate::graphics_engine::graphics_engine::GraphicsEngine::Draw) prologue. `m_FrameIndex`
 /// (set from the post-incrementing `m_Counter`) drives the TAA jitter phase and shadow parity;
 /// `m_RingIndex` is the three-slot constant-buffer ring.
 pub struct RenderFrameCounters {
@@ -808,7 +959,7 @@ impl std::convert::AsMut<RenderFrameCounters> for RenderFrameCounters {
 }
 #[repr(C, align(4))]
 /// The cascaded sun-shadow constants for the forward-material resolve: the cascade transform plus the
-/// per-cascade box-test parameters, staged into cb0 by `RenderEngine::SetGlobalShaderConstants`.
+/// per-cascade box-test parameters, staged into cb0 by [`SetGlobalShaderConstants`](crate::graphics_engine::render_engine::RenderEngine::SetGlobalShaderConstants).
 pub struct ShadowCascades {
     /// Maps a camera-relative world position into cascade/texture space (row-major, row-vector; its
     /// columns are `cb0[45..47]` in the GlobalConstants, the translation `cb0[48]`). The
@@ -855,9 +1006,9 @@ pub unsafe fn get_render_frame_counters() -> &'static mut crate::graphics_engine
 pub const SetupRenderStates_ADDRESS: usize = 0x14195FEA0;
 /// The pre-draw pipeline-state flush at the top of every draw wrapper: for each dirty state category
 /// (samplers, depth-stencil, blend, rasterizer) it decodes the packed state index staged on the context
-/// -- creating and caching the D3D state object on first use ([`CreateDepthStencilState`]) -- binds it,
+/// -- creating and caching the D3D state object on first use ([`CreateDepthStencilState`](crate::graphics_engine::graphics_engine::CreateDepthStencilState)) -- binds it,
 /// and clears the dirty flag. The depth-stencil bind reads
-/// [`HContext_t::m_DepthStencilStateIndex`] / [`HContext_t::m_StencilRef`] and issues the sole
+/// [`HContext_t::m_DepthStencilStateIndex`](crate::graphics_engine::graphics_engine::HContext_t::m_DepthStencilStateIndex) / [`HContext_t::m_StencilRef`](crate::graphics_engine::graphics_engine::HContext_t::m_StencilRef) and issues the sole
 /// `OMSetDepthStencilState`, only when the index or ref changed since the last draw.
 pub unsafe fn SetupRenderStates(
     context: *mut crate::graphics_engine::graphics_engine::HContext_t,
@@ -872,9 +1023,9 @@ pub unsafe fn SetupRenderStates(
     }
 }
 pub const CreateDepthStencilState_ADDRESS: usize = 0x14195F9D0;
-/// Decodes a packed depth-stencil state index (see [`HContext_t::m_DepthStencilStateIndex`]) into a
+/// Decodes a packed depth-stencil state index (see [`HContext_t::m_DepthStencilStateIndex`](crate::graphics_engine::graphics_engine::HContext_t::m_DepthStencilStateIndex)) into a
 /// `D3D11_DEPTH_STENCIL_DESC` and creates+caches the `ID3D11DepthStencilState`. Called by
-/// [`SetupRenderStates`] on the first bind of each distinct index.
+/// [`SetupRenderStates`](crate::graphics_engine::graphics_engine::SetupRenderStates) on the first bind of each distinct index.
 pub unsafe fn CreateDepthStencilState(
     context: *mut crate::graphics_engine::graphics_engine::HContext_t,
     index: u64,
@@ -890,7 +1041,7 @@ pub unsafe fn CreateDepthStencilState(
 pub const SetRenderSetup_ADDRESS: usize = 0x141966D20;
 /// Binds a render setup as the active output on the context and sets the viewport. Applies the setup's
 /// render-target views and depth-stencil (`OMSetRenderTargets`), then sets the rasterizer viewport:
-/// [`HRenderSetup_t::m_Viewport`] when [`HRenderSetup_t::m_HasCustomViewport`] is set, otherwise a
+/// [`HRenderSetup_t::m_Viewport`](crate::graphics_engine::graphics_engine::HRenderSetup_t::m_Viewport) when [`HRenderSetup_t::m_HasCustomViewport`](crate::graphics_engine::graphics_engine::HRenderSetup_t::m_HasCustomViewport) is set, otherwise a
 /// synthesized viewport covering the full render target (`0, 0, width, height, 0, 1`). It is the single
 /// viewport write on the render-setup path -- the passes that draw after it inherit this viewport.
 /// `force` re-applies the setup even when it matches the currently-bound one; its exact effect is
@@ -1014,7 +1165,7 @@ pub unsafe fn BeginTimeStampDisjointQuery(
 }
 pub const EndTimeStampDisjointQuery_ADDRESS: usize = 0x1419558B0;
 /// Ends the disjoint interval (`ID3D11DeviceContext::End`). In the release build the body is
-/// identical-code-folded with [`SetTimeStampQuery`] (both call `End` under the context mutex), so
+/// identical-code-folded with [`SetTimeStampQuery`](crate::graphics_engine::graphics_engine::SetTimeStampQuery) (both call `End` under the context mutex), so
 /// this shares its address; the release symbol table's placement at `0x141954000` is an unrelated
 /// two-instruction stub.
 pub unsafe fn EndTimeStampDisjointQuery(
@@ -1055,10 +1206,10 @@ pub const BeginScopeMarker_ADDRESS: usize = 0x141954D10;
 /// (`"Frame setup"`, `"CopyEffectTextures"`, `"Debug UI"`), the post-effect stack (SMAA, FXAA,
 /// depth of field, motion blur, lens flare, glare, tone mapping), deferred lighting, SSAO, SSR,
 /// environment reflections, water, terrain restores, and the per-render-block-type runs opened by
-/// [`RenderPass::ChangeRenderBlockType`](graphics_engine::render_pass::RenderPass::ChangeRenderBlockType)
+/// [`RenderPass::ChangeRenderBlockType`](crate::graphics_engine::render_pass::RenderPass::ChangeRenderBlockType)
 /// (named by each type's
-/// [`GetTypeName`](graphics_engine::render_engine::RenderBlockTypeBase::GetTypeName)). Scopes nest
-/// per context and are closed by [`EndScopeMarker`]; the RAII wrapper `Graphics::CScopeMarker`
+/// [`GetTypeName`](crate::graphics_engine::render_engine::RenderBlockTypeBase::GetTypeName)). Scopes nest
+/// per context and are closed by [`EndScopeMarker`](crate::graphics_engine::graphics_engine::EndScopeMarker); the RAII wrapper `Graphics::CScopeMarker`
 /// calls the pair from its constructor and destructor.
 pub unsafe fn BeginScopeMarker(
     context: *mut crate::graphics_engine::graphics_engine::HContext_t,
@@ -1073,7 +1224,7 @@ pub unsafe fn BeginScopeMarker(
     }
 }
 pub const EndScopeMarker_ADDRESS: usize = 0x141954D20;
-/// Closes the innermost scope opened by [`BeginScopeMarker`] on the context. Compiled to an empty
+/// Closes the innermost scope opened by [`BeginScopeMarker`](crate::graphics_engine::graphics_engine::BeginScopeMarker) on the context. Compiled to an empty
 /// function in the release build; the call sites survive.
 pub unsafe fn EndScopeMarker(
     context: *mut crate::graphics_engine::graphics_engine::HContext_t,

@@ -13,7 +13,8 @@
 //! The patch is applied to the DXBC in-flight, before `CreatePixelShader` (which copies the bytecode,
 //! so a patched copy only needs to outlive the call). Editing the bytecode invalidates the DXBC
 //! container checksum, and the D3D stack under Proton rejects a blob whose stored hash no longer
-//! matches -- so the patched copy's checksum is recomputed ([`refresh_dxbc_checksum`]) before the call.
+//! matches -- so the patched copy's checksum is recomputed (`dxbc_stereo::refresh_checksum`) before
+//! the call.
 //! It therefore affects only shaders created after
 //! the hook installs: with launch-time injection that is every shader; with mid-session injection,
 //! trigger a shader reload (e.g. change the shadow-quality graphics setting) so the shadow shaders are
@@ -26,10 +27,21 @@ use std::{
 };
 
 use detours_macro::detour;
-use jc3gi::graphics_engine::{draw::CreateFragmentProgramParams, graphics_engine::GraphicsEngine};
+use dxbc_stereo::refresh_checksum;
+use jc3gi::graphics_engine::{
+    draw::{
+        CreateDomainProgramParams, CreateFragmentProgramParams, CreateHullProgramParams,
+        CreateVertexProgramParams,
+    },
+    graphics_engine::GraphicsEngine,
+};
 use re_utilities::hook_library::HookLibrary;
 
-use crate::config::Config;
+use crate::{
+    config::Config,
+    hooks::graphics_engine::ss_decal,
+    stereo::single_pass::{VsTransform, is_terrain_shadow_pass, set_patch_pending, terrain_active},
+};
 
 /// The 16-byte `dp2` immediate `l(12.9898, 78.233, 0, 0)` -- the screen-pixel PCF rotation seed. The
 /// first eight bytes are the two multiplier constants; zeroing them makes the dot product (and thus
@@ -64,10 +76,140 @@ const DISSOLVE_NEVER: [u8; 4] = [0xe6, 0xb1, 0x61, 0xff];
 
 static PATCHED: AtomicUsize = AtomicUsize::new(0);
 static DISSOLVE_PATCHED: AtomicUsize = AtomicUsize::new(0);
+/// The number of screen-space decal permutations whose depth fetch has been biased since injection --
+/// twelve per bundle load. Read on eject to decide whether the pristine shaders need restoring.
+static SSDECAL_BIASED: AtomicUsize = AtomicUsize::new(0);
 static RELOAD_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Read a shader program's engine debug name (a null-terminated C string in
+/// `Create*ProgramParams.m_Name`), or `None` if the pointer is null. Used to log which tessellation
+/// shaders the terrain hooks transform, to catch structural over-capture of non-terrain families.
+fn program_name(m_name: *const u8) -> Option<String> {
+    (!m_name.is_null()).then(|| {
+        unsafe { std::ffi::CStr::from_ptr(m_name.cast::<std::ffi::c_char>()) }
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
 pub(super) fn hook_library() -> HookLibrary {
-    HookLibrary::new().with_static_binder(&CREATE_FRAGMENT_PROGRAM_BINDER)
+    HookLibrary::new()
+        .with_static_binder(&CREATE_FRAGMENT_PROGRAM_BINDER)
+        .with_static_binder(&CREATE_VERTEX_PROGRAM_BINDER)
+        .with_static_binder(&CREATE_HULL_PROGRAM_BINDER)
+        .with_static_binder(&CREATE_DOMAIN_PROGRAM_BINDER)
+}
+
+/// Detour on `Graphics::CreateVertexProgram` for single-pass stereo: census the vertex-shader rewrite
+/// and, when single-pass is active, substitute the patched bytecode.
+///
+/// When single-pass (or its census-only dry-run) is enabled, run [`dxbc_stereo::patch_vertex_shader`]
+/// on the incoming DXBC and tally the outcome ([`crate::stereo::single_pass::record_patch_outcome`]),
+/// so the debug UI reports how the rewriter fares against the game's real shader set. Decide which of
+/// the single-pass transforms the shader is to get ([`crate::stereo::single_pass::decide_vs_transform`])
+/// -- that decision reads the shader's engine name, which exists nowhere else -- and remember it
+/// against the bytecode for the D3D-level re-create path. When single-pass is *active* (master on,
+/// dry-run off, capability present), also point the params at the patched copy for the
+/// (bytecode-copying) `CreateVertexShader` call -- the copy is kept alive in `saved` and the caller's
+/// pointer restored afterwards, exactly as the fragment hook does. The patched shader reads
+/// its position from `cb13` (see [`crate::hooks::graphics_engine::single_pass`]); in dry-run the copy
+/// is discarded and rendering is unchanged. Only sees shaders created after it installs; use the
+/// shader-reload button for shaders loaded before injection.
+#[detour(address = jc3gi::graphics_engine::draw::CreateVertexProgram_ADDRESS)]
+fn create_vertex_program(
+    device: *mut c_void,
+    params: *mut CreateVertexProgramParams,
+) -> *mut c_void {
+    // The patched blob is *larger* than the original (added SFI0 chunk, cb13 declaration, prologue,
+    // signature entries), so unlike the in-place fragment patch this must repoint `m_Size` as well as
+    // `m_Code` -- otherwise the engine hands the D3D stack a truncated container whose chunk table
+    // runs past the declared length. Both are restored after the (bytecode-copying) call.
+    let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
+    // Hoisted out of the census block so it can be handed to `set_patch_pending` below, which records
+    // it against the `ID3D11VertexShader` the engine is about to create -- the only join between a
+    // shader's engine name and the pointer the draw-time paths see.
+    let mut name: Option<String> = None;
+    // Skip the census once eject begins, matching the fragment hook. The eject restore bounces the
+    // bundle -- two `LoadShaderBundle` calls, so every vertex shader passes through here twice -- on
+    // the game thread, which blocks in `shutdown_from_game` throughout. Running the full rewrite ~900
+    // times there is a multi-second freeze on every F5, on a path already racing teardown, and it buys
+    // nothing: the substitution is inert during shutdown, so the rewrite's only product is a tally
+    // nobody will read.
+    let census = !crate::is_shutting_down()
+        && Config::lock_query(|c| {
+            c.stereo.single_pass.enabled || c.stereo.single_pass.patch_dryrun
+        });
+    if census
+        && let Some(p) = unsafe { params.as_mut() }
+        && !p.m_Code.is_null()
+        && p.m_Size >= 4
+    {
+        let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
+        // The shader's engine name (a null-terminated C string) drives the reprojection allowlist and
+        // the baked-cb block families' decline.
+        name = program_name(p.m_Name);
+        // A family whose draws a baked-view-projection block intercept re-issues per eye must stay
+        // pristine: the remap would claim it on a `cb0[4]` reference that is not its position path,
+        // leaving both eyes on the collapsed centre view *and* standing the intercept down. It is
+        // counted as having no per-eye reference, which is what it has -- no per-eye *clip* reference.
+        let owned = crate::stereo::single_pass::baked_cb_block_owns_vs(name.as_deref(), code);
+        let outcome = if owned {
+            Err(dxbc_stereo::DxbcError::NoPerEyeReferences)
+        } else {
+            dxbc_stereo::patch_vertex_shader(code)
+        };
+        crate::stereo::single_pass::record_patch_outcome(&outcome, name.as_deref());
+        // Which transform this shader gets is decided here, because here is the only place its engine
+        // name exists. The decision is then remembered against the bytecode, so the `CreateVertexShader`
+        // detour re-applies *this* decision to a shader re-created through a path that skips this hook,
+        // rather than deriving a `cb0` remap it has no name to override.
+        //
+        // Decided (and remembered) whether or not single-pass is active: the dry-run census is the only
+        // pass over the shader set that some shaders get, and turning single-pass on afterwards creates
+        // no new programs to decide from.
+        let transform = if owned {
+            VsTransform::None
+        } else {
+            crate::stereo::single_pass::decide_vs_transform(name.as_deref(), code, &outcome)
+        };
+        crate::stereo::single_pass::remember_vs_transform(code, transform);
+        let substitute = if crate::stereo::single_pass::active() {
+            crate::stereo::single_pass::apply_vs_transform(
+                transform,
+                code,
+                outcome.ok(),
+                name.as_deref(),
+            )
+        } else {
+            None
+        };
+        if let Some(blob) = substitute {
+            let len = blob.len() as u64;
+            saved = Some((p.m_Code, p.m_Size, blob));
+            p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
+            p.m_Size = len;
+        }
+    }
+
+    // Flag the patched creation so the CreateVertexShader detour records the resulting shader for the
+    // draw-time patched/unpatched gating. Install the COM detours *first*, before the trampoline
+    // creates the D3D shader: otherwise a shader created before the detours' lazy first-frame install
+    // (e.g. a character shader loaded at level start) is patched at the blob level but never recorded,
+    // so `BOUND_VS_PATCHED` stays false and its draw is never doubled -- it renders in one eye.
+    if saved.is_some() {
+        crate::stereo::single_pass::ensure_viewport_detours();
+        set_patch_pending(true, name.as_deref());
+    }
+    let result = CREATE_VERTEX_PROGRAM.get().unwrap().call(device, params);
+    set_patch_pending(false, None);
+
+    if let Some((original_code, original_size, _copy)) = saved
+        && let Some(p) = unsafe { params.as_mut() }
+    {
+        p.m_Code = original_code;
+        p.m_Size = original_size;
+    }
+    result
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::CreateFragmentProgram_ADDRESS)]
@@ -78,10 +220,15 @@ fn create_fragment_program(
     // When enabled and a target site is present, point the params at a patched copy of the bytecode
     // for the duration of the (bytecode-copying) CreatePixelShader call, then restore the caller's
     // pointer. `saved` keeps the patched copy alive across the call.
-    let mut saved: Option<(*const u8, Vec<u8>)> = None;
+    let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
     let (patch_pcf, patch_dissolve) =
         Config::lock_query(|c| (c.stereo.patch_shadow_pcf_hash, c.stereo.patch_lod_dissolve));
-    if (patch_pcf || patch_dissolve)
+    // The screen-space decal permutations' depth-UV bias, the one rewrite here that *grows* the blob.
+    let bias_ssdecal = ss_decal::shader_rewrite_enabled();
+    // Skip patching once eject begins, so the shader restore's bounce re-creates pristine fragment
+    // shaders (matching the vertex side) and the clean game keeps none of the mod's edits.
+    if !crate::is_shutting_down()
+        && (patch_pcf || patch_dissolve || bias_ssdecal)
         && let Some(p) = unsafe { params.as_mut() }
     {
         let size = p.m_Size as usize;
@@ -99,21 +246,127 @@ fn create_fragment_program(
                 // validate it (the translation layers under Proton do) reject the blob, so the
                 // shadow shaders fail to create and the scene renders broken. Refresh the checksum
                 // so the patched bytecode is a valid container.
-                refresh_dxbc_checksum(&mut copy);
+                refresh_checksum(&mut copy);
                 PATCHED.fetch_add(pcf, Ordering::Relaxed);
                 DISSOLVE_PATCHED.fetch_add(dissolve, Ordering::Relaxed);
-                saved = Some((p.m_Code, copy));
-                p.m_Code = saved.as_ref().expect("just set").1.as_ptr();
+            }
+            // Structural, not name-gated: the rewrite declines every shader without the decals'
+            // projective-UV depth fetch, and reassembles (and re-checksums) the container itself.
+            let mut biased = false;
+            if bias_ssdecal && let Ok(blob) = dxbc_stereo::bias_ssdecal_depth_uv(&copy) {
+                copy = blob;
+                biased = true;
+                // `CreateFragmentProgramParams` carries no debug name (unlike the vertex/hull/domain
+                // forms), so the running count is the only handle on which permutations were caught.
+                let count = SSDECAL_BIASED.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::debug!(
+                    target: "single_pass",
+                    "ssdecal: depth-UV biased ({count} permutations so far)",
+                );
+            }
+            if pcf + dissolve > 0 || biased {
+                // Unlike the in-place byte patches, the decal rewrite splices an instruction in, so
+                // `m_Size` has to move with `m_Code` or the engine hands D3D a container whose chunk
+                // table runs past the declared length. Both are restored after the copying call.
+                let len = copy.len() as u64;
+                saved = Some((p.m_Code, p.m_Size, copy));
+                p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
+                p.m_Size = len;
             }
         }
     }
 
     let result = CREATE_FRAGMENT_PROGRAM.get().unwrap().call(device, params);
 
-    if let Some((original, _copy)) = saved
+    if let Some((original_code, original_size, _copy)) = saved
         && let Some(p) = unsafe { params.as_mut() }
     {
-        p.m_Code = original;
+        p.m_Code = original_code;
+        p.m_Size = original_size;
+    }
+    result
+}
+
+/// Detour on `Graphics::CreateHullProgram` for the single-pass terrain path: when terrain single-pass
+/// is active, forward the eye index through the tessellation control-point phase by widening the hull's
+/// `TEXCOORD3` lane to `.xyz` ([`dxbc_stereo::forward_eye_hull_shader`]). Gated structurally -- only
+/// hulls that carry the free lane transform; the rest return an error and are left untouched -- since
+/// the hull is created without a paired-VS identity to name-gate on. The patched blob replaces the
+/// bytecode for the (copying) `CreateHullShader` call, then the caller's pointer is restored.
+#[detour(address = jc3gi::graphics_engine::draw::CreateHullProgram_ADDRESS)]
+fn create_hull_program(device: *mut c_void, params: *mut CreateHullProgramParams) -> *mut c_void {
+    let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
+    if terrain_active()
+        && let Some(p) = unsafe { params.as_mut() }
+        && !p.m_Code.is_null()
+        && p.m_Size >= 4
+    {
+        let name = program_name(p.m_Name);
+        // Skip shadow-pass terrain: it renders from the light's view, so eye-forwarding its lane feeds
+        // a shadow-atlas draw an eye it must not have.
+        if !is_terrain_shadow_pass(name.as_deref()) {
+            let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
+            if let Ok(blob) = dxbc_stereo::forward_eye_hull_shader(code) {
+                let len = blob.len() as u64;
+                tracing::info!(target: "single_pass", stage = "hull", name = ?name, "terrain: eye-lane forwarded");
+                saved = Some((p.m_Code, p.m_Size, blob));
+                p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
+                p.m_Size = len;
+                crate::stereo::single_pass::record_hull_forwarded();
+            }
+        }
+    }
+
+    let result = CREATE_HULL_PROGRAM.get().unwrap().call(device, params);
+
+    if let Some((original_code, original_size, _copy)) = saved
+        && let Some(p) = unsafe { params.as_mut() }
+    {
+        p.m_Code = original_code;
+        p.m_Size = original_size;
+    }
+    result
+}
+
+/// Detour on `Graphics::CreateDomainProgram` for the single-pass terrain path: when terrain single-pass
+/// is active, reproject the domain shader's clip by the per-eye `M_eye` and route to the eye's viewport
+/// ([`dxbc_stereo::reproject_domain_shader`]), reading the eye off the `TEXCOORD3.z` lane the vertex and
+/// hull stages carried. Gated structurally like the hull hook. The domain shader reads `cb13`, which is
+/// bound to the domain stage in [`crate::stereo::single_pass`]'s per-view upload.
+#[detour(address = jc3gi::graphics_engine::draw::CreateDomainProgram_ADDRESS)]
+fn create_domain_program(
+    device: *mut c_void,
+    params: *mut CreateDomainProgramParams,
+) -> *mut c_void {
+    let mut saved: Option<(*const u8, u64, Vec<u8>)> = None;
+    if terrain_active()
+        && let Some(p) = unsafe { params.as_mut() }
+        && !p.m_Code.is_null()
+        && p.m_Size >= 4
+    {
+        let name = program_name(p.m_Name);
+        // Skip shadow-pass terrain: reprojecting a shadow-atlas draw by the eye M_eye (and routing it to
+        // a per-eye viewport that does not exist in the shadow pass) corrupts the shadow map.
+        if !is_terrain_shadow_pass(name.as_deref()) {
+            let code = unsafe { std::slice::from_raw_parts(p.m_Code, p.m_Size as usize) };
+            if let Ok(blob) = dxbc_stereo::reproject_domain_shader(code) {
+                let len = blob.len() as u64;
+                tracing::info!(target: "single_pass", stage = "domain", name = ?name, "terrain: reprojected");
+                saved = Some((p.m_Code, p.m_Size, blob));
+                p.m_Code = saved.as_ref().expect("just set").2.as_ptr();
+                p.m_Size = len;
+                crate::stereo::single_pass::record_domain_reprojected();
+            }
+        }
+    }
+
+    let result = CREATE_DOMAIN_PROGRAM.get().unwrap().call(device, params);
+
+    if let Some((original_code, original_size, _copy)) = saved
+        && let Some(p) = unsafe { params.as_mut() }
+    {
+        p.m_Code = original_code;
+        p.m_Size = original_size;
     }
     result
 }
@@ -137,6 +390,13 @@ fn neutralize_unstable_dissolves(code: &mut [u8]) -> usize {
         if (token >> 12) & 0xFF == 0 && code[fade..fade + 4] == F32_ONE {
             code[fade..fade + 4].copy_from_slice(&DISSOLVE_NEVER);
             count += 1;
+        } else {
+            tracing::debug!(
+                "dissolve: seed matched at offset {i} but pattern check failed \
+                 (token type={}, fade immediate={:?}); coverage regression may have occurred",
+                (token >> 12) & 0xFF,
+                &code[fade..fade + 4],
+            );
         }
         i += DISSOLVE_SEED.len();
     }
@@ -158,114 +418,6 @@ fn zero_seeds(code: &mut [u8]) -> usize {
         }
     }
     count
-}
-
-/// Recompute the DXBC container checksum over a patched blob and write it into the 16-byte hash field
-/// at offset `0x4`. The checksum is a modified MD5 (see [`dxbc_hash`]) over every byte after the
-/// 20-byte header; a consumer that validates it rejects a blob whose stored hash no longer matches the
-/// bytecode, so an in-place patch must refresh it. A blob too small to hold a header is left untouched.
-fn refresh_dxbc_checksum(blob: &mut [u8]) {
-    const HEADER_LEN: usize = 20;
-    if blob.len() < HEADER_LEN {
-        return;
-    }
-    let hash = dxbc_hash(&blob[HEADER_LEN..]);
-    blob[4..HEADER_LEN].copy_from_slice(&hash);
-}
-
-/// The DXBC container hash: a modified MD5 over `data` (the bytes after the 20-byte header). It differs
-/// from standard MD5 only in the final block -- the message bit length is prepended to the trailing
-/// block rather than appended, and the closing dword is `(bits >> 2) | 1` -- so it cannot be produced
-/// with a stock MD5 finaliser.
-fn dxbc_hash(data: &[u8]) -> [u8; 16] {
-    let mut state = MD5_INIT;
-    let n = data.len();
-    let num_bits = (n as u32).wrapping_mul(8);
-    let left_over = n % 64;
-    let full = n - left_over;
-
-    let mut i = 0;
-    while i < full {
-        let mut block = [0u8; 64];
-        block.copy_from_slice(&data[i..i + 64]);
-        md5_transform(&mut state, &block);
-        i += 64;
-    }
-    let tail = &data[full..];
-    let closing = ((num_bits >> 2) | 1).to_le_bytes();
-    if left_over >= 56 {
-        let mut block = [0u8; 64];
-        block[..left_over].copy_from_slice(tail);
-        block[left_over] = 0x80;
-        md5_transform(&mut state, &block);
-        let mut last = [0u8; 64];
-        last[0..4].copy_from_slice(&num_bits.to_le_bytes());
-        last[60..64].copy_from_slice(&closing);
-        md5_transform(&mut state, &last);
-    } else {
-        let mut block = [0u8; 64];
-        block[0..4].copy_from_slice(&num_bits.to_le_bytes());
-        block[4..4 + left_over].copy_from_slice(tail);
-        block[4 + left_over] = 0x80;
-        block[60..64].copy_from_slice(&closing);
-        md5_transform(&mut state, &block);
-    }
-
-    let mut out = [0u8; 16];
-    for (chunk, word) in out.chunks_exact_mut(4).zip(state) {
-        chunk.copy_from_slice(&word.to_le_bytes());
-    }
-    out
-}
-
-const MD5_INIT: [u32; 4] = [0x6745_2301, 0xefcd_ab89, 0x98ba_dcfe, 0x1032_5476];
-
-/// Standard MD5 per-round left-rotation amounts.
-#[rustfmt::skip]
-const MD5_SHIFTS: [u32; 64] = [
-    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
-    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
-];
-
-/// Standard MD5 per-round additive constants, `floor(abs(sin(i + 1)) * 2^32)`.
-#[rustfmt::skip]
-const MD5_K: [u32; 64] = [
-    0xd76a_a478, 0xe8c7_b756, 0x2420_70db, 0xc1bd_ceee, 0xf57c_0faf, 0x4787_c62a, 0xa830_4613, 0xfd46_9501,
-    0x6980_98d8, 0x8b44_f7af, 0xffff_5bb1, 0x895c_d7be, 0x6b90_1122, 0xfd98_7193, 0xa679_438e, 0x49b4_0821,
-    0xf61e_2562, 0xc040_b340, 0x265e_5a51, 0xe9b6_c7aa, 0xd62f_105d, 0x0244_1453, 0xd8a1_e681, 0xe7d3_fbc8,
-    0x21e1_cde6, 0xc337_07d6, 0xf4d5_0d87, 0x455a_14ed, 0xa9e3_e905, 0xfcef_a3f8, 0x676f_02d9, 0x8d2a_4c8a,
-    0xfffa_3942, 0x8771_f681, 0x6d9d_6122, 0xfde5_380c, 0xa4be_ea44, 0x4bde_cfa9, 0xf6bb_4b60, 0xbebf_bc70,
-    0x289b_7ec6, 0xeaa1_27fa, 0xd4ef_3085, 0x0488_1d05, 0xd9d4_d039, 0xe6db_99e5, 0x1fa2_7cf8, 0xc4ac_5665,
-    0xf429_2244, 0x432a_ff97, 0xab94_23a7, 0xfc93_a039, 0x655b_59c3, 0x8f0c_cc92, 0xffef_f47d, 0x8584_5dd1,
-    0x6fa8_7e4f, 0xfe2c_e6e0, 0xa301_4314, 0x4e08_11a1, 0xf753_7e82, 0xbd3a_f235, 0x2ad7_d2bb, 0xeb86_d391,
-];
-
-/// Apply the standard MD5 compression function for one 64-byte block to `state`.
-fn md5_transform(state: &mut [u32; 4], block: &[u8; 64]) {
-    let mut m = [0u32; 16];
-    for (word, chunk) in m.iter_mut().zip(block.chunks_exact(4)) {
-        *word = u32::from_le_bytes(chunk.try_into().expect("4-byte chunk"));
-    }
-    let [mut a, mut b, mut c, mut d] = *state;
-    for i in 0..64 {
-        let (f, g) = match i {
-            0..=15 => ((b & c) | (!b & d), i),
-            16..=31 => ((d & b) | (!d & c), (5 * i + 1) % 16),
-            32..=47 => (b ^ c ^ d, (3 * i + 5) % 16),
-            _ => (c ^ (b | !d), (7 * i) % 16),
-        };
-        let f = f.wrapping_add(a).wrapping_add(MD5_K[i]).wrapping_add(m[g]);
-        a = d;
-        d = c;
-        c = b;
-        b = b.wrapping_add(f.rotate_left(MD5_SHIFTS[i]));
-    }
-    state[0] = state[0].wrapping_add(a);
-    state[1] = state[1].wrapping_add(b);
-    state[2] = state[2].wrapping_add(c);
-    state[3] = state[3].wrapping_add(d);
 }
 
 /// The number of PCF-seed sites patched since injection. Surfaced in the debug UI so it is obvious
@@ -296,9 +448,40 @@ pub fn process_reload_request() {
     if !RELOAD_REQUESTED.swap(false, Ordering::Relaxed) {
         return;
     }
-    // SAFETY: runs on the game thread at frame start; the engine singleton is live and its
-    // `m_CurrentBundleName` is a stable `std::string`. `LoadShaderBundle` is what the settings path
-    // calls; we drain the draw first so no GPU work references the shaders being replaced.
+    bounce_shader_bundle();
+}
+
+/// On eject: if the mod patched any shaders that the game still holds -- single-pass's substituted
+/// (`cb13`-reading) vertex shaders, or the fragment-side PCF/dissolve edits -- re-create the
+/// originals. `LoadShaderBundle` re-runs the create hooks, and with `crate::is_shutting_down()` set
+/// both the vertex substitution and the fragment patches are inert, so the game returns to fully
+/// pristine shaders instead of keeping the mod's edits after it is gone. Game thread, during
+/// shutdown, before the hooks are uninstalled.
+pub fn restore_original_shaders_on_eject() {
+    // Every substitution the mod makes has to be represented here, or a session that made only that
+    // kind of substitution ejects without a bounce. The tessellation pair is the case that was
+    // missing: a terrain-only session leaves a domain shader reading a `cb13` nothing binds any more.
+    let (hull_forwarded, domain_reprojected) = crate::stereo::single_pass::terrain_counts();
+    let patched_anything = crate::stereo::single_pass::has_patched_shaders()
+        || patched_count() > 0
+        || dissolve_patched_count() > 0
+        || SSDECAL_BIASED.load(Ordering::Relaxed) > 0
+        || hull_forwarded > 0
+        || domain_reprojected > 0;
+    if !patched_anything {
+        return;
+    }
+    crate::stereo::single_pass::warn_if_shaders_hold_patched_bytecode();
+    tracing::info!("shader restore: re-creating the pristine shaders on eject");
+    bounce_shader_bundle();
+}
+
+/// Re-create every shader by bouncing the active bundle to its other quality variant and back, so all
+/// shader holders re-run through the create hooks. Game thread only, no draw in flight (drains first).
+fn bounce_shader_bundle() {
+    // SAFETY: runs on the game thread; the engine singleton is live and its `m_CurrentBundleName` is a
+    // stable `std::string`. `LoadShaderBundle` is what the settings path calls; we drain the draw
+    // first so no GPU work references the shaders being replaced.
     unsafe {
         let Some(ge) = GraphicsEngine::get() else {
             return;
@@ -322,11 +505,20 @@ pub fn process_reload_request() {
 
         ge.WaitForCPUDrawToFinish();
         ge.LoadShaderBundle(away.as_ptr());
+        // A reload bounces the bundle (away, then back), re-creating every shader through the hooks
+        // twice. Reset the single-pass census after the throwaway `away` pass so the reported numbers
+        // reflect exactly one clean pass over the real (`back`) shader set; also clear the patched-VS
+        // set so it repopulates with the `back` set's live shader pointers.
+        crate::stereo::single_pass::reset_census();
+        crate::stereo::single_pass::reset_patched_vs();
         ge.LoadShaderBundle(back.as_ptr());
         tracing::info!(
             "shader reload: '{current_name}' (bounced via '{other}'); {} PCF sites patched total",
             patched_count(),
         );
+        // A no-op unless the const census switch is on; then the `back` pass has re-created every
+        // shader through the census hook, so the name census is complete -- dump it.
+        crate::stereo::single_pass::dump_vs_name_census();
     }
 }
 
@@ -339,40 +531,11 @@ fn toggle_bundle(name: &str) -> &'static str {
         "ShadersLowShadows" => "Shaders",
         "ShadersConstMath" => "ShadersConstMathLowShadows",
         "ShadersConstMathLowShadows" => "ShadersConstMath",
-        _ => "ShadersLowShadows",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::dxbc_hash;
-
-    /// Vectors generated from a reference implementation that reproduces the stored checksum of the
-    /// game's own shader blobs, covering both final-block branches (`left_over < 56` and `>= 56`).
-    #[test]
-    fn dxbc_hash_matches_reference_vectors() {
-        let cases: &[(&[u8], &str)] = &[
-            (&[], "140d60f6b775e2ba4e4abed401b2e9a1"),
-            (b"abc", "fbf0ffb01d1f9d12864dff8830d1b4a3"),
-            (&bytes(55), "842e55534ba93daa93e94bd5af9b0c03"),
-            (&bytes(56), "00f9cc964ff2ec81959d4a3f092ce63f"),
-            (&bytes(64), "f42eb06ca921c878e435e3b8d4f92b13"),
-            (&skewed(120), "370fd73fe9bf95fa11dcfc5a9acb4826"),
-        ];
-        for (data, expected) in cases {
-            assert_eq!(hex(&dxbc_hash(data)), *expected, "len {}", data.len());
+        _ => {
+            tracing::warn!(
+                "shader: toggle_bundle received unrecognized name {name:?}; falling back to ShadersLowShadows"
+            );
+            "ShadersLowShadows"
         }
-    }
-
-    fn bytes(n: usize) -> Vec<u8> {
-        (0..n).map(|i| i as u8).collect()
-    }
-
-    fn skewed(n: usize) -> Vec<u8> {
-        (0..n).map(|i| (i * 7) as u8).collect()
-    }
-
-    fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 }

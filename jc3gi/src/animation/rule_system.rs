@@ -57,7 +57,7 @@ impl std::convert::AsMut<State> for State {
 }
 #[repr(C, align(8))]
 /// A running animation state machine (`NAnimationSystem::CStateMachineInstance`): tracks the current
-/// [`State`] for one [`AnimationRuleSystem`].
+/// [`State`](crate::animation::rule_system::State) for one [`AnimationRuleSystem`](crate::animation::rule_system::AnimationRuleSystem).
 pub struct StateMachineInstance {
     _field_0: [u8; 24],
     /// The state the machine is currently in.

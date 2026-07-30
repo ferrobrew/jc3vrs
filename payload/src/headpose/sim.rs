@@ -2,8 +2,8 @@
 //!
 //! This module owns everything that is *simulation-specific*: mouse-look input handling, the
 //! latch state machine, mode detection, body-yaw target computation, and the per-tick
-//! [`on_input_tick`] that produces a [`HeadPose`](super::HeadPose) and publishes it via
-//! [`super::set_pose`].
+//! [`on_input_tick`] that produces a [`HeadPose`](crate::headpose::HeadPose) and publishes it via
+//! [`crate::headpose::set_pose`].
 //!
 //! The key insight: in VR, the player's head and body are independent — the head moves freely (HMD),
 //! and the body is yawed via a stick. In flatscreen, we don't have independent head/body controls,
@@ -23,7 +23,7 @@
 //! Input arrives on the engine's fixed-rate sim tick (the device poll in
 //! `InputDeviceManager::Update`), not per rendered frame. The whole sim step ([`on_input_tick`])
 //! runs inside that hook, on the engine's own tick timeline: the published pose pair
-//! ([`super::snapshot_prev`]) rotates at the exact moment the engine resets its sub-frame
+//! ([`crate::headpose::snapshot_prev`]) rotates at the exact moment the engine resets its sub-frame
 //! interpolation fraction, so the camera hook's previous/current pair is phase-aligned with the
 //! `dtf` lerp that smooths it across the frames between ticks. (Deferring the step to the next
 //! frame's update left the render lerping a stale pair at `dtf ≈ 0` on every tick frame — a
@@ -34,9 +34,7 @@ use std::sync::atomic::Ordering;
 use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
-use crate::{config::Config, grapple};
-
-use super::HeadPose;
+use crate::{config::Config, grapple, headpose::HeadPose, hooks::input::locomotion};
 
 /// The latch state (on-foot only).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -79,7 +77,7 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     // is read by `head_decoupled_idle` (the body-turn suppression gate), so freezing it under VR
     // left the game's aim-relative body turn permanently unsuppressed, which the body-relative pose
     // composition (`body × cockpit`) turns into a runaway head spin.
-    let evals = crate::hooks::input::locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
+    let evals = locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
     s.mode = detect_mode(s.last_orientation_evals, evals);
     s.last_orientation_evals = evals;
 
@@ -90,7 +88,7 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     // fallback and the state read that keeps `sim` coverage.
     {
         let body = read_body_rotation().unwrap_or(Quat::IDENTITY);
-        let anchor = super::anchor().unwrap_or(Vec3::ZERO);
+        let anchor = crate::headpose::anchor().unwrap_or(Vec3::ZERO);
         // `on_foot` is passed in rather than read back via `sim::mode()`: the SIM lock is held
         // here, and re-locking it inside `advance` deadlocks the input tick.
         grapple::advance(body, anchor, s.mode == HeadMode::OnFoot, &config.grapple);
@@ -102,8 +100,13 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     // slot; skip the rest of the tick so the VR pose stands (mode detection above still ran). The
     // look effectors do not steer the HMD-driven head, so they are consumed here to turn the body
     // instead (the flatscreen head-yaw path below owns this for the sim source).
-    if super::source() == super::Source::Vr {
-        super::xr::advance_body_yaw(look_x, look_x_delta, s.mode == HeadMode::OnFoot, &config);
+    if crate::headpose::source() == crate::headpose::Source::Vr {
+        crate::headpose::xr::advance_body_yaw(
+            look_x,
+            look_x_delta,
+            s.mode == HeadMode::OnFoot,
+            &config,
+        );
         return;
     }
 
@@ -112,7 +115,7 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
 
     // Rotate the published pose pair on the engine's own tick timeline, phase-aligned with its
     // dtf reset (see the module docs).
-    super::snapshot_prev();
+    crate::headpose::snapshot_prev();
 
     // Negated: a positive net LOOK_RIGHT delta must turn the head clockwise from above, which is
     // a negative rotation about +Y (established in-game; the unnegated form turned the wrong way).
@@ -165,7 +168,7 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     // anchors to the animated head bone plus the configured roomscale-testing offset.
     let posture_target = if config.posture_enabled {
         let up_body = body_rotation
-            .map(|rotation| rotation.inverse() * -super::neck_delta())
+            .map(|rotation| rotation.inverse() * -crate::headpose::neck_delta())
             .unwrap_or(Vec3::Y);
         posture_swing(
             up_body,
@@ -191,10 +194,10 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     // the alignment toward the target never reaches the composed view; see `crate::grapple`.
     let body_rotation = grapple::filter_body_rotation(body_rotation.unwrap_or(Quat::IDENTITY));
     let orientation = body_rotation * s.posture * head_offset;
-    let anchor = grapple::filter_anchor(super::anchor().unwrap_or(Vec3::ZERO));
+    let anchor = grapple::filter_anchor(crate::headpose::anchor().unwrap_or(Vec3::ZERO));
     let position = anchor + orientation * config.position_offset;
     drop(s);
-    super::set_pose(HeadPose {
+    crate::headpose::set_pose(HeadPose {
         position,
         orientation,
     });
@@ -286,7 +289,7 @@ fn update_latch(
     latch: LatchState,
     relative_yaw_deg: f32,
     mode: HeadMode,
-    config: &super::HeadPoseConfig,
+    config: &crate::headpose::HeadPoseConfig,
 ) -> LatchState {
     if mode != HeadMode::OnFoot {
         return LatchState::Decoupled;

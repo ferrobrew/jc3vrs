@@ -4,7 +4,7 @@
 use jc3gi::ui::ui_manager::GetIUIManager;
 use windows::core::Interface as _;
 
-use super::target::HudTarget;
+use crate::hud::target::HudTarget;
 
 /// Rebind the UI to render into `target` at `width` x `height` pixels. Returns whether it took: the
 /// UI singleton must be live.
@@ -28,7 +28,7 @@ use super::target::HudTarget;
 ///
 /// The cached viewport size is refreshed from the device every frame (in `PreRender`), but the safe
 /// area, movie rectangle, and movie viewport are not recomputed per frame, so this rebind persists
-/// until the next device/resolution reset (handled by re-applying on a back-buffer size change).
+/// until the next device/resolution reset (handled by re-applying on a render-size change).
 pub(super) fn redirect_to(target: &HudTarget, width: u32, height: u32) -> bool {
     // SAFETY: GetIUIManager returns the live UI singleton. The sequence below touches only UIManager
     // fields and calls only UIManager methods, all of which the engine itself drives from this same
@@ -114,19 +114,19 @@ pub(super) fn movie_viewport_matches(width: u32, height: u32) -> bool {
     }
 }
 
-/// Restore the engine's own UI binding by resizing everything back to the back buffer:
+/// Restore the engine's own UI binding by resizing everything back to the engine's render size:
 /// `ComputeMovieSizeOnViewSize` resets the movie rectangle to the device resolution, then the
 /// viewport, safe area, and `InitPlatformRT` (which rebinds to the engine surface) follow.
-pub(super) fn restore_engine_binding(back_buffer_width: u32, back_buffer_height: u32) {
+pub(super) fn restore_engine_binding(render_width: u32, render_height: u32) {
     // SAFETY: same as redirect_to -- the engine drives this sequence from the render thread.
     unsafe {
         let Some(manager) = GetIUIManager().as_mut() else {
             return;
         };
 
-        let w = back_buffer_width as i32;
-        let h = back_buffer_height as i32;
-        tracing::debug!(target: "hud", back_buffer_width, back_buffer_height, "restoring engine binding");
+        let w = render_width as i32;
+        let h = render_height as i32;
+        tracing::debug!(target: "hud", render_width, render_height, "restoring engine binding");
 
         // Reset the movie rectangle to the device resolution (this refreshes the cached sizes too),
         // then replay the engine-native viewport / safe area / render-target rebind.

@@ -1,6 +1,6 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// The global-illumination render pass (`RP_GLOBAL_ILLUMINATION`), owning the LPV [`GISolver`].
+/// The global-illumination render pass (`RP_GLOBAL_ILLUMINATION`), owning the LPV [`GISolver`](crate::graphics_engine::gi::GISolver).
 pub struct GIPass {
     _field_0: [u8; 2240],
     /// The LPV solver the pass delegates its GI work to.
@@ -26,7 +26,7 @@ impl std::convert::AsMut<GIPass> for GIPass {
 #[repr(C, align(8))]
 /// The light-propagation-volume solver: RSM inject + LPV propagation for the global-illumination pass.
 /// `CGISolver::Execute` refreshes one of the two LPV cascades each dispatch and toggles
-/// [`m_CascadeToUpdate`](GISolver::m_CascadeToUpdate) afterward, so the cascades are refreshed in
+/// [`m_CascadeToUpdate`](crate::graphics_engine::gi::GISolver::m_CascadeToUpdate) afterward, so the cascades are refreshed in
 /// alternation across frames.
 pub struct GISolver {
     _field_0: [u8; 984],
@@ -56,7 +56,12 @@ impl std::convert::AsMut<GISolver> for GISolver {
 /// The scene light manager, owning the global-illumination pass. The singleton address holds a pointer
 /// to the manager, which is null until the light system initializes.
 pub struct LightManager {
-    _field_0: [u8; 1829128],
+    _field_0: [u8; 12],
+    /// The diffuse colour of the embedded global light (the sun, or the moon at night) -- the head
+    /// of `m_GlobalLight.m_Light.Diffuse`. The atmospheric-scattering sky-lighting compute and the
+    /// deferred sun term both read it.
+    pub m_GlobalLightDiffuse: crate::types::math::Vector3,
+    _field_18: [u8; 1829104],
     /// The global-illumination render pass.
     pub m_GIPass: *mut crate::graphics_engine::gi::GIPass,
 }

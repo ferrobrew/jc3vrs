@@ -1,7 +1,7 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 /// The character's equipment inventory (`CInventory`), embedded in `CCharacter`
-/// ([`Character::m_Inventory`](character::character::Character::m_Inventory)). Only the
+/// ([`Character::m_Inventory`](crate::character::character::Character::m_Inventory)). Only the
 /// grappling-hook slot is mapped.
 pub struct Inventory {
     _field_0: [u8; 192],

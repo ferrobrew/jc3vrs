@@ -41,7 +41,15 @@ use jc3gi::graphics_engine::{
 };
 use parking_lot::Mutex;
 
-use crate::config::{Config, FarFieldMode};
+use crate::config::Config;
+
+mod config;
+pub use config::{DEFAULT_FAR_FIELD_GATED_TYPES, FarFieldConfig, FarFieldMode};
+
+use crate::{
+    hooks,
+    stereo::{far_phase, is_second_eye, share_frame},
+};
 
 pub mod share;
 
@@ -89,7 +97,7 @@ pub fn sync_type_gates(names: &str) {
         .collect();
 
     let mut gated = GATED_TYPE_SLOTS.lock();
-    let Some(mut patcher) = crate::hooks::patcher() else {
+    let Some(mut patcher) = hooks::patcher() else {
         return;
     };
     // SAFETY: the registry is static engine storage with live type singletons; the slot writes are
@@ -244,13 +252,13 @@ pub unsafe fn before_do_draw(pass: *mut RenderPass, ctx: *mut RenderContext) -> 
         FarFieldMode::Collect => None,
         FarFieldMode::SkipFar => Some((0, split)),
         FarFieldMode::SkipNear => Some((split, count)),
-        FarFieldMode::SkipFarEye1 => crate::stereo::is_second_eye().then_some((0, split)),
+        FarFieldMode::SkipFarEye1 => is_second_eye().then_some((0, split)),
         // A share frame's far dispatch draws only the far run; the near dispatches only the
         // near run. Outside a share frame (stereo off), Share behaves like Collect.
         FarFieldMode::Share => {
-            if crate::stereo::far_phase() {
+            if far_phase() {
                 Some((split, count))
-            } else if crate::stereo::share_frame() {
+            } else if share_frame() {
                 Some((0, split))
             } else {
                 None
@@ -320,10 +328,10 @@ unsafe extern "system" fn far_gated_type_is_enabled(_this: *mut ::core::ffi::c_v
     let skipping = enabled
         && match mode {
             FarFieldMode::SkipFar => true,
-            FarFieldMode::SkipFarEye1 => crate::stereo::is_second_eye(),
+            FarFieldMode::SkipFarEye1 => is_second_eye(),
             // The gated types are far-regime content: on a share frame they render only in the
             // far dispatch (the near dispatches composite them from the capture).
-            FarFieldMode::Share => crate::stereo::share_frame() && !crate::stereo::far_phase(),
+            FarFieldMode::Share => share_frame() && !far_phase(),
             FarFieldMode::Collect | FarFieldMode::SkipNear => false,
         };
     !skipping
@@ -331,8 +339,15 @@ unsafe extern "system" fn far_gated_type_is_enabled(_this: *mut ::core::ffi::c_v
 
 /// Whether this frame should run the three-dispatch far-field share: the split is enabled in
 /// `Share` mode (the Draw driver also requires stereo to be active).
+///
+/// Mutually exclusive with the single-pass collapse, which is the stronger claim on the dispatch
+/// list: the collapse renders both eyes from one walk, so there is no per-eye dispatch for the far
+/// G-buffer to be shared *between*, and the share's own range splitting bypasses the single-pass
+/// G-buffer marking entirely -- leaving `cb13` mirrored and the viewport unsplit, so both eyes get
+/// the same mono image cropped in half.
 pub fn share_configured() -> bool {
-    Config::lock_query(|c| c.far_field.enabled && c.far_field.mode == FarFieldMode::Share)
+    !crate::stereo::single_pass::collapse_active()
+        && Config::lock_query(|c| c.far_field.enabled && c.far_field.mode == FarFieldMode::Share)
 }
 
 /// The sentinel boundary appended after the threshold. The engine's bucket search
@@ -365,7 +380,7 @@ fn apply_buckets(pass: &mut RenderPass, threshold_m: f32) -> bool {
     if pass.m_NumDepthBuckets != 1 {
         return false;
     }
-    let Some(mut patcher) = crate::hooks::patcher() else {
+    let Some(mut patcher) = hooks::patcher() else {
         return false;
     };
     pass.m_DepthSqTable[1] = sq;
@@ -388,7 +403,7 @@ fn restore_buckets(pass: &mut RenderPass) {
         return;
     }
     // SAFETY: reverts the count patch applied in `apply_buckets` on the same live pass.
-    if let Some(mut patcher) = crate::hooks::patcher() {
+    if let Some(mut patcher) = hooks::patcher() {
         unsafe { patcher.unpatch((&raw const pass.m_NumDepthBuckets) as usize) };
     }
 }

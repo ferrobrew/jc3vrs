@@ -35,6 +35,8 @@ mod lifecycle;
 mod logging;
 #[cfg(feature = "profiler")]
 mod profiler;
+mod screenshot;
+mod session;
 mod stereo;
 
 #[unsafe(no_mangle)]
@@ -57,6 +59,10 @@ pub extern "system" fn run(_: *mut c_void) {
 
 /// Called when the DLL is loaded
 fn initialize_startup() {
+    // Resolve this run's output directory first, so the log, crash dumps, and every other artifact
+    // land under the same timestamped session folder.
+    session::init();
+
     std::panic::set_hook(Box::new(|info| {
         // Log the location before touching the payload: for formatted panics, `payload()` runs the
         // format arguments' Display impls, and one reading dead game memory faults — which
@@ -73,7 +79,7 @@ fn initialize_startup() {
 
         #[allow(clippy::manual_map)]
         let payload = if let Some(s) = payload.downcast_ref::<&str>() {
-            Some(&**s)
+            Some(*s)
         } else if let Some(s) = payload.downcast_ref::<String>() {
             Some(s.as_str())
         } else {
@@ -101,7 +107,28 @@ fn shutdown_startup() {
     // Stop the frame-tail worker before anything is torn down: a thread still alive at
     // `module::exit` would be running in an unmapped image. Any in-flight tail finishes first
     // (the VR teardown in `shutdown_from_game` already synchronized on the runtime lock).
-    vr::tail::shutdown();
+    //
+    // If it will not stop, pin the module so the image is never unmapped. A live thread in an
+    // unmapped image parks forever holding whatever it took, and the process wedges with nothing
+    // runnable and nothing logged -- strictly worse than leaking this DLL for the remaining lifetime
+    // of the game, which the player ends by quitting anyway.
+    if !vr::tail::shutdown() {
+        module::pin();
+    }
+
+    // Likewise for a profiler capture's writer thread: see `profiler::capture::shutdown`'s doc
+    // comment for why an unjoined writer is the same class of hazard as the frame tail.
+    #[cfg(feature = "profiler")]
+    if !profiler::capture::shutdown() {
+        module::pin();
+    }
+
+    // And for an F12 screenshot's writer. The PNG encode of a double-wide capture runs off-thread
+    // precisely because it is too slow to do inline, so the same unjoined-thread hazard applies --
+    // and unlike the profiler's, this one is not behind a feature.
+    if !screenshot::shutdown() {
+        module::pin();
+    }
 
     // The cleanups cleared render-thread-driven config flags (e.g. the HUD redirect). Give the still-
     // live hooks a few frames to tick those changes through -- the per-frame restore runs on the
@@ -133,7 +160,8 @@ fn initialize_from_game() -> anyhow::Result<()> {
 
     EguiState::install()?;
     ui::render::install();
-    config::CONFIG.lock().far_field.gated_types = config::DEFAULT_FAR_FIELD_GATED_TYPES.to_owned();
+    config::CONFIG.lock().far_field.gated_types =
+        crate::far_field::DEFAULT_FAR_FIELD_GATED_TYPES.to_owned();
     hud::install();
     capture::install();
     vr::install();
@@ -144,14 +172,25 @@ fn initialize_from_game() -> anyhow::Result<()> {
 
 /// Called to undo `initialize_from_game`; called once shutdown is triggered
 fn shutdown_from_game() {
+    // Re-create the original vertex shaders before anything is torn down: single-pass substitutes
+    // patched (cb13-reading) shaders that the game holds, so without this the clean game would keep
+    // rendering with them after eject. `SHUTTING_DOWN` is already set, so the reload's create hooks
+    // are inert and produce the unpatched originals. A no-op unless single-pass patched any shaders.
+    hooks::graphics_engine::shader::restore_original_shaders_on_eject();
+
     // Revert the far-field type gates and release the share pipeline's COM objects before the
     // hooks (and their patches) are torn down: the gated IsEnabled slots and the composite
     // pipeline must never outlive the payload code they point into.
     far_field::sync_type_gates("");
     far_field::share::teardown();
-    if let Some(egui_state) = EguiState::get().as_mut() {
-        lifecycle::run_cleanups(&mut egui_state.egui_renderer);
-    }
+    // Unconditionally, not only when the debug UI came up: the cleanups undo engine-wide state --
+    // the double-wide render resolution, the HUD redirect -- that a session sets whether or not egui
+    // was ever shown.
+    lifecycle::run_cleanups(
+        EguiState::get()
+            .as_mut()
+            .map(|state| &mut state.egui_renderer),
+    );
     EguiState::uninstall();
 }
 
@@ -201,12 +240,18 @@ fn update() {
             return;
         }
 
+        // The per-eye captures feed the VR blit, the desktop mirror, and the F10 capture composite.
+        // Driven here rather than from inside the egui closure below: they are what VR submits, and
+        // preparing them only as a side effect of the debug UI meant an `EguiState` that failed to
+        // install left VR with nothing to present and no indication why.
+        ui::render::EGUI_DEBUG_RENDER_STATE
+            .lock()
+            .ensure_eye_targets();
+
         if let Some(egui_state) = EguiState::get().as_mut() {
-            // While the F10 capture mode is active, keep input with the game (no egui capture
-            // toggle) but still run the egui window so the eye-texture maintenance in
-            // `prepare_if_necessary` keeps the per-eye captures sized correctly. The overlay
-            // itself is hidden by skipping `egui_state.render()` in `graphics_flip` while capture
-            // is active.
+            // While the F10 capture mode is active, keep input with the game rather than letting
+            // this toggle hand it to egui. The overlay itself is hidden by skipping
+            // `egui_state.render()` in `graphics_flip` while capture is active.
             if util::is_pressed(VK_F6) && !crate::capture::is_active() {
                 egui_state.toggle_game_input_capture();
             }
@@ -222,9 +267,9 @@ fn update() {
             }
 
             egui_state.run(|ctx, renderer| {
-                // The per-eye capture textures feed the VR blit, the desktop mirror, and the F10
-                // capture composite — they must be (re)created every frame, independent of which
-                // UI tabs or windows are visible (or whether the Debug window is collapsed).
+                // The UI-side half of capture upkeep: the Previews tab's own textures, and the egui
+                // registrations for surfaces the render thread created without a renderer. The eye
+                // captures themselves are prepared above, off this path.
                 ui::render::EGUI_DEBUG_RENDER_STATE
                     .lock()
                     .prepare_if_necessary(renderer);

@@ -1,5 +1,5 @@
 [workspace]
-members = ["injector", "jc3gi", "payload", "fsr-sys", "shadergen", "tools/scaleform-gfx-examine"]
+members = ["injector", "jc3gi", "payload", "fsr-sys", "shadergen", "dxbc-stereo", "tools/dxbc-tool", "tools/scaleform-gfx-examine"]
 resolver = "3"
 default-members = ["injector"]
 
@@ -41,6 +41,12 @@ detours-macro = { git = "https://github.com/ferrobrew/re-utilities.git" }
 # pyxis = { path = "../pyxis" }
 pyxis = { git = "https://github.com/ferrobrew/pyxis.git" }
 
+# Abort on panic rather than unwinding. The payload's detours hold raw pointers into engine state
+# that is not safe to drop through, and unwinding across a FFI boundary (the detour trampolines) is
+# UB. The panic hook in `crash.rs` still fires before the abort, so crash logs are written.
+[profile.dev]
+panic = "abort"
+
 # Optimize the PNG-encode chain even in dev builds: the render-trace screenshot diagnostic encodes
 # many full-resolution frames, and unoptimized deflate makes a capture crawl. These are third-party
 # crates, so optimizing them does not slow iteration on our own code.
@@ -58,3 +64,10 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.crc32fast]
 opt-level = 3
+
+# Keep line tables in release. Without them a release hang or crash symbolizes to a bare RVA, which
+# is what made the allocator deadlock in `uninstall_com_detours` take a session to pin down. Costs
+# image size, not speed.
+[profile.release]
+debug = 1
+panic = "abort"

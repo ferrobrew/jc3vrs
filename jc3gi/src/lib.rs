@@ -5,7 +5,8 @@
     non_upper_case_globals,
     clippy::missing_safety_doc,
     clippy::unnecessary_cast,
-    clippy::module_inception
+    clippy::module_inception,
+    rustdoc::redundant_explicit_links
 )]
 #![cfg_attr(any(), rustfmt::skip)]
 #[macro_export]

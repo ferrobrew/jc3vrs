@@ -5,7 +5,7 @@ use std::{collections::VecDeque, time::Instant};
 
 use parking_lot::Mutex;
 
-use super::util::patchbox;
+use crate::ui::util::patchbox;
 
 pub fn egui_debug_performance(ui: &mut egui::Ui) {
     unsafe {

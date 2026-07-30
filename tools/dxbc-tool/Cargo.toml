@@ -1,0 +1,9 @@
+[package]
+name = "dxbc-tool"
+version = "0.1.0"
+edition = "2024"
+description = "Compiles HLSL to DXBC and disassembles DXBC via d3dcompiler_47, run under Wine. Replaces the compile.c/disasm.c harnesses."
+publish = false
+
+[dependencies]
+windows = { workspace = true, features = ["Win32_Graphics_Direct3D_Fxc"] }

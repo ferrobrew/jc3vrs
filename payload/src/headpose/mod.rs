@@ -36,6 +36,8 @@ pub mod xr;
 
 pub use config::HeadPoseConfig;
 
+use crate::config::Config;
+
 /// Which source currently owns the published headpose. The flatscreen [`sim`] and the VR [`xr`]
 /// source are mutually exclusive publishers; the arbiter is a plain atomic so the sim's per-tick
 /// gate and [`set_anchors`] can read it without taking the runtime lock (the VR frame loop holds the
@@ -130,7 +132,9 @@ pub struct Anchors {
 /// overrides the head bone. Non-finite or absurdly distant positions (loading screens,
 /// uninitialized bone data) are rejected, leaving the previous anchors in place. The pose position
 /// is refreshed immediately so the character hook, which reads the pose right after publishing the
-/// anchors, sees a position anchored to this frame's animated pose.
+/// anchors, sees a position anchored to this frame's animated pose: the sim source recomputes it
+/// from the new anchor outright, and the VR pose is shifted by the anchor delta, keeping its
+/// room-scale component while moving the anchor component onto this frame's anchor.
 pub fn set_anchors(anchors: Anchors) {
     if !anchors.head.is_finite()
         || !anchors.head_prev.is_finite()
@@ -141,8 +145,9 @@ pub fn set_anchors(anchors: Anchors) {
     {
         return;
     }
-    let offset = crate::config::Config::lock_query(|c| c.headpose.position_offset);
+    let offset = Config::lock_query(|c| c.headpose.position_offset);
     let mut s = state().lock();
+    let previous_anchor = s.anchor;
     s.anchor = Some(anchors.head);
     s.anchor_prev = Some(anchors.head_prev);
     s.neck_delta = anchors.neck - anchors.head;
@@ -151,12 +156,18 @@ pub fn set_anchors(anchors: Anchors) {
     if anchors.eye_arm.is_finite() && anchors.eye_arm.length_squared() < 1.0 {
         s.eye_arm = anchors.eye_arm;
     }
-    // The sim's pose position is anchor-derived, so refresh it here to this frame's animated head
-    // bone. The VR source owns the full pose position (the anchor plus the room-scale HMD
-    // translation), so refreshing it from the anchor alone would drop that translation -- leave it
-    // untouched while VR publishes.
+    // The sim's pose position is anchor-derived, so recompute it here from this frame's animated
+    // head bone. The VR source composes the full position (the anchor plus the room-scale HMD
+    // translation) at its own render cadence, so between publishes the anchor advances up to one
+    // sim tick ahead of the published pose -- and the sim-tick consumers (the head-bone override,
+    // the HumanIK target) read it against the *new* anchor, sitting the head bone one tick behind
+    // the moving body (issue #44: the shadow's head trails the torso). Shifting by the anchor
+    // delta brings the anchor component current without touching the room-scale component; the
+    // next render-frame publish recomposes the full pose anyway.
     if source() == Source::Sim {
         s.pose.position = anchors.head + s.pose.orientation * offset;
+    } else if let Some(previous_anchor) = previous_anchor {
+        s.pose.position += anchors.head - previous_anchor;
     }
 }
 
@@ -210,7 +221,7 @@ pub fn body_yaw_target() -> Option<Vec3> {
 
 /// Whether headpose-driven head control is enabled.
 pub fn is_active() -> bool {
-    crate::config::Config::lock_query(|c| c.headpose.enabled)
+    Config::lock_query(|c| c.headpose.enabled)
 }
 
 #[derive(Default)]

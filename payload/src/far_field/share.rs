@@ -7,7 +7,7 @@
 //! far G-buffer back in — after the engine's clears and Z prepass, before the geometry passes — so
 //! the stock deferred lighting then resolves a *complete* G-buffer per eye, bit-identical to a
 //! full render. Sharing the G-buffer (rather than a lit far image) sidesteps the lighting-resolve
-//! masking problem entirely; the cost is that lighting stays per-eye. See `docs/mod/far-field.md`.
+//! masking problem entirely; the cost is that lighting stays per-eye. See `docs/mod/stereo/far-field.md`.
 //!
 //! Eye 0's composite is an identity mapping (the far dispatch used its pose and projection); eye
 //! 1's maps through the per-axis affine NDC reprojection between the two off-axis projections
@@ -37,6 +37,8 @@ use windows::Win32::{
     },
     System::Threading::{EnterCriticalSection, LeaveCriticalSection},
 };
+
+use crate::vr::{foveation::resource_as_texture, render_params};
 
 /// Capture the far dispatch's G-buffer: copy MainDepth + GBuffer0..3 into the share pipeline's own
 /// textures (recreated on size/format change). Called from the render-pass-range hook after the
@@ -243,7 +245,7 @@ impl SharePipeline {
         for (i, slot) in self.gbuffer.iter_mut().enumerate() {
             let tex = unsafe { ge.m_GBufferTexture[i].as_ref() }
                 .with_context(|| format!("far field: GBuffer{i} is unavailable"))?;
-            let src = crate::vr::foveation::resource_as_texture(&raw const tex.m_Texture)
+            let src = resource_as_texture(&raw const tex.m_Texture)
                 .with_context(|| format!("far field: GBuffer{i} has no texture resource"))?;
             let mut src_desc = D3D11_TEXTURE2D_DESC::default();
             unsafe { src.GetDesc(&mut src_desc) };
@@ -263,7 +265,7 @@ impl SharePipeline {
                 .context("far field: MainDepth is unavailable")?;
             let desc = (tex.m_Width as u32, tex.m_Height as u32, tex.m_Format as i32);
             if self.depth.as_ref().map(|c| c.desc) != Some(desc) {
-                let src = crate::vr::foveation::resource_as_texture(&raw const tex.m_Texture)
+                let src = resource_as_texture(&raw const tex.m_Texture)
                     .context("far field: MainDepth has no texture resource")?;
                 let mut src_desc = D3D11_TEXTURE2D_DESC::default();
                 unsafe { src.GetDesc(&mut src_desc) };
@@ -274,7 +276,7 @@ impl SharePipeline {
                 self.depth = Some(create_capture(device, desc, copy_format, srv_format)?);
             }
             let capture = self.depth.as_ref().expect("the capture was just ensured");
-            let src = crate::vr::foveation::resource_as_texture(&raw const tex.m_Texture)
+            let src = resource_as_texture(&raw const tex.m_Texture)
                 .context("far field: MainDepth has no texture resource")?;
             unsafe { context.CopyResource(&capture.texture, &src) };
         }
@@ -304,7 +306,7 @@ impl SharePipeline {
         for (i, rtv) in rtvs.iter_mut().enumerate() {
             let tex = unsafe { ge.m_GBufferTexture[i].as_ref() }
                 .with_context(|| format!("far field: GBuffer{i} is unavailable"))?;
-            let src = crate::vr::foveation::resource_as_texture(&raw const tex.m_Texture)
+            let src = resource_as_texture(&raw const tex.m_Texture)
                 .with_context(|| format!("far field: GBuffer{i} has no texture resource"))?;
             let key = tex as *const _ as usize;
             if self.raw_rtvs[i].as_ref().map(|(k, _)| *k) != Some(key) {
@@ -414,8 +416,8 @@ impl SharePipeline {
 /// Identity when either projection is unavailable (flatscreen stereo: identical projections).
 fn ndc_affine(eye: usize) -> ((f32, f32), (f32, f32)) {
     let (Some(p_eye), Some(p_far)) = (
-        crate::vr::render_params(eye).map(|p| p.projection_standard),
-        crate::vr::render_params(0).map(|p| p.projection_standard),
+        render_params(eye).map(|p| p.projection_standard),
+        render_params(0).map(|p| p.projection_standard),
     ) else {
         return ((1.0, 1.0), (0.0, 0.0));
     };

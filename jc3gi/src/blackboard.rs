@@ -1,18 +1,18 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
 /// A keyed value store attached to game objects (`CObjectBlackboard`); the character's instance
-/// lives at [`Character::m_Blackboard`](Character::m_Blackboard) and carries
+/// lives at [`Character::m_Blackboard`](crate::character::character::Character::m_Blackboard) and carries
 /// the locomotion values (the camera-relative move direction, the target face direction, the up
 /// direction). Values are read and written by id through the template accessors below, under
-/// [`m_BbLock`](ObjectBlackboard::m_BbLock).
+/// [`m_BbLock`](crate::blackboard::ObjectBlackboard::m_BbLock).
 pub struct ObjectBlackboard {
-    /// The key table, [`m_KeyInfoCapacity`](ObjectBlackboard::m_KeyInfoCapacity) slots; keys are
+    /// The key table, [`m_KeyInfoCapacity`](crate::blackboard::ObjectBlackboard::m_KeyInfoCapacity) slots; keys are
     /// assigned as they are first written.
     pub m_KeyInfos: *mut crate::blackboard::ObjectBlackboardKeyInfo,
     pub m_KeyInfoCapacity: u16,
     _field_a: [u8; 6],
     /// The value arena; each entry lives at its key's
-    /// [`m_DataOffset`](ObjectBlackboardKeyInfo::m_DataOffset).
+    /// [`m_DataOffset`](crate::blackboard::ObjectBlackboardKeyInfo::m_DataOffset).
     pub m_Data: *mut u8,
     pub m_DataCapacity: u16,
     /// The arena's bump-allocation cursor.
@@ -87,7 +87,7 @@ impl ObjectBlackboard {
 }
 impl ObjectBlackboard {
     /// The id of the second float the input move task reads alongside
-    /// [`SPEED_ID`](ObjectBlackboard::SPEED_ID); semantics unmapped, a candidate input-strength
+    /// [`SPEED_ID`](crate::blackboard::ObjectBlackboard::SPEED_ID); semantics unmapped, a candidate input-strength
     /// signal.
     pub const AUX_FLOAT_ID: u32 = 2217900102;
     /// The id of the constrained-ground movement direction (`CVector3f`), present on slopes (and
@@ -116,7 +116,7 @@ impl std::convert::AsMut<ObjectBlackboard> for ObjectBlackboard {
     }
 }
 #[repr(C, align(8))]
-/// One key slot in an [`ObjectBlackboard`]'s table (`SObjectBlackboardKeyInfo`): the key hash, the
+/// One key slot in an [`ObjectBlackboard`](crate::blackboard::ObjectBlackboard)'s table (`SObjectBlackboardKeyInfo`): the key hash, the
 /// value's type tag and arena offset, and an optional debug label.
 pub struct ObjectBlackboardKeyInfo {
     /// The key hash the accessors look up by.
@@ -129,7 +129,7 @@ pub struct ObjectBlackboardKeyInfo {
     /// The persistence class (`SObjectBlackboardKeyInfo::EPersistenceType`): `0` session,
     /// `1` local frame, `2` global frame.
     pub m_PersistenceType: u32,
-    /// The value's byte offset within [`ObjectBlackboard::m_Data`].
+    /// The value's byte offset within [`ObjectBlackboard::m_Data`](crate::blackboard::ObjectBlackboard::m_Data).
     pub m_DataOffset: u16,
     _field_e: [u8; 2],
     /// An optional debug label for the key; null at release call sites.

@@ -35,9 +35,7 @@ pub(crate) fn render(ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             for (label, event) in WEATHER_EVENTS {
                 if ui.button(*label).clicked() {
-                    let event = std::ffi::CString::new(*event)
-                        .expect("a weather event name contains a NUL");
-                    jc3gi::event::send_event_msg(&event);
+                    jc3gi::event::send_event_msg(event);
                 }
             }
         });
@@ -73,7 +71,7 @@ pub(crate) fn render(ui: &mut egui::Ui) {
 
 /// The named weather events the [`WeatherController`] subscribes in its `Init`, as button label
 /// and event name (see the `WeatherController::EVENT_*` docs for what each pins).
-const WEATHER_EVENTS: &[(&str, &str)] = &[
+const WEATHER_EVENTS: &[(&str, &std::ffi::CStr)] = &[
     ("Sunny", WeatherController::EVENT_SUNNY),
     ("Rain", WeatherController::EVENT_RAIN),
     ("Snow", WeatherController::EVENT_SNOW),

@@ -185,6 +185,8 @@ pub enum TraceEvent {
     SmoothedExposureUpdate { gated: bool, exposure: f32 },
     #[serde(rename = "CalcHistogramMidBright")]
     CalcHistogramMidBright { gated: bool },
+    #[serde(rename = "ToneMappingUpdate")]
+    ToneMappingUpdate { gated: bool },
     /// Per-frame exposure internals, read from inside `ToneMappingEffect::Update` (the canonical
     /// exposure write, with the live effect in hand). `divisor` is `m_Histogram2`'s mid-point -- the
     /// value the converged exposure actually tracks (`target = target_num / divisor`). The stereo
@@ -207,10 +209,31 @@ pub enum TraceEvent {
         pingpong: u32,
         forced: bool,
     },
-    #[serde(rename = "GenerateHistogram")]
-    GenerateHistogram { skip: bool },
-    #[serde(rename = "DrawHistogramWindow")]
-    DrawHistogramWindow { skip: bool },
+    /// The render engine's CPU staging copies of the global shader constant buffers: `fp` is the
+    /// 95-row fragment `GlobalConstants` block (lighting, wetness, shadow, per-view camera rows),
+    /// `vp` the 49-row vertex block (view-projection, fog, and atmospheric-scattering rows), each
+    /// flattened row-major. The blocks are re-staged per pass, so `at` names the sample point
+    /// (`scene` at the aerial-perspective composite, `frame_end` after the draw drains). Diffing a
+    /// good frame against a bad one identifies which row a latched change rides in. Gated on
+    /// `stereo.diagnose_global_constants`.
+    #[serde(rename = "GlobalConstants")]
+    GlobalConstants {
+        at: String,
+        fp: Vec<f32>,
+        vp: Vec<f32>,
+    },
+    /// The subsampled linear mean of the HDR MainColor buffer at a named pipeline stage
+    /// (`post_resolve`, `pre_atmosphere`, `post_atmosphere`, `post_block_entry`, `pre_post`, or a
+    /// `pass0xNN` label from the per-pass sweep). Bracketing a global change between two stages
+    /// names the frame segment that injects it -- the instrument that localized the foveation
+    /// blend-state latch. Gated on `stereo.diagnose_main_color_means` (stage brackets) and
+    /// `stereo.diagnose_pass_sweep` (the per-pass ladder).
+    #[serde(rename = "MainColorMean")]
+    MainColorMean { at: String, r: f32, g: f32, b: f32 },
+    #[serde(rename = "ToneMappingApply")]
+    ToneMappingApply { skip: bool },
+    #[serde(rename = "GenerateFinalHistogram")]
+    GenerateFinalHistogram { skip: bool },
     #[serde(rename = "ApplyWorldFilters")]
     ApplyWorldFilters { gated: bool },
     #[serde(rename = "ApplyGlobalFilters")]
@@ -289,10 +312,11 @@ pub fn active_frames() -> i32 {
     TRACE_FRAMES.load(Ordering::Relaxed)
 }
 
-/// The per-trace output directory `<dll dir>/traces/<stamp>`, collecting one capture's NDJSON and its
-/// per-frame screenshots together. `None` when the module path is unavailable.
+/// The per-trace output directory `traces/<stamp>` in the session directory (see [`crate::session`]),
+/// collecting one capture's NDJSON and its per-frame screenshots together. `None` when the session
+/// directory is unavailable.
 fn trace_dir(stamp: &str) -> Option<std::path::PathBuf> {
-    let base = crate::module::get_path()?.parent()?.join("traces");
+    let base = crate::session::subdir("traces")?.ok()?;
     Some(base.join(if stamp.is_empty() { "latest" } else { stamp }))
 }
 
@@ -393,7 +417,7 @@ impl TraceState {
     /// written as the first record while the counter is still 0 (lock held), then the counter is
     /// armed -- so render-thread hooks that observe it can never race ahead of the manifest.
     pub fn start(frames: i32) {
-        let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string();
+        let stamp = crate::session::stamp();
         {
             let mut state = TRACE_STATE.lock();
             let last_path = state.last_path.take();

@@ -1,6 +1,31 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// Parameters to [`CreateFragmentProgram`]: the compiled DXBC bytecode (`m_Code`) and its byte length
+/// Parameters to [`CreateDomainProgram`](crate::graphics_engine::draw::CreateDomainProgram): the compiled DXBC bytecode, its byte length, and a debug
+/// name. Same layout as [`CreateVertexProgramParams`](crate::graphics_engine::draw::CreateVertexProgramParams).
+pub struct CreateDomainProgramParams {
+    pub m_Code: *const u8,
+    pub m_Size: u64,
+    pub m_Name: *const u8,
+}
+fn _CreateDomainProgramParams_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x18], CreateDomainProgramParams>([0u8; 0x18]);
+    }
+    unreachable!()
+}
+impl CreateDomainProgramParams {}
+impl std::convert::AsRef<CreateDomainProgramParams> for CreateDomainProgramParams {
+    fn as_ref(&self) -> &CreateDomainProgramParams {
+        self
+    }
+}
+impl std::convert::AsMut<CreateDomainProgramParams> for CreateDomainProgramParams {
+    fn as_mut(&mut self) -> &mut CreateDomainProgramParams {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// Parameters to [`CreateFragmentProgram`](crate::graphics_engine::draw::CreateFragmentProgram): the compiled DXBC bytecode (`m_Code`) and its byte length
 /// (`m_Size`), passed straight through to `ID3D11Device::CreatePixelShader`. `m_Size` is read as a
 /// pointer-width value (the bytecode length argument to `CreatePixelShader`).
 pub struct CreateFragmentProgramParams {
@@ -25,7 +50,32 @@ impl std::convert::AsMut<CreateFragmentProgramParams> for CreateFragmentProgramP
     }
 }
 #[repr(C, align(8))]
-/// Parameters to [`CreateVertexProgram`]: the compiled DXBC bytecode, its byte length, and a debug
+/// Parameters to [`CreateHullProgram`](crate::graphics_engine::draw::CreateHullProgram): the compiled DXBC bytecode, its byte length, and a debug name.
+/// Same layout as [`CreateVertexProgramParams`](crate::graphics_engine::draw::CreateVertexProgramParams).
+pub struct CreateHullProgramParams {
+    pub m_Code: *const u8,
+    pub m_Size: u64,
+    pub m_Name: *const u8,
+}
+fn _CreateHullProgramParams_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x18], CreateHullProgramParams>([0u8; 0x18]);
+    }
+    unreachable!()
+}
+impl CreateHullProgramParams {}
+impl std::convert::AsRef<CreateHullProgramParams> for CreateHullProgramParams {
+    fn as_ref(&self) -> &CreateHullProgramParams {
+        self
+    }
+}
+impl std::convert::AsMut<CreateHullProgramParams> for CreateHullProgramParams {
+    fn as_mut(&mut self) -> &mut CreateHullProgramParams {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// Parameters to [`CreateVertexProgram`](crate::graphics_engine::draw::CreateVertexProgram): the compiled DXBC bytecode, its byte length, and a debug
 /// name (attached to the D3D object and used to size the retained bytecode copy).
 pub struct CreateVertexProgramParams {
     pub m_Code: *const u8,
@@ -201,25 +251,31 @@ pub unsafe fn DrawIndexedInstancedIndirect(
     }
 }
 pub const Dispatch_ADDRESS: usize = 0x141962AD0;
-/// A compute dispatch.
+/// A compute dispatch of `x` by `y` by `z` thread groups.
+///
+/// Unlike its neighbours above, this one's demangled symbol agrees with the disassembly: the body
+/// takes exactly four arguments in `rcx`/`edx`/`r8d`/`r9d`, flushes the pending render state through
+/// `Graphics::SetupRenderStates`, and forwards the three group counts to the backend's dispatch entry
+/// under the context's critical section.
+///
+/// A dispatch is not rasterization, so none of the rasterizer state applies to it: neither the
+/// viewport nor the scissor rectangle ([`SetScissorEnable`](crate::graphics_engine::draw::SetScissorEnable)) restricts which texels a dispatch's
+/// threads address. The addressed region is decided entirely by the group counts passed here and by
+/// the compute program's own mapping from `SV_DispatchThreadID` to texel.
 pub unsafe fn Dispatch(
-    a1: *mut ::std::ffi::c_void,
-    a2: *mut ::std::ffi::c_void,
-    a3: *mut ::std::ffi::c_void,
-    a4: *mut ::std::ffi::c_void,
-    a5: *mut ::std::ffi::c_void,
-    a6: *mut ::std::ffi::c_void,
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    x: u32,
+    y: u32,
+    z: u32,
 ) {
     unsafe {
         let f: unsafe extern "system" fn(
-            a1: *mut ::std::ffi::c_void,
-            a2: *mut ::std::ffi::c_void,
-            a3: *mut ::std::ffi::c_void,
-            a4: *mut ::std::ffi::c_void,
-            a5: *mut ::std::ffi::c_void,
-            a6: *mut ::std::ffi::c_void,
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            x: u32,
+            y: u32,
+            z: u32,
         ) = ::std::mem::transmute(Dispatch_ADDRESS);
-        f(a1, a2, a3, a4, a5, a6)
+        f(ctx, x, y, z)
     }
 }
 pub const DispatchIndirect_ADDRESS: usize = 0x141962B60;
@@ -280,8 +336,11 @@ pub unsafe fn Clear(
         f(ctx, flags, color, depth, stencil)
     }
 }
-pub const CopySurfaceToTexture_ADDRESS: usize = 0x14195ABA0;
-/// Copies one surface into another texture.
+pub const CopySurfaceToTexture_ADDRESS: usize = 0x141954850;
+/// Copies one surface into another texture: a whole-resource `ID3D11DeviceContext::CopyResource`
+/// of `src`'s D3D11 resource into `dst`'s, issued under the context mutex. The release build's
+/// symbol table misplaces this function's name onto [`EndDraw`](crate::graphics_engine::draw::EndDraw) and labels this address
+/// `NGraphicsEngine::CGPUProfiler::BeginScope`; the body is unambiguous.
 pub unsafe fn CopySurfaceToTexture(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     dst: *mut ::std::ffi::c_void,
@@ -296,6 +355,21 @@ pub unsafe fn CopySurfaceToTexture(
         f(ctx, dst, src)
     }
 }
+pub const EndDraw_ADDRESS: usize = 0x14195ABA0;
+/// Submits the frame's recorded command work: under the context's critical section it indexes the
+/// context's command-slot ring and submits the two prebuilt command objects for the current slot
+/// through the backend. It takes no arguments beyond the context.
+///
+/// The release build's symbol table labels this address `Graphics::CopySurfaceToTexture`; the two
+/// names are swapped (see [`CopySurfaceToTexture`](crate::graphics_engine::draw::CopySurfaceToTexture)).
+pub unsafe fn EndDraw(ctx: *mut crate::graphics_engine::graphics_engine::HContext_t) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        ) = ::std::mem::transmute(EndDraw_ADDRESS);
+        f(ctx)
+    }
+}
 pub const ResolveSurface_ADDRESS: usize = 0x1419672B0;
 /// Resolves an MSAA surface.
 pub unsafe fn ResolveSurface(
@@ -308,6 +382,25 @@ pub unsafe fn ResolveSurface(
             params: *mut ::std::ffi::c_void,
         ) = ::std::mem::transmute(ResolveSurface_ADDRESS);
         f(ctx, params)
+    }
+}
+pub const SetScissorEnable_ADDRESS: usize = 0x141966B80;
+/// Sets the scissor-enable bit of the context's current rasterizer-state key (bit 7 of the key's low
+/// byte), which becomes `D3D11_RASTERIZER_DESC::ScissorEnable` when the state object for that key is
+/// created. The key is looked up (and the object created on first use) by the render-state flush that
+/// precedes every draw, so the change takes effect from the next draw on. Only the enable flag lives
+/// in the key: the rectangles themselves are passed straight through to the context's
+/// `RSSetScissorRects` by a separate wrapper and are ignored while the flag is clear.
+pub unsafe fn SetScissorEnable(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    enable: bool,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            enable: bool,
+        ) = ::std::mem::transmute(SetScissorEnable_ADDRESS);
+        f(ctx, enable)
     }
 }
 pub const GetRTVFromSurface_ADDRESS: usize = 0x141956240;
@@ -336,9 +429,9 @@ pub unsafe fn GetDSVFromSurface(
 }
 pub const CreateFragmentProgram_ADDRESS: usize = 0x141953470;
 /// The leaf fragment-program creator: it wraps `ID3D11Device::CreatePixelShader` over
-/// `params.m_Code`/`params.m_Size`. `CreatePixelShader` copies the bytecode, so a hook may substitute a
-/// patched copy that only has to outlive the call. Static (no `this`); the first argument is the
-/// graphics device.
+/// `params.m_Code`/`params.m_Size`. `CreatePixelShader` copies the bytecode, so `params.m_Code` need
+/// not remain valid past the call, and the returned holder retains no bytecode of its own. Static (no
+/// `this`); the first argument is the graphics device.
 pub unsafe fn CreateFragmentProgram(
     device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
     params: *mut crate::graphics_engine::draw::CreateFragmentProgramParams,
@@ -355,7 +448,7 @@ pub unsafe fn CreateFragmentProgram(
 }
 pub const CreateVertexProgram_ADDRESS: usize = 0x141953320;
 /// The leaf vertex-program creator: it wraps `ID3D11Device::CreateVertexShader` over
-/// `params.m_Code`/`params.m_Size`. Unlike [`CreateFragmentProgram`], the returned holder also
+/// `params.m_Code`/`params.m_Size`. Unlike [`CreateFragmentProgram`](crate::graphics_engine::draw::CreateFragmentProgram), the returned holder also
 /// retains a heap copy of the bytecode (used later for input-layout creation), so both the D3D
 /// object and the retained copy reflect whatever bytecode was passed in. Static (no `this`); the
 /// first argument is the graphics device.
@@ -373,10 +466,56 @@ pub unsafe fn CreateVertexProgram(
         f(device, params)
     }
 }
+pub const CreateHullProgram_ADDRESS: usize = 0x141953690;
+/// The leaf hull-program creator: it wraps `ID3D11Device::CreateHullShader` (vtable slot 16) over
+/// `params.m_Code`/`params.m_Size`. `CreateHullShader` copies the bytecode, so `params.m_Code` need not
+/// remain valid past the call; unlike [`CreateVertexProgram`](crate::graphics_engine::draw::CreateVertexProgram), the returned holder is a bare shader
+/// pointer with no retained bytecode copy. Static (no `this`); the first argument is the graphics
+/// device.
+pub unsafe fn CreateHullProgram(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    params: *const crate::graphics_engine::draw::CreateHullProgramParams,
+) -> *mut ::std::ffi::c_void {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+            params: *const crate::graphics_engine::draw::CreateHullProgramParams,
+        ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(CreateHullProgram_ADDRESS);
+        f(device, params)
+    }
+}
+pub const CreateDomainProgram_ADDRESS: usize = 0x1419537A0;
+/// The leaf domain-program creator: it wraps `ID3D11Device::CreateDomainShader` (vtable slot 17) over
+/// `params.m_Code`/`params.m_Size`. `CreateDomainShader` copies the bytecode, so `params.m_Code` need
+/// not remain valid past the call; like [`CreateHullProgram`](crate::graphics_engine::draw::CreateHullProgram), the returned holder is a bare shader
+/// pointer with no retained bytecode copy. Static (no `this`); the first argument is the graphics
+/// device.
+pub unsafe fn CreateDomainProgram(
+    device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+    params: *const crate::graphics_engine::draw::CreateDomainProgramParams,
+) -> *mut ::std::ffi::c_void {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            device: *mut crate::graphics_engine::graphics_engine::HDevice_t,
+            params: *const crate::graphics_engine::draw::CreateDomainProgramParams,
+        ) -> *mut ::std::ffi::c_void = ::std::mem::transmute(
+            CreateDomainProgram_ADDRESS,
+        );
+        f(device, params)
+    }
+}
 pub const SetFragmentProgramConstants_ADDRESS: usize = 0x141964840;
 /// Stages `count` float4 constants into the given fragment constant buffer slot, starting at
 /// `start_offset`, writing to the context's per-slot staging buffer and setting the dirty flag. The
 /// actual GPU upload happens at the next state flush.
+///
+/// The staging buffer is a single 512-row `float4` array per shader stage, held in the graphics
+/// context (the fragment one begins at context offset `0x2020`, after the vertex one at `0x20`); the
+/// four slots of a stage carve their windows out of it, each starting at the row
+/// [`SetFragmentProgramConstantBufferSize`](crate::graphics_engine::draw::SetFragmentProgramConstantBufferSize) recorded for it. The write is therefore bounded by that
+/// window and by the pooled buffer the slot is bound to, not by `count` alone. A row-level redundancy
+/// check skips rows byte-identical to what is already staged, and a call that skips every row leaves
+/// the dirty flag alone.
 pub unsafe fn SetFragmentProgramConstants(
     ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
     cb_index: i32,
@@ -392,6 +531,124 @@ pub unsafe fn SetFragmentProgramConstants(
             data: *const f32,
             count: u32,
         ) = ::std::mem::transmute(SetFragmentProgramConstants_ADDRESS);
+        f(ctx, cb_index, start_offset, data, count)
+    }
+}
+pub const SetFragmentProgramConstantBufferSize_ADDRESS: usize = 0x1419643B0;
+/// Declares how large a fragment constant-buffer slot is for the draws that follow, and where in the
+/// stage's shared staging array its window begins.
+///
+/// `count` is a number of `float4` rows. It is not stored as-is: the engine rounds it **up** to the
+/// next entry of a fixed 17-entry pool-size table — `1, 2, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128,
+/// 196, 256, 384, 512` — and binds the pre-created `ID3D11Buffer` of that size to the slot (a
+/// `PSSetConstantBuffers` call, skipped when the size class is unchanged). The rounded size class,
+/// not `count`, is what [`SetupRenderStates`](crate::graphics_engine::draw::SetupRenderStates) later uploads, so the constant buffer the shader sees is
+/// the rounded one and the rows between `count` and the size class are uploaded as whatever the
+/// staging array happens to hold. `start_offset` is recorded as the slot's base row within the
+/// stage's 512-row staging array; every shipped call passes `0`, so at most one staged slot per stage
+/// is live at a time. Passing `count = 0` unbinds the slot and clears its dirty flag.
+///
+/// The debug build additionally keeps `count` verbatim so that every
+/// [`SetFragmentProgramConstants`](crate::graphics_engine::draw::SetFragmentProgramConstants) can assert that its own `start_offset + count` stays within it; the
+/// release build stores only the bound buffer, the size class, and the base row, and performs no
+/// bounds check at all.
+pub unsafe fn SetFragmentProgramConstantBufferSize(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            count: u32,
+        ) = ::std::mem::transmute(SetFragmentProgramConstantBufferSize_ADDRESS);
+        f(ctx, cb_index, start_offset, count)
+    }
+}
+pub const SetVertexProgramConstantBufferSize_ADDRESS: usize = 0x141964280;
+/// The vertex analogue of [`SetFragmentProgramConstantBufferSize`](crate::graphics_engine::draw::SetFragmentProgramConstantBufferSize), over the vertex staging array and
+/// the vertex slots' pooled buffers.
+pub unsafe fn SetVertexProgramConstantBufferSize(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            count: u32,
+        ) = ::std::mem::transmute(SetVertexProgramConstantBufferSize_ADDRESS);
+        f(ctx, cb_index, start_offset, count)
+    }
+}
+pub const SetupRenderStates_ADDRESS: usize = 0x14195FEA0;
+/// Flushes the graphics context's deferred state to D3D11 ahead of a draw: for each of the four slots
+/// of each shader stage whose dirty flag is set, maps its bound constant buffer with
+/// `D3D11_MAP_WRITE_DISCARD` and copies `16 * size_class` bytes into it from the stage's staging array
+/// starting at the slot's base row — the **rounded** size class from
+/// [`SetFragmentProgramConstantBufferSize`](crate::graphics_engine::draw::SetFragmentProgramConstantBufferSize), not the requested row count — then resolves the
+/// depth-stencil, blend, and rasterizer state objects from their cached descriptors.
+pub unsafe fn SetupRenderStates(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+        ) = ::std::mem::transmute(SetupRenderStates_ADDRESS);
+        f(ctx)
+    }
+}
+pub const SetVertexProgramConstants_ADDRESS: usize = 0x141964740;
+/// Stages `count` float4 constants into the given **vertex** constant buffer slot, starting at
+/// `start_offset` (in float4 rows), writing to the context's per-slot staging buffer and setting the
+/// dirty flag; the GPU upload happens at the next state flush. The vertex analogue of
+/// [`SetFragmentProgramConstants`](crate::graphics_engine::draw::SetFragmentProgramConstants). `cb_index` is the vertex-shader constant-buffer slot (e.g. `1`
+/// for `cb1`). A row-level redundancy check skips rows byte-identical to what is already staged.
+pub unsafe fn SetVertexProgramConstants(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    data: *const f32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            data: *const f32,
+            count: u32,
+        ) = ::std::mem::transmute(SetVertexProgramConstants_ADDRESS);
+        f(ctx, cb_index, start_offset, data, count)
+    }
+}
+pub const SetGeometryProgramConstants_ADDRESS: usize = 0x141964A40;
+/// Stages `count` float4 constants into the given **geometry** constant buffer slot, starting at
+/// `start_offset` (in float4 rows), writing to the context's per-slot staging buffer and setting the
+/// dirty flag; the GPU upload happens at the next state flush. The geometry analogue of
+/// [`SetFragmentProgramConstants`](crate::graphics_engine::draw::SetFragmentProgramConstants). The clustered deferred-lighting pass is the volume user: it
+/// stages the light-assignment geometry shader's `ProjMatrix` here as four rows on `cb0`.
+pub unsafe fn SetGeometryProgramConstants(
+    ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+    cb_index: i32,
+    start_offset: u32,
+    data: *const f32,
+    count: u32,
+) {
+    unsafe {
+        let f: unsafe extern "system" fn(
+            ctx: *mut crate::graphics_engine::graphics_engine::HContext_t,
+            cb_index: i32,
+            start_offset: u32,
+            data: *const f32,
+            count: u32,
+        ) = ::std::mem::transmute(SetGeometryProgramConstants_ADDRESS);
         f(ctx, cb_index, start_offset, data, count)
     }
 }

@@ -79,7 +79,7 @@ impl Camera {
         }
     }
     pub const SetComputeView_ADDRESS: usize = 0x14009BDB0;
-    /// Sets or clears the `m_ComputeView` flag. When set, [`UpdateRender`](Camera::UpdateRender)
+    /// Sets or clears the `m_ComputeView` flag. When set, [`UpdateRender`](crate::camera::camera::Camera::UpdateRender)
     /// re-derives `m_View` as the inverse of `m_TransformF` each frame instead of reading a supplied
     /// view matrix.
     pub unsafe fn SetComputeView(&mut self, enable: bool) {
@@ -107,7 +107,7 @@ impl Camera {
     /// data from `m_ViewProjection`: it inverts the view-projection, transforms the NDC cube corners to
     /// world space (using `transform`'s translation for the apex), and derives the planes. Reads the
     /// standard-depth `m_ViewProjection` (not the reverse-Z `m_ViewProjectionF`) and asserts
-    /// `!m_IsRenderCamera`. Called from [`UpdateRender`](Camera::UpdateRender) when the view is dirty;
+    /// `!m_IsRenderCamera`. Called from [`UpdateRender`](crate::camera::camera::Camera::UpdateRender) when the view is dirty;
     /// the frustum-cull consumers (terrain patches, occlusion) read these planes, not `m_ProjectionF`.
     pub unsafe fn UpdateFrustum(
         &mut self,

@@ -12,9 +12,14 @@ use glam::{Quat, Vec3};
 use jc3gi::types::math::Matrix4;
 use parking_lot::Mutex;
 
-use crate::{config, grapple, headpose};
-
-use super::{Fov, FrameContext, OffAxisProjection, VrConfig, config::ProjectionConvention};
+use crate::{
+    config, grapple, headpose,
+    vr::{
+        Fov, FrameContext, FreezeMode, OffAxisProjection, VrConfig,
+        config::ProjectionConvention,
+        pose_control::{self, pose_orientation, pose_position},
+    },
+};
 
 /// The per-eye render parameters the `SetupRenderCamera` hook applies while a VR frame is in flight.
 #[derive(Copy, Clone)]
@@ -45,15 +50,15 @@ pub struct EyeRenderParams {
 /// frame-held runtime lock.
 static RENDER_PARAMS: Mutex<Option<[EyeRenderParams; 2]>> = Mutex::new(None);
 
+/// The per-eye render parameters captured on the first frame of a [`FreezeMode::FullCamera`] freeze
+/// and reused until it ends, so the eyes hold still around the pinned camera. `None` whenever that
+/// mode is not engaged.
+static FROZEN_EYE_PARAMS: Mutex<Option<[EyeRenderParams; 2]>> = Mutex::new(None);
+
 /// The standard-depth, symmetric, union-FOV projection that bounds *both* eyes' off-axis frusta, for
 /// widening the scene cull frustum (see [`cull_projection_standard`]). `None` when no VR frame is
 /// rendering.
 static CULL_PROJECTION: Mutex<Option<Matrix4>> = Mutex::new(None);
-
-/// The captured pose reused every frame while [`VrConfig::freeze_pose`] is on: the two eye views plus
-/// the sim-driven body frame and head anchor, so the *full* composed render camera is bit-identical
-/// frame to frame (`None` when the toggle is off, so the next enable re-captures the then-current pose).
-static FROZEN_POSE: Mutex<Option<([super::EyeView; 2], Quat, Vec3)>> = Mutex::new(None);
 
 /// The render parameters for `eye` (`0` = left, `1` = right) this frame, or `None` when no VR frame
 /// is rendering. Read by the `SetupRenderCamera` hook.
@@ -87,11 +92,16 @@ pub fn clear_render_params() {
 /// held guard); publishes through the headpose state and the [`RENDER_PARAMS`] slot, both
 /// independently locked.
 pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
-    // Freeze diagnostic: reuse the first captured pose -- eye views plus the sim-driven body frame and
-    // anchor -- so every frame renders from a bit-identical camera, isolating per-frame-input-driven
-    // artifacts (pose noise, head-bone idle animation) from intrinsic render ones (see `freeze_pose`).
-    let frozen = if cfg.freeze_pose {
-        Some(*FROZEN_POSE.lock().get_or_insert_with(|| {
+    // Cockpit-pose freeze diagnostic: reuse the first captured pose -- eye views plus the sim-driven
+    // body frame and anchor -- so the head contributes the same thing every frame, isolating
+    // per-frame-input-driven artifacts (pose noise, head-bone idle animation) from intrinsic render
+    // ones. The captured centre pose is then hand-editable from the Camera tab, so a mis-scaled
+    // screen-space pass can be driven by an exact, repeatable yaw or translation step. The
+    // full-camera mode is not handled here at all: it pins the composed camera in the
+    // `SetupRenderCamera` hook, downstream of everything this function publishes (see
+    // `crate::vr::FreezeMode` and `crate::vr::pose_control`).
+    let frozen = if cfg.freeze_mode == FreezeMode::CockpitPose {
+        Some(pose_control::frozen_frame(|| {
             (
                 [frame.eye_view(0), frame.eye_view(1)],
                 headpose::xr::body_rotation(),
@@ -99,17 +109,21 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
             )
         }))
     } else {
-        *FROZEN_POSE.lock() = None;
+        // The full-camera freeze owns the capture from the `SetupRenderCamera` hook, so only drop it
+        // here when nothing is frozen at all.
+        if cfg.freeze_mode == FreezeMode::Off {
+            pose_control::clear();
+        }
         None
     };
-    let [eye0, eye1] = frozen.map_or_else(|| [frame.eye_view(0), frame.eye_view(1)], |f| f.0);
+    let [eye0, eye1] = frozen.map_or_else(|| [frame.eye_view(0), frame.eye_view(1)], |f| f.eyes);
 
     // Advance the grapple reel-in filter at frame cadence, before the body frame and anchor below
     // are read through it: the engine rotates the body the instant a reel begins, and the ~33 Hz
     // input-tick advance alone left up to a tick of that rotation reaching the view before the
     // filter engaged (issue #36 telemetry). At frame cadence the held pre-reel frame is the one
     // the previous render composed with, so an instant engage is seamless.
-    let anchor_raw = frozen.map_or_else(|| headpose::anchor().unwrap_or(Vec3::ZERO), |f| f.2);
+    let anchor_raw = frozen.map_or_else(|| headpose::anchor().unwrap_or(Vec3::ZERO), |f| f.anchor);
     let headpose_config = config::Config::lock_query(|c| c.headpose);
     grapple::advance(
         headpose::xr::body_rotation_raw(),
@@ -125,22 +139,25 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // eyes rather than on one of them. On canted panels the eyes' orientations differ, so anchoring
     // the center on one eye would bias the head (and everything keyed to it -- aim, the recenter
     // baseline) toward that eye and split the per-eye canting asymmetrically. Matches the runtime
-    // head-pose stand-in ([`super::mid_pose`]), which is likewise the slerp-mid.
+    // head-pose stand-in ([`crate::vr::recenter::mid_pose`]), which is likewise the slerp-mid.
     let center_orientation = pose_orientation(eye0.pose).slerp(pose_orientation(eye1.pose), 0.5);
 
-    let body_rotation = frozen.map_or_else(headpose::xr::body_rotation, |f| f.1);
+    let body_rotation = frozen.map_or_else(headpose::xr::body_rotation, |f| f.body_rotation);
     // The anchor goes through the grapple filter's landing rate limit; the previous-tick anchor is
     // offset by the same amount so the pair keeps the true tick delta for the engine's `dtf` lerp.
     let anchor = grapple::filter_anchor(anchor_raw);
-    let anchor_prev_raw =
-        frozen.map_or_else(|| headpose::anchor_prev().unwrap_or(anchor_raw), |f| f.2);
+    let anchor_prev_raw = frozen.map_or_else(
+        || headpose::anchor_prev().unwrap_or(anchor_raw),
+        |f| f.anchor,
+    );
 
     // Compose a tick-spaced pose pair sharing the fresh HMD cockpit delta but differing in the
     // sim-driven body frame and head anchor (T1 vs T0), so the engine's `dtf` lerp smooths the
     // per-tick body/anchor motion between rendered frames. The previous-tick anchor and body rotation
     // fall back to the current-tick values until they are available, degenerating to no interpolation
     // rather than a bad one. Under the freeze diagnostic, prev == cur so the lerp is constant too.
-    let body_rotation_prev = frozen.map_or_else(headpose::xr::body_rotation_prev, |f| f.1);
+    let body_rotation_prev =
+        frozen.map_or_else(headpose::xr::body_rotation_prev, |f| f.body_rotation);
     let anchor_prev = anchor - (anchor_raw - anchor_prev_raw);
 
     // Publish the raw cockpit-frame HMD pose (the tracking delta before the body-frame composition
@@ -219,12 +236,12 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // asymmetric off-axis frustum for a zero-shear symmetric one of the same extent (Test A); `mirror`
     // makes eye 1 reuse eye 0's params so both eyes draw the identical view (Test B). Both feed the
     // reconstruction consistently, since the camera hook and reconstruction read whatever lands in
-    // `RENDER_PARAMS`. See `crate::config::StereoConfig`.
+    // `RENDER_PARAMS`. See `crate::stereo::config::StereoConfig`.
     let (symmetrize, mirror) = config::Config::lock_query(|c| {
         (c.stereo.symmetrize_eye_frusta, c.stereo.mirror_eye0_to_both)
     });
 
-    let eye_params = |eye: super::EyeView, eye_position: Vec3| {
+    let eye_params = |eye: crate::vr::EyeView, eye_position: Vec3| {
         let projection = if symmetrize {
             symmetric_projection(eye.fov, near_clip, far_clip)
         } else {
@@ -252,11 +269,26 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     } else {
         eye_params(eye1, pos1)
     };
-    *RENDER_PARAMS.lock() = Some([eye0_params, eye1_params]);
+
+    // Under the full-camera freeze the render camera itself is pinned in world space (see the
+    // `SetupRenderCamera` hook), so the per-eye parameters must be pinned with it: `world_offset`
+    // carries the live body rotation and the live eye-to-centre delta, and letting those keep moving
+    // would swing each eye by up to the IPD around the frozen centre -- exactly the residual motion
+    // the mode exists to remove. Captured on the first frozen frame and reused until the mode leaves.
+    let params = {
+        let mut frozen_params = FROZEN_EYE_PARAMS.lock();
+        if cfg.freeze_mode == FreezeMode::FullCamera {
+            *frozen_params.get_or_insert([eye0_params, eye1_params])
+        } else {
+            *frozen_params = None;
+            [eye0_params, eye1_params]
+        }
+    };
+    *RENDER_PARAMS.lock() = Some(params);
 }
 
 /// Build a zero-shear (symmetric) off-axis projection that preserves the eye's horizontal and vertical
-/// FOV *extent* but re-centres the frustum, for the [`crate::config::StereoConfig::symmetrize_eye_frusta`]
+/// FOV *extent* but re-centres the frustum, for the [`crate::stereo::config::StereoConfig::symmetrize_eye_frusta`]
 /// flicker-isolation diagnostic (issue #31). Each axis' symmetric half-extent is half the asymmetric
 /// tangent span, so `2/(tr-tl)` (the projection's scale term) is unchanged while the off-centre terms
 /// `(tl+tr)` and `(td+tu)` collapse to zero.
@@ -272,20 +304,5 @@ fn symmetric_projection(fov: openxr::Fovf, near: f32, far: f32) -> OffAxisProjec
         },
         near,
         far,
-    )
-}
-
-/// The position of an OpenXR pose as a [`Vec3`].
-fn pose_position(pose: openxr::Posef) -> Vec3 {
-    Vec3::new(pose.position.x, pose.position.y, pose.position.z)
-}
-
-/// The orientation of an OpenXR pose as a [`glam::Quat`].
-fn pose_orientation(pose: openxr::Posef) -> glam::Quat {
-    glam::Quat::from_xyzw(
-        pose.orientation.x,
-        pose.orientation.y,
-        pose.orientation.z,
-        pose.orientation.w,
     )
 }

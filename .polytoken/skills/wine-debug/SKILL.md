@@ -52,6 +52,37 @@ done
 - Zero R-state threads → a pure wait cycle (locks/events). Go to the lock-state
   and stack-walk steps.
 
+## Catching a hard crash (the process faults and exits)
+
+For a reproducible crash (on a specific action — a refocus, an eject, a menu
+change), attach *before* triggering it and let gdb catch the fault. Two traps
+make a naive catcher useless under Wine:
+
+1. **Wine fires `SIGUSR1` (and realtime signals) constantly** for its own thread
+   scheduling. A plain `handle SIGSEGV stop` catcher wakes on every one of them.
+   Silence them: `handle SIGUSR1 SIGUSR2 SIGTRAP SIG33 SIG34 SIG35 nostop noprint
+   pass`.
+2. **gdb itself asserts** (`get_thread_regcache: thread->state != THREAD_EXITED`)
+   if it tries to report a signal while the game's threads are exiting mid-crash.
+   So stop on the *first* genuine `SIGSEGV`/`SIGABRT` and dump immediately — never
+   loop-continue past a fatal fault.
+
+`scripts/catch_crash.py` does exactly this: it auto-resolves the game PID (the one
+with `jc3vrs_payload` mapped) and the exe/payload address bands, silences the Wine
+signals, stops on the first real fault, and dumps registers + faulting
+instructions + backtrace + a stack scan, tagging any address in the exe or the
+payload band.
+
+```sh
+gdb --batch -x .polytoken/skills/wine-debug/scripts/catch_crash.py > /tmp/crash.out 2>&1 &
+#   wait for "=== ATTACHED ... trigger the crash now ===", then trigger it; read /tmp/crash.out
+```
+
+A fault **RIP inside the payload band** after an eject/teardown is the signature
+of a **dangling detour** — an inline hook (COM-vtable or otherwise) left enabled
+while the DLL unmapped, so the game jumped into freed payload code. The fix is a
+teardown that disables those detours before unload.
+
 ## Spinning threads: sample the instruction pointer
 
 ```sh

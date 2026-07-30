@@ -439,6 +439,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dxbc-stereo"
+version = "0.1.0"
+
+[[package]]
+name = "dxbc-tool"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "ecolor"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -944,6 +955,7 @@ dependencies = [
  "anyhow",
  "clipboard-win",
  "detours-macro",
+ "dxbc-stereo",
  "egui",
  "egui-directx11",
  "egui_dock",
@@ -957,6 +969,7 @@ dependencies = [
  "puffin",
  "puffin_egui",
  "re-utilities",
+ "retour",
  "serde",
  "serde_json",
  "tracing",
@@ -1504,7 +1517,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 [[package]]
 name = "pyxis"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/pyxis.git#06e76f8978a7371b424778b7cca6ffb5576bdca7"
+source = "git+https://github.com/ferrobrew/pyxis.git#f95ea87092ea66b821d6350bb6d6617f2da691ba"
 dependencies = [
  "ariadne",
  "glob",
@@ -1522,7 +1535,7 @@ dependencies = [
 [[package]]
 name = "pyxis_macros"
 version = "0.1.0"
-source = "git+https://github.com/ferrobrew/pyxis.git#06e76f8978a7371b424778b7cca6ffb5576bdca7"
+source = "git+https://github.com/ferrobrew/pyxis.git#f95ea87092ea66b821d6350bb6d6617f2da691ba"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -17,7 +17,10 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::{config::Config, hud::cursor};
+use crate::{
+    config::Config,
+    hud::{HUD_STATE, compute_panel_vp, current_aspect, cursor, split::roots},
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -65,19 +68,17 @@ fn convert_3d_coords_default(
     // SAFETY: `world` is the caller's live aim point; panel_pose only reads cached state.
     if record_aim
         && let Some(world) = unsafe { world.as_ref() }
-        && let Some((anchor, _)) = crate::hud::HUD_STATE.lock().panel_pose()
+        && let Some((anchor, _)) = HUD_STATE.lock().panel_pose()
     {
         let world = glam::Vec3::new(world.data[0], world.data[1], world.data[2]);
         crate::hud::aim::record((world - anchor).length().clamp(0.5, max_depth.max(0.5)));
     }
 
-    let aspect = crate::hud::current_aspect();
+    let aspect = current_aspect();
     // The reticle's projection is a tunable A/B (issue #6): the panel subtense (default) or the game's
     // own projection. Markers stay on the panel subtense.
     let symmetric = reticle_align == crate::hud::ReticleAlign::PanelSubtense;
-    let panel = panel_enabled
-        .then(|| crate::hud::compute_panel_vp(symmetric))
-        .flatten();
+    let panel = panel_enabled.then(|| compute_panel_vp(symmetric)).flatten();
     match panel {
         // Project through the panel VP with the aspect retarget, exactly like the Get2DInfo hook,
         // so the grapple reticle lands at the correct spot on the panel surface.
@@ -129,7 +130,7 @@ fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
         unsafe {
             crate::hud::scaleform::apply_overlay_suppression(suppress_overlays);
             if let Some(movie) = this.as_mut() {
-                crate::hud::split::roots::on_capture(movie, split_active);
+                roots::on_capture(movie, split_active);
                 log_pipeline_lag(movie, split_active);
             }
         }
@@ -178,7 +179,7 @@ fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
     if let Some(views) = crate::hud::split_inputs() {
         // SAFETY: called from the detour with the detour's own arguments, on the UI render
         // worker.
-        if unsafe { crate::hud::split::roots::render_partitioned(this, &views) } {
+        if unsafe { roots::render_partitioned(this, &views) } {
             return;
         }
     }
@@ -214,11 +215,9 @@ fn get_2d_info(
             c.hud.marker_radius,
         )
     });
-    let aspect = crate::hud::current_aspect();
+    let aspect = current_aspect();
     // Markers always use the panel subtense; only the reticle exposes the game-projection A/B.
-    let panel = panel_enabled
-        .then(|| crate::hud::compute_panel_vp(true))
-        .flatten();
+    let panel = panel_enabled.then(|| compute_panel_vp(true)).flatten();
     let (vp, camera) = panel
         .as_ref()
         .map(|(v, c)| (v as *const Matrix4, c as *const Matrix4))
@@ -265,7 +264,7 @@ fn get_2d_info(
                 && pos == ScreenPos::SCREEN_POS_ONSCREEN
                 && manager.m_CachedStageWidth > 0.0
                 && manager.m_CachedStageHeight > 0.0
-                && let Some((anchor, _)) = crate::hud::HUD_STATE.lock().panel_pose()
+                && let Some((anchor, _)) = HUD_STATE.lock().panel_pose()
             {
                 let world = glam::Vec3::new(world.data[0], world.data[1], world.data[2]);
                 let depth = (world - anchor).length().clamp(0.5, max_depth.max(0.5));

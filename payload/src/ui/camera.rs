@@ -3,7 +3,10 @@
 use egui::Slider;
 use jc3gi::types::math::Matrix4;
 
-use crate::{config, grapple, headpose, hooks};
+use crate::{
+    config, grapple, headpose, headpose::config::VrTurnMode, hooks, hooks::character::BodyIkConfig,
+    vr, vr::FreezeMode,
+};
 
 pub fn egui_debug_camera(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
@@ -38,6 +41,9 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
     ui.add(Slider::new(&mut cs.body_offset.z, -1.0..=1.0).text("Body Z"));
 
     ui.collapsing("Headpose", |ui| egui_debug_headpose(ui, &mut cfg.headpose));
+    ui.collapsing("Frozen pose (diagnostic)", |ui| {
+        egui_frozen_pose(ui, &mut cfg.vr);
+    });
     ui.collapsing("Grapple reel-in comfort", |ui| {
         egui_grapple(ui, &mut cfg.headpose.grapple);
     });
@@ -47,7 +53,7 @@ pub fn egui_debug_camera(ui: &mut egui::Ui) {
     ui.collapsing("Body IK", |ui| egui_debug_body_ik(ui, &mut cfg.body_ik));
 }
 
-fn egui_debug_body_ik(ui: &mut egui::Ui, ik: &mut config::BodyIkConfig) {
+fn egui_debug_body_ik(ui: &mut egui::Ui, ik: &mut BodyIkConfig) {
     ui.checkbox(&mut ik.enabled, "Enabled")
         .on_hover_text("Drive the upper body toward the headpose via the engine's HumanIK solver.");
     ui.checkbox(
@@ -140,6 +146,158 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
     ui.add(Slider::new(&mut hp.position_offset.z, -1.0..=1.0).text("Roomscale offset Z (m)"));
 }
 
+/// The frozen-pose diagnostic ([`crate::vr::pose_control`]): pin the rendered pose, then drive it by
+/// hand. Content that only mis-renders *in motion* (a mis-scaled screen-space pass, a render block
+/// that slides under the camera) cannot be measured by turning your head -- the same movement is never
+/// repeated twice. Frozen, a pose is an exact set of numbers: dial one in, step yaw by exactly one
+/// degree, and the two frames differ in exactly that.
+///
+/// The mode picks *what* is held: the head's contribution to the camera, or the whole camera. For a
+/// "slides as the camera moves" measurement it is the full camera you want, since only that holds
+/// everything the view is built from.
+fn egui_frozen_pose(ui: &mut egui::Ui, vr: &mut vr::VrConfig) {
+    ui.horizontal(|ui| {
+        ui.label("Freeze:");
+        ui.radio_value(&mut vr.freeze_mode, FreezeMode::Off, "Off");
+        ui.radio_value(
+            &mut vr.freeze_mode,
+            FreezeMode::CockpitPose,
+            "Head pose (cockpit)",
+        )
+        .on_hover_text(
+            "Capture the current HMD pose (and the body frame and head anchor with it) and reuse it \
+             every frame. Isolates HMD pose-noise-driven flicker (present even on a desk) from \
+             intrinsic render artifacts. This holds the head's contribution still, not the camera: \
+             a camera the game moves still moves.",
+        );
+        ui.radio_value(
+            &mut vr.freeze_mode,
+            FreezeMode::FullCamera,
+            "Full camera (world)",
+        )
+        .on_hover_text(
+            "Pin the final scene render camera in world space, at the last point before the engine \
+             consumes it. Nothing moves the view -- not the head, the body, the animated head bone, \
+             or the game's own camera -- and the per-eye offsets are held with it. This is the mode \
+             for measuring content that only mis-renders in motion.",
+        );
+    });
+    // While frozen, edit the pose actually driving the render. Unfrozen there is nothing to edit, so
+    // the live cockpit pose stands in as a readout -- but only in the modes whose numbers are in that
+    // frame. The full-camera mode has no live stand-in (the cockpit pose is a different quantity in a
+    // different frame, and showing it here would read as a world position), so it says so instead.
+    let frozen = vr::pose_control::current();
+    let values = match (frozen, vr.freeze_mode) {
+        (Some(values), _) => Some(values),
+        (None, FreezeMode::FullCamera) => None,
+        (None, _) => headpose::xr::cockpit_pose()
+            .map(|p| vr::pose_control::PoseValues::from_pose(p.position, p.orientation)),
+    };
+    // The two frames are not interchangeable: cockpit metres are head travel from the recenter
+    // baseline, world metres are the camera's position in the game world. A number whose frame is
+    // ambiguous is worse than no number, so the frame is always stated next to the values.
+    ui.label(match (frozen.is_some(), vr.freeze_mode) {
+        (true, FreezeMode::FullCamera) => {
+            "Frame: world -- the render camera's world-space position and orientation"
+        }
+        (true, _) => "Frame: cockpit -- the head pose relative to the recenter baseline",
+        (false, _) => "Frame: cockpit (live head pose) -- freeze to edit",
+    });
+    let Some(mut values) = values else {
+        ui.label(match vr.freeze_mode {
+            FreezeMode::FullCamera => "Pose: no frame has rendered under the freeze yet.",
+            _ => "Pose: no VR frame has rendered yet.",
+        });
+        return;
+    };
+
+    let step_m = vr.freeze_pose_step_m;
+    let step_deg = vr.freeze_pose_step_deg;
+    let mut changed = false;
+    ui.add_enabled_ui(frozen.is_some(), |ui| {
+        egui::Grid::new("frozen_pose_grid")
+            .num_columns(4)
+            .show(ui, |ui| {
+                changed |= pose_row(ui, "X", &mut values.position.x, step_m, " m");
+                changed |= pose_row(ui, "Y", &mut values.position.y, step_m, " m");
+                changed |= pose_row(ui, "Z", &mut values.position.z, step_m, " m");
+                changed |= pose_row(ui, "Yaw", &mut values.yaw_deg, step_deg, "°");
+                changed |= pose_row(ui, "Pitch", &mut values.pitch_deg, step_deg, "°");
+                changed |= pose_row(ui, "Roll", &mut values.roll_deg, step_deg, "°");
+            });
+        if changed {
+            vr::pose_control::set_current(values);
+        }
+
+        if ui
+            .button("Reset to captured pose")
+            .on_hover_text(match vr::pose_control::base() {
+                Some(base) => format!(
+                    "Return to the pose captured when the freeze engaged: ({:+.3}, {:+.3}, {:+.3}) m, \
+                     yaw {:+.2}°, pitch {:+.2}°, roll {:+.2}°.",
+                    base.position.x,
+                    base.position.y,
+                    base.position.z,
+                    base.yaw_deg,
+                    base.pitch_deg,
+                    base.roll_deg,
+                ),
+                None => "Nothing is frozen.".to_string(),
+            })
+            .clicked()
+        {
+            vr::pose_control::reset();
+        }
+    });
+
+    ui.add(
+        egui::DragValue::new(&mut vr.freeze_pose_step_m)
+            .speed(0.01)
+            .range(0.001..=10.0)
+            .prefix("Translation step: ")
+            .suffix(" m"),
+    );
+    ui.add(
+        egui::DragValue::new(&mut vr.freeze_pose_step_deg)
+            .speed(0.1)
+            .range(0.01..=90.0)
+            .prefix("Rotation step: ")
+            .suffix("°"),
+    );
+}
+
+/// One editable pose component: direct numeric entry plus exact `-`/`+` nudges of `step`. Returns
+/// whether the value changed this frame.
+fn pose_row(ui: &mut egui::Ui, label: &str, value: &mut f32, step: f32, suffix: &str) -> bool {
+    ui.label(label);
+    let mut changed = ui
+        .add(
+            egui::DragValue::new(value)
+                .speed(step * 0.1)
+                .max_decimals(4)
+                .suffix(suffix),
+        )
+        .changed();
+    if ui
+        .button("-")
+        .on_hover_text("Step down by exactly one step, snapped to the step grid.")
+        .clicked()
+    {
+        *value = vr::pose_control::nudge(*value, step, -1);
+        changed = true;
+    }
+    if ui
+        .button("+")
+        .on_hover_text("Step up by exactly one step, snapped to the step grid.")
+        .clicked()
+    {
+        *value = vr::pose_control::nudge(*value, step, 1);
+        changed = true;
+    }
+    ui.end_row();
+    changed
+}
+
 /// The grapple reel-in body-frame filter (issue #36): which rotation the reel is allowed to
 /// compose into the view, and the blend constants around the reel window.
 fn egui_grapple(ui: &mut egui::Ui, grapple: &mut grapple::GrappleComfortConfig) {
@@ -204,8 +362,6 @@ fn egui_grapple(ui: &mut egui::Ui, grapple: &mut grapple::GrappleComfortConfig) 
 /// The on-foot body-turn knobs used while the HMD owns the head (mouse and right stick turn the body,
 /// not the head). Separate from the flatscreen latch above, which never runs under an OpenXR session.
 fn egui_vr_turn(ui: &mut egui::Ui, turn: &mut headpose::config::VrTurnConfig) {
-    use headpose::config::VrTurnMode;
-
     ui.horizontal(|ui| {
         ui.label("Mode:");
         ui.radio_value(&mut turn.mode, VrTurnMode::Smooth, "Smooth");

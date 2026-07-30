@@ -37,7 +37,7 @@ impl GameCameraManager {
     pub const PushRenderContext_ADDRESS: usize = 0x1407ECB00;
     /// Funnels the camera control contexts into the active camera state: reads the next render
     /// context, sets the audio listener, applies the jitter filter, and calls
-    /// [`CameraManager::InitTransform`] and [`CameraManager::InitFOV`].
+    /// [`CameraManager::InitTransform`](crate::camera::camera_manager::CameraManager::InitTransform) and [`CameraManager::InitFOV`](crate::camera::camera_manager::CameraManager::InitFOV).
     pub unsafe fn PushRenderContext(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -86,7 +86,7 @@ impl GameCameraManager {
     /// Writes the camera matrix used for mapping player input to world space — the same matrix the
     /// locomotion input task reads to make the move direction camera-relative (its negated third
     /// row is the camera forward on the ground plane). Reads
-    /// [`CameraControlContext::m_NextRenderContext`](camera::camera_context::CameraControlContext::m_NextRenderContext)'s camera transform.
+    /// [`CameraControlContext::m_NextRenderContext`](crate::camera::camera_context::CameraControlContext::m_NextRenderContext)'s camera transform.
     pub unsafe fn GetInputMatrix(&self, matrix: *mut crate::types::math::Matrix4) {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -97,8 +97,8 @@ impl GameCameraManager {
         }
     }
     pub const GetCameraMatrix_ADDRESS: usize = 0x14075C7C0;
-    /// Writes the sim-phase camera matrix: [`CameraControlContext::m_NextCameraContext`](camera::camera_context::CameraControlContext::m_NextCameraContext)'s camera
-    /// transform, as opposed to [`GetInputMatrix`](GameCameraManager::GetInputMatrix)'s next *render* context. Read by the player aim
+    /// Writes the sim-phase camera matrix: [`CameraControlContext::m_NextCameraContext`](crate::camera::camera_context::CameraControlContext::m_NextCameraContext)'s camera
+    /// transform, as opposed to [`GetInputMatrix`](crate::camera::game_camera_manager::GameCameraManager::GetInputMatrix)'s next *render* context. Read by the player aim
     /// control (raycast start position, adjusted camera matrix, target visibility casts), weapon
     /// aim-target queries, melee and grapple state tasks, and other sim-side camera consumers.
     pub unsafe fn GetCameraMatrix(&self, matrix: *mut crate::types::math::Matrix4) {
@@ -112,8 +112,8 @@ impl GameCameraManager {
     }
     pub const GetAlternateAimMatrix_ADDRESS: usize = 0x14075C830;
     /// Writes the alternate-aim (aim-down-sights) matrix:
-    /// [`CameraControlContext::m_NextRenderContext`](camera::camera_context::CameraControlContext::m_NextRenderContext)'s alternate aim transform. The player aim
-    /// control prefers it over [`GetCameraMatrix`](GameCameraManager::GetCameraMatrix) when [`IsAlternateAimTransformUsed`](GameCameraManager::IsAlternateAimTransformUsed) is set.
+    /// [`CameraControlContext::m_NextRenderContext`](crate::camera::camera_context::CameraControlContext::m_NextRenderContext)'s alternate aim transform. The player aim
+    /// control prefers it over [`GetCameraMatrix`](crate::camera::game_camera_manager::GameCameraManager::GetCameraMatrix) when [`IsAlternateAimTransformUsed`](crate::camera::game_camera_manager::GameCameraManager::IsAlternateAimTransformUsed) is set.
     pub unsafe fn GetAlternateAimMatrix(
         &self,
         matrix: *mut crate::types::math::Matrix4,
@@ -128,7 +128,7 @@ impl GameCameraManager {
     }
     pub const UpdateRender_ADDRESS: usize = 0x1407F4560;
     /// The per-frame render update: runs the camera tree via
-    /// [`CameraTree::UpdateRenderContexts`], pushes the render context, then updates the lighting and
+    /// [`CameraTree::UpdateRenderContexts`](crate::camera::camera_tree::CameraTree::UpdateRenderContexts), pushes the render context, then updates the lighting and
     /// water level at the camera.
     pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32, blend: f32) -> u64 {
         unsafe {

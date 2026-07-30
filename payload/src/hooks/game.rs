@@ -1,5 +1,5 @@
 use std::{
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicU32, Ordering},
     time::{Duration, Instant},
 };
 
@@ -20,12 +20,22 @@ use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 
 use crate::{
-    crash::Phase,
-    debug::trace::{TraceEvent, TraceState},
+    config::Config,
+    crash::{Phase, mark},
+    debug::{
+        camera::capture_render_camera,
+        trace::{TraceEvent, TraceState, tracing_active},
+    },
+    hooks::{
+        draw_count::DRAW_COUNTS,
+        graphics_engine::{
+            self,
+            graphics_engine::{BLOCK_FLIP, log_hook_thread},
+            ssao,
+        },
+    },
     stereo::STEREO_STATE,
 };
-
-use super::graphics_engine::{self, graphics_engine::BLOCK_FLIP};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -41,7 +51,7 @@ pub(super) fn hook_library() -> HookLibrary {
 #[detour(address = jc3gi::game::Game::Update_ADDRESS)]
 fn game_update(game: *const Game) -> bool {
     // Start of a real frame: re-arm the once-per-frame CClock::Update gate.
-    super::clock::UPDATED_THIS_FRAME.store(false, Ordering::Relaxed);
+    crate::hooks::clock::UPDATED_THIS_FRAME.store(false, Ordering::Relaxed);
     // `crate::update` advances the puffin frame (closing the previous one); the frame scope opens
     // after it so it belongs to the new frame and spans the whole original update.
     crate::update();
@@ -52,17 +62,30 @@ fn game_update(game: *const Game) -> bool {
 
 #[detour(address = jc3gi::game::Game::UpdateRender_ADDRESS)]
 fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
+    log_hook_thread("game_update_render", &GAME_UPDATE_RENDER_THREAD);
     #[cfg(feature = "profiler")]
     puffin::profile_scope!("CGame::UpdateRender");
     unsafe {
-        crate::crash::mark(Phase::UpdateRenderEnter);
+        mark(Phase::UpdateRenderEnter);
         let spf = Clock::get().unwrap().GetSPF(false).min(0.5);
+
+        // Open the single-pass frame: advance the diagnostics' frame ordinal, fold the previous
+        // frame's instanced-exposure counters, and close any G-buffer range left open by it. The
+        // range flag is raised around a re-entrant engine call, so an interrupted frame (a torn-down
+        // session, a dispatch that never returned) could otherwise leave it up and have every shadow
+        // and reflection draw of this frame instance-doubled and eye-split.
+        crate::stereo::single_pass::begin_frame();
+        // Sample the single-pass config for this frame's game-thread consumers: the render-resolution
+        // and camera decisions below, and the shader-creation hooks the reload a few lines down drives
+        // (a toggle has to reach them in the frame the debug UI made it, since that reload is what
+        // applies it). The draw thread does *not* read this snapshot mid-dispatch -- it pins its own in
+        // `single_pass::begin_dispatch` -- because this write runs concurrently with the previous
+        // frame's dispatch once the frame tail is deferred.
+        crate::stereo::single_pass::refresh_config_flags();
 
         // Apply the sun-shadow diagnostic override before the original runs, so this frame's
         // sim-side CShadowManager::UpdateRender sees it and drives the engine's own SetEnabled path.
-        apply_sun_shadow_override(crate::config::Config::lock_query(|c| {
-            c.stereo.disable_sun_shadows
-        }));
+        apply_sun_shadow_override(Config::lock_query(|c| c.stereo.disable_sun_shadows));
 
         // Apply a requested shader reload here, on the game thread before this frame's draws, so the
         // PCF-patch hook re-creates the already-loaded shaders (injection is normally after the game
@@ -75,7 +98,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         crate::hud::scaleform::process_requests();
 
         // New game frame: the next grapple-reticle projection is the frame's aim position.
-        super::ui::begin_frame_aim_recording();
+        crate::hooks::ui::begin_frame_aim_recording();
 
         // The vehicle-attach state drives the HUD's near shift; it reads game-thread animation
         // state, so it is polled here and read by the render side.
@@ -110,6 +133,9 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // prologue (previous dispatch drained, this frame not yet dispatched -- the idle-context
         // boundary `ApplyResize` needs). Must sit before the first `game.Draw`.
         crate::vr::apply_native_resolution();
+        // Once the mod owns the back buffer, bring the swapchain down to the window size (a no-op
+        // otherwise, and once it already matches).
+        crate::vr::sync_swapchain_to_window();
 
         // The sum of the VR-lock tail block, xrWaitFrame, and view location -- each scoped inside
         // `vr::frame_begin` -- so the front-load breakdown shows which dominates.
@@ -132,13 +158,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // frame of HMD-tracking latency as a bonus. When the runtime asks to skip rendering, clear the
         // parameters so the camera hook falls back to flatscreen stereo for the (non-submitted)
         // keep-alive Draws.
-        let vr_cfg = crate::config::Config::lock_query(|c| c.vr.clone());
+        let vr_cfg = Config::lock_query(|c| c.vr.clone());
         match vr_frame.as_ref() {
             Some(frame) if frame.should_render() => crate::vr::begin_render_frame(frame, &vr_cfg),
             _ => crate::vr::clear_render_params(),
         }
 
-        crate::crash::mark(Phase::OriginalUpdateRender);
+        mark(Phase::OriginalUpdateRender);
         #[cfg(feature = "profiler")]
         let engine_scope = puffin::profile_scope_custom!("UpdateRender (engine)");
         GAME_UPDATE_RENDER
@@ -162,7 +188,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             restore_ssao,
             restore_gi,
             invalidate_terrain_cb,
-        ) = crate::config::Config::lock_query(|c| {
+        ) = Config::lock_query(|c| {
             (
                 c.stereo.enabled,
                 c.stereo.restore_frame_counters,
@@ -185,15 +211,15 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // eyes drained on this thread before the frame ends.
         let defer_tail = stereo
             && vr_frame.is_some()
-            && crate::config::Config::lock_query(|c| c.stereo.defer_frame_tail)
-            && !crate::debug::trace::tracing_active()
+            && Config::lock_query(|c| c.stereo.defer_frame_tail)
+            && !tracing_active()
             && !crate::capture::is_active()
             && !crate::debug::stereo_diff::is_active();
 
         if stereo {
             #[cfg(feature = "profiler")]
             let snapshot_scope = puffin::profile_scope_custom!("Stereo snapshots");
-            crate::crash::mark(Phase::Eye0Snapshot);
+            mark(Phase::Eye0Snapshot);
             // Snapshot the reflection-proxy depth-history before the first dispatch and restore it
             // before each later one, so every dispatch makes the same per-slot decisions -- the
             // state then advances once per real frame instead of once per dispatch, otherwise
@@ -217,11 +243,11 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             // Diagnostic (only while a trace is collecting, so it costs nothing in normal play):
             // confirm the between-dispatch restores are actually reaching live state -- a
             // `None`/null here means the snapshot missed and the restore is a silent no-op.
-            if crate::debug::trace::tracing_active() {
+            if tracing_active() {
                 tracing::info!(
                     target: "stereo",
                     "restore diag: ssao_ptr_null={} ssao_snap={:?} gi_snap={:?}",
-                    super::graphics_engine::ssao::ssao_pass().is_null(),
+                    ssao::ssao_pass().is_null(),
                     ssao_history,
                     gi_cascade,
                 );
@@ -236,7 +262,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             drop(snapshot_scope);
 
             // The per-eye camera offset is injected on the render camera in the SetupRenderCamera
-            // hook (see hooks::camera and docs/engine/rendering.md section 2); here we just drive
+            // hook (see hooks::camera and docs/engine/rendering/rendering.md section 2); here we just drive
             // the dispatches and tag each with its eye index via STEREO_STATE.draw_index.
             // present_eye_0 picks which eye reaches the screen (the other's flip is blocked), so
             // each eye can be compared live. A share frame (issue #32) prepends a far-only
@@ -244,6 +270,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             // types into the G-buffer, which the render-pass-range hook captures for the two near
             // dispatches to composite.
             let share_frame = crate::far_field::share_configured();
+            let collapsed = crate::stereo::single_pass::collapse_active();
             let present_eye = usize::from(!present_eye_0);
             TraceState::record(TraceEvent::FrameBegin {
                 stereo: true,
@@ -252,7 +279,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             });
 
             // (eye index, far phase) per dispatch, in order.
-            let dispatches: &[(usize, bool)] = if share_frame {
+            let dispatches: &[(usize, bool)] = if collapsed {
+                // Single-pass collapse: one walk produces both eyes (cb13 + viewport routing +
+                // instance doubling), so there is no per-eye second dispatch and no far-field share
+                // prepend -- the between-eye snapshot/restore below is skipped for free (it is gated
+                // on `ordinal > 0`). The capture then splits the one back buffer into both eyes.
+                &[(0, false)]
+            } else if share_frame {
                 &[(0, true), (0, false), (1, false)]
             } else {
                 &[(0, false), (1, false)]
@@ -261,7 +294,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 if ordinal > 0 {
                     #[cfg(feature = "profiler")]
                     puffin::profile_scope!("Between-eye restore");
-                    crate::crash::mark(Phase::BetweenEyesRestore);
+                    mark(Phase::BetweenEyesRestore);
                     if let Some(state) = &effect_info {
                         restore_effect_info(state);
                     }
@@ -294,7 +327,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                     *get_current_add_buffer() = saved_add_buffer;
                 }
 
-                super::draw_count::DRAW_COUNTS.clear();
+                DRAW_COUNTS.clear();
                 graphics_engine::post_effects::reset_post_block_gate();
                 TraceState::record(TraceEvent::DrawBegin { eye });
                 {
@@ -307,15 +340,20 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 // While a VR session runs there is no desktop present at all (the compositor
                 // presents), so block the flip for every dispatch; otherwise `present_eye_0` picks
                 // which eye reaches the game window. The far dispatch never presents.
+                //
+                // The eye-parity block must not apply under the collapse: the one dispatch is tagged
+                // eye 0 but carries *both* eyes, so blocking it whenever `present_eye_0` is off (the
+                // default) would block every flip there is, and the game window would keep showing
+                // whatever it last presented while the engine ran on at full rate.
                 BLOCK_FLIP.store(
-                    vr_running || far_phase || present_eye != eye,
+                    vr_running || far_phase || (!collapsed && present_eye != eye),
                     Ordering::Relaxed,
                 );
                 tracing::trace!(
                     target: "frameloop",
                     "game_update_render: dispatch {ordinal} (eye {eye}, far {far_phase}) Draw"
                 );
-                crate::crash::mark(if eye == 0 {
+                mark(if eye == 0 {
                     Phase::Eye0Draw
                 } else {
                     Phase::Eye1Draw
@@ -323,7 +361,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 #[cfg(feature = "profiler")]
                 puffin::profile_scope!("Dispatch", format!("eye {eye}, ordinal {ordinal}"));
                 game.Draw(spf);
-                crate::crash::mark(if eye == 0 {
+                mark(if eye == 0 {
                     Phase::Eye0Drain
                 } else {
                     Phase::Eye1Drain
@@ -340,18 +378,19 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                     ge.WaitForCPUDrawToFinish();
                     drain_draw_thread_fragment(ge);
                 }
-                crate::crash::mark(if eye == 0 {
+                mark(if eye == 0 {
                     Phase::Eye0Post
                 } else {
                     Phase::Eye1Post
                 });
                 if !far_phase {
                     crate::debug::rt_hash::hash_engine_rts();
-                    crate::debug::camera::capture_render_camera(eye);
+                    crate::debug::pipeline_probes::record_global_constants("frame_end");
+                    capture_render_camera(eye);
                 }
                 TraceState::record(TraceEvent::DrawEnd {
                     eye,
-                    counts: super::draw_count::DRAW_COUNTS.snapshot(),
+                    counts: DRAW_COUNTS.snapshot(),
                 });
             }
             TraceState::end_frame();
@@ -376,13 +415,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             });
             reset_dispatch_state();
             graphics_engine::post_effects::reset_post_block_gate();
-            crate::crash::mark(Phase::NonStereoDraw);
+            mark(Phase::NonStereoDraw);
             {
                 #[cfg(feature = "profiler")]
                 puffin::profile_scope!("Dispatch", "mono");
                 game.Draw(spf);
             }
-            crate::debug::camera::capture_render_camera(0);
+            capture_render_camera(0);
             TraceState::end_frame();
         }
 
@@ -420,7 +459,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
 
         // Drive the F10 stereo capture composite after the frame's draws are done (both eyes
         // captured in stereo, eye 0 in non-stereo). No-op when capture is inactive.
-        crate::crash::mark(Phase::Present);
+        mark(Phase::Present);
         crate::capture::present_frame();
 
         // Desktop mirror: while a session runs the engine's own present is fully blocked (BLOCK_FLIP,
@@ -437,9 +476,13 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             puffin::profile_scope!("Desktop mirror");
             crate::vr::present_mirror(usize::from(vr_cfg.mirror_eye));
         }
-        crate::crash::mark(Phase::FrameEnd);
+        mark(Phase::FrameEnd);
     }
 }
+
+/// Last-seen thread id for [`game_update_render`]. See
+/// [`graphics_engine::graphics_engine::log_hook_thread`].
+static GAME_UPDATE_RENDER_THREAD: AtomicU32 = AtomicU32::new(0);
 
 /// Snapshot of the reflection-proxy depth-history lifecycle (the 5 slot counters + the picked
 /// index). Advanced once per scene dispatch, so we restore it between the two stereo Draws.
@@ -494,7 +537,7 @@ fn restore_effect_info(state: &EffectInfoState) {
 /// per-camera context and faults (the intermittent open-world crash). Mirrors the engine's own guard so
 /// it cannot spin on a build that draws inline.
 pub(crate) unsafe fn drain_draw_thread_fragment(ge: &mut GraphicsEngine) {
-    if !crate::config::Config::lock_query(|c| c.stereo.drain_draw_fragment) {
+    if !Config::lock_query(|c| c.stereo.drain_draw_fragment) {
         return;
     }
     unsafe {

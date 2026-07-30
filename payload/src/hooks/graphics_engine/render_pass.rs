@@ -1,5 +1,5 @@
 //! Detours that gate per-frame render-list state so it advances only once per *real* frame, even
-//! though we render the scene twice (once per eye). See PLAN.md sections 5.2/5.3.
+//! though we render the scene twice (once per eye). See `docs/mod/stereo/single-pass-stereo.md`.
 //!
 //! Each gate is toggleable at runtime (debug UI) so the working combination can be found in-game.
 //! `SetupRenderFrameData` (the per-batch list *build*, not the swap) and `HandBackBuffers`
@@ -21,12 +21,18 @@ use re_utilities::hook_library::HookLibrary;
 
 use crate::{
     config::Config,
-    debug::trace::{TraceEvent, TraceState},
-    stereo::is_second_eye,
+    debug::{
+        stereo_diff::op_total,
+        trace::{TraceEvent, TraceState, tracing_active},
+    },
+    profiler::gpu::seam,
+    stereo::{STEREO_STATE, draw_index, is_second_eye},
+    vr::foveation::{FORCE_STENCIL_TEST, FoveationParams},
 };
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
+        .with_static_binder(&RENDER_PASS_DRAW_BINDER)
         .with_static_binder(&SETUP_RENDER_FRAME_DATA_BINDER)
         .with_static_binder(&DO_DRAW_BINDER)
         .with_static_binder(&HAND_BACK_BUFFERS_BINDER)
@@ -38,6 +44,33 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&COMMIT_RENDER_PASS_SETTINGS_BINDER)
         .with_static_binder(&SHADOW_MANAGER_UPDATE_RENDER_BINDER)
 }
+
+// RenderPass::Draw -- the per-pass draw entry. Under `stereo.diagnose_pass_sweep`, record the
+// MainColor mean after each late-scene pass (fog gradient through the particle/transparent tail),
+// so a global change walks itself to the pass that injects it. Eye 0, every 2nd frame, to bound
+// the readback stalls.
+#[detour(address = jc3gi::graphics_engine::render_pass::RenderPass::Draw_ADDRESS)]
+fn render_pass_draw(this: *mut RenderPass) {
+    RENDER_PASS_DRAW.get().unwrap().call(this);
+    if !tracing_active() || draw_index() != 0 {
+        return;
+    }
+    let Some(pass) = (unsafe { this.as_ref() }) else {
+        return;
+    };
+    let id = pass.m_Index;
+    if !SWEEP_PASS_RANGE.contains(&id) {
+        return;
+    }
+    let even_frame = TraceState::screenshot_target().is_some_and(|(_, frame)| frame % 2 == 0);
+    if !even_frame {
+        return;
+    }
+    crate::debug::pipeline_probes::record_pass_sweep_mean(format!("pass{id:#04x}"));
+}
+
+/// The late-scene pass ids the sweep covers: `RP_SKY_GRADIENT` through `RP_PARTICLE_ONSCREEN`.
+const SWEEP_PASS_RANGE: std::ops::RangeInclusive<i16> = 0x67..=0x95;
 
 // RenderPass::SetupRenderFrameData -- the per-batch list *build*: appends `count` render-block-items
 // to the active add-list. Runs on worker threads during the sim, not during our Draw calls, so the
@@ -83,20 +116,21 @@ fn do_draw(this: *mut RenderPass, ctx: *mut RenderContext, color_mask: u32) -> b
     // Single-pass-stereo feasibility probe: record this pass's per-eye GPU-op count so the two
     // eyes' draw sequences can be diffed at frame end. Off by default; two atomic loads when on.
     let diff = crate::debug::stereo_diff::is_active();
-    let ops_before = if diff {
-        crate::debug::stereo_diff::op_total()
-    } else {
-        0
-    };
+    let ops_before = if diff { op_total() } else { 0 };
     // SAFETY: `this` and `ctx` are the live pass and render context of this draw call.
     let window = unsafe { crate::far_field::before_do_draw(this, ctx) };
+    // Publish the pass for the duration of the walk: the draw detours see only a D3D context, and
+    // which pass a draw belongs to is what tells a geometry draw apart from a fullscreen one.
+    // SAFETY: `this` is the live render pass; `m_Index` is its render-pass id.
+    let previous_pass = crate::stereo::single_pass::set_current_pass(unsafe { (*this).m_Index });
     let result = DO_DRAW.get().unwrap().call(this, ctx, color_mask);
+    crate::stereo::single_pass::restore_current_pass(previous_pass);
     drop(window);
     if diff {
-        let ops = crate::debug::stereo_diff::op_total().wrapping_sub(ops_before);
+        let ops = op_total().wrapping_sub(ops_before);
         // SAFETY: `this` is the live render pass; `m_Index` is its render-pass id.
         let pass_id = unsafe { (*this).m_Index };
-        crate::debug::stereo_diff::record_pass(pass_id, crate::stereo::draw_index(), ops);
+        crate::debug::stereo_diff::record_pass(pass_id, draw_index(), ops);
     }
     // Close the final render-block-type run's scope before the pass scope closes.
     #[cfg(feature = "profiler")]
@@ -108,8 +142,13 @@ const RP_AO_VOLUMES: i32 = RenderPassId::RP_AO_VOLUMES as i32;
 const RP_SCREEN_SPACE_REFLECTIONS: i32 = RenderPassId::RP_SCREEN_SPACE_REFLECTIONS as i32;
 const RP_GLOBAL_ILLUMINATION: i32 = RenderPassId::RP_GLOBAL_ILLUMINATION as i32;
 
-// RenderEngine::DrawRenderPassRange -- draws the half-open pass-index range [first, last). The
-// per-eye-divergence and flicker diagnostics drop passes by splitting the range around them, so
+// RenderEngine::DrawRenderPassRange -- draws the half-open pass-index range [first, last). The engine
+// calls it three times per dispatch, from `CGraphicsEngine::HandleDrawThreadTask` in this order:
+// `DrawGBuffer` (0x2F..0x55), `Draw` (0x56..0x96), and `DrawPosteffects` (0x96..0x97); the bounds are
+// compile-time constants at each call site, so the ranges never vary between frames. `PreDraw` (the
+// shadow, reflection, and vegetation prepasses) runs before all three and does not come through here.
+//
+// The per-eye-divergence and flicker diagnostics drop passes by splitting the range around them, so
 // every other pass runs untouched: SSR (reads a previous-frame scene capture regenerated each Draw)
 // and GI (may carry a per-eye temporal/probe history) for the per-eye MainColor divergence, AO
 // volumes (depth-tested proxy geometry whose whole contribution can flip on a sub-pixel jitter
@@ -142,7 +181,7 @@ fn draw_render_pass_range(
     // dispatch composites the captured far G-buffer between the clear/Z-prepass passes and the
     // geometry passes.
     let (far_phase, share_frame) = {
-        let state = crate::stereo::STEREO_STATE.lock();
+        let state = STEREO_STATE.lock();
         (state.far_phase, state.share_frame)
     };
     if far_phase && first >= RP_FIRST_SCENE {
@@ -183,12 +222,34 @@ fn draw_render_pass_range(
             crate::far_field::share::capture_far_gbuffer();
         } else {
             run_scene_range(first, RP_FIRST_GEOMETRY, &draw);
-            crate::far_field::share::composite(crate::stereo::draw_index());
+            crate::far_field::share::composite(draw_index());
             run_scene_range(RP_FIRST_GEOMETRY, last, &draw);
         }
         return;
     }
+    // Single-pass stereo: mark the camera-scene geometry range so the dual-eye cb13,
+    // viewport split, and instance doubling apply to it. `first >= RP_Z_OCCLUDERS` selects the main
+    // camera scene, excluding the shadow/reflection prepasses (<= RP_LAST_PREPASS) that reuse the same
+    // patched shaders under a different (sun/reflection) view. Without collapse the range is just the
+    // G-buffer (`..RP_FIRST_SCENE`), a diagnostic that renders each eye into a half; with collapse it
+    // extends to the whole camera scene so the later geometry passes (water, sky, transparents) route
+    // to the eyes too -- there the viewport split moves to draw time (patched geometry only), so the
+    // interleaved fullscreen lighting/post passes keep the full width. A no-op unless dual-eye is on.
+    let scene_geometry = crate::stereo::single_pass::dual_eye_active()
+        && first >= RP_Z_OCCLUDERS
+        && (crate::stereo::single_pass::collapse_active() || last <= RP_FIRST_SCENE);
+    let range = scene_geometry.then(|| {
+        let range = crate::stereo::single_pass::enter_gbuffer_range();
+        // The main G-buffer viewport was bound before this range flag went up, so re-split it now.
+        // (A no-op under collapse, which splits per-draw instead.)
+        crate::stereo::single_pass::apply_eye_split_viewport();
+        range
+    });
     run_scene_range(first, last, &draw);
+    if range.is_some() {
+        drop(range);
+        crate::stereo::single_pass::log_draw_split(first as u32, last as u32);
+    }
 }
 
 /// The first pass of the scene (lighting/main) block; the far dispatch stops before it.
@@ -216,9 +277,9 @@ fn run_scene_range(first: i32, last: i32, draw: &dyn Fn(i32, i32)) {
     if plan.do_mask {
         run_foveation_pass(crate::vr::foveation::mask_write, plan.params, "mask-write");
     }
-    crate::vr::foveation::FORCE_STENCIL_TEST.store(true, std::sync::atomic::Ordering::Relaxed);
+    FORCE_STENCIL_TEST.store(true, std::sync::atomic::Ordering::Relaxed);
     draw(plan.fov_start, plan.fov_end);
-    crate::vr::foveation::FORCE_STENCIL_TEST.store(false, std::sync::atomic::Ordering::Relaxed);
+    FORCE_STENCIL_TEST.store(false, std::sync::atomic::Ordering::Relaxed);
     draw(plan.fov_end, last);
 }
 
@@ -229,7 +290,7 @@ struct FoveationPlan {
     fov_start: i32,
     fov_end: i32,
     do_mask: bool,
-    params: crate::vr::foveation::FoveationParams,
+    params: FoveationParams,
 }
 
 /// Build the [`FoveationPlan`] for a draw-range call, or `None` when foveation is disabled, this is not a
@@ -238,6 +299,10 @@ struct FoveationPlan {
 fn foveation_plan(first: i32, last: i32) -> Option<FoveationPlan> {
     let cfg = Config::lock_query(|c| c.foveation.clone());
     if !cfg.enabled {
+        return None;
+    }
+    if let Err(e) = cfg.validate() {
+        tracing::warn!("foveation disabled: {e}");
         return None;
     }
     let eye = usize::from(is_second_eye());
@@ -262,11 +327,8 @@ fn foveation_plan(first: i32, last: i32) -> Option<FoveationPlan> {
 }
 
 /// Build the pass parameters from the config and the eye's foveal centre.
-fn foveation_params(
-    cfg: &crate::config::FoveationConfig,
-    center_uv: glam::Vec2,
-) -> crate::vr::foveation::FoveationParams {
-    crate::vr::foveation::FoveationParams {
+fn foveation_params(cfg: &crate::vr::FoveationConfig, center_uv: glam::Vec2) -> FoveationParams {
+    FoveationParams {
         center_uv,
         inner_fraction: cfg.inner_fraction,
         outer_fraction: cfg.outer_fraction,
@@ -289,8 +351,8 @@ fn foveal_center_uv(eye: usize) -> Option<glam::Vec2> {
 
 /// Run one foveation D3D pass, warning on any failure without disturbing the surrounding scene draw.
 fn run_foveation_pass(
-    pass: fn(crate::vr::foveation::FoveationParams) -> anyhow::Result<()>,
-    params: crate::vr::foveation::FoveationParams,
+    pass: fn(FoveationParams) -> anyhow::Result<()>,
+    params: FoveationParams,
     label: &str,
 ) {
     if let Err(e) = pass(params) {
@@ -315,9 +377,7 @@ fn draw_posteffects(this: *mut c_void, ctx: *mut c_void, setup: *mut c_void) {
     }
     #[cfg(feature = "profiler")]
     // SAFETY: `ctx` is the live immediate-context handle for this dispatch.
-    let _gpu = unsafe {
-        crate::profiler::gpu::seam(ctx.cast(), crate::profiler::gpu::GpuSeam::PostEffects)
-    };
+    let _gpu = unsafe { seam(ctx.cast(), crate::profiler::gpu::GpuSeam::PostEffects) };
     if let Some(cfg) = Config::lock_query(|c| c.foveation.enabled.then(|| c.foveation.clone())) {
         let eye = usize::from(is_second_eye());
         if let Some(center_uv) = foveal_center_uv(eye) {
@@ -469,6 +529,12 @@ fn commit_render_pass_settings(this: *mut ShadowManager, ctx: *mut c_void) {
 // the last word before the loop; the passes are re-enabled after so the next frame's first eye runs them.
 // Gated on `restore_frame_counters` so both eyes share the shadow-atlas parity slot (without it, eye 1
 // advances parity and would sample the other, unrendered slot).
+//
+// Under the single-pass collapse this whole path is inert, and correctly so: the collapse runs one
+// dispatch, so `dispatch_ordinal()` is never > 0 and PreDraw already runs exactly once per frame.
+// There is no second walk of the prepasses to elide, which is why extending the collapse over
+// PreDraw would save nothing -- see "Why `PreDraw` is outside the collapse" in
+// docs/mod/stereo/single-pass-stereo.md.
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PreDraw_ADDRESS)]
 fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
     // The first seam of a dispatch: label this thread's puffin lane (a no-op on single-core,
@@ -486,7 +552,12 @@ fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
     };
     #[cfg(feature = "profiler")]
     // SAFETY: `ctx` is the live immediate context for this dispatch.
-    let _gpu = unsafe { crate::profiler::gpu::seam(ctx, crate::profiler::gpu::GpuSeam::PreDraw) };
+    let _gpu = unsafe { seam(ctx, crate::profiler::gpu::GpuSeam::PreDraw) };
+    // The first thing this dispatch does on the draw thread, and the one point in its sequence where
+    // no single-pass G-buffer range can be live: close one left open by an interrupted dispatch here,
+    // rather than from the game thread, which runs concurrently with it once the frame tail is
+    // deferred.
+    crate::stereo::single_pass::begin_dispatch();
     let original = PRE_DRAW.get().unwrap();
     let share_cfg =
         Config::lock_query(|c| c.stereo.share_prepasses && c.stereo.restore_frame_counters);
@@ -561,7 +632,7 @@ unsafe fn reenable_passes(passes: &[*mut RenderPass]) {
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::SetGlobalShaderConstants_ADDRESS)]
 fn set_global_shader_constants(this: *mut c_void, ctx: *mut c_void) {
     if let Some(ctx) = unsafe { ctx.cast::<RenderContext>().as_mut() } {
-        let delta = crate::stereo::STEREO_STATE.lock().shadow_anchor_delta;
+        let delta = STEREO_STATE.lock().shadow_anchor_delta;
         record_shadow_state(ctx, delta);
         if Config::lock_query(|c| c.stereo.fix_shadow_cascade_anchor) {
             apply_shadow_cascade_anchor_fix(ctx, delta);
@@ -574,7 +645,7 @@ fn set_global_shader_constants(this: *mut c_void, ctx: *mut c_void) {
 /// the raw parity-slot values, read before the anchor correction mutates them. See
 /// [`TraceEvent::ShadowState`] for how the series is analysed.
 fn record_shadow_state(ctx: &RenderContext, anchor_delta: glam::Vec3) {
-    if !crate::debug::trace::tracing_active() {
+    if !tracing_active() {
         return;
     }
     // SAFETY: the render-frame counters live for the process.

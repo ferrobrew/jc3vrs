@@ -209,6 +209,12 @@ fn to_rgba8(
 /// Encode one frame's RGBA8 pixels to a PNG in this trace's `traces/<stamp>/` folder, named by frame
 /// index and eye so the sequence reassembles and aligns 1:1 with the per-frame trace events.
 fn write_png_frame(eye: usize, width: u32, height: u32, rgba: Vec<u8>) {
+    write_png_named(format!("eye{eye}"), width, height, rgba);
+}
+
+/// Encode one frame-stamped PNG with a caller-chosen suffix (`frameNNN_<label>.png`) into this
+/// trace's folder.
+fn write_png_named(label: String, width: u32, height: u32, rgba: Vec<u8>) {
     let Some((dir, frame)) = TraceState::screenshot_target() else {
         return;
     };
@@ -216,7 +222,7 @@ fn write_png_frame(eye: usize, width: u32, height: u32, rgba: Vec<u8>) {
         tracing::warn!("rt_hash: screenshot buffer size mismatch");
         return;
     };
-    let path = dir.join(format!("frame{frame:03}_eye{eye}.png"));
+    let path = dir.join(format!("frame{frame:03}_{label}.png"));
     if let Err(e) = image.save_with_format(&path, image::ImageFormat::Png) {
         tracing::warn!("rt_hash: screenshot PNG write failed: {e}");
     }

@@ -1,12 +1,15 @@
 //! The profiler's Performance-tab UI: a collapsible holding the enable toggle, the trace-capture
 //! control, and — when scope collection is on — puffin's live flame graph.
 
-use super::capture::{self, DEFAULT_CAPTURE_SECS};
+use crate::profiler::{
+    capture::{self, DEFAULT_CAPTURE_SECS},
+    ui_enabled,
+};
 
 /// Renders the profiler section, as a collapsible under the existing Performance readout.
 pub fn egui_profiler(ui: &mut egui::Ui) {
     ui.collapsing("Profiler (issue #34)", |ui| {
-        let mut enabled = super::ui_enabled();
+        let mut enabled = ui_enabled();
         if ui
             .checkbox(&mut enabled, "Collect scopes (live flame graph)")
             .on_hover_text(
@@ -15,17 +18,88 @@ pub fn egui_profiler(ui: &mut egui::Ui) {
             )
             .changed()
         {
-            super::set_ui_enabled(enabled);
+            crate::profiler::set_ui_enabled(enabled);
+        }
+
+        let mut per_draw = crate::profiler::per_draw_scopes();
+        if ui
+            .checkbox(&mut per_draw, "Per-draw render-block scopes")
+            .on_hover_text(
+                "Adds one puffin scope per render-block-type run (hundreds per frame) on the \
+                 draw-submission path -- which inflates the very path it measures, so a capture \
+                 taken with this on overstates submission cost. Off by default; the per-type block \
+                 counts below are collected either way.",
+            )
+            .changed()
+        {
+            crate::profiler::set_per_draw_scopes(per_draw);
+        }
+
+        let mut pass_timestamps = crate::profiler::gpu::pass_timestamps_enabled();
+        if ui
+            .checkbox(&mut pass_timestamps, "GPU per-pass timestamps")
+            .on_hover_text(
+                "Brackets every render pass with a GPU timestamp pair, so a dispatch's GPU span \
+                 splits into work and starvation instead of reading as one opaque block. On by \
+                 default; turning it off leaves only the coarse per-seam brackets, and the busy \
+                 figure degenerates to the whole span.",
+            )
+            .changed()
+        {
+            crate::profiler::gpu::set_pass_timestamps_enabled(pass_timestamps);
         }
 
         capture_controls(ui);
+        gpu_summary(ui);
+        block_counts(ui);
 
-        if super::ui_enabled() {
+        if ui_enabled() {
             ui.separator();
             puffin_egui::profiler_ui(ui);
         } else if capture::is_recording() {
             ui.separator();
             ui.label("Capturing… (flame graph hidden; enable collection to watch live)");
+        }
+    });
+}
+
+/// The last completed GPU summary window: the busy/starved decomposition and the CPU submit span
+/// it has to be read against. Mirrors the periodic log line, for reading in-headset.
+fn gpu_summary(ui: &mut egui::Ui) {
+    let Some(summary) = crate::profiler::gpu::summary() else {
+        return;
+    };
+    ui.separator();
+    ui.label(format!(
+        "GPU/frame over {} frames ({:.1} dispatches): busy \u{2264} {:.2} ms, starved \u{2265} \
+         {:.2} ms, idle between {:.2} ms",
+        summary.frames,
+        summary.dispatches_per_frame,
+        summary.busy_ms,
+        summary.starved_ms,
+        summary.idle_ms,
+    ))
+    .on_hover_text(
+        "Busy sums the per-pass GPU intervals and starved is the time between them, so busy is an \
+         upper bound on real GPU work and starved a lower bound on real idle: starvation between \
+         individual draws inside one pass is counted as busy. Read them against the CPU submit \
+         span -- a GPU span that tracks submit is a fed-just-in-time pipeline, not shading cost.",
+    );
+    ui.label(format!("CPU submit/frame: {:.2} ms", summary.submit_ms));
+}
+
+/// The busiest render-block types of the last summary window, by blocks drawn.
+fn block_counts(ui: &mut egui::Ui) {
+    let counts = crate::profiler::blocks::snapshot();
+    if counts.is_empty() {
+        return;
+    }
+    ui.collapsing("Render blocks drawn (current window)", |ui| {
+        for count in counts.iter().take(16) {
+            ui.label(format!(
+                "{}: {} blocks in {} runs",
+                count.name, count.blocks, count.runs
+            ));
         }
     });
 }

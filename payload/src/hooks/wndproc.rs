@@ -1,9 +1,11 @@
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
+#[cfg(feature = "profiler")]
+use windows::Win32::UI::Input::KeyboardAndMouse::VK_F9;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     UI::{
-        Input::KeyboardAndMouse::{VK_F7, VK_F8, VK_F10, VK_F11},
+        Input::KeyboardAndMouse::{VK_F7, VK_F8, VK_F10, VK_F11, VK_F12},
         WindowsAndMessaging::{
             GetClientRect, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
             WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN,
@@ -11,10 +13,11 @@ use windows::Win32::{
     },
 };
 
-#[cfg(feature = "profiler")]
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_F9;
+use crate::{config::CONFIG, egui_impl::EguiState, hooks::graphics_engine::shader, hud::cursor};
 
-use crate::hud::cursor;
+/// Whether F10 toggles the fullscreen stereo capture mode. Off for now: the capture window's
+/// fullscreen toggle is finicky under some setups. The F12 screenshot path covers diagnosis meanwhile.
+const F10_CAPTURE_ENABLED: bool = false;
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new().with_static_binder(&WNDPROC_BINDER)
@@ -36,13 +39,17 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // F10 toggles the fullscreen stereo capture mode. Intercept it before egui or the game sees it:
     // F10 is a system key (it activates the menu bar via WM_SYSKEYDOWN), so consuming it here also
     // suppresses that default behaviour. Edge-detect on the previous-state bit (lparam bit 30) so
-    // holding F10 toggles once, not on every repeat.
-    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F10.0 as usize {
+    // holding F10 toggles once, not on every repeat. Disabled for now (the fullscreen toggle is
+    // finicky under some setups); flip `F10_CAPTURE_ENABLED` to restore it.
+    if F10_CAPTURE_ENABLED
+        && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+        && wparam.0 == VK_F10.0 as usize
+    {
         let previous_down = (lparam.0 & 0x4000_0000) != 0;
         if !previous_down {
             // Release egui's input capture if held, so the game retains input while the overlay is
             // hidden.
-            if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut()
+            if let Some(egui_state) = EguiState::get().as_mut()
                 && egui_state.is_input_captured()
             {
                 egui_state.toggle_game_input_capture();
@@ -53,8 +60,8 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     }
 
     // F9 starts a profiler trace capture (issue #34): records a few seconds of CPU and GPU frames
-    // and dumps them next to the log as Chrome trace-event JSON, so a capture can be taken
-    // in-headset without the overlay. Edge-detected; consumed. A no-op while one is already
+    // and dumps them to the session's profile/ folder as Chrome trace-event JSON, so a capture can be
+    // taken in-headset without the overlay. Edge-detected; consumed. A no-op while one is already
     // recording.
     #[cfg(feature = "profiler")]
     if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F9.0 as usize {
@@ -75,11 +82,11 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         let previous_down = (lparam.0 & 0x4000_0000) != 0;
         if !previous_down {
             let enabled = {
-                let mut cfg = crate::config::CONFIG.lock();
+                let mut cfg = CONFIG.lock();
                 cfg.hud.egui_panel.enabled = !cfg.hud.egui_panel.enabled;
                 cfg.hud.egui_panel.enabled
             };
-            if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut()
+            if let Some(egui_state) = EguiState::get().as_mut()
                 && egui_state.is_input_captured() != enabled
             {
                 egui_state.toggle_game_input_capture();
@@ -99,15 +106,27 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         let previous_down = (lparam.0 & 0x4000_0000) != 0;
         if !previous_down {
             let now_on = {
-                let mut cfg = crate::config::CONFIG.lock();
+                let mut cfg = CONFIG.lock();
                 cfg.stereo.patch_shadow_pcf_hash = !cfg.stereo.patch_shadow_pcf_hash;
                 cfg.stereo.patch_shadow_pcf_hash
             };
-            crate::hooks::graphics_engine::shader::request_reload();
+            shader::request_reload();
             tracing::info!(
                 "F11: sun-shadow PCF patch {}; reloading shaders to apply",
                 if now_on { "ON" } else { "OFF" }
             );
+        }
+        return LRESULT(0);
+    }
+
+    // F12 writes a PNG of the linear back buffer to the session's `screenshots/` folder -- under
+    // single-pass collapse that is the full side-by-side render (both eyes). A robust alternative to
+    // the F10 fullscreen capture for in-headset diagnosis. Edge-detected; consumed.
+    if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) && wparam.0 == VK_F12.0 as usize {
+        let previous_down = (lparam.0 & 0x4000_0000) != 0;
+        if !previous_down {
+            crate::screenshot::request();
+            tracing::info!("F12: screenshot requested");
         }
         return LRESULT(0);
     }
@@ -144,7 +163,7 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         cursor::set_mouse_pos((x, y));
     }
 
-    if let Some(egui_state) = crate::egui_impl::EguiState::get().as_mut() {
+    if let Some(egui_state) = EguiState::get().as_mut() {
         egui_state.wndproc(hwnd, msg, wparam, lparam);
     }
     WNDPROC.get().unwrap().call(hwnd, msg, wparam, lparam)

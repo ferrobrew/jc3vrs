@@ -1,21 +1,27 @@
 //! The Previews tab: the per-eye pipeline thumbnails, the fusable stereo pair, and the live
-//! render-target views, all fed by the capture state in [`super::render`].
+//! render-target views, all fed by the capture state in [`crate::ui::render`].
 
 use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
 use windows::core::Interface;
 
-use super::render::{EGUI_DEBUG_RENDER_STATE, EguiDebugRenderState, STEREO_CROSS_EYED};
+use crate::ui::render::{EGUI_DEBUG_RENDER_STATE, EguiDebugRenderState, STEREO_CROSS_EYED};
 
 /// Labels for the post-effect stages captured per eye, in chain order (indices
-/// [`super::render::POST_STAGE_DOF`] and [`super::render::POST_STAGE_MB`]).
+/// [`crate::ui::render::POST_STAGE_DOF`] and [`crate::ui::render::POST_STAGE_MB`]).
 const POST_STAGE_LABELS: [&str; 2] = ["after DoF", "after MB"];
 
 /// Preview thumbnail width (px); user-controllable via a slider.
 static PREVIEW_WIDTH: Mutex<f32> = Mutex::new(700.0);
 
 pub fn egui_debug_previews(ui: &mut egui::Ui, renderer: &mut egui_directx11::Renderer) {
+    // The capture path this tab displays is gated on the tab being drawn, so that a panel almost
+    // nobody has open does not cost a full-size `CopyResource` per stage per eye on every frame.
+    // Marked here rather than on tab selection because `egui_dock` has no "closed" event -- a tab
+    // that stops being drawn simply stops calling this.
+    crate::ui::render::mark_previews_visible();
+
     let preview_width = {
         let mut w = PREVIEW_WIDTH.lock();
         ui.add(egui::Slider::new(&mut *w, 48.0..=4096.0).text("Preview size (px)"));
@@ -55,7 +61,7 @@ pub fn egui_debug_previews(ui: &mut egui::Ui, renderer: &mut egui_directx11::Ren
                         .and_then(|c| c.egui_id)
                 };
                 let mc_id = |eye: usize| state.main_color_textures[eye].as_ref().map(|(_, id)| *id);
-                let bb_id = |eye: usize| state.target_textures[eye].as_ref().map(|(_, id)| *id);
+                let bb_id = |eye: usize| state.target_textures[eye].as_ref().and_then(|(_, id)| *id);
                 vec![
                     ("Scene", [mc_id(0), mc_id(1)]),
                     (POST_STAGE_LABELS[0], [post_id(0, 0), post_id(0, 1)]),

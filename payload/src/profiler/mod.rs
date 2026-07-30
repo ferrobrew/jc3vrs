@@ -14,6 +14,7 @@
 //! stream per thread, so main-thread and draw-thread scopes land in separate lanes; the GPU layer
 //! reports a third, synthetic "GPU" lane.
 
+pub mod blocks;
 pub mod capture;
 pub mod chrome_trace;
 pub mod gpu;
@@ -50,6 +51,21 @@ pub fn are_scopes_on() -> bool {
     puffin::are_scopes_on()
 }
 
+/// Whether the per-render-block-type run scopes are recorded. Off by default: they are the
+/// finest-grained instrumentation the mod has (hundreds of scopes per frame, each a lock and a
+/// stream push) and they sit on the draw-submission path, so leaving them on inflates the very
+/// cost a capture is usually taken to measure. The [`blocks`] counters carry the cheap part of
+/// their signal (how many blocks of each type were drawn) unconditionally.
+pub fn per_draw_scopes() -> bool {
+    PER_DRAW_SCOPES.load(Ordering::Relaxed)
+}
+
+pub fn set_per_draw_scopes(enabled: bool) {
+    PER_DRAW_SCOPES.store(enabled, Ordering::Relaxed);
+}
+
+static PER_DRAW_SCOPES: AtomicBool = AtomicBool::new(false);
+
 /// Recomputes puffin's global scope switch from the UI toggle and the capture state.
 pub(crate) fn apply_scopes_on() {
     puffin::set_scopes_on(UI_ENABLED.load(Ordering::Relaxed) || capture::is_recording());
@@ -61,6 +77,7 @@ pub(crate) fn apply_scopes_on() {
 pub fn new_frame() {
     label_thread("game");
     install_details_sink();
+    ensure_gpu_cleanup_registered();
     // Advance the frame even while collection is off: a stream flushed just as collection was
     // toggled off would otherwise sit parked in the profiler and be glued onto the front of the
     // next enabled frame, minutes later, ruining its range (and a capture's timestamp base).
@@ -132,6 +149,18 @@ fn install_details_sink() {
     });
 }
 
+/// Registers the GPU layer's shutdown cleanup once. The module has no dedicated `install` entry
+/// point that the payload's startup path calls, so this piggybacks on [`new_frame`], which already
+/// runs exactly once per real frame from the very first frame on; a `Once` still guards it in case
+/// a future caller invokes `new_frame` from more than one place.
+fn ensure_gpu_cleanup_registered() {
+    use std::sync::Once;
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        crate::lifecycle::on_cleanup(|_renderer| gpu::teardown());
+    });
+}
+
 /// A registry of puffin scope ids for engine-supplied names that only exist at runtime (render
 /// pass names, render-block-type names). Keyed by the name text: the set of distinct names is
 /// small and fixed, so a single registration per name amortizes to nothing.
@@ -144,12 +173,15 @@ pub fn scope_for_name(name: &str) -> Option<EngineScope> {
     EngineScope::begin(id, "")
 }
 
-/// Opens a scope named for the render pass `pass` is drawing, resolved through the engine's own
-/// pass-name table. Returns `None` while scope collection is off or the name is unavailable.
+/// Opens the CPU scope *and* the GPU timestamp interval for the render pass `pass` is drawing,
+/// both named after it through the engine's own pass-name table. The pair is what makes a
+/// dispatch's GPU span decomposable into work and starvation (see [`gpu`]).
+///
+/// Returns `None` while scope collection is off or the name is unavailable.
 ///
 /// # Safety
 /// `pass` must be null or a live [`RenderPass`] whose `m_Index` is its render-pass id.
-pub unsafe fn pass_scope(pass: *mut RenderPass) -> Option<EngineScope> {
+pub unsafe fn pass_scope(pass: *mut RenderPass) -> Option<PassScope> {
     if !are_scopes_on() || pass.is_null() {
         return None;
     }
@@ -167,7 +199,22 @@ pub unsafe fn pass_scope(pass: *mut RenderPass) -> Option<EngineScope> {
         }
         CStr::from_ptr(ptr.cast()).to_str().ok()?
     };
-    scope_for_name(name)
+    let id = named_scope_id(name)?;
+    Some(PassScope {
+        gpu: gpu::pass_interval(id),
+        cpu: EngineScope::begin(id, ""),
+    })
+}
+
+/// A render pass's paired CPU scope and GPU interval. The GPU end timestamp is recorded first on
+/// drop (field order), so it lands inside the CPU scope rather than straddling its close.
+#[expect(
+    dead_code,
+    reason = "both fields are held only for the timestamps and stream records their drops write"
+)]
+pub struct PassScope {
+    gpu: Option<gpu::IntervalGuard>,
+    cpu: Option<EngineScope>,
 }
 
 fn named_scope_id(name: &str) -> Option<ScopeId> {
@@ -215,7 +262,7 @@ impl Drop for EngineScope {
 pub mod type_scope {
     use std::cell::RefCell;
 
-    use super::EngineScope;
+    use crate::profiler::EngineScope;
 
     thread_local! {
         static ACTIVE: RefCell<Option<EngineScope>> = const { RefCell::new(None) };

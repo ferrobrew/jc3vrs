@@ -14,7 +14,10 @@ use std::{cell::Cell, ffi::c_void, sync::atomic::Ordering};
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
 
-use crate::debug::trace::{DrawCounts, TraceEvent, TraceState};
+use crate::{
+    debug::trace::{DrawCounts, TraceEvent, TraceState},
+    hooks::graphics_engine::{clustered_lighting, reconstruction},
+};
 
 // Per-pass tallies: bumped alongside the global per-eye counters, then read + reset on each
 // SetRenderSetup, so the count attached to a bind is "draws issued since the previous bind on this
@@ -146,16 +149,12 @@ fn draw_indexed_instanced_indirect(
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::Dispatch_ADDRESS)]
-fn dispatch(
-    a1: *mut c_void,
-    a2: *mut c_void,
-    a3: *mut c_void,
-    a4: *mut c_void,
-    a5: *mut c_void,
-    a6: *mut c_void,
-) {
+fn dispatch(ctx: *mut c_void, x: u32, y: u32, z: u32) {
+    if dispatch_suppressed() {
+        return;
+    }
     bump_dispatch();
-    DISPATCH.get().unwrap().call(a1, a2, a3, a4, a5, a6);
+    DISPATCH.get().unwrap().call(ctx, x, y, z);
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::DispatchIndirect_ADDRESS)]
@@ -167,11 +166,26 @@ fn dispatch_indirect(
     a5: *mut c_void,
     a6: *mut c_void,
 ) {
+    if dispatch_suppressed() {
+        return;
+    }
     bump_dispatch();
     DISPATCH_INDIRECT
         .get()
         .unwrap()
         .call(a1, a2, a3, a4, a5, a6);
+}
+
+/// Whether a per-eye fullscreen-reconstruction run is in flight on this thread that must not issue the
+/// compute work its block is asking for.
+///
+/// A scissor rectangle clips rasterization and nothing else, so a block split per eye would otherwise
+/// redo its whole-texture compute on the second run, over the first run's output. The split names one
+/// run to issue it on instead; this is where the other run's dispatches are dropped. A suppressed
+/// dispatch is not counted either -- the tally is of work submitted, and none was. Always `false`
+/// outside such a run, which is every dispatch in the engine that has nothing to do with a split.
+fn dispatch_suppressed() -> bool {
+    reconstruction::dispatch_suppressed()
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::SetRenderSetup_ADDRESS)]
@@ -185,6 +199,18 @@ fn set_render_setup(ctx: *mut c_void, setup: *mut c_void, restore: bool) {
         dispatch: PASS_DISPATCH.with(|c| c.replace(0)),
     });
     SET_RENDER_SETUP.get().unwrap().call(ctx, setup, restore);
+    // Single-pass stereo: the bind just (re)set the viewport for this target -- including per-cascade
+    // in the shadow passes -- so mirror it into viewport slot 1 for the patched shaders' viewport
+    // routing. A no-op unless single-pass is active.
+    crate::stereo::single_pass::duplicate_current_viewport();
+    // Per-eye clustered lighting: the light-assignment target's bind is the seam the froxel split
+    // narrows the viewport at, and the later binds are what put it back. A no-op unless a per-eye
+    // froxel run is in flight on this thread.
+    clustered_lighting::on_render_setup_bound();
+    // Per-eye fullscreen reconstruction: a scissor mask is in the bound target's pixels, so an at-entry
+    // per-eye run has to re-derive its eye half from the target this bind just made current. A no-op
+    // unless such a run is in flight on this thread.
+    reconstruction::on_render_setup_bound();
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::Clear_ADDRESS)]
@@ -198,9 +224,20 @@ fn clear(ctx: *mut c_void, flags: u32, color: *mut c_void, depth: f32, stencil: 
         }
     };
     TraceState::record_eye(TraceEvent::Clear { color: color_rgba });
+    // The clustered light-assignment phase's whole-target clear would wipe the first eye's half of the
+    // froxel grid on the second eye's run, which is the one thing that stops the two halves composing.
+    // A no-op unless that second run is in flight on this thread.
+    if clustered_lighting::suppress_clear() {
+        return;
+    }
     CLEAR.get().unwrap().call(ctx, flags, color, depth, stencil);
 }
 
+/// Note for anyone comparing against a trace captured before the defs were corrected: this address
+/// used to resolve to `Graphics::EndDraw`, which the IDB had mislabelled. Traces recorded then show
+/// one `CopySurfaceToTexture` per dispatch, at its end -- that was the command-list submission, not a
+/// copy. It now records the real thing: the VFX depth copy, several times per frame, mid-frame. The
+/// end-of-dispatch marker those older traces happened to carry is simply gone.
 #[detour(address = jc3gi::graphics_engine::draw::CopySurfaceToTexture_ADDRESS)]
 fn copy_surface_to_texture(ctx: *mut c_void, dst: *mut c_void, src: *mut c_void) {
     TraceState::record_eye(TraceEvent::CopySurfaceToTexture {

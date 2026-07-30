@@ -4,7 +4,7 @@ pub struct CameraManager {
     _field_0: [u8; 16],
     pub m_DefaultCamera: crate::camera::camera::Camera,
     /// The camera gameplay drives. Sim-side systems read it -- the sun-shadow fit
-    /// ([`ShadowManager::UpdateRender`](graphics_engine::shadow_manager::ShadowManager::UpdateRender))
+    /// ([`ShadowManager::UpdateRender`](crate::graphics_engine::shadow_manager::ShadowManager::UpdateRender))
     /// among them.
     pub m_ActiveCamera: *mut crate::camera::camera::Camera,
     pub m_RenderCamera: *mut crate::camera::camera::Camera,
@@ -62,7 +62,7 @@ impl CameraManager {
     }
     pub const UpdateRender_ADDRESS: usize = 0x1400D4000;
     /// The sim-path per-frame update: iterates every camera in the manager's list and calls
-    /// [`Camera::UpdateRender`] on each. This is where the active camera's `m_View` is produced for the
+    /// [`Camera::UpdateRender`](crate::camera::camera::Camera::UpdateRender) on each. This is where the active camera's `m_View` is produced for the
     /// frame.
     pub unsafe fn UpdateRender(&mut self, dt: f32, dtf: f32) {
         unsafe {

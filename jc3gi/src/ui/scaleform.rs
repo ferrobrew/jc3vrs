@@ -1,21 +1,21 @@
 #![cfg_attr(any(), rustfmt::skip)]
 #[repr(C, align(8))]
-/// A node in the display tree returned by `Movie::GetDisplayObjectsTree`. Inherits from
-/// [`RefCountImpl`] and embeds a `Scaleform::String` for the name and a
+/// A node in the display tree returned by [`GetDisplayObjectsTree`](crate::ui::scaleform::Movie::GetDisplayObjectsTree). Inherits from
+/// [`RefCountImpl`](crate::ui::scaleform::RefCountImpl) and embeds a `Scaleform::String` for the name and a
 /// `Scaleform::ArrayDataBase<Ptr<AmpMovieObjectDesc>>` for children.
 ///
 /// Layout verified from `GetChildDescTree` at `0x141_A30_410`.
 pub struct AmpMovieObjectDesc {
     pub ref_count_impl: crate::ui::scaleform::RefCountImpl,
     /// The clip's instance name, or `"Unnamed"`: a `Scaleform::String`, i.e. a pointer to a
-    /// [`StringDataDesc`] with heap flags packed into the pointer's low 3 bits (mask with `& !7`).
+    /// [`StringDataDesc`](crate::ui::scaleform::StringDataDesc) with heap flags packed into the pointer's low 3 bits (mask with `& !7`).
     pub name: *const u8,
     /// Pointer to the child array. Each element is a `Ptr<AmpMovieObjectDesc>` (a raw pointer
-    /// to another `AmpMovieObjectDesc`).
+    /// to another [`AmpMovieObjectDesc`](crate::ui::scaleform::AmpMovieObjectDesc)).
     pub children: *mut *mut crate::ui::scaleform::AmpMovieObjectDesc,
-    /// Number of children in [`children`](AmpMovieObjectDesc::children).
+    /// Number of children in [`children`](crate::ui::scaleform::AmpMovieObjectDesc::children).
     pub child_count: u64,
-    /// Allocated capacity of [`children`](AmpMovieObjectDesc::children).
+    /// Allocated capacity of [`children`](crate::ui::scaleform::AmpMovieObjectDesc::children).
     pub child_capacity: u64,
 }
 fn _AmpMovieObjectDesc_size_check() {
@@ -67,10 +67,10 @@ impl std::convert::AsMut<AmpMovieObjectDesc> for AmpMovieObjectDesc {
 }
 #[repr(C, align(8))]
 /// A pinned `DisplayHandle<TreeRoot>` as returned by
-/// [`GetDisplayHandle`](MovieImpl::GetDisplayHandle): one refcounted `HandleData` pointer.
+/// [`GetDisplayHandle`](crate::ui::scaleform::MovieImpl::GetDisplayHandle): one refcounted `HandleData` pointer.
 pub struct DisplayHandle {
-    /// The refcounted `RTHandle::HandleData` (starts with `RefCountImpl`, so
-    /// [`RefCountImpl::AddRef`] pins a copied handle).
+    /// The refcounted `RTHandle::HandleData` (starts with [`RefCountImpl`](crate::ui::scaleform::RefCountImpl), so
+    /// [`RefCountImpl::AddRef`](crate::ui::scaleform::RefCountImpl::AddRef) pins a copied handle).
     pub pData: *mut crate::ui::scaleform::RefCountImpl,
 }
 fn _DisplayHandle_size_check() {
@@ -93,8 +93,8 @@ impl std::convert::AsMut<DisplayHandle> for DisplayHandle {
 #[derive(Default)]
 #[repr(C, align(16))]
 /// A display object's presentation state, read and written through
-/// [`ValueObjectInterface::GetDisplayInfo`] / [`SetDisplayInfo`](ValueObjectInterface::SetDisplayInfo).
-/// [`VarsSet`](DisplayInfo::VarsSet) selects which fields a write applies.
+/// [`ValueObjectInterface::GetDisplayInfo`](crate::ui::scaleform::ValueObjectInterface::GetDisplayInfo) / [`SetDisplayInfo`](crate::ui::scaleform::ValueObjectInterface::SetDisplayInfo).
+/// [`VarsSet`](crate::ui::scaleform::DisplayInfo::VarsSet) selects which fields a write applies.
 pub struct DisplayInfo {
     pub X: f64,
     pub Y: f64,
@@ -114,7 +114,7 @@ pub struct DisplayInfo {
     pub ProjectionMatrix3D: [f32; 16],
     /// `Render::EdgeAAMode`.
     pub EdgeAAMode: u32,
-    /// Which fields a [`SetDisplayInfo`](ValueObjectInterface::SetDisplayInfo) call applies
+    /// Which fields a [`SetDisplayInfo`](crate::ui::scaleform::ValueObjectInterface::SetDisplayInfo) call applies
     /// (`V_*` bits; `0x40` = visible).
     pub VarsSet: u16,
     pub Visible: bool,
@@ -128,7 +128,7 @@ fn _DisplayInfo_size_check() {
 }
 impl DisplayInfo {}
 impl DisplayInfo {
-    /// The [`VarsSet`](DisplayInfo::VarsSet) bit selecting [`Visible`](DisplayInfo::Visible).
+    /// The [`VarsSet`](crate::ui::scaleform::DisplayInfo::VarsSet) bit selecting [`Visible`](crate::ui::scaleform::DisplayInfo::Visible).
     pub const V_VISIBLE: u32 = 64;
 }
 impl std::convert::AsRef<DisplayInfo> for DisplayInfo {
@@ -143,7 +143,7 @@ impl std::convert::AsMut<DisplayInfo> for DisplayInfo {
 }
 #[repr(C, align(1))]
 /// A Scaleform `GFx::DisplayObjectBase`: the display-side object behind a display-list entry.
-/// Reached from a managed display-object [`Value`] at `mValue + 0x88` (guarded by the traits
+/// Reached from a managed display-object [`Value`](crate::ui::scaleform::Value) at `mValue + 0x88` (guarded by the traits
 /// check `GetDisplayInfo` performs on `mValue + 0x28`).
 pub struct DisplayObjectBase {
     _field_0: [u8; 8],
@@ -179,7 +179,7 @@ impl std::convert::AsMut<DisplayObjectBase> for DisplayObjectBase {
     }
 }
 #[repr(C, align(1))]
-/// A Scaleform `MemoryHeap`. Opaque; allocation goes through its vtable (`Alloc` at slot offset
+/// A Scaleform [`MemoryHeap`](crate::ui::scaleform::MemoryHeap). Opaque; allocation goes through its vtable (`Alloc` at slot offset
 /// `0x50`).
 pub struct MemoryHeap {
     _field_0: [u8; 8],
@@ -204,11 +204,11 @@ impl std::convert::AsMut<MemoryHeap> for MemoryHeap {
 #[derive(Copy, Clone)]
 #[repr(C, align(4))]
 /// A `GFx::MouseEvent` (a `GFx::Event` with the mouse payload): the argument
-/// `CUIManager::SendMouseEvents` builds for [`MovieImpl::HandleEvent`]. `x` and `y` are in
+/// `CUIManager::SendMouseEvents` builds for [`MovieImpl::HandleEvent`](crate::ui::scaleform::MovieImpl::HandleEvent). `x` and `y` are in
 /// movie-viewport pixels: window-client pixels minus the centering offset
 /// `(cached viewport size - movie rectangle size) / 2`, i.e. relative to the top-left corner of
 /// the centered movie rectangle (see
-/// [`UIManager::m_MovieScaleWidth`](ui::ui_manager::UIManager::m_MovieScaleWidth)).
+/// [`UIManager::m_MovieScaleWidth`](crate::ui::ui_manager::UIManager::m_MovieScaleWidth)).
 pub struct MouseEvent {
     /// The `GFx::Event::Type` tag (`TYPE_MOUSE_*`).
     pub Type: u32,
@@ -232,13 +232,13 @@ fn _MouseEvent_size_check() {
 }
 impl MouseEvent {}
 impl MouseEvent {
-    /// The [`Type`](MouseEvent::Type) of a button-press event.
+    /// The [`Type`](crate::ui::scaleform::MouseEvent::Type) of a button-press event.
     pub const TYPE_MOUSE_DOWN: u32 = 2;
-    /// The [`Type`](MouseEvent::Type) of a mouse-move event.
+    /// The [`Type`](crate::ui::scaleform::MouseEvent::Type) of a mouse-move event.
     pub const TYPE_MOUSE_MOVE: u32 = 1;
-    /// The [`Type`](MouseEvent::Type) of a button-release event.
+    /// The [`Type`](crate::ui::scaleform::MouseEvent::Type) of a button-release event.
     pub const TYPE_MOUSE_UP: u32 = 3;
-    /// The [`Type`](MouseEvent::Type) of a wheel event ([`ScrollDelta`](MouseEvent::ScrollDelta)
+    /// The [`Type`](crate::ui::scaleform::MouseEvent::Type) of a wheel event ([`ScrollDelta`](crate::ui::scaleform::MouseEvent::ScrollDelta)
     /// carries the amount).
     pub const TYPE_MOUSE_WHEEL: u32 = 4;
 }
@@ -254,12 +254,12 @@ impl std::convert::AsMut<MouseEvent> for MouseEvent {
 }
 #[repr(C, align(8))]
 /// A Scaleform `GFx::MouseState`: one tracked mouse's per-movie state
-/// ([`MovieImpl::MouseStates`]). `MouseState::UpdateState` (`0x141_9DD_E60`) fills it while
-/// [`MovieImpl::ProcessInput`] drains the input-events queue during `Advance`: it copies
-/// [`CurButtonsState`](MouseState::CurButtonsState) into
-/// [`PrevButtonsState`](MouseState::PrevButtonsState), applies the entry's button/wheel payload,
-/// sets or clears [`FLAG_MOUSE_MOVED`](MouseState::FLAG_MOUSE_MOVED) by integer-comparing the
-/// entry's position against [`LastPosition`](MouseState::LastPosition), and stores the entry's
+/// ([`MovieImpl::MouseStates`](crate::ui::scaleform::MovieImpl::MouseStates)). `MouseState::UpdateState` (`0x141_9DD_E60`) fills it while
+/// [`MovieImpl::ProcessInput`](crate::ui::scaleform::MovieImpl::ProcessInput) drains the input-events queue during `Advance`: it copies
+/// [`CurButtonsState`](crate::ui::scaleform::MouseState::CurButtonsState) into
+/// [`PrevButtonsState`](crate::ui::scaleform::MouseState::PrevButtonsState), applies the entry's button/wheel payload,
+/// sets or clears [`FLAG_MOUSE_MOVED`](crate::ui::scaleform::MouseState::FLAG_MOUSE_MOVED) by integer-comparing the
+/// entry's position against [`LastPosition`](crate::ui::scaleform::MouseState::LastPosition), and stores the entry's
 /// position. `MovieImpl::ProcessMouse` then hit-tests the display tree at that stored position
 /// directly (`GetTopMostEntity` recurses with each display object's own local transforms) -- no
 /// further viewport, view-scale, or flag-dependent transform runs between the queue and the hit
@@ -276,16 +276,16 @@ pub struct MouseState {
     /// targets.
     pub MouseButtonDownEntities: [u64; 3],
     /// The current button bitmask (bit 0 left, bit 1 right, bit 2 middle), as last applied from
-    /// the queue. [`MovieImpl::NotifyMouseState`] diffs its `buttons` argument against this when
+    /// the queue. [`MovieImpl::NotifyMouseState`](crate::ui::scaleform::MovieImpl::NotifyMouseState) diffs its `buttons` argument against this when
     /// queueing.
     pub CurButtonsState: u32,
     /// The button bitmask before the last processed queue entry.
     pub PrevButtonsState: u32,
     /// The mouse position in stage twips (`Render::Point<float>`): the authoritative position
     /// hit-testing uses, i.e. the queued output of the
-    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix)-inverse transform once `Advance` has
+    /// [`ViewportMatrix`](crate::ui::scaleform::MovieImpl::ViewportMatrix)-inverse transform once `Advance` has
     /// drained the queue. Divide by 20 for stage pixels. Between a
-    /// [`NotifyMouseState`](MovieImpl::NotifyMouseState) call and the next `Advance`, the new
+    /// [`NotifyMouseState`](crate::ui::scaleform::MovieImpl::NotifyMouseState) call and the next `Advance`, the new
     /// position exists only in the input-events queue; this field still holds the previous one.
     pub LastPosition: [f32; 2],
     /// The cursor type forced via `MovieImpl::ChangeMouseCursorType`, if any.
@@ -306,17 +306,17 @@ fn _MouseState_size_check() {
 }
 impl MouseState {}
 impl MouseState {
-    /// [`Flags`](MouseState::Flags) bit: this mouse has received input since the movie started.
+    /// [`Flags`](crate::ui::scaleform::MouseState::Flags) bit: this mouse has received input since the movie started.
     pub const FLAG_ACTIVATED: u8 = 16;
-    /// [`Flags`](MouseState::Flags) bit: the mouse was inside the active entity on the last
+    /// [`Flags`](crate::ui::scaleform::MouseState::Flags) bit: the mouse was inside the active entity on the last
     /// test.
     pub const FLAG_MOUSE_INSIDE_ENTITY_LAST: u8 = 4;
-    /// [`Flags`](MouseState::Flags) bit: the position changed on the last processed queue entry
+    /// [`Flags`](crate::ui::scaleform::MouseState::Flags) bit: the position changed on the last processed queue entry
     /// (compared as truncated integers).
     pub const FLAG_MOUSE_MOVED: u8 = 8;
-    /// [`Flags`](MouseState::Flags) bit: the previous topmost entity was null.
+    /// [`Flags`](crate::ui::scaleform::MouseState::Flags) bit: the previous topmost entity was null.
     pub const FLAG_PREV_TOPMOST_ENTITY_WAS_NULL: u8 = 2;
-    /// [`Flags`](MouseState::Flags) bit: the topmost entity resolved to null on the last update.
+    /// [`Flags`](crate::ui::scaleform::MouseState::Flags) bit: the topmost entity resolved to null on the last update.
     pub const FLAG_TOPMOST_ENTITY_IS_NULL: u8 = 1;
 }
 impl std::convert::AsRef<MouseState> for MouseState {
@@ -332,8 +332,8 @@ impl std::convert::AsMut<MouseState> for MouseState {
 #[repr(C, align(8))]
 /// The Scaleform AS3 `MovieRoot` (the `ASMovieRootBase` interface), which `CUIManager::m_Movie`
 /// points at. The engine drives the movie through this interface's virtuals; the bound
-/// [`SetVariable`](Movie::SetVariable) / [`GetVariable`](Movie::GetVariable) /
-/// [`Invoke`](Movie::Invoke) are its concrete implementations. The vtable is `MovieRoot`'s at
+/// [`SetVariable`](crate::ui::scaleform::Movie::SetVariable) / [`GetVariable`](crate::ui::scaleform::Movie::GetVariable) /
+/// [`Invoke`](crate::ui::scaleform::Movie::Invoke) are its concrete implementations. The vtable is `MovieRoot`'s at
 /// `0x142_621_780`.
 pub struct Movie {
     vftable: *const crate::ui::scaleform::MovieVftable,
@@ -374,7 +374,7 @@ impl Movie {
         }
     }
     pub const GetVariable_ADDRESS: usize = 0x141C47DF0;
-    /// Reads an AS3 variable by clip path into a [`Value`]. Returns false if the path is not
+    /// Reads an AS3 variable by clip path into a [`Value`](crate::ui::scaleform::Value). Returns false if the path is not
     /// found. A returned managed value (display object, string) must be released through the
     /// movie's object interface; plain bool/int/number values need no cleanup.
     pub unsafe fn GetVariable(
@@ -415,10 +415,10 @@ impl Movie {
         }
     }
     /// Recursively walks the runtime display tree from the root movie clip: returns a tree of
-    /// [`AmpMovieObjectDesc`] nodes, each carrying the clip's instance name (or `"Unnamed"`)
+    /// [`AmpMovieObjectDesc`](crate::ui::scaleform::AmpMovieObjectDesc) nodes, each carrying the clip's instance name (or `"Unnamed"`)
     /// and a child array, calling `DisplayObject::GetName` on every child and recursing into
     /// containers. `heap` is the Scaleform `MemoryHeap*` used for the allocations (e.g.
-    /// [`MovieImpl::pHeap`]); the tree is freed by releasing the root node. Slot 35 of the
+    /// [`MovieImpl::pHeap`](crate::ui::scaleform::MovieImpl::pHeap)); the tree is freed by releasing the root node. Slot 35 of the
     /// `ASMovieRootBase` vtable; the implementation is at `0x141_BED_530`. Call on the capture
     /// (game update) thread, where the display tree is stable.
     pub unsafe fn GetDisplayObjectsTree(
@@ -433,7 +433,7 @@ impl Movie {
 }
 impl Movie {
     /// The `AS3::MovieRoot` vtable address (the `ASMovieRootBase` layout: slot 35 is
-    /// [`GetDisplayObjectsTree`](Movie::GetDisplayObjectsTree), slots 49/50/57 are the bound
+    /// [`GetDisplayObjectsTree`](crate::ui::scaleform::Movie::GetDisplayObjectsTree), slots 49/50/57 are the bound
     /// SetVariable/GetVariable/Invoke). The payload checks a live object against it before
     /// trusting the vtable-indexed calls, since the object's dynamic type is load-bearing here.
     pub const VFTABLE: u64 = 5408691888;
@@ -449,49 +449,49 @@ impl std::convert::AsMut<Movie> for Movie {
     }
 }
 #[repr(C, align(8))]
-/// The `GFx::MovieImpl` behind [`UIManager::m_Movie`](ui::ui_manager::UIManager::m_Movie): the
+/// The `GFx::MovieImpl` behind [`UIManager::m_Movie`](crate::ui::ui_manager::UIManager::m_Movie): the
 /// `GFx::Movie` instance. The rendering-side virtuals live on its own vtable; the AS3 side
-/// (SetVariable, Invoke, the display tree) lives on [`pASMovieRoot`](MovieImpl::pASMovieRoot).
+/// (SetVariable, Invoke, the display tree) lives on [`pASMovieRoot`](crate::ui::scaleform::MovieImpl::pASMovieRoot).
 pub struct MovieImpl {
     vftable: *const crate::ui::scaleform::MovieImplVftable,
     _field_8: [u8; 16],
-    /// The AS3 `MovieRoot` (the [`Movie`] interface): SetVariable, Invoke, and the display tree.
+    /// The AS3 `MovieRoot` (the [`Movie`](crate::ui::scaleform::Movie) interface): SetVariable, Invoke, and the display tree.
     pub pASMovieRoot: *mut crate::ui::scaleform::Movie,
     _field_20: [u8; 24],
     /// The `GFx::Value::ObjectInterface` for this movie: the dispatcher every `GFx::Value`
     /// display-object/member operation goes through.
     pub pObjectInterface: *mut ::std::ffi::c_void,
-    /// The Scaleform `MemoryHeap` the movie allocates from.
+    /// The Scaleform [`MemoryHeap`](crate::ui::scaleform::MemoryHeap) the movie allocates from.
     pub pHeap: *mut crate::ui::scaleform::MemoryHeap,
-    /// The main `MovieDefImpl`. [`UpdateViewport`](MovieImpl::UpdateViewport) reads the stage
+    /// The main `MovieDefImpl`. [`UpdateViewport`](crate::ui::scaleform::MovieImpl::UpdateViewport) reads the stage
     /// frame rectangle (twips) through it; while null, the view scale and offset reset to
     /// identity.
     pub pMainMovieDef: *mut ::std::ffi::c_void,
     /// The root `DisplayObjContainer` (the main movie clip).
     pub pMainMovie: *mut ::std::ffi::c_void,
     _field_58: [u8; 48],
-    /// The movie's render-tree root ([`TreeRoot`]): the entry `CUIManager::Render` draws via the
+    /// The movie's render-tree root ([`TreeRoot`](crate::ui::scaleform::TreeRoot)): the entry `CUIManager::Render` draws via the
     /// display handle. The whole display tree's render nodes hang off it.
     pub pRenderRoot: *mut crate::ui::scaleform::TreeRoot,
     _field_90: [u8; 16],
-    /// The movie's current [`Viewport`], as last copied in by
-    /// [`SetViewportImpl`](MovieImpl::SetViewportImpl). [`TreeRoot::SetViewport`] takes it
+    /// The movie's current [`Viewport`](crate::ui::scaleform::Viewport), as last copied in by
+    /// [`SetViewportImpl`](crate::ui::scaleform::MovieImpl::SetViewportImpl). [`TreeRoot::SetViewport`](crate::ui::scaleform::TreeRoot::SetViewport) takes it
     /// directly (copying the 0x2C `Render::Viewport` prefix).
     pub Viewport: crate::ui::scaleform::Viewport,
     /// The larger of `1 / ViewScaleX` and `1 / ViewScaleY`, recomputed by
-    /// [`UpdateViewport`](MovieImpl::UpdateViewport) (0.005 when a scale is zero).
+    /// [`UpdateViewport`](crate::ui::scaleform::MovieImpl::UpdateViewport) (0.005 when a scale is zero).
     pub PixelScale: f32,
     /// The stage-pixel to view-rectangle-pixel scale on X, derived from
-    /// [`ViewScaleMode`](MovieImpl::ViewScaleMode) by [`UpdateViewport`](MovieImpl::UpdateViewport)
+    /// [`ViewScaleMode`](crate::ui::scaleform::MovieImpl::ViewScaleMode) by [`UpdateViewport`](crate::ui::scaleform::MovieImpl::UpdateViewport)
     /// (for `SM_SHOW_ALL`/`SM_NO_BORDER`, the visible-frame to view-rectangle ratio).
     pub ViewScaleX: f32,
-    /// See [`ViewScaleX`](MovieImpl::ViewScaleX).
+    /// See [`ViewScaleX`](crate::ui::scaleform::MovieImpl::ViewScaleX).
     pub ViewScaleY: f32,
-    /// [`VisibleFrameRect`](MovieImpl::VisibleFrameRect) `x1` in stage pixels (`x1 / 20`).
+    /// [`VisibleFrameRect`](crate::ui::scaleform::MovieImpl::VisibleFrameRect) `x1` in stage pixels (`x1 / 20`).
     pub ViewOffsetX: f32,
-    /// [`VisibleFrameRect`](MovieImpl::VisibleFrameRect) `y1` in stage pixels (`y1 / 20`).
+    /// [`VisibleFrameRect`](crate::ui::scaleform::MovieImpl::VisibleFrameRect) `y1` in stage pixels (`y1 / 20`).
     pub ViewOffsetY: f32,
-    /// The `SM_*` stage scale mode. Constructed as [`SM_SHOW_ALL`](MovieImpl::SM_SHOW_ALL); the
+    /// The `SM_*` stage scale mode. Constructed as [`SM_SHOW_ALL`](crate::ui::scaleform::MovieImpl::SM_SHOW_ALL); the
     /// engine never changes it on the main UI movie (`CRenderToTextureUI`/`CDynUI` set it on
     /// their own movies).
     pub ViewScaleMode: u32,
@@ -499,32 +499,32 @@ pub struct MovieImpl {
     /// as 0.
     pub ViewAlignment: u32,
     /// The stage region mapped onto the view rectangle, in twips (`x1, y1, x2, y2`), computed by
-    /// [`UpdateViewport`](MovieImpl::UpdateViewport) from the [`Viewport`](MovieImpl::Viewport),
-    /// the stage frame rectangle, and the [`ViewScaleMode`](MovieImpl::ViewScaleMode). Under
+    /// [`UpdateViewport`](crate::ui::scaleform::MovieImpl::UpdateViewport) from the [`Viewport`](crate::ui::scaleform::MovieImpl::Viewport),
+    /// the stage frame rectangle, and the [`ViewScaleMode`](crate::ui::scaleform::MovieImpl::ViewScaleMode). Under
     /// `SM_SHOW_ALL` with a view rectangle matching the stage aspect, this is the whole stage.
     pub VisibleFrameRect: [f32; 4],
     _field_100: [u8; 16],
     /// The stage-to-viewport matrix (`Matrix2x4<float>`, rows `[sx, shx, shy, tx]` and
     /// `[shx, sy, shy, ty]`; in practice `sx` at `[0]`, `tx` at `[3]`, `sy` at `[5]`, and `ty` at
-    /// `[7]`) the movie sets on [`pRenderRoot`](MovieImpl::pRenderRoot) via `TreeNode::SetMatrix`
+    /// `[7]`) the movie sets on [`pRenderRoot`](crate::ui::scaleform::MovieImpl::pRenderRoot) via `TreeNode::SetMatrix`
     /// whenever the viewport changes. Built by
-    /// [`ResetViewportMatrix`](MovieImpl::ResetViewportMatrix) as `sx = Viewport.Width /
+    /// [`ResetViewportMatrix`](crate::ui::scaleform::MovieImpl::ResetViewportMatrix) as `sx = Viewport.Width /
     /// (VisibleFrameRect.x2 - VisibleFrameRect.x1)`, `tx = -VisibleFrameRect.x1 * sx` (and
     /// likewise for Y), mapping stage twips to pixels relative to the view rectangle's top-left
     /// corner -- `Viewport.Left`/`Top` are *not* part of the matrix.
     ///
     /// This same matrix, inverted, is the entire mouse-to-stage transform:
-    /// [`HandleEvent`](MovieImpl::HandleEvent) and
-    /// [`NotifyMouseState`](MovieImpl::NotifyMouseState) run incoming positions through
+    /// [`HandleEvent`](crate::ui::scaleform::MovieImpl::HandleEvent) and
+    /// [`NotifyMouseState`](crate::ui::scaleform::MovieImpl::NotifyMouseState) run incoming positions through
     /// `TransformByInverse` before queueing, so mouse coordinates are expected in view-rectangle
     /// pixels (`stage_twips = (pos - t) / s` per axis).
     pub ViewportMatrix: [f32; 8],
     _field_130: [u8; 8416],
-    /// The tracked mice ([`MouseState`] per index; the engine's main UI movie uses only index
-    /// 0). The array ends exactly at [`MouseCursorCount`](MovieImpl::MouseCursorCount).
+    /// The tracked mice ([`MouseState`](crate::ui::scaleform::MouseState) per index; the engine's main UI movie uses only index
+    /// 0). The array ends exactly at [`MouseCursorCount`](crate::ui::scaleform::MovieImpl::MouseCursorCount).
     pub MouseStates: [crate::ui::scaleform::MouseState; 6],
     /// The number of mouse cursors the movie tracks (see
-    /// [`SetMouseCursorCount`](MovieImpl::SetMouseCursorCount)); mouse input with an index at or
+    /// [`SetMouseCursorCount`](crate::ui::scaleform::MovieImpl::SetMouseCursorCount)); mouse input with an index at or
     /// beyond it is dropped.
     pub MouseCursorCount: u32,
     _field_23f4: [u8; 12124],
@@ -543,7 +543,7 @@ impl MovieImpl {
         self.vftable as *const crate::ui::scaleform::MovieImplVftable
     }
     pub const CaptureImpl_ADDRESS: usize = 0x14198B7D0;
-    /// The concrete implementation behind the [`Capture`](MovieImpl::Capture) virtual (vtable
+    /// The concrete implementation behind the [`Capture`](crate::ui::scaleform::MovieImpl::Capture) virtual (vtable
     /// slot 25): gates on `Context::HasChanges` when `if_changed` is set, suspends the GC, and
     /// runs `Render::Context::Capture` to publish the frame's display-tree changes as the pending
     /// snapshot. `CUIManager::PreRender` calls it right after `Advance`, on the game update
@@ -559,9 +559,9 @@ impl MovieImpl {
         }
     }
     pub const HandleEventImpl_ADDRESS: usize = 0x1419830D0;
-    /// The concrete implementation behind [`HandleEvent`](MovieImpl::HandleEvent) (vtable slot
+    /// The concrete implementation behind [`HandleEvent`](crate::ui::scaleform::MovieImpl::HandleEvent) (vtable slot
     /// 35). For mouse move/down/up/wheel events it transforms the event's position by the
-    /// inverse of [`ViewportMatrix`](MovieImpl::ViewportMatrix) (view-rectangle pixels to stage
+    /// inverse of [`ViewportMatrix`](crate::ui::scaleform::MovieImpl::ViewportMatrix) (view-rectangle pixels to stage
     /// twips) and queues the result on the input-events queue; nothing is stored raw. The next
     /// `Advance` drains the queue into AS3 mouse processing.
     pub unsafe fn HandleEventImpl(
@@ -577,9 +577,9 @@ impl MovieImpl {
         }
     }
     pub const NotifyMouseStateImpl_ADDRESS: usize = 0x141983830;
-    /// The concrete implementation behind [`NotifyMouseState`](MovieImpl::NotifyMouseState)
+    /// The concrete implementation behind [`NotifyMouseState`](crate::ui::scaleform::MovieImpl::NotifyMouseState)
     /// (vtable slot 37). Transforms `(x, y)` by the inverse of
-    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix), queues a mouse move at the resulting stage
+    /// [`ViewportMatrix`](crate::ui::scaleform::MovieImpl::ViewportMatrix), queues a mouse move at the resulting stage
     /// position (twips), then diffs `buttons` against the tracked per-mouse button state and
     /// queues a button event per changed bit.
     pub unsafe fn NotifyMouseStateImpl(
@@ -602,10 +602,10 @@ impl MovieImpl {
     }
     pub const SetViewportImpl_ADDRESS: usize = 0x14198E4F0;
     /// The concrete implementation behind the `SetViewport` virtual (vtable slot 12). When
-    /// `desc` differs from [`Viewport`](MovieImpl::Viewport) (memcmp over all 0x34 bytes), copies
-    /// it in, runs [`UpdateViewport`](MovieImpl::UpdateViewport), and pushes the new state to the
-    /// render tree ([`TreeRoot::SetViewport`], background color, and `TreeNode::SetMatrix` with
-    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix) on [`pRenderRoot`](MovieImpl::pRenderRoot)).
+    /// `desc` differs from [`Viewport`](crate::ui::scaleform::MovieImpl::Viewport) (memcmp over all 0x34 bytes), copies
+    /// it in, runs [`UpdateViewport`](crate::ui::scaleform::MovieImpl::UpdateViewport), and pushes the new state to the
+    /// render tree ([`TreeRoot::SetViewport`](crate::ui::scaleform::TreeRoot::SetViewport), background color, and `TreeNode::SetMatrix` with
+    /// [`ViewportMatrix`](crate::ui::scaleform::MovieImpl::ViewportMatrix) on [`pRenderRoot`](crate::ui::scaleform::MovieImpl::pRenderRoot)).
     pub unsafe fn SetViewportImpl(
         &mut self,
         desc: *const crate::ui::scaleform::Viewport,
@@ -619,11 +619,11 @@ impl MovieImpl {
         }
     }
     pub const UpdateViewport_ADDRESS: usize = 0x14198ACC0;
-    /// Recomputes [`VisibleFrameRect`](MovieImpl::VisibleFrameRect), the view scales and offsets,
-    /// and [`PixelScale`](MovieImpl::PixelScale) from [`Viewport`](MovieImpl::Viewport), the
-    /// stage frame rectangle, and [`ViewScaleMode`](MovieImpl::ViewScaleMode), then calls
-    /// [`ResetViewportMatrix`](MovieImpl::ResetViewportMatrix). Called only from
-    /// [`SetViewportImpl`](MovieImpl::SetViewportImpl); nothing engine-side recomputes the
+    /// Recomputes [`VisibleFrameRect`](crate::ui::scaleform::MovieImpl::VisibleFrameRect), the view scales and offsets,
+    /// and [`PixelScale`](crate::ui::scaleform::MovieImpl::PixelScale) from [`Viewport`](crate::ui::scaleform::MovieImpl::Viewport), the
+    /// stage frame rectangle, and [`ViewScaleMode`](crate::ui::scaleform::MovieImpl::ViewScaleMode), then calls
+    /// [`ResetViewportMatrix`](crate::ui::scaleform::MovieImpl::ResetViewportMatrix). Called only from
+    /// [`SetViewportImpl`](crate::ui::scaleform::MovieImpl::SetViewportImpl); nothing engine-side recomputes the
     /// viewport per frame.
     pub unsafe fn UpdateViewport(&mut self) {
         unsafe {
@@ -634,9 +634,9 @@ impl MovieImpl {
         }
     }
     pub const ResetViewportMatrix_ADDRESS: usize = 0x141987380;
-    /// Rebuilds [`ViewportMatrix`](MovieImpl::ViewportMatrix) from
-    /// [`Viewport`](MovieImpl::Viewport) `Width`/`Height` and
-    /// [`VisibleFrameRect`](MovieImpl::VisibleFrameRect) (see the matrix field for the formula).
+    /// Rebuilds [`ViewportMatrix`](crate::ui::scaleform::MovieImpl::ViewportMatrix) from
+    /// [`Viewport`](crate::ui::scaleform::MovieImpl::Viewport) `Width`/`Height` and
+    /// [`VisibleFrameRect`](crate::ui::scaleform::MovieImpl::VisibleFrameRect) (see the matrix field for the formula).
     /// Does not push the matrix to the render tree.
     pub unsafe fn ResetViewportMatrix(&mut self) {
         unsafe {
@@ -651,7 +651,7 @@ impl MovieImpl {
     /// mouse entries to `ProcessMouse` (which runs `MouseState::UpdateState` and hit-tests the
     /// display tree at the entry's stage-twips position). Afterwards, for any tracked mouse that
     /// saw no entry this drain but has pending state (movie-flag 0x80), re-resolves the hover
-    /// target from [`MouseState::LastPosition`].
+    /// target from [`MouseState::LastPosition`](crate::ui::scaleform::MouseState::LastPosition).
     pub unsafe fn ProcessInput(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -661,7 +661,7 @@ impl MovieImpl {
         }
     }
     pub const GetMouseStateImpl_ADDRESS: usize = 0x141983920;
-    /// The concrete implementation behind [`GetMouseState`](MovieImpl::GetMouseState) (vtable
+    /// The concrete implementation behind [`GetMouseState`](crate::ui::scaleform::MovieImpl::GetMouseState) (vtable
     /// slot 36).
     pub unsafe fn GetMouseStateImpl(
         &mut self,
@@ -682,7 +682,7 @@ impl MovieImpl {
         }
     }
     pub const HitTestImpl_ADDRESS: usize = 0x1419839A0;
-    /// The concrete implementation behind [`HitTest`](MovieImpl::HitTest) (vtable slot 38).
+    /// The concrete implementation behind [`HitTest`](crate::ui::scaleform::MovieImpl::HitTest) (vtable slot 38).
     pub unsafe fn HitTestImpl(
         &mut self,
         x: f32,
@@ -703,8 +703,8 @@ impl MovieImpl {
     }
     /// Snapshots the display tree for the render thread (`GFx::Movie` vtable slot 25). Must be
     /// called from the current capture thread (see
-    /// [`SetCaptureThread`](MovieImpl::SetCaptureThread)); `if_changed = false` forces a fresh
-    /// snapshot. The next `RTHandle::NextCapture` on the render side picks it up.
+    /// [`SetCaptureThread`](crate::ui::scaleform::MovieImpl::SetCaptureThread)); `if_changed = false` forces a fresh
+    /// snapshot. The next [`NextCapture`](crate::ui::scaleform::RTHandle::NextCapture) on the render side picks it up.
     pub unsafe fn Capture(&mut self, if_changed: bool) -> u64 {
         unsafe {
             let f = (&raw const (*self.vftable()).Capture).read();
@@ -713,7 +713,7 @@ impl MovieImpl {
     }
     /// Returns the movie's display handle (`GFx::Movie` vtable slot 26): the pinned
     /// `DisplayHandle<TreeRoot>` whose `pData` the renderer copies (with an `AddRef`) into a
-    /// stack [`RTHandle`] before consuming the frame's capture.
+    /// stack [`RTHandle`](crate::ui::scaleform::RTHandle) before consuming the frame's capture.
     pub unsafe fn GetDisplayHandle(
         &mut self,
     ) -> *mut crate::ui::scaleform::DisplayHandle {
@@ -732,7 +732,7 @@ impl MovieImpl {
         }
     }
     /// Routes a `GFx::Event` to the movie (`GFx::Movie` vtable slot 35). For a
-    /// [`MouseEvent`] the movie records the new mouse state, which the next `Advance`
+    /// [`MouseEvent`](crate::ui::scaleform::MouseEvent) the movie records the new mouse state, which the next `Advance`
     /// processes into AS3 mouse events (hover, press, release). Call on the capture (game
     /// update) thread. `CUIManager::SendMouseEvents` is the engine's only mouse feeder, and
     /// only emits a move event on frames where the DirectInput mouse reported a non-zero
@@ -747,11 +747,11 @@ impl MovieImpl {
         }
     }
     /// Reads one mouse's current state (`GFx::Movie` vtable slot 36): the position comes
-    /// from [`MouseStates`](MovieImpl::MouseStates)`[mouse_index].LastPosition` converted to
+    /// from [`MouseStates`](crate::ui::scaleform::MovieImpl::MouseStates)`[mouse_index].LastPosition` converted to
     /// **view-rectangle pixels** (`(twips * 0.05 - ViewOffset) / ViewScale` per axis, the
-    /// same space [`NotifyMouseState`](MovieImpl::NotifyMouseState) takes), and `buttons`
-    /// from [`CurButtonsState`](MouseState::CurButtonsState). Out pointers may be null; a
-    /// `mouse_index` at or beyond [`MouseCursorCount`](MovieImpl::MouseCursorCount) leaves
+    /// same space [`NotifyMouseState`](crate::ui::scaleform::MovieImpl::NotifyMouseState) takes), and `buttons`
+    /// from [`CurButtonsState`](crate::ui::scaleform::MouseState::CurButtonsState). Out pointers may be null; a
+    /// `mouse_index` at or beyond [`MouseCursorCount`](crate::ui::scaleform::MovieImpl::MouseCursorCount) leaves
     /// them untouched.
     pub unsafe fn GetMouseState(
         &mut self,
@@ -766,9 +766,9 @@ impl MovieImpl {
         }
     }
     /// Directly overwrites one mouse's state (`GFx::Movie` vtable slot 37): position in
-    /// movie-viewport pixels (the same space as [`MouseEvent`]) plus a button bitmask (bit 0
+    /// movie-viewport pixels (the same space as [`MouseEvent`](crate::ui::scaleform::MouseEvent)) plus a button bitmask (bit 0
     /// left, bit 1 right), bypassing the event objects. Processed on the next `Advance`, like
-    /// [`HandleEvent`](MovieImpl::HandleEvent).
+    /// [`HandleEvent`](crate::ui::scaleform::MovieImpl::HandleEvent).
     pub unsafe fn NotifyMouseState(
         &mut self,
         x: f32,
@@ -783,7 +783,7 @@ impl MovieImpl {
     }
     /// Hit-tests the display tree at a point in view-rectangle pixels (`GFx::Movie` vtable
     /// slot 38): transforms by the inverse of
-    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix), then tests each root level's shapes.
+    /// [`ViewportMatrix`](crate::ui::scaleform::MovieImpl::ViewportMatrix), then tests each root level's shapes.
     /// `test_cond` is the `HitTestType` (0 = bounds, 1 = shapes, 2 = button events with
     /// `controller_idx`, 3 = shapes counting invisible).
     pub unsafe fn HitTest(
@@ -809,16 +809,16 @@ impl MovieImpl {
     }
 }
 impl MovieImpl {
-    /// The [`ViewScaleMode`](MovieImpl::ViewScaleMode) that stretches the stage to the view
+    /// The [`ViewScaleMode`](crate::ui::scaleform::MovieImpl::ViewScaleMode) that stretches the stage to the view
     /// rectangle exactly, ignoring aspect.
     pub const SM_EXACT_FIT: u32 = 2;
-    /// The [`ViewScaleMode`](MovieImpl::ViewScaleMode) that fills the view rectangle, preserving
+    /// The [`ViewScaleMode`](crate::ui::scaleform::MovieImpl::ViewScaleMode) that fills the view rectangle, preserving
     /// aspect (cropping as needed).
     pub const SM_NO_BORDER: u32 = 3;
-    /// The [`ViewScaleMode`](MovieImpl::ViewScaleMode) that maps the movie 1:1 at
-    /// [`Viewport::Scale`] with no stretching (the view rectangle crops or pads the stage).
+    /// The [`ViewScaleMode`](crate::ui::scaleform::MovieImpl::ViewScaleMode) that maps the movie 1:1 at
+    /// [`Viewport::Scale`](crate::ui::scaleform::Viewport::Scale) with no stretching (the view rectangle crops or pads the stage).
     pub const SM_NO_SCALE: u32 = 0;
-    /// The [`ViewScaleMode`](MovieImpl::ViewScaleMode) that fits the whole stage inside the view
+    /// The [`ViewScaleMode`](crate::ui::scaleform::MovieImpl::ViewScaleMode) that fits the whole stage inside the view
     /// rectangle, preserving aspect (letterboxing as needed). The constructor default.
     pub const SM_SHOW_ALL: u32 = 1;
 }
@@ -861,15 +861,15 @@ pub struct MovieImplVftable {
     _vfunc_24: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
     /// Snapshots the display tree for the render thread (`GFx::Movie` vtable slot 25). Must be
     /// called from the current capture thread (see
-    /// [`SetCaptureThread`](MovieImpl::SetCaptureThread)); `if_changed = false` forces a fresh
-    /// snapshot. The next `RTHandle::NextCapture` on the render side picks it up.
+    /// [`SetCaptureThread`](crate::ui::scaleform::MovieImpl::SetCaptureThread)); `if_changed = false` forces a fresh
+    /// snapshot. The next [`NextCapture`](crate::ui::scaleform::RTHandle::NextCapture) on the render side picks it up.
     pub Capture: unsafe extern "system" fn(
         this: *mut crate::ui::scaleform::MovieImpl,
         if_changed: bool,
     ) -> u64,
     /// Returns the movie's display handle (`GFx::Movie` vtable slot 26): the pinned
     /// `DisplayHandle<TreeRoot>` whose `pData` the renderer copies (with an `AddRef`) into a
-    /// stack [`RTHandle`] before consuming the frame's capture.
+    /// stack [`RTHandle`](crate::ui::scaleform::RTHandle) before consuming the frame's capture.
     pub GetDisplayHandle: unsafe extern "system" fn(
         this: *mut crate::ui::scaleform::MovieImpl,
     ) -> *mut crate::ui::scaleform::DisplayHandle,
@@ -888,7 +888,7 @@ pub struct MovieImplVftable {
     _vfunc_33: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
     _vfunc_34: unsafe extern "system" fn(this: *mut crate::ui::scaleform::MovieImpl),
     /// Routes a `GFx::Event` to the movie (`GFx::Movie` vtable slot 35). For a
-    /// [`MouseEvent`] the movie records the new mouse state, which the next `Advance`
+    /// [`MouseEvent`](crate::ui::scaleform::MouseEvent) the movie records the new mouse state, which the next `Advance`
     /// processes into AS3 mouse events (hover, press, release). Call on the capture (game
     /// update) thread. `CUIManager::SendMouseEvents` is the engine's only mouse feeder, and
     /// only emits a move event on frames where the DirectInput mouse reported a non-zero
@@ -898,11 +898,11 @@ pub struct MovieImplVftable {
         event: *const crate::ui::scaleform::MouseEvent,
     ) -> u32,
     /// Reads one mouse's current state (`GFx::Movie` vtable slot 36): the position comes
-    /// from [`MouseStates`](MovieImpl::MouseStates)`[mouse_index].LastPosition` converted to
+    /// from [`MouseStates`](crate::ui::scaleform::MovieImpl::MouseStates)`[mouse_index].LastPosition` converted to
     /// **view-rectangle pixels** (`(twips * 0.05 - ViewOffset) / ViewScale` per axis, the
-    /// same space [`NotifyMouseState`](MovieImpl::NotifyMouseState) takes), and `buttons`
-    /// from [`CurButtonsState`](MouseState::CurButtonsState). Out pointers may be null; a
-    /// `mouse_index` at or beyond [`MouseCursorCount`](MovieImpl::MouseCursorCount) leaves
+    /// same space [`NotifyMouseState`](crate::ui::scaleform::MovieImpl::NotifyMouseState) takes), and `buttons`
+    /// from [`CurButtonsState`](crate::ui::scaleform::MouseState::CurButtonsState). Out pointers may be null; a
+    /// `mouse_index` at or beyond [`MouseCursorCount`](crate::ui::scaleform::MovieImpl::MouseCursorCount) leaves
     /// them untouched.
     pub GetMouseState: unsafe extern "system" fn(
         this: *mut crate::ui::scaleform::MovieImpl,
@@ -912,9 +912,9 @@ pub struct MovieImplVftable {
         buttons: *mut u32,
     ),
     /// Directly overwrites one mouse's state (`GFx::Movie` vtable slot 37): position in
-    /// movie-viewport pixels (the same space as [`MouseEvent`]) plus a button bitmask (bit 0
+    /// movie-viewport pixels (the same space as [`MouseEvent`](crate::ui::scaleform::MouseEvent)) plus a button bitmask (bit 0
     /// left, bit 1 right), bypassing the event objects. Processed on the next `Advance`, like
-    /// [`HandleEvent`](MovieImpl::HandleEvent).
+    /// [`HandleEvent`](crate::ui::scaleform::MovieImpl::HandleEvent).
     pub NotifyMouseState: unsafe extern "system" fn(
         this: *mut crate::ui::scaleform::MovieImpl,
         x: f32,
@@ -924,7 +924,7 @@ pub struct MovieImplVftable {
     ),
     /// Hit-tests the display tree at a point in view-rectangle pixels (`GFx::Movie` vtable
     /// slot 38): transforms by the inverse of
-    /// [`ViewportMatrix`](MovieImpl::ViewportMatrix), then tests each root level's shapes.
+    /// [`ViewportMatrix`](crate::ui::scaleform::MovieImpl::ViewportMatrix), then tests each root level's shapes.
     /// `test_cond` is the `HitTestType` (0 = bounds, 1 = shapes, 2 = button events with
     /// `controller_idx`, 3 = shapes counting invisible).
     pub HitTest: unsafe extern "system" fn(
@@ -1001,10 +1001,10 @@ pub struct MovieVftable {
     _vfunc_33: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
     _vfunc_34: unsafe extern "system" fn(this: *mut crate::ui::scaleform::Movie),
     /// Recursively walks the runtime display tree from the root movie clip: returns a tree of
-    /// [`AmpMovieObjectDesc`] nodes, each carrying the clip's instance name (or `"Unnamed"`)
+    /// [`AmpMovieObjectDesc`](crate::ui::scaleform::AmpMovieObjectDesc) nodes, each carrying the clip's instance name (or `"Unnamed"`)
     /// and a child array, calling `DisplayObject::GetName` on every child and recursing into
     /// containers. `heap` is the Scaleform `MemoryHeap*` used for the allocations (e.g.
-    /// [`MovieImpl::pHeap`]); the tree is freed by releasing the root node. Slot 35 of the
+    /// [`MovieImpl::pHeap`](crate::ui::scaleform::MovieImpl::pHeap)); the tree is freed by releasing the root node. Slot 35 of the
     /// `ASMovieRootBase` vtable; the implementation is at `0x141_BED_530`. Call on the capture
     /// (game update) thread, where the display tree is stable.
     pub GetDisplayObjectsTree: unsafe extern "system" fn(
@@ -1030,16 +1030,16 @@ impl std::convert::AsMut<MovieVftable> for MovieVftable {
     }
 }
 #[repr(C, align(8))]
-/// A Scaleform AS3 object (the managed payload behind a display-object [`Value::mValue`]): its type
-/// [`m_Traits`](Object::m_Traits) classify it, and for a display object its
-/// [`m_DisplayObject`](Object::m_DisplayObject) is the presentation-side [`DisplayObjectBase`].
+/// A Scaleform AS3 object (the managed payload behind a display-object [`Value::mValue`](crate::ui::scaleform::Value::mValue)): its type
+/// [`m_Traits`](crate::ui::scaleform::Object::m_Traits) classify it, and for a display object its
+/// [`m_DisplayObject`](crate::ui::scaleform::Object::m_DisplayObject) is the presentation-side [`DisplayObjectBase`](crate::ui::scaleform::DisplayObjectBase).
 pub struct Object {
     _field_0: [u8; 40],
     /// The object's type traits (class metadata), used to check it really is a display object
-    /// before reaching [`m_DisplayObject`](Object::m_DisplayObject).
+    /// before reaching [`m_DisplayObject`](crate::ui::scaleform::Object::m_DisplayObject).
     pub m_Traits: *mut crate::ui::scaleform::Traits,
     _field_30: [u8; 88],
-    /// The presentation-side display object, valid once [`m_Traits`](Object::m_Traits) confirm a
+    /// The presentation-side display object, valid once [`m_Traits`](crate::ui::scaleform::Object::m_Traits) confirm a
     /// display-object kind.
     pub m_DisplayObject: *mut crate::ui::scaleform::DisplayObjectBase,
 }
@@ -1062,7 +1062,7 @@ impl std::convert::AsMut<Object> for Object {
 }
 #[repr(C, align(8))]
 /// A stack `Render::ContextImpl::RTHandle` over a copied
-/// [`DisplayHandle::pData`] (AddRef'd first, destructed after use).
+/// [`DisplayHandle::pData`](crate::ui::scaleform::DisplayHandle::pData) (AddRef'd first, destructed after use).
 pub struct RTHandle {
     /// The shared, refcounted handle data.
     pub pData: *mut crate::ui::scaleform::RefCountImpl,
@@ -1076,9 +1076,9 @@ fn _RTHandle_size_check() {
 impl RTHandle {
     pub const NextCapture_ADDRESS: usize = 0x1419A7970;
     /// Consumes the context's pending snapshot into the displaying one (at most once per HAL
-    /// frame: the context's [`NextCaptureCalledInFrame`](RenderContext::NextCaptureCalledInFrame)
+    /// frame: the context's [`NextCaptureCalledInFrame`](crate::ui::scaleform::RenderContext::NextCaptureCalledInFrame)
     /// latch short-circuits repeats). Returns whether the handle is valid to draw. `notify` is
-    /// the HAL's context notify ([`RenderHAL::GetContextNotify`]); `frame_id` is 0.
+    /// the HAL's context notify ([`RenderHAL::GetContextNotify`](crate::ui::scaleform::RenderHAL::GetContextNotify)); `frame_id` is 0.
     pub unsafe fn NextCapture(
         &mut self,
         notify: *mut ::std::ffi::c_void,
@@ -1127,7 +1127,7 @@ impl std::convert::AsMut<RTHandle> for RTHandle {
     }
 }
 #[repr(C, align(8))]
-/// Scaleform `RefCountImpl` -- the base class for reference-counted Scaleform objects. Provides
+/// Scaleform [`RefCountImpl`](crate::ui::scaleform::RefCountImpl) -- the base class for reference-counted Scaleform objects. Provides
 /// a vtable pointer at +0 and an atomic refcount at +8. `AddRef`/`Release` are non-virtual;
 /// the vtable's slot 0 is the destructor, called when the refcount reaches zero.
 pub struct RefCountImpl {
@@ -1213,12 +1213,12 @@ impl std::convert::AsMut<RefCountImplVftable> for RefCountImplVftable {
 #[repr(C, align(8))]
 /// The Scaleform `Render::ContextImpl::Context`: the display-tree snapshot pipeline between the
 /// update thread and the renderer. `Capture` (update thread) merges the active snapshot's changes
-/// into the pending snapshot; `RTHandle::NextCapture` (render thread) consumes the pending
+/// into the pending snapshot; [`NextCapture`](crate::ui::scaleform::RTHandle::NextCapture) (render thread) consumes the pending
 /// snapshot into the displaying one, at most once per HAL frame. Only the fields the payload
 /// touches are modeled; the declared size covers just the modeled prefix.
 pub struct RenderContext {
     _field_0: [u8; 153],
-    /// The once-a-frame consumption latch: while set, `RTHandle::NextCapture` keeps the current
+    /// The once-a-frame consumption latch: while set, [`NextCapture`](crate::ui::scaleform::RTHandle::NextCapture) keeps the current
     /// displaying snapshot instead of consuming the pending one. Set by the first `NextCapture`
     /// of a HAL frame and cleared by `HAL::EndFrame` (`EndFrameContextNotify`), so within one
     /// `CUIManager::Render` call every draw sees the same snapshot.
@@ -1239,10 +1239,10 @@ fn _RenderContext_size_check() {
 }
 impl RenderContext {
     pub const CreateEntryTreeRoot_ADDRESS: usize = 0x141994560;
-    /// Creates a fresh [`TreeRoot`] entry in this context (`Context::CreateEntry<TreeRoot>`):
+    /// Creates a fresh [`TreeRoot`](crate::ui::scaleform::TreeRoot) entry in this context (`Context::CreateEntry<TreeRoot>`):
     /// allocates its `NodeData` from the context heap and registers the entry. The root starts
-    /// parentless with no viewport; give it one via [`TreeRoot::SetViewport`] and a stage matrix
-    /// via [`TreeNode::SetMatrix`] before drawing it. Call on the capture (game update) thread.
+    /// parentless with no viewport; give it one via [`TreeRoot::SetViewport`](crate::ui::scaleform::TreeRoot::SetViewport) and a stage matrix
+    /// via [`TreeNode::SetMatrix`](crate::ui::scaleform::TreeNode::SetMatrix) before drawing it. Call on the capture (game update) thread.
     pub unsafe fn CreateEntryTreeRoot(&mut self) -> *mut crate::ui::scaleform::TreeRoot {
         unsafe {
             let f: unsafe extern "system" fn(
@@ -1254,7 +1254,7 @@ impl RenderContext {
         }
     }
     pub const CreateEntryTreeContainer_ADDRESS: usize = 0x141990AF0;
-    /// Creates a fresh empty [`TreeContainer`] entry in this context
+    /// Creates a fresh empty [`TreeContainer`](crate::ui::scaleform::TreeContainer) entry in this context
     /// (`Context::CreateEntry<TreeContainer>`). Call on the capture (game update) thread.
     pub unsafe fn CreateEntryTreeContainer(
         &mut self,
@@ -1303,7 +1303,7 @@ impl RenderHAL {
         self.vftable as *const crate::ui::scaleform::RenderHALVftable
     }
     pub const CreateRenderTarget_ADDRESS: usize = 0x141DE1110;
-    /// Builds a [`RenderTarget`] from D3D color/depth views (`ID3D11RenderTargetView*` /
+    /// Builds a [`RenderTarget`](crate::ui::scaleform::RenderTarget) from D3D color/depth views (`ID3D11RenderTargetView*` /
     /// `ID3D11DepthStencilView*`); the concrete implementation behind vtable slot 111.
     /// `RenderOffScreenTextures` creates one per off-screen draw and releases it afterwards.
     /// Render thread only.
@@ -1324,7 +1324,7 @@ impl RenderHAL {
         }
     }
     pub const Draw_ADDRESS: usize = 0x1419B4850;
-    /// Draws a [`TreeRoot`]'s displaying-snapshot subtree into the bound target
+    /// Draws a [`TreeRoot`](crate::ui::scaleform::TreeRoot)'s displaying-snapshot subtree into the bound target
     /// (`Scaleform::Render::HAL::Draw`). Render thread only, within `BeginFrame`/`BeginScene`.
     pub unsafe fn Draw(&mut self, root: *mut crate::ui::scaleform::TreeRoot) {
         unsafe {
@@ -1337,7 +1337,7 @@ impl RenderHAL {
     }
     /// Binds `target` as the frame's display render target (slot 3). `CUIManager::Render`
     /// calls it with `m_RenderBuffer` before `BeginFrame`, paired with a trailing
-    /// [`PopRenderTarget`](RenderHAL::PopRenderTarget).
+    /// [`PopRenderTarget`](crate::ui::scaleform::RenderHAL::PopRenderTarget).
     pub unsafe fn SetRenderTarget(
         &mut self,
         target: *mut crate::ui::scaleform::RenderTarget,
@@ -1400,7 +1400,7 @@ impl RenderHAL {
         }
     }
     /// The HAL's `Render::ContextImpl::RenderNotify` (slot 19), passed to
-    /// [`RTHandle::NextCapture`].
+    /// [`RTHandle::NextCapture`](crate::ui::scaleform::RTHandle::NextCapture).
     pub unsafe fn GetContextNotify(&mut self) -> *mut ::std::ffi::c_void {
         unsafe {
             let f = (&raw const (*self.vftable()).GetContextNotify).read();
@@ -1425,7 +1425,7 @@ pub struct RenderHALVftable {
     _vfunc_2: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
     /// Binds `target` as the frame's display render target (slot 3). `CUIManager::Render`
     /// calls it with `m_RenderBuffer` before `BeginFrame`, paired with a trailing
-    /// [`PopRenderTarget`](RenderHAL::PopRenderTarget).
+    /// [`PopRenderTarget`](crate::ui::scaleform::RenderHAL::PopRenderTarget).
     pub SetRenderTarget: unsafe extern "system" fn(
         this: *mut crate::ui::scaleform::RenderHAL,
         target: *mut crate::ui::scaleform::RenderTarget,
@@ -1469,7 +1469,7 @@ pub struct RenderHALVftable {
     _vfunc_17: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
     _vfunc_18: unsafe extern "system" fn(this: *mut crate::ui::scaleform::RenderHAL),
     /// The HAL's `Render::ContextImpl::RenderNotify` (slot 19), passed to
-    /// [`RTHandle::NextCapture`].
+    /// [`RTHandle::NextCapture`](crate::ui::scaleform::RTHandle::NextCapture).
     pub GetContextNotify: unsafe extern "system" fn(
         this: *mut crate::ui::scaleform::RenderHAL,
     ) -> *mut ::std::ffi::c_void,
@@ -1494,7 +1494,7 @@ impl std::convert::AsMut<RenderHALVftable> for RenderHALVftable {
 #[repr(C, align(8))]
 /// A Scaleform `Render::RenderTarget`: the target wrapper `SetRenderTarget`/`PushRenderTarget`
 /// take. `RenderOffScreenTextures` creates one per draw from D3D views
-/// ([`RenderHAL::CreateRenderTarget`]) and releases it after the pop.
+/// ([`RenderHAL::CreateRenderTarget`](crate::ui::scaleform::RenderHAL::CreateRenderTarget)) and releases it after the pop.
 pub struct RenderTarget {
     vftable: *const crate::ui::scaleform::RenderTargetVftable,
     _field_8: [u8; 16],
@@ -1619,16 +1619,16 @@ impl std::convert::AsMut<StringDataDesc> for StringDataDesc {
     }
 }
 #[repr(C, align(8))]
-/// A Scaleform AS3 object's type traits: the class metadata identifying an [`Object`]'s kind. The
+/// A Scaleform AS3 object's type traits: the class metadata identifying an [`Object`](crate::ui::scaleform::Object)'s kind. The
 /// display-object type-id range and flag values are hard-coded magic in the engine too (the same
 /// constants appear inline in `Value::ObjectInterface::GetDisplayInfo`); their deeper AS3-builtin-type
 /// meaning is not recoverable from the stripped Scaleform code, so they are named here by role.
 pub struct Traits {
     _field_0: [u8; 112],
-    /// Trait flags; see [`FLAG_NON_DISPLAY_OBJECT`](Traits::FLAG_NON_DISPLAY_OBJECT).
+    /// Trait flags; see [`FLAG_NON_DISPLAY_OBJECT`](crate::ui::scaleform::Traits::FLAG_NON_DISPLAY_OBJECT).
     pub m_Flags: u8,
     _field_71: [u8; 7],
-    /// The traits' AS3 builtin-class type id; see [`is_display_object`](Traits::is_display_object).
+    /// The traits' AS3 builtin-class type id; see [`is_display_object`](crate::ui::scaleform::Traits::is_display_object).
     pub m_TypeId: u32,
     _field_7c: [u8; 4],
 }
@@ -1643,9 +1643,9 @@ impl Traits {
     /// The number of type ids in the display-object range (so display objects are
     /// `FIRST..FIRST + COUNT`).
     pub const DISPLAY_OBJECT_TYPE_ID_COUNT: u32 = 12;
-    /// The first [`m_TypeId`](Traits::m_TypeId) of the display-object AS3 builtin-class range.
+    /// The first [`m_TypeId`](crate::ui::scaleform::Traits::m_TypeId) of the display-object AS3 builtin-class range.
     pub const DISPLAY_OBJECT_TYPE_ID_FIRST: u32 = 24;
-    /// A [`m_Flags`](Traits::m_Flags) bit marking a kind excluded from the display-object check.
+    /// A [`m_Flags`](crate::ui::scaleform::Traits::m_Flags) bit marking a kind excluded from the display-object check.
     pub const FLAG_NON_DISPLAY_OBJECT: u8 = 32;
 }
 impl std::convert::AsRef<Traits> for Traits {
@@ -1659,7 +1659,7 @@ impl std::convert::AsMut<Traits> for Traits {
     }
 }
 #[repr(C, align(1))]
-/// A render-tree container node (`Render::TreeContainer`): a [`TreeNode`] whose `NodeData` holds
+/// A render-tree container node (`Render::TreeContainer`): a [`TreeNode`](crate::ui::scaleform::TreeNode) whose `NodeData` holds
 /// a child `TreeNodeArray`. The display side mirrors every `DisplayObjContainer` into one, and
 /// addresses children by *cached numeric index* (`GFx::DisplayList`'s `TreeIndex`) -- so removing
 /// a child behind the display list's back shifts its siblings' cached indices; swap in a
@@ -1676,7 +1676,7 @@ fn _TreeContainer_size_check() {
 impl TreeContainer {
     pub const Insert_ADDRESS: usize = 0x1419E6720;
     /// Inserts `node` at `index` (entry-change bit 0x100): refcounts the node, sets its
-    /// [`pParent`](TreeNode::pParent), and propagates. Capture (game update) thread only.
+    /// [`pParent`](crate::ui::scaleform::TreeNode::pParent), and propagates. Capture (game update) thread only.
     pub unsafe fn Insert(
         &mut self,
         index: u64,
@@ -1693,7 +1693,7 @@ impl TreeContainer {
     }
     pub const Remove_ADDRESS: usize = 0x1419E6790;
     /// Removes `count` children starting at `index` (entry-change bit 0x200): nulls each child's
-    /// [`pParent`](TreeNode::pParent) and drops its refcount (destroying it at zero). Capture
+    /// [`pParent`](crate::ui::scaleform::TreeNode::pParent) and drops its refcount (destroying it at zero). Capture
     /// (game update) thread only.
     pub unsafe fn Remove(&mut self, index: u64, count: u64) {
         unsafe {
@@ -1740,19 +1740,19 @@ impl std::convert::AsMut<TreeContainer> for TreeContainer {
 #[repr(C, align(8))]
 /// A Scaleform render-tree node: a `Render::ContextImpl::Entry` (a 56-byte slot in a
 /// 0x1000-aligned entry page) whose per-snapshot `NodeData` carries the transform, visibility,
-/// and bounds. [`TreeContainer`] and [`TreeRoot`] share this header; a pointer to either casts to
+/// and bounds. [`TreeContainer`](crate::ui::scaleform::TreeContainer) and [`TreeRoot`](crate::ui::scaleform::TreeRoot) share this header; a pointer to either casts to
 /// this freely.
 pub struct TreeNode {
     _field_0: [u8; 8],
-    /// The entry's reference count. [`TreeContainer::Insert`] increments it and
-    /// [`TreeContainer::Remove`] decrements it (destroying the entry at zero), so moving a node
+    /// The entry's reference count. [`TreeContainer::Insert`](crate::ui::scaleform::TreeContainer::Insert) increments it and
+    /// [`TreeContainer::Remove`](crate::ui::scaleform::TreeContainer::Remove) decrements it (destroying the entry at zero), so moving a node
     /// between containers must hold an extra count across the remove.
     pub RefCount: u64,
     /// The displaying-snapshot `EntryData` the renderer reads (low bit carries a flag).
     pub pNative: *mut ::std::ffi::c_void,
     /// The renderer's `TreeCacheNode` for this entry, once drawn.
     pub pRenderer: *mut ::std::ffi::c_void,
-    /// The parent container entry, or null while detached. [`TreeContainer::Remove`] nulls it;
+    /// The parent container entry, or null while detached. [`TreeContainer::Remove`](crate::ui::scaleform::TreeContainer::Remove) nulls it;
     /// a null parent on a node the display side owned means the display list dropped it.
     pub pParent: *mut crate::ui::scaleform::TreeNode,
     _field_28: [u8; 16],
@@ -1778,7 +1778,7 @@ impl TreeNode {
     pub const DestroyHelper_ADDRESS: usize = 0x1419A6110;
     /// Destroys the entry (`Entry::destroyHelper`): queues its `NodeData` on the context's
     /// destroyed-nodes list (freed at the next capture) and frees the slot. Call only when
-    /// [`RefCount`](TreeNode::RefCount) reached zero, on the capture (game update) thread.
+    /// [`RefCount`](crate::ui::scaleform::TreeNode::RefCount) reached zero, on the capture (game update) thread.
     pub unsafe fn DestroyHelper(&mut self) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self) = ::std::mem::transmute(
@@ -1799,7 +1799,7 @@ impl std::convert::AsMut<TreeNode> for TreeNode {
     }
 }
 #[repr(C, align(1))]
-/// A render-tree root (`Render::TreeRoot`): a [`TreeContainer`] whose `NodeData` adds the
+/// A render-tree root (`Render::TreeRoot`): a [`TreeContainer`](crate::ui::scaleform::TreeContainer) whose `NodeData` adds the
 /// viewport and background color. `HAL::Draw` takes one; the engine draws several per frame
 /// through the same HAL (the UI movie, the off-screen movies, the debug text).
 pub struct TreeRoot {
@@ -1814,7 +1814,7 @@ fn _TreeRoot_size_check() {
 impl TreeRoot {
     pub const SetViewport_ADDRESS: usize = 0x1419E6860;
     /// Writes the root's viewport (entry-change bit 0x1000, self-comparing). `viewport` is a
-    /// [`Viewport`] (e.g. [`MovieImpl::Viewport`]); the 0x2C `Render::Viewport` prefix is
+    /// [`Viewport`](crate::ui::scaleform::Viewport) (e.g. [`MovieImpl::Viewport`](crate::ui::scaleform::MovieImpl::Viewport)); the 0x2C `Render::Viewport` prefix is
     /// copied. Capture (game update) thread only.
     pub unsafe fn SetViewport(
         &mut self,
@@ -1843,7 +1843,7 @@ impl std::convert::AsMut<TreeRoot> for TreeRoot {
 /// A Scaleform `GFx::Value`: the tagged union the AS3 interface traffics in. Starts with a
 /// `ListNode<Value>` (managed values are tracked on the movie's `ExternalObjRefs` list); a
 /// stack-constructed unmanaged value leaves the list pointers and
-/// [`pObjectInterface`](Value::pObjectInterface) null.
+/// [`pObjectInterface`](crate::ui::scaleform::Value::pObjectInterface) null.
 pub struct Value {
     /// `ListNode<Value>::pPrev`; null for unmanaged values.
     pub pPrev: *mut crate::ui::scaleform::Value,
@@ -1855,7 +1855,7 @@ pub struct Value {
     pub Type: u32,
     _field_1c: [u8; 4],
     /// The value union: `bool` / `i32` / `u32` / `f64` / `*const c_char` / object pointer,
-    /// selected by [`Type`](Value::Type).
+    /// selected by [`Type`](crate::ui::scaleform::Value::Type).
     pub mValue: u64,
     /// Auxiliary data (e.g. the closure's user pointer).
     pub DataAux: u64,
@@ -1871,7 +1871,7 @@ impl Value {
     /// The managed bit: set on values owned by the movie (which must be released through the
     /// object interface, never constructed by hand).
     pub const VTC_MANAGED_BIT: u32 = 64;
-    /// The type tag for a boolean value ([`mValue`](Value::mValue) carries the `bool` in its
+    /// The type tag for a boolean value ([`mValue`](crate::ui::scaleform::Value::mValue) carries the `bool` in its
     /// first byte).
     pub const VT_BOOLEAN: u32 = 2;
     /// The type tag for a display-object value (managed; owned by the movie).
@@ -1882,7 +1882,7 @@ impl Value {
     pub const VT_NUMBER: u32 = 5;
     /// The type tag for a string value (`mValue` is a `*const c_char`).
     pub const VT_STRING: u32 = 6;
-    /// The mask isolating the base `VT_*` value-type tag in [`Type`](Value::Type) from the `VTC_*`
+    /// The mask isolating the base `VT_*` value-type tag in [`Type`](crate::ui::scaleform::Value::Type) from the `VTC_*`
     /// control bits (the game compares `Type & VT_TYPE_MASK` against the `VT_*` tags).
     pub const VT_TYPE_MASK: u32 = 143;
 }
@@ -1898,8 +1898,8 @@ impl std::convert::AsMut<Value> for Value {
 }
 #[repr(C, align(1))]
 /// The `GFx::Value::ObjectInterface`: the dispatcher for operations on managed values (display
-/// objects, arrays). One per movie ([`MovieImpl::pObjectInterface`]); a managed [`Value`] carries
-/// its owning interface in [`Value::pObjectInterface`].
+/// objects, arrays). One per movie ([`MovieImpl::pObjectInterface`](crate::ui::scaleform::MovieImpl::pObjectInterface)); a managed [`Value`](crate::ui::scaleform::Value) carries
+/// its owning interface in [`Value::pObjectInterface`](crate::ui::scaleform::Value::pObjectInterface).
 pub struct ValueObjectInterface {
     _field_0: [u8; 8],
 }
@@ -1911,8 +1911,8 @@ fn _ValueObjectInterface_size_check() {
 }
 impl ValueObjectInterface {
     pub const GetDisplayInfo_ADDRESS: usize = 0x141BB8690;
-    /// Reads a display object's `DisplayInfo` (position, scale, alpha, visibility). `data` is the
-    /// value's [`mValue`](Value::mValue) payload. Returns false when the value is not a display
+    /// Reads a display object's [`DisplayInfo`](crate::ui::scaleform::DisplayInfo) (position, scale, alpha, visibility). `data` is the
+    /// value's [`mValue`](crate::ui::scaleform::Value::mValue) payload. Returns false when the value is not a display
     /// object.
     pub unsafe fn GetDisplayInfo(
         &mut self,
@@ -1929,7 +1929,7 @@ impl ValueObjectInterface {
         }
     }
     pub const SetDisplayInfo_ADDRESS: usize = 0x141BAEF00;
-    /// Writes the `DisplayInfo` fields selected by [`DisplayInfo::VarsSet`] directly at the
+    /// Writes the `DisplayInfo` fields selected by [`DisplayInfo::VarsSet`](crate::ui::scaleform::DisplayInfo::VarsSet) directly at the
     /// display-object level -- no AVM path resolution and no AS3 property setters, which is what
     /// makes it suitable for high-frequency writes (the game's own `CHUDUI::UpdatePOIs` drives
     /// POI positions and visibility through it every frame).
@@ -1950,7 +1950,7 @@ impl ValueObjectInterface {
     pub const ObjectRelease_ADDRESS: usize = 0x141BC8D70;
     /// Releases a managed value: unlinks it from the movie's external-references list and drops
     /// the AS3 object reference. Call on the capture thread. `data` is the value's
-    /// [`mValue`](Value::mValue) payload.
+    /// [`mValue`](crate::ui::scaleform::Value::mValue) payload.
     pub unsafe fn ObjectRelease(
         &mut self,
         value: *mut crate::ui::scaleform::Value,
@@ -1979,12 +1979,12 @@ impl std::convert::AsMut<ValueObjectInterface> for ValueObjectInterface {
 #[derive(Copy, Clone, Default)]
 #[repr(C, align(4))]
 /// A Scaleform `GFx::Viewport` (a `Render::Viewport` plus `Scale` and `AspectRatio`): the
-/// description [`MovieImpl::SetViewportImpl`] copies into [`MovieImpl::Viewport`]. `BufferWidth`
+/// description [`MovieImpl::SetViewportImpl`](crate::ui::scaleform::MovieImpl::SetViewportImpl) copies into [`MovieImpl::Viewport`](crate::ui::scaleform::MovieImpl::Viewport). `BufferWidth`
 /// and `BufferHeight` describe the whole output surface; `Left`/`Top`/`Width`/`Height` are the
 /// view rectangle the movie occupies within it. `CUIManager::SetMovieViewport` builds one as
 /// `{BufferWidth: vw, BufferHeight: vh, Left: (vw - movie_w) / 2, Top: (vh - movie_h) / 2,
 /// Width: movie_w, Height: movie_h, Scissor*: 0, Flags: 0, Scale: 1.0, AspectRatio: 1.0}`, where
-/// `movie_w`/`movie_h` are `UIManager::m_MovieScaleWidth`/`Height` at call time (not the
+/// `movie_w`/`movie_h` are [`m_MovieScaleWidth`](crate::ui::ui_manager::UIManager::m_MovieScaleWidth)/`Height` at call time (not the
 /// arguments).
 pub struct Viewport {
     pub BufferWidth: i32,
@@ -2001,7 +2001,7 @@ pub struct Viewport {
     pub Flags: u32,
     /// The view scale used by the `SM_NO_SCALE` mode; every engine caller passes 1.0.
     pub Scale: f32,
-    /// The pixel aspect used as an extra horizontal factor by [`MovieImpl::UpdateViewport`];
+    /// The pixel aspect used as an extra horizontal factor by [`MovieImpl::UpdateViewport`](crate::ui::scaleform::MovieImpl::UpdateViewport);
     /// every engine caller passes 1.0.
     pub AspectRatio: f32,
 }
@@ -2059,7 +2059,7 @@ impl Value {
 }
 #[allow(dead_code)]
 impl Value {
-    /// An unmanaged boolean value, safe to pass to `Movie::SetVariable` (the movie copies it;
+    /// An unmanaged boolean value, safe to pass to [`SetVariable`](Movie::SetVariable) (the movie copies it;
     /// nothing needs releasing).
     pub fn new_boolean(value: bool) -> Self {
         let mut v: Self = unsafe { ::core::mem::zeroed() };
