@@ -56,7 +56,12 @@ impl std::convert::AsMut<GISolver> for GISolver {
 /// The scene light manager, owning the global-illumination pass. The singleton address holds a pointer
 /// to the manager, which is null until the light system initializes.
 pub struct LightManager {
-    _field_0: [u8; 1829128],
+    _field_0: [u8; 12],
+    /// The diffuse colour of the embedded global light (the sun, or the moon at night) -- the head
+    /// of `m_GlobalLight.m_Light.Diffuse`. The atmospheric-scattering sky-lighting compute and the
+    /// deferred sun term both read it.
+    pub m_GlobalLightDiffuse: crate::types::math::Vector3,
+    _field_18: [u8; 1829104],
     /// The global-illumination render pass.
     pub m_GIPass: *mut crate::graphics_engine::gi::GIPass,
 }

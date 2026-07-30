@@ -164,11 +164,30 @@ impl std::convert::AsMut<RBIInfo> for RBIInfo {
     }
 }
 #[repr(C, align(8))]
-/// The atmospheric-scattering / aerial-perspective render block. Its `Draw` reconstructs world
-/// position from depth via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) -- for the whole
-/// screen, sky included -- and then ray-marches the sun shadow cascade and aerial perspective over
-/// the reconstructed positions.
-pub struct RenderBlockAtmosphericScattering {}
+pub struct RenderBlockAtmosphericScattering {
+    _field_0: [u8; 88],
+    /// The direction toward the dominant celestial light (the sun, or the moon at night), fed to
+    /// both the sky-lighting SH compute and the aerial-perspective fragment constants.
+    pub m_TowardsVector: crate::types::math::Vector3,
+    _field_64: [u8; 4],
+    /// The HDR intensity multiplier applied to the scattering output.
+    pub m_HdrMultiplier: f32,
+    /// The luminance floor applied at night.
+    pub m_MinNightLuminance: f32,
+    /// The cloud coverage factor fed to the sky-lighting SH compute.
+    pub m_CloudCoverage: f32,
+    /// The cloud ambient colour fed to the sky-lighting SH compute.
+    pub m_CloudAmbientColor: crate::types::math::Vector3,
+}
+fn _RenderBlockAtmosphericScattering_size_check() {
+    unsafe {
+        ::std::mem::transmute::<
+            [u8; 0x80],
+            RenderBlockAtmosphericScattering,
+        >([0u8; 0x80]);
+    }
+    unreachable!()
+}
 impl RenderBlockAtmosphericScattering {
     pub const Draw_ADDRESS: usize = 0x14036A820;
     /// Draws the atmospheric-scattering pass. `rc` is the per-view render context; `info` the
@@ -566,6 +585,60 @@ impl std::convert::AsRef<RenderBlockFoliage> for RenderBlockFoliage {
 }
 impl std::convert::AsMut<RenderBlockFoliage> for RenderBlockFoliage {
     fn as_mut(&mut self) -> &mut RenderBlockFoliage {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The atmospheric-scattering / aerial-perspective render block. Its `Draw` reconstructs world
+/// position from depth via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) -- for the whole
+/// screen, sky included -- and then ray-marches the sun shadow cascade and aerial perspective over
+/// the reconstructed positions.
+/// The low-resolution particle compose block: blends the low-resolution particle buffer
+/// ([`m_SceneTexture`](crate::graphics_engine::render_block::RenderBlockLRParticleCompose::m_SceneTexture)) over the full-resolution scene with a premultiplied
+/// (`ONE`, `INV_SRC_ALPHA`) fullscreen draw, using the paired depth textures for the bilateral
+/// edge test. Drawn from the `RP_POSTEFFECTS` pass list ahead of the post-effects chain.
+pub struct RenderBlockLRParticleCompose {
+    _field_0: [u8; 24],
+    /// The low-resolution buffer composited over the scene (fragment slot 0). Despite the name, it
+    /// holds the low-resolution particle rendering, not the scene.
+    pub m_SceneTexture: *mut crate::graphics_engine::texture::Texture,
+    /// The low-resolution depth texture (fragment slot 2).
+    pub m_LowResDepthTexture: *mut crate::graphics_engine::texture::Texture,
+    /// The full-resolution depth texture (fragment slot 1).
+    pub m_HighResDepthTexture: *mut crate::graphics_engine::texture::Texture,
+}
+fn _RenderBlockLRParticleCompose_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x30], RenderBlockLRParticleCompose>([0u8; 0x30]);
+    }
+    unreachable!()
+}
+impl RenderBlockLRParticleCompose {
+    pub const Draw_ADDRESS: usize = 0x140112750;
+    /// Draws the compose: binds the low-resolution colour and the two depths, enables
+    /// premultiplied blending, and issues the fullscreen geometry.
+    pub unsafe fn Draw(
+        &mut self,
+        rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+        info: *const crate::graphics_engine::render_block::RBIInfo,
+    ) {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *mut Self,
+                rc: *mut crate::graphics_engine::graphics_engine::RenderContext,
+                info: *const crate::graphics_engine::render_block::RBIInfo,
+            ) = ::std::mem::transmute(Self::Draw_ADDRESS);
+            f(self as *mut Self as _, rc, info)
+        }
+    }
+}
+impl std::convert::AsRef<RenderBlockLRParticleCompose> for RenderBlockLRParticleCompose {
+    fn as_ref(&self) -> &RenderBlockLRParticleCompose {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockLRParticleCompose> for RenderBlockLRParticleCompose {
+    fn as_mut(&mut self) -> &mut RenderBlockLRParticleCompose {
         self
     }
 }
@@ -1189,6 +1262,51 @@ impl std::convert::AsRef<RenderBlockTypeAddFogVolume> for RenderBlockTypeAddFogV
 }
 impl std::convert::AsMut<RenderBlockTypeAddFogVolume> for RenderBlockTypeAddFogVolume {
     fn as_mut(&mut self) -> &mut RenderBlockTypeAddFogVolume {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The atmospheric-scattering render block type object: the scattering LUT textures and the
+/// sky-lighting SH coefficient targets the block's compute pass writes each frame (in
+/// `PRE_RP_SKY_LIGHTING`) and every downstream material shader samples as the sky-light term
+/// (fragment slots `0x16`--`0x18`).
+pub struct RenderBlockTypeAtmosphericScattering {
+    _field_0: [u8; 384],
+    /// The atmospheric transmittance LUT (compute slot 0).
+    pub m_TransmittanceTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_188: [u8; 32],
+    /// The atmospheric irradiance LUT (compute slot 1).
+    pub m_IrradianceTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_1b0: [u8; 32],
+    /// The atmospheric in-scattering LUT (compute slot 2).
+    pub m_InscatteringTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_1d8: [u8; 136],
+    /// The sky-lighting SH red-coefficient texture (fragment slot `0x16`).
+    pub m_SHLightingRedCoeffs: *mut crate::graphics_engine::texture::Texture,
+    /// The sky-lighting SH green-coefficient texture (fragment slot `0x17`).
+    pub m_SHLightingGreenCoeffs: *mut crate::graphics_engine::texture::Texture,
+    /// The sky-lighting SH blue-coefficient texture (fragment slot `0x18`).
+    pub m_SHLightingBlueCoeffs: *mut crate::graphics_engine::texture::Texture,
+}
+fn _RenderBlockTypeAtmosphericScattering_size_check() {
+    unsafe {
+        ::std::mem::transmute::<
+            [u8; 0x278],
+            RenderBlockTypeAtmosphericScattering,
+        >([0u8; 0x278]);
+    }
+    unreachable!()
+}
+impl RenderBlockTypeAtmosphericScattering {}
+impl std::convert::AsRef<RenderBlockTypeAtmosphericScattering>
+for RenderBlockTypeAtmosphericScattering {
+    fn as_ref(&self) -> &RenderBlockTypeAtmosphericScattering {
+        self
+    }
+}
+impl std::convert::AsMut<RenderBlockTypeAtmosphericScattering>
+for RenderBlockTypeAtmosphericScattering {
+    fn as_mut(&mut self) -> &mut RenderBlockTypeAtmosphericScattering {
         self
     }
 }
@@ -1994,6 +2112,13 @@ impl std::convert::AsRef<WaterHighEndRenderBlockType> for WaterHighEndRenderBloc
 impl std::convert::AsMut<WaterHighEndRenderBlockType> for WaterHighEndRenderBlockType {
     fn as_mut(&mut self) -> &mut WaterHighEndRenderBlockType {
         self
+    }
+}
+/// The pointer holding the atmospheric-scattering block type singleton.
+pub unsafe fn get_g_RenderBlockTypeAtmosphericScattering() -> &'static mut *mut crate::graphics_engine::render_block::RenderBlockTypeAtmosphericScattering {
+    unsafe {
+        &mut *(0x142EF52F0
+            as *mut *mut crate::graphics_engine::render_block::RenderBlockTypeAtmosphericScattering)
     }
 }
 pub const DrawWaterBoxSurface_ADDRESS: usize = 0x140368C70;

@@ -269,14 +269,15 @@ fn dof_apply(
         return input;
     }
     let slot = if dof_no_reproject {
-        // DoF's motion-vector reprojection (the flicker) is gated by bit 0 of the render context's
-        // flags, inside its full composite/grade branch. Clear just that bit for the call so DoF
-        // still grades the scene but skips the reprojection, then restore.
+        // Bit 0 of the render context's flags is the engine's underwater bit
+        // (`m_CameraUnderwater`), which selects the DoF composite's underwater shader family --
+        // the variant that carries the reprojection-style distortion this toggle was validated to
+        // suppress. Clear just that bit for the call so DoF composites through the plain family,
+        // then restore.
         let rc = unsafe { pec.as_mut().and_then(|p| p.m_RenderContext.as_mut()) };
         if let Some(rc) = rc {
             let saved = rc.m_Flags;
-            rc.m_Flags
-                .remove(PostEffectRenderFlags::m_MotionVectorReprojection);
+            rc.m_Flags.remove(PostEffectRenderFlags::m_CameraUnderwater);
             let result = DOF_APPLY.get().unwrap().call(this, ctx, pec, mgr, input);
             rc.m_Flags = saved;
             result

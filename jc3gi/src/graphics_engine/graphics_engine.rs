@@ -821,7 +821,11 @@ pub struct RenderContext {
     /// `CLightManager::GetActiveRenderSpotLightCount`. The clustered deferred-lighting pass uses it
     /// as the instance count of its cone-proxy draw.
     pub m_ActiveSpotLightCount: i32,
-    _field_3fc: [u8; 60],
+    /// The direction toward the global light (the sun, or the moon at night) for this dispatch.
+    /// The atmospheric-scattering scene composite uploads it directly and derives its sky and fog
+    /// brightness factors from the elevation (`y`) component.
+    pub m_GlobalLightVector: crate::types::math::Vector3,
+    _field_408: [u8; 48],
     /// The id (`ERenderPass`, see `render_engine::RenderPassId`) of the pass currently drawing
     /// through this context, written by `SetupRenderContext` from the pass's index. `RP_NONE` (0)
     /// outside a pass body.

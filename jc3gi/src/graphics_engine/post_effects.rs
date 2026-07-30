@@ -393,7 +393,22 @@ impl std::convert::AsMut<PlayerDamageEffect> for PlayerDamageEffect {
 #[repr(C, align(8))]
 pub struct PostEffectContext {
     pub m_RenderContext: *mut crate::graphics_engine::post_effects::PostEffectRenderContext,
-    _field_8: [u8; 148],
+    _field_8: [u8; 48],
+    /// The smoothed bright point of the exposure-weighted histogram, published alongside
+    /// [`m_Exposure`](crate::graphics_engine::post_effects::PostEffectContext::m_Exposure) each post-effects block draw.
+    pub m_HistogramBrightPointAfterExposure: f32,
+    /// The applied auto-exposure multiplier. Published each post-effects block draw from the
+    /// tone-mapping effect's smoothed exposure, and uploaded by [`DepthOfFieldEffect::Apply`](crate::graphics_engine::post_effects::DepthOfFieldEffect::Apply) as
+    /// the composite's exposure fragment constant (c2.x).
+    pub m_Exposure: f32,
+    _field_40: [u8; 18],
+    /// When the post-effects manager is disabled, selects the tonemap-only composite shader instead
+    /// of the raw passthrough.
+    pub m_TonemapWhenDisabled: bool,
+    _field_53: [u8; 1],
+    /// Selects the tone-mapping operator family for the composite shaders.
+    pub m_ToneMappingTechnique: crate::graphics_engine::post_effects::ToneMappingTechnique,
+    _field_58: [u8; 68],
     /// The auto-exposure target numerator. [`ToneMappingEffect::Update`](crate::graphics_engine::tone_mapping::ToneMappingEffect::Update) sets the exposure target to
     /// this divided by the raw-brightness histogram mid-point.
     pub m_AutoExposureKey: f32,
@@ -417,13 +432,44 @@ impl std::convert::AsMut<PostEffectContext> for PostEffectContext {
 }
 #[repr(C, align(8))]
 pub struct PostEffectRenderContext {
-    _field_0: [u8; 900],
+    _field_0: [u8; 816],
+    /// The composite environment cube map (static env blended with the dynamic sky cube), the
+    /// ambient specular source the material shaders sample. Written per frame from the render
+    /// engine's composite cube.
+    pub m_EnvCubeTexture: *mut ::std::ffi::c_void,
+    _field_338: [u8; 76],
     pub m_Flags: crate::graphics_engine::post_effects::PostEffectRenderFlags,
     _field_385: [u8; 3],
+    /// The night-light reference level for the current time of day, interpolated from the
+    /// atmosphere's 24-entry per-hour table and copied in per frame from the light manager's
+    /// frame-info ring.
+    pub m_CurrentNightLightReference: f32,
+    _field_38c: [u8; 4],
+    /// The frame delta time in seconds.
+    pub m_Dt: f32,
+    /// The time of day in hours (0-24), copied per frame from the world time.
+    pub m_TimeOfDay: f32,
+    /// The emissive intensity scale for the current time of day.
+    pub m_TimeOfDayEmissiveScale: f32,
+    _field_39c: [u8; 4],
+    /// The clustered-lighting frame constant buffer, copied per frame from the light manager.
+    pub m_LightBuffer: *mut ::std::ffi::c_void,
+    /// The clustered light-grid lookup texture for this frame, copied from the light manager's
+    /// three-slot per-frame ring (indexed by the render context frame counter modulo three).
+    pub m_LightLookup: *mut ::std::ffi::c_void,
+    /// The clustered light index buffer for this frame, from the same three-slot ring as
+    /// [`m_LightLookup`](crate::graphics_engine::post_effects::PostEffectRenderContext::m_LightLookup).
+    pub m_LightIndexBuffer: *mut ::std::ffi::c_void,
+    /// The lighting tuning constant buffer.
+    pub m_LightTuningBuffer: *mut ::std::ffi::c_void,
+    /// The first of the paired terrain horizon maps (large-scale sky-visibility occlusion).
+    pub m_HorizonMap0: *mut ::std::ffi::c_void,
+    /// The second of the paired terrain horizon maps.
+    pub m_HorizonMap1: *mut ::std::ffi::c_void,
 }
 fn _PostEffectRenderContext_size_check() {
     unsafe {
-        ::std::mem::transmute::<[u8; 0x388], PostEffectRenderContext>([0u8; 0x388]);
+        ::std::mem::transmute::<[u8; 0x3D0], PostEffectRenderContext>([0u8; 0x3D0]);
     }
     unreachable!()
 }
@@ -440,9 +486,9 @@ impl std::convert::AsMut<PostEffectRenderContext> for PostEffectRenderContext {
 }
 crate::__bitflags! {
     #[doc =
-    " Per-frame render-context flags carried by a [`PostEffectRenderContext`](crate::graphics_engine::post_effects::PostEffectRenderContext)."]
-    pub struct PostEffectRenderFlags : u8 { const m_MotionVectorReprojection = 1usize as
-    _; }
+    " Per-frame render-context flags carried by a [`PostEffectRenderContext`](crate::graphics_engine::post_effects::PostEffectRenderContext) (the packed bools that"]
+    #[doc = " follow the aniso field in the render context)."] pub struct
+    PostEffectRenderFlags : u8 { const m_CameraUnderwater = 1usize as _; }
 }
 fn _PostEffectRenderFlags_size_check() {
     unsafe {
@@ -451,7 +497,20 @@ fn _PostEffectRenderFlags_size_check() {
     unreachable!()
 }
 #[repr(C, align(8))]
-pub struct PostEffectsManager {}
+pub struct PostEffectsManager {
+    _field_0: [u8; 526],
+    /// Master enable for the post-effects chain. When clear, [`DepthOfFieldEffect::Apply`](crate::graphics_engine::post_effects::DepthOfFieldEffect::Apply) swaps the
+    /// full composite (exposure, grading, depth of field) for the tonemap-only or passthrough
+    /// shader, and the manager skips the sun halo, fade, and global-pass enqueue.
+    pub m_Enabled: bool,
+    _field_20f: [u8; 1],
+}
+fn _PostEffectsManager_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x210], PostEffectsManager>([0u8; 0x210]);
+    }
+    unreachable!()
+}
 impl PostEffectsManager {
     pub const ApplyWorldFilters_ADDRESS: usize = 0x14014BFE0;
     /// Enqueues the world post-effect block, then steps the world fade accumulator
@@ -653,6 +712,21 @@ impl std::convert::AsMut<SunHaloEffect> for SunHaloEffect {
     fn as_mut(&mut self) -> &mut SunHaloEffect {
         self
     }
+}
+#[repr(i32)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
+/// The tone-mapping operator applied by the HDR-to-LDR composite in
+/// [`DepthOfFieldEffect::Apply`](crate::graphics_engine::post_effects::DepthOfFieldEffect::Apply).
+pub enum ToneMappingTechnique {
+    Reinhard = 0isize as _,
+    U2Filmic = 1isize as _,
+    Photographic = 2isize as _,
+}
+fn _ToneMappingTechnique_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x4], ToneMappingTechnique>([0u8; 0x4]);
+    }
+    unreachable!()
 }
 pub const GetViewProjInverse_ADDRESS: usize = 0x1400C77E0;
 /// Builds the depth-of-field chain's clip-to-world basis into `out`, which is also returned.
