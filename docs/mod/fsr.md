@@ -17,7 +17,7 @@ FSR's inputs all exist on the `GraphicsEngine` singleton and are valid at the st
 - **HDR color** — `m_MainColorBuffer` (`MainColorBuffer`, R11G11B10F). Holds the clean HDR scene at the start of the post chain; the mod already captures it there (`capture_main_color`).
 - **Depth** — `m_MainDepthTexture` (`MainDepthBuffer`, D32FS8, reverse-Z, near=1/far=0). FSR must be told the depth is inverted (and infinite-far) to match.
 - **Motion vectors** — `m_VelocityBufferTexture` (`motion_blur_velocity_buffer`, ABGR32), per-object screen-space velocity written in `RP_Z_AND_VELOCITY_PASS`. These are the hardest input to synthesize, and the engine already produces them.
-- **Exposure** — `CToneMappingEffect::m_CurrentExposure`, metered once per real frame. Only needed on the pre-tonemap (HDR) dispatch path; the post-tonemap path doesn't use it.
+- **Exposure** — `CToneMappingEffect::m_ExposureBrightPoint` (the applied exposure), metered once per real frame. Only needed on the pre-tonemap (HDR) dispatch path; the post-tonemap path doesn't use it.
 
 The one input the mod must build itself is a **per-eye previous-frame view-projection** for correct stereo motion vectors. The engine snapshots a single previous VP in the sim path (`Camera::UpdateRender`), not per dispatch, so each eye needs its own. This is the same per-eye-VP work already identified for the stereo render generally (rendering §5.7) — FSR inherits it, it is not new to FSR. **Now implemented** as the stereo MV correction in the decode pass (see *Motion vectors* below): the mod snapshots per-eye view-projections in the `SetupRenderCamera` hook and re-anchors each eye's vectors at its own previous pose, without touching engine state.
 

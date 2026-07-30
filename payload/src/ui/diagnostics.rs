@@ -415,7 +415,7 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
         );
     });
 
-    ui.collapsing("Exposure A/B (pin m_CurrentExposure)", |ui| {
+    ui.collapsing("Exposure A/B (pin the applied exposure)", |ui| {
         ui.checkbox(
             &mut cfg.exposure.force,
             "Force exposure (pin after the engine's Update)",

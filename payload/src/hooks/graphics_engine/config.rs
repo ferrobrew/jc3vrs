@@ -12,7 +12,7 @@ pub struct ExposureConfig {
     /// real frame and can read back a stale histogram once head motion makes consecutive frames
     /// diverge.
     pub gate_update: bool,
-    /// Pin `m_CurrentExposure` to `forced_value` instead of the engine's auto-exposure (A/B aid).
+    /// Pin the applied exposure (`m_ExposureBrightPoint`) to `forced_value` instead of the engine's auto-exposure (A/B aid).
     pub force: bool,
     /// The pinned exposure value, used when `force` is set.
     pub forced_value: f32,

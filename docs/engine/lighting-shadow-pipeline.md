@@ -190,7 +190,7 @@ Every per-frame global lighting/shadow value the material shaders consume, and w
 | Fog colour / ramps / fog light dir | `SetFog` | `CRenderEngine this[1334..1365]` → CB `this[1663..1982]` | stable (time-of-day) |
 | Dynamic light list | `CopyLightsToUpdate` | `m_FrameLightInfo[3]`, `m_LightLookup[3]` | **counter** (3-slot ring) |
 | TAA jitter phase (perturbs projection) | `ApplySubsampleJitter` | reads `m_FrameIndex` | **parity/ring** (rendering §5.7) |
-| Auto-exposure | `CToneMappingEffect::Update` | `m_CurrentExposure` | frame-counted (rendering §5.4) |
+| Auto-exposure | `CToneMappingEffect::Update` | `m_ExposureBrightPoint` | frame-counted (rendering §5.4) |
 
 **The shadow ping-pong surface, in one line:** the shadow slice base, the cascade block, the per-slice matrices, and the active-cascade count all switch on `m_FrameIndex & 1`; *which* cascades carry a fresh fit switches on the full `m_Counter`. Everything else in the lighting/fog/sun set is recomputed every frame from continuous inputs and is identical across a stereo frame's two dispatches. Any lighting/shadow flicker that is *not* explained by the exposure meter (rendering §5.4) or TAA jitter must come from one of the parity- or counter-indexed shadow rows above being read at a parity/counter that disagrees with the half that was written.
 

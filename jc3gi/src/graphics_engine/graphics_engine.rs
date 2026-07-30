@@ -807,7 +807,41 @@ pub struct RenderContext {
     /// The graphics context this dispatch draws through. The render blocks' draw paths and the
     /// scope markers ([`BeginScopeMarker`](crate::graphics_engine::graphics_engine::BeginScopeMarker) / [`EndScopeMarker`](crate::graphics_engine::graphics_engine::EndScopeMarker)) read it off the render context.
     pub m_Context: *mut crate::graphics_engine::graphics_engine::HContext_t,
-    _field_320: [u8; 200],
+    _field_320: [u8; 16],
+    /// The composite environment cube map (static env blended with the dynamic sky cube), the
+    /// ambient specular source the material shaders sample. Written per frame from the render
+    /// engine's composite cube.
+    pub m_EnvCubeTexture: *mut ::std::ffi::c_void,
+    _field_338: [u8; 76],
+    pub m_Flags: crate::graphics_engine::graphics_engine::RenderContextFlags,
+    _field_385: [u8; 3],
+    /// The night-light reference level for the current time of day, interpolated from the
+    /// atmosphere's 24-entry per-hour table and copied in per frame from the light manager's
+    /// frame-info ring.
+    pub m_CurrentNightLightReference: f32,
+    _field_38c: [u8; 4],
+    /// The frame delta time in seconds.
+    pub m_Dt: f32,
+    /// The time of day in hours (0-24), copied per frame from the world time.
+    pub m_TimeOfDay: f32,
+    /// The emissive intensity scale for the current time of day.
+    pub m_TimeOfDayEmissiveScale: f32,
+    _field_39c: [u8; 4],
+    /// The clustered-lighting frame constant buffer, copied per frame from the light manager.
+    pub m_LightBuffer: *mut ::std::ffi::c_void,
+    /// The clustered light-grid lookup texture for this frame, copied from the light manager's
+    /// three-slot per-frame ring (indexed by the render context frame counter modulo three).
+    pub m_LightLookup: *mut ::std::ffi::c_void,
+    /// The clustered light index buffer for this frame, from the same three-slot ring as
+    /// [`m_LightLookup`](crate::graphics_engine::graphics_engine::RenderContext::m_LightLookup).
+    pub m_LightIndexBuffer: *mut ::std::ffi::c_void,
+    /// The lighting tuning constant buffer.
+    pub m_LightTuningBuffer: *mut ::std::ffi::c_void,
+    /// The first of the paired terrain horizon maps (large-scale sky-visibility occlusion).
+    pub m_HorizonMap0: *mut ::std::ffi::c_void,
+    /// The second of the paired terrain horizon maps.
+    pub m_HorizonMap1: *mut ::std::ffi::c_void,
+    _field_3d0: [u8; 24],
     /// The number of point lights active for this render frame, copied by
     /// `CRenderPass::SetupRenderContext` from
     /// `CLightManager::GetActiveRenderPointLightCount`. The clustered deferred-lighting pass uses it
@@ -883,6 +917,18 @@ impl std::convert::AsMut<RenderContext> for RenderContext {
     fn as_mut(&mut self) -> &mut RenderContext {
         self
     }
+}
+crate::__bitflags! {
+    #[doc =
+    " Per-frame packed state bits carried by a [`RenderContext`](crate::graphics_engine::graphics_engine::RenderContext) (the packed bools that follow the"]
+    #[doc = " aniso field)."] pub struct RenderContextFlags : u8 { const
+    m_CameraUnderwater = 1usize as _; }
+}
+fn _RenderContextFlags_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x1], RenderContextFlags>([0u8; 0x1]);
+    }
+    unreachable!()
 }
 #[derive(Copy, Clone)]
 #[repr(C, align(4))]

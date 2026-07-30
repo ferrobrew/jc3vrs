@@ -27,8 +27,8 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&SMOOTHED_EXPOSURE_UPDATE_BINDER)
         .with_static_binder(&CALC_HISTOGRAM_MID_BRIGHT_BINDER)
         .with_static_binder(&TONEMAPPING_UPDATE_BINDER)
-        .with_static_binder(&GENERATE_HISTOGRAM_BINDER)
-        .with_static_binder(&DRAW_HISTOGRAM_WINDOW_BINDER)
+        .with_static_binder(&TONEMAPPING_APPLY_BINDER)
+        .with_static_binder(&GENERATE_FINAL_HISTOGRAM_BINDER)
 }
 
 // ToneMappingEffect::SmoothedExposure::Update -- N-frame exposure smoother (no dt term, so it
@@ -67,7 +67,7 @@ fn calc_histogram_mid_bright(
 }
 
 // ToneMappingEffect::Update -- the per-frame exposure step (CPostEffectsManager::UpdateRender -> here).
-// With the real 3-arg signature this is the canonical place to (a) pin m_CurrentExposure for the A/B,
+// With the real 3-arg signature this is the canonical place to (a) pin the applied exposure for the A/B,
 // and (b) read the exposure internals. The target divisor is m_Histogram2's mid-point -- what the
 // converged exposure tracks, NOT m_Histogram. Update also advances internal histogram ring indices
 // (notably the occlusion-query slot selector at this+0x57C); running it on both eyes steps those
@@ -91,7 +91,7 @@ fn tonemapping_update(
     let (force_exposure, forced_value) =
         Config::lock_query(|c| (c.exposure.force, c.exposure.forced_value));
     if force_exposure {
-        tme.m_CurrentExposure = forced_value;
+        tme.m_ExposureBrightPoint = forced_value;
     }
     if crate::debug::trace::tracing_active() {
         let target_num = unsafe { ctx.as_ref() }
@@ -101,7 +101,7 @@ fn tonemapping_update(
         let divisor = tme.m_Histogram2.m_HistogramMidPoint;
         let n = (tme.m_NumBuckets as usize).min(tme.m_Histogram.m_NumPixelsInBuckets.len());
         TraceState::record_eye(TraceEvent::ExposureInternals {
-            exposure: tme.m_CurrentExposure,
+            exposure: tme.m_ExposureBrightPoint,
             target_num,
             divisor,
             target: if divisor != 0.0 {
@@ -122,21 +122,22 @@ fn tonemapping_update(
     }
 }
 
-// ToneMappingEffect::GenerateHistogramForFinalScene -- auto-exposure histogram. Skipping stalls
-// adaptation, but preserve the out-param contract (this+764/765 = current slot indices) so callers
-// don't read garbage. A bisection aid for the stereo darkening.
-#[detour(
-    address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::GenerateHistogramForFinalScene_ADDRESS
-)]
-fn generate_histogram(
-    this: *mut c_void,
-    a2: *mut c_void,
-    a3: *mut c_void,
-    a4: *mut c_void,
-    a5: i32,
-    a6: *mut u32,
-    a7: *mut u32,
-) -> *mut u32 {
+// ToneMappingEffect::Apply -- the per-dispatch exposure publish (into the frame context's
+// m_Exposure, the value the HDR->LDR composite multiplies the scene by) plus the exposure-weighted
+// histogram meter. Skipping on eye 1 stalls the double metering, but the out-params must still be
+// served -- they are the context's exposure pair, so eye 1's composite reads eye 0's published
+// values either way.
+#[detour(address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::Apply_ADDRESS)]
+#[allow(clippy::too_many_arguments)]
+fn tonemapping_apply(
+    this: *mut ToneMappingEffect,
+    ctx: *mut c_void,
+    mgr: *mut c_void,
+    pec: *mut c_void,
+    dt: f32,
+    out_exposure: *mut f32,
+    out_bright_point: *mut f32,
+) -> *mut f32 {
     // Gate the histogram *population* on eye 1 when stereo, symmetric to the exposure-*adaptation*
     // gate (exposure.gate). Both eyes otherwise write the GPU luminance buckets, so the gated
     // per-frame exposure Update reads a histogram populated by both dispatches and settles too dark.
@@ -144,7 +145,7 @@ fn generate_histogram(
         Config::lock_query(|c| (c.post_fx.skip_histogram, c.exposure.gate));
     let eye1_gated = is_second_eye() && gate_exposure;
     let skip = skip_histogram || eye1_gated;
-    TraceState::record_eye(TraceEvent::GenerateHistogram { skip });
+    TraceState::record_eye(TraceEvent::ToneMappingApply { skip });
     // MainColor still holds this dispatch's clean lit scene here (the post chain has not recycled
     // it), so this seam is the `pre_post` brightness bracket and feeds the armed brightness-step
     // auto-capture.
@@ -161,33 +162,36 @@ fn generate_histogram(
     }
 
     if skip {
-        unsafe {
-            let base = this as *const u32;
-            if !a6.is_null() {
-                *a6 = *base.add(764);
-            }
-            if !a7.is_null() {
-                *a7 = *base.add(765);
+        // Serve the out-param contract without metering: publish the same exposure pair the
+        // original would.
+        if let Some(tme) = unsafe { this.as_ref() } {
+            unsafe {
+                if !out_exposure.is_null() {
+                    *out_exposure = tme.m_ExposureBrightPoint;
+                }
+                if !out_bright_point.is_null() {
+                    *out_bright_point = tme.m_HistogramBrightPointWithExposure;
+                }
             }
         }
-        return a7;
+        return out_bright_point;
     }
-    GENERATE_HISTOGRAM
+    TONEMAPPING_APPLY
         .get()
         .unwrap()
-        .call(this, a2, a3, a4, a5, a6, a7)
+        .call(this, ctx, mgr, pec, dt, out_exposure, out_bright_point)
 }
 
-// ToneMappingEffect::DrawHistogramWindow -- despite the name, this meters the *second*, un-exposure-
-// weighted histogram (m_Histogram2): the raw scene brightness that Update divides the auto-exposure
-// target by. Like GenerateHistogramForFinalScene it runs once per dispatch, but only that first meter
-// was gated -- so in stereo m_Histogram2 was metered on both eyes, its occlusion-query ring inflated
-// and corrupted, and the exposure divided by a too-large brightness => the frame went dark. Gate it to
-// eye 0 (under GATE_EXPOSURE), symmetric with generate_histogram, so it meters once per real frame.
+// ToneMappingEffect::GenerateHistogramForFinalScene -- meters the non-exposure-weighted final-scene
+// histogram (m_Histogram2): the raw scene brightness that Update divides the auto-exposure target
+// by. It runs once per dispatch, but only the exposure-weighted meter was gated at first -- so in
+// stereo m_Histogram2 was metered on both eyes, its occlusion-query ring inflated and corrupted,
+// and the exposure divided by a too-large brightness => the frame went dark. Gate it to eye 0
+// (under exposure.gate), symmetric with tonemapping_apply, so it meters once per real frame.
 #[detour(
-    address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::DrawHistogramWindow_ADDRESS
+    address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::GenerateHistogramForFinalScene_ADDRESS
 )]
-fn draw_histogram_window(
+fn generate_final_histogram(
     this: *mut c_void,
     ctx: *mut c_void,
     pec: *mut c_void,
@@ -195,11 +199,11 @@ fn draw_histogram_window(
     index: u32,
 ) {
     let eye1_gated = is_second_eye() && Config::lock_query(|c| c.exposure.gate);
-    TraceState::record_eye(TraceEvent::DrawHistogramWindow { skip: eye1_gated });
+    TraceState::record_eye(TraceEvent::GenerateFinalHistogram { skip: eye1_gated });
     if eye1_gated {
         return;
     }
-    DRAW_HISTOGRAM_WINDOW
+    GENERATE_FINAL_HISTOGRAM
         .get()
         .unwrap()
         .call(this, ctx, pec, mgr, index);

@@ -312,13 +312,13 @@ Ordered stages per dispatch:
 3. **Lighting / reflections / main** — `CRenderEngine::Draw` -> `DrawRenderPassRange(setup, 0x56, 0x96)`. In order: `RP_REFLECTIVE_WATER_PLANES`, `RP_AO_VOLUMES`, `RP_SSAO`, `RP_SCREEN_SPACE_REFLECTIONS`, `RP_GLOBAL_ILLUMINATION`, `RP_SCREEN_SPACE_SUBSURFACE_SKIN`, `RP_DEFERRED_LIGHTS` (these resolve lighting into MainColor), then opaque/`RP_LAST_OPAQUE`, environment (`RP_STARS`/`RP_SUN`/`RP_MOON`/`RP_SKYBOX`), water, transparency, ending just before `RP_POSTEFFECTS`. Reflection-proxy passes (`RP_REFLECTION_*`) and `RP_ENVREFLECTION` are also in this block.
 
 4. **Post-effects (world)** — `CPostEffectsManager::ApplyWorldFilters` enqueues the world post-effect block, then `CRenderEngine::DrawPosteffects` -> `DrawRenderPassRange(setup, 0x96, 0x97)` runs pass `0x96` (`RP_POSTEFFECTS`). The actual HDR chain executes inside `CRenderBlockPostEffects::Draw`, in order:
-   1. `CToneMappingEffect::GenerateHistogramForFinalScene` (exposure histogram)
+   1. `CToneMappingEffect::Apply` (publishes the applied exposure into the frame context; exposure-weighted histogram)
    2. `CSunHaloEffect::PreApply`
    3. blur: bokeh path (`CDownScale2x2PackFocus::Apply` -> `CBlurEffectBokeh::Apply`) if `CPostEffectsManager::IsBokehActive`, else `CBlurEffect::Apply`
    4. `CGlareEffect::Apply`
    5. `CDepthOfFieldEffect::Apply`
    6. `CMotionBlurEffect::Apply` (gated by motion-blur active / AA-mode==3 / heat-haze)
-   7. `CToneMappingEffect::DrawHistogramWindow` (**the HDR->LDR tonemap composite**)
+   7. `CToneMappingEffect::GenerateHistogramForFinalScene` (the raw final-scene histogram; **the HDR->LDR tonemap composite itself is `CDepthOfFieldEffect::Apply`**, step 4's DoF composite, which multiplies the scene by the published exposure as fragment constant c2.x)
    8. `CPlayerDamageEffect::Apply` (if damage flag set)
    9. `CAntiAliasingEffect::Apply`
    10. `CSunHaloEffect::Apply` + additive sun blend (`SetBlendFunc(5,5,6)`)
@@ -330,7 +330,7 @@ Ordered stages per dispatch:
 
 ### 3.1 The HDR->LDR composite
 
-Step 7 above — `CToneMappingEffect::DrawHistogramWindow` inside `CRenderBlockPostEffects::Draw` — is the pass that applies tonemapping/exposure to convert the R11G11B10F HDR MainColor into the LDR back-buffer-linear target. (The histogram for auto-exposure is generated in step 1 of the same block.)
+The HDR→LDR conversion — applying the published exposure and the tone-map operator to turn the R11G11B10F HDR MainColor into the LDR target — happens in `CDepthOfFieldEffect::Apply` (the DoF composite step of the same block; exposure rides in as fragment constant c2.x from `PostEffectContext::m_Exposure`). Step 1 publishes that exposure and meters the exposure-weighted histogram; step 7 meters the raw final scene.
 
 ### 3.2 Ping-pong slot scheme (why per-eye intermediate captures alias)
 
@@ -363,7 +363,7 @@ Frame assembly path:
 GBuffer fill (MainDepth + GBuffer0..3 + Velocity)
   -> lighting/SSR/GI/deferred lights resolve into MainColor (HDR, R11G11B10F)
   -> environment/water/transparency composited into MainColor
-  -> post chain (blur/glare/DoF/motionblur), tonemap HDR->LDR (DrawHistogramWindow),
+  -> post chain (blur/glare/DoF-composite tonemap HDR->LDR/motionblur),
      AA, damage, sun halo, fade  -> intermediate fullscreen temp textures (3-slot ring)
   -> global filters (screen fade, heat haze) -> RP_POSTEFFECTS_GLOBAL
   -> PostDraw + UI + debug
@@ -456,11 +456,11 @@ Parity advances only in the `GraphicsEngine::Draw` prologue, not per dispatch. T
 - `Clock::Update` ticks once in the prologue (per real frame) — keep it there; the slow-mo hazard is calling it twice, so it is gated to once per real frame.
 - Auto-exposure is **frame-counted, not dt-driven** — `m_Dt = 0` does **not** touch it. The stereo darkening (~0.74x) was a **second, un-gated histogram meter run on both eyes**, now **fixed** by gating it to one eye.
 
-  **How it works.** `CToneMappingEffect::Update` runs **once per real frame** (`CPostEffectsManager::UpdateRender`); it sets the auto-exposure target to `key / m_Histogram2.m_HistogramMidPoint` — key over the *raw* scene brightness — then adapts `m_CurrentExposure` toward it. There are **two** histograms, both metered via `PopulateHistogram` → per-bucket occlusion queries over a fixed 320x180 RT (a correct read totals 57,600 pixels):
-  - `m_Histogram` (`+0x8`): the **exposure-weighted** meter, run by `GenerateHistogramForFinalScene` per dispatch (fed `m_CurrentExposure` through the `"LuminanceToDepthWithExposure"` shader; that exposure-weighting is the feedback loop). The mod already gates it to eye 0.
-  - `m_Histogram2` (`+0x2A8`): the **un-weighted** raw-brightness meter — the target's divisor — run by `DrawHistogramWindow`. Despite the name, that function just calls `PopulateHistogram` with a fixed exposure of `1.0`; it also runs per dispatch.
+  **How it works.** `CToneMappingEffect::Update` runs **once per real frame** (`CPostEffectsManager::UpdateRender`); it sets the auto-exposure target to `key / m_Histogram2.m_HistogramMidPoint` — key over the *raw* scene brightness — then adapts `m_ExposureBrightPoint` (the applied exposure) toward it. There are **two** histograms, both metered via `PopulateHistogram` → per-bucket occlusion queries over a fixed 320x180 RT (a correct read totals 57,600 pixels):
+  - `m_Histogram` (`+0x8`): the **exposure-weighted** meter, run by `CToneMappingEffect::Apply` per dispatch (fed `m_ExposureBrightPoint` through the `"LuminanceToDepthWithExposure"` shader; that exposure-weighting is the feedback loop). The mod already gates it to eye 0.
+  - `m_Histogram2` (`+0x2A8`): the **un-weighted** raw-brightness meter — the target's divisor — run by `GenerateHistogramForFinalScene`. That function just calls `PopulateHistogram` with a fixed exposure of `1.0`; it also runs per dispatch.
 
-  **The bug + fix.** `GenerateHistogramForFinalScene` was gated to eye 0, but `DrawHistogramWindow` was **not** — so in stereo `m_Histogram2` got metered on *both* dispatches, its occlusion-query ring inflated and corrupted (total 57,600 → ~265,000, with irregular buckets), its mid-point read ~1.35x high, and the exposure divided by a too-large brightness → the frame darkened ~0.74x. The fix is the missing symmetry: gate `DrawHistogramWindow` on eye 1 too (`hooks::graphics_engine::tone_mapping::draw_histogram_window`, under `config.exposure.gate`), so `m_Histogram2` meters once per real frame. Confirmed by the per-frame `ExposureInternals` trace — with the gate, stereo `divisor`/`exposure` match non-stereo and `hist2`'s total returns to 57,600. (An earlier attempt to gate `GenerateHistogramForFinalScene` harder did nothing precisely because that meter feeds `m_Histogram`, not the divisor; the functions are all in `graphics_engine/tone_mapping.pyxis`.)
+  **The bug + fix.** The exposure-weighted meter (`Apply`) was gated to eye 0, but the raw meter (`GenerateHistogramForFinalScene`) was **not** — so in stereo `m_Histogram2` got metered on *both* dispatches, its occlusion-query ring inflated and corrupted (total 57,600 → ~265,000, with irregular buckets), its mid-point read ~1.35x high, and the exposure divided by a too-large brightness → the frame darkened ~0.74x. The fix is the missing symmetry: gate the raw meter on eye 1 too (`hooks::graphics_engine::tone_mapping::generate_final_histogram`, under `config.exposure.gate`), so `m_Histogram2` meters once per real frame. Confirmed by the per-frame `ExposureInternals` trace — with the gate, stereo `divisor`/`exposure` match non-stereo and `hist2`'s total returns to 57,600. (An earlier attempt to gate the exposure-weighted meter harder did nothing precisely because it feeds `m_Histogram`, not the divisor; the functions are all in `graphics_engine/tone_mapping.pyxis`.)
 
 ### 5.5 Screenshot countdown / profiler / end-draw callbacks
 

@@ -230,10 +230,10 @@ pub enum TraceEvent {
     /// `stereo.diagnose_pass_sweep` (the per-pass ladder).
     #[serde(rename = "MainColorMean")]
     MainColorMean { at: String, r: f32, g: f32, b: f32 },
-    #[serde(rename = "GenerateHistogram")]
-    GenerateHistogram { skip: bool },
-    #[serde(rename = "DrawHistogramWindow")]
-    DrawHistogramWindow { skip: bool },
+    #[serde(rename = "ToneMappingApply")]
+    ToneMappingApply { skip: bool },
+    #[serde(rename = "GenerateFinalHistogram")]
+    GenerateFinalHistogram { skip: bool },
     #[serde(rename = "ApplyWorldFilters")]
     ApplyWorldFilters { gated: bool },
     #[serde(rename = "ApplyGlobalFilters")]
