@@ -138,7 +138,7 @@ pub fn begin_render_frame(frame: &FrameContext, cfg: &VrConfig) {
     // eyes rather than on one of them. On canted panels the eyes' orientations differ, so anchoring
     // the center on one eye would bias the head (and everything keyed to it -- aim, the recenter
     // baseline) toward that eye and split the per-eye canting asymmetrically. Matches the runtime
-    // head-pose stand-in ([`crate::vr::mid_pose`]), which is likewise the slerp-mid.
+    // head-pose stand-in ([`crate::vr::recenter::mid_pose`]), which is likewise the slerp-mid.
     let center_orientation = pose_orientation(eye0.pose).slerp(pose_orientation(eye1.pose), 0.5);
 
     let body_rotation = frozen.map_or_else(headpose::xr::body_rotation, |f| f.body_rotation);
