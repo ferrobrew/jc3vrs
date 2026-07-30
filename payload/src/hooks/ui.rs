@@ -17,7 +17,10 @@ use jc3gi::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::{config::Config, hud::cursor};
+use crate::{
+    config::Config,
+    hud::{cursor, split::roots},
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -129,7 +132,7 @@ fn movie_capture(this: *mut MovieImpl, if_changed: bool) -> u64 {
         unsafe {
             crate::hud::scaleform::apply_overlay_suppression(suppress_overlays);
             if let Some(movie) = this.as_mut() {
-                crate::hud::split::roots::on_capture(movie, split_active);
+                roots::on_capture(movie, split_active);
                 log_pipeline_lag(movie, split_active);
             }
         }
@@ -178,7 +181,7 @@ fn ui_render(this: *mut UIManager, context: *mut HContext_t) {
     if let Some(views) = crate::hud::split_inputs() {
         // SAFETY: called from the detour with the detour's own arguments, on the UI render
         // worker.
-        if unsafe { crate::hud::split::roots::render_partitioned(this, &views) } {
+        if unsafe { roots::render_partitioned(this, &views) } {
             return;
         }
     }

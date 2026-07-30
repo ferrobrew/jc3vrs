@@ -23,6 +23,7 @@ use crate::{
         camera::{CAMERA_SNAPSHOTS, CameraSnapshot},
         trace,
     },
+    hooks::graphics_engine::terrain,
     ui::camera::matrix_grid,
 };
 
@@ -319,7 +320,7 @@ pub fn egui_debug_diagnostics(ui: &mut egui::Ui) {
                 .button("Re-apply (patch sizes + recreate setup buffers)")
                 .clicked()
             {
-                crate::hooks::graphics_engine::terrain::request_detail_budget_apply();
+                terrain::request_detail_budget_apply();
             }
         });
     });

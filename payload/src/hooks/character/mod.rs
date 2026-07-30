@@ -21,7 +21,7 @@ use jc3gi::{
 use parking_lot::Mutex;
 use re_utilities::hook_library::HookLibrary;
 
-use crate::{config::Config, headpose};
+use crate::{config::Config, headpose, hooks::graphics_engine::render_block};
 
 pub(crate) mod config;
 pub(crate) use config::BodyIkConfig;
@@ -341,8 +341,8 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
                     instance as usize + AnimatedModel::MODEL_INSTANCE_RBI_INFO_OFFSET as usize
                 }
             });
-        crate::hooks::graphics_engine::render_block::publish_player_rbi_infos(&rbi_infos);
-        crate::hooks::graphics_engine::render_block::publish_player_root(
+        render_block::publish_player_rbi_infos(&rbi_infos);
+        render_block::publish_player_root(
             glam::Mat4::from(character.m_WorldMatrixT0)
                 .w_axis
                 .truncate(),
@@ -351,7 +351,7 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
                 .truncate(),
         );
         let bone = |name: &[u8]| animation_controller.GetBoneIndex(hashlittle(name) as u32);
-        crate::hooks::graphics_engine::render_block::publish_collapse_bones(&[
+        render_block::publish_collapse_bones(&[
             head_index,
             bone(b"offset_facialOrienter"),
             bone(b"fJaw"),
@@ -394,9 +394,7 @@ fn character_update_prop_effects(character: *mut Character, dt: f32) {
         // The head-hide collapse target: the render side cannot read positions out of the
         // palette (the translation slots depend on each block's layout), so the model-space neck
         // point comes from the skeleton here.
-        crate::hooks::graphics_engine::render_block::publish_collapse_target(joint_translation(
-            &neck_joint,
-        ));
+        render_block::publish_collapse_target(joint_translation(&neck_joint));
 
         // The pre-IK head/neck orientations captured this frame before the solve. When body_ik is
         // driving the head, the joints read above are the *post-IK* pose, so composing the

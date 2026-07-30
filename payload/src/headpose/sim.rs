@@ -36,7 +36,7 @@ use parking_lot::Mutex;
 
 use crate::{config::Config, grapple};
 
-use crate::headpose::HeadPose;
+use crate::{headpose::HeadPose, hooks::input::locomotion};
 
 /// The latch state (on-foot only).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -79,7 +79,7 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     // is read by `head_decoupled_idle` (the body-turn suppression gate), so freezing it under VR
     // left the game's aim-relative body turn permanently unsuppressed, which the body-relative pose
     // composition (`body × cockpit`) turns into a runaway head spin.
-    let evals = crate::hooks::input::locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
+    let evals = locomotion::ORIENTATION_EVAL_CALLS.load(Ordering::Relaxed);
     s.mode = detect_mode(s.last_orientation_evals, evals);
     s.last_orientation_evals = evals;
 

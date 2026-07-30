@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use egui::CursorIcon as CI;
 use jc3gi::graphics_engine::graphics_engine::{ActiveCursor, GraphicsEngine, get_graphics_params};
 use parking_lot::{Mutex, MutexGuard};
 use windows::Win32::{
@@ -137,7 +138,6 @@ impl EguiState {
         if self.is_input_captured()
             && let Some(graphics_engine) = unsafe { GraphicsEngine::get() }
         {
-            use egui::CursorIcon as CI;
             graphics_engine.m_ActiveCursor = match platform_output.cursor_icon {
                 CI::None => ActiveCursor::None,
                 CI::AllScroll => ActiveCursor::Cross,

@@ -28,6 +28,7 @@ use crate::{
 use crate::hooks::graphics_engine::{
     self,
     graphics_engine::{BLOCK_FLIP, log_hook_thread},
+    ssao,
 };
 
 pub(super) fn hook_library() -> HookLibrary {
@@ -242,7 +243,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
                 tracing::info!(
                     target: "stereo",
                     "restore diag: ssao_ptr_null={} ssao_snap={:?} gi_snap={:?}",
-                    crate::hooks::graphics_engine::ssao::ssao_pass().is_null(),
+                    ssao::ssao_pass().is_null(),
                     ssao_history,
                     gi_cascade,
                 );

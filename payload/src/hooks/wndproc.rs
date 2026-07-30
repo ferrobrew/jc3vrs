@@ -14,7 +14,7 @@ use windows::Win32::{
 #[cfg(feature = "profiler")]
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_F9;
 
-use crate::hud::cursor;
+use crate::{hooks::graphics_engine::shader, hud::cursor};
 
 /// Whether F10 toggles the fullscreen stereo capture mode. Off for now: the capture window's
 /// fullscreen toggle is finicky under some setups. The F12 screenshot path covers diagnosis meanwhile.
@@ -111,7 +111,7 @@ fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 cfg.stereo.patch_shadow_pcf_hash = !cfg.stereo.patch_shadow_pcf_hash;
                 cfg.stereo.patch_shadow_pcf_hash
             };
-            crate::hooks::graphics_engine::shader::request_reload();
+            shader::request_reload();
             tracing::info!(
                 "F11: sun-shadow PCF patch {}; reloading shaders to apply",
                 if now_on { "ON" } else { "OFF" }

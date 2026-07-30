@@ -44,7 +44,7 @@ use openxr::sys::Handle as _;
 use parking_lot::{Mutex, MutexGuard};
 use windows::core::Interface as _;
 
-use crate::config::Config;
+use crate::{config::Config, hooks::graphics_engine::graphics_engine};
 
 pub use config::{
     BlitGamma, FoveationConfig, FoveationConfigError, FreezeMode, MirrorFraming,
@@ -1120,8 +1120,7 @@ impl VrState {
                 self.end_session_cleanly();
             }
         }
-        crate::hooks::graphics_engine::graphics_engine::BLOCK_FLIP
-            .store(false, std::sync::atomic::Ordering::Relaxed);
+        graphics_engine::BLOCK_FLIP.store(false, std::sync::atomic::Ordering::Relaxed);
 
         if persist {
             if let Some(session) = self.session.take() {

@@ -12,6 +12,7 @@
 //! stays pristine, which is also why it must not be rewritten -- see `shader_policy`.
 
 use super::*;
+use crate::hooks::graphics_engine::clustered_lighting;
 
 /// One eye's re-issue of a terrain-detail draw: the reprojected `cb1` (four float4 rows) to stage on
 /// vertex slot 1, and the eye-half viewport to render into.
@@ -522,15 +523,13 @@ pub(super) unsafe extern "system" fn set_vertex_program_constants_detour(
     // eye's lights from this eye's position. Checked first because it is scoped to a single call
     // inside `DrawClustered` and cannot overlap a baked-cb re-issue, which only arms in the G-buffer
     // range.
-    if let Some(rows) =
-        crate::hooks::graphics_engine::clustered_lighting::substitute_assignment_view(
-            ctx as usize,
-            cb_index,
-            start_offset,
-            data,
-            count,
-        )
-    {
+    if let Some(rows) = clustered_lighting::substitute_assignment_view(
+        ctx as usize,
+        cb_index,
+        start_offset,
+        data,
+        count,
+    ) {
         // SAFETY: `rows` holds the 4 float4 rows the call stages and outlives it; `detour.call` is the
         // trampoline.
         unsafe { detour.call(ctx, cb_index, start_offset, rows.as_ptr(), count) };

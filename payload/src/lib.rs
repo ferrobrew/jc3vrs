@@ -79,7 +79,7 @@ fn initialize_startup() {
 
         #[allow(clippy::manual_map)]
         let payload = if let Some(s) = payload.downcast_ref::<&str>() {
-            Some(&**s)
+            Some(*s)
         } else if let Some(s) = payload.downcast_ref::<String>() {
             Some(s.as_str())
         } else {

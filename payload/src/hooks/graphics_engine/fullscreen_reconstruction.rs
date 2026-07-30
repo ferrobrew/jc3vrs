@@ -69,7 +69,10 @@ use jc3gi::graphics_engine::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::{config::Config, hooks::graphics_engine::reconstruction};
+use crate::{
+    config::Config,
+    hooks::graphics_engine::{reconstruction, ssao},
+};
 
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
@@ -268,5 +271,5 @@ fn restore_ssao_history(history: SsaoHistory) {
 }
 
 fn ssao_pass() -> *mut SSAOPass {
-    crate::hooks::graphics_engine::ssao::ssao_pass()
+    ssao::ssao_pass()
 }

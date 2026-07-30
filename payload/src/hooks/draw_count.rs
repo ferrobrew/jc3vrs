@@ -14,7 +14,10 @@ use std::{cell::Cell, ffi::c_void, sync::atomic::Ordering};
 use detours_macro::detour;
 use re_utilities::hook_library::HookLibrary;
 
-use crate::debug::trace::{DrawCounts, TraceEvent, TraceState};
+use crate::{
+    debug::trace::{DrawCounts, TraceEvent, TraceState},
+    hooks::graphics_engine::{clustered_lighting, reconstruction},
+};
 
 // Per-pass tallies: bumped alongside the global per-eye counters, then read + reset on each
 // SetRenderSetup, so the count attached to a bind is "draws issued since the previous bind on this
@@ -182,7 +185,7 @@ fn dispatch_indirect(
 /// dispatch is not counted either -- the tally is of work submitted, and none was. Always `false`
 /// outside such a run, which is every dispatch in the engine that has nothing to do with a split.
 fn dispatch_suppressed() -> bool {
-    crate::hooks::graphics_engine::reconstruction::dispatch_suppressed()
+    reconstruction::dispatch_suppressed()
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::SetRenderSetup_ADDRESS)]
@@ -203,11 +206,11 @@ fn set_render_setup(ctx: *mut c_void, setup: *mut c_void, restore: bool) {
     // Per-eye clustered lighting: the light-assignment target's bind is the seam the froxel split
     // narrows the viewport at, and the later binds are what put it back. A no-op unless a per-eye
     // froxel run is in flight on this thread.
-    crate::hooks::graphics_engine::clustered_lighting::on_render_setup_bound();
+    clustered_lighting::on_render_setup_bound();
     // Per-eye fullscreen reconstruction: a scissor mask is in the bound target's pixels, so an at-entry
     // per-eye run has to re-derive its eye half from the target this bind just made current. A no-op
     // unless such a run is in flight on this thread.
-    crate::hooks::graphics_engine::reconstruction::on_render_setup_bound();
+    reconstruction::on_render_setup_bound();
 }
 
 #[detour(address = jc3gi::graphics_engine::draw::Clear_ADDRESS)]
@@ -224,7 +227,7 @@ fn clear(ctx: *mut c_void, flags: u32, color: *mut c_void, depth: f32, stencil: 
     // The clustered light-assignment phase's whole-target clear would wipe the first eye's half of the
     // froxel grid on the second eye's run, which is the one thing that stops the two halves composing.
     // A no-op unless that second run is in flight on this thread.
-    if crate::hooks::graphics_engine::clustered_lighting::suppress_clear() {
+    if clustered_lighting::suppress_clear() {
         return;
     }
     CLEAR.get().unwrap().call(ctx, flags, color, depth, stencil);

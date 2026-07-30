@@ -5,7 +5,7 @@ use jc3gi::types::math::Matrix4;
 
 use crate::{config, grapple, headpose, hooks, vr};
 
-use crate::hooks::character::BodyIkConfig;
+use crate::{headpose::config::VrTurnMode, hooks::character::BodyIkConfig, vr::FreezeMode};
 
 pub fn egui_debug_camera(ui: &mut egui::Ui) {
     let mut cfg = config::CONFIG.lock();
@@ -155,8 +155,6 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
 /// "slides as the camera moves" measurement it is the full camera you want, since only that holds
 /// everything the view is built from.
 fn egui_frozen_pose(ui: &mut egui::Ui, vr: &mut vr::VrConfig) {
-    use vr::FreezeMode;
-
     ui.horizontal(|ui| {
         ui.label("Freeze:");
         ui.radio_value(&mut vr.freeze_mode, FreezeMode::Off, "Off");
@@ -363,8 +361,6 @@ fn egui_grapple(ui: &mut egui::Ui, grapple: &mut grapple::GrappleComfortConfig) 
 /// The on-foot body-turn knobs used while the HMD owns the head (mouse and right stick turn the body,
 /// not the head). Separate from the flatscreen latch above, which never runs under an OpenXR session.
 fn egui_vr_turn(ui: &mut egui::Ui, turn: &mut headpose::config::VrTurnConfig) {
-    use headpose::config::VrTurnMode;
-
     ui.horizontal(|ui| {
         ui.label("Mode:");
         ui.radio_value(&mut turn.mode, VrTurnMode::Smooth, "Smooth");

@@ -37,7 +37,7 @@ use jc3gi::graphics_engine::{
 };
 use re_utilities::hook_library::HookLibrary;
 
-use crate::{config::Config, stereo::single_pass::VsTransform};
+use crate::{config::Config, hooks::graphics_engine::ss_decal, stereo::single_pass::VsTransform};
 
 /// The 16-byte `dp2` immediate `l(12.9898, 78.233, 0, 0)` -- the screen-pixel PCF rotation seed. The
 /// first eight bytes are the two multiplier constants; zeroing them makes the dot product (and thus
@@ -220,7 +220,7 @@ fn create_fragment_program(
     let (patch_pcf, patch_dissolve) =
         Config::lock_query(|c| (c.stereo.patch_shadow_pcf_hash, c.stereo.patch_lod_dissolve));
     // The screen-space decal permutations' depth-UV bias, the one rewrite here that *grows* the blob.
-    let bias_ssdecal = crate::hooks::graphics_engine::ss_decal::shader_rewrite_enabled();
+    let bias_ssdecal = ss_decal::shader_rewrite_enabled();
     // Skip patching once eject begins, so the shader restore's bounce re-creates pristine fragment
     // shaders (matching the vertex side) and the clean game keeps none of the mod's edits.
     if !crate::is_shutting_down()

@@ -13,6 +13,7 @@
 
 use std::ffi::CString;
 
+use crate::hud::split::roots;
 use jc3gi::ui::{
     scaleform::{AmpMovieObjectDesc, DisplayInfo, Movie, MovieImpl, Value},
     ui_manager::UIManager,
@@ -273,7 +274,7 @@ pub fn request_release_handles() {
 fn release_clip_handles() {
     // The render-root partition resolved its nodes through these handles; restore the render
     // tree before they go away (rebuilt from the fresh registry on the next capture).
-    crate::hud::split::roots::teardown_now();
+    roots::teardown_now();
     if let Some(mut handles) = CLIP_HANDLES.lock().take() {
         // SAFETY: called on the capture thread; each handle releases through its own interface.
         unsafe {
@@ -320,7 +321,7 @@ pub fn process_requests() {
     let handles_live = CLIP_HANDLES.lock().is_some();
     if handles_needed
         && (!handles_live
-            || (!crate::hud::split::roots::live()
+            || (!roots::live()
                 && LAST_DISCOVERY
                     .lock()
                     .is_some_and(|t| t.elapsed().as_secs_f32() >= 5.0)))
