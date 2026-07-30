@@ -217,7 +217,7 @@ not touch the black grass.
 
 `m_GBufferTexture[0]` is named in the symbol dump's `CRenderBlockType::SetupForwardLightingResources`;
 the t44/t45 identification comes from the `HorizonMap0`/`HorizonMap1` binding names in `sh_0796`, whose
-sample is world-space, not screen-space. `docs/engine/lighting-shadow-pipeline.md` §4.2 calls t44/t45
+sample is world-space, not screen-space. `docs/engine/rendering/lighting-shadow-pipeline.md` §4.2 calls t44/t45
 the sun-shadow cascades and should be corrected the same way.
 
 **What is still open.** The deferred permutation's G-buffer albedo is

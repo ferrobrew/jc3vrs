@@ -223,7 +223,7 @@ fn make_union_camera(camera: &mut Camera, union: Matrix4) {
 // from its standard-depth `m_ViewProjection`, once per frame per camera. The active camera's planes gate
 // a SECOND model-visibility cull -- `CModelInstance::AddToRender` frustum-tests each render block against
 // them (`CCamera::IsBoxVisible`), a gate the scene-cull widen never reaches, so large buildings pop out
-// at the combined-eye edge (`docs/engine/model-culling.md`). For the active camera, rebuild its planes
+// at the combined-eye edge (`docs/engine/rendering/model-culling.md`). For the active camera, rebuild its planes
 // from the binocular union projection so that cull -- and the instant-hide-instead-of-fade pop, road
 // meshes, and far lights that read the same planes -- covers both eyes. `m_ViewProjection` is restored
 // afterwards, so the per-eye render matrices are untouched; only the cull planes widen. The rebuild goes

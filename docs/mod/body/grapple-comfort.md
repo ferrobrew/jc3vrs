@@ -1,6 +1,6 @@
 # Grapple comfort
 
-The grapple is JC3's most-used traversal mechanic, and in VR it used to be the most uncomfortable one: firing at anything off-axis swung the view violently, with rotation the inner ear never felt. This doc describes the filter that fixes it (issue #36). The implementation lives in `payload/src/grapple/`; the engine-side grapple machinery it reads is documented in `docs/engine/grapple-pipeline.md`.
+The grapple is JC3's most-used traversal mechanic, and in VR it used to be the most uncomfortable one: firing at anything off-axis swung the view violently, with rotation the inner ear never felt. This doc describes the filter that fixes it (issue #36). The implementation lives in `payload/src/grapple/`; the engine-side grapple machinery it reads is documented in `docs/engine/gameplay/grapple-pipeline.md`.
 
 ## The problem: rotation applied twice
 

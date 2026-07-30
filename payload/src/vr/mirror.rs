@@ -3,7 +3,7 @@
 //! ## Why a mirror is needed
 //!
 //! While a session runs the compositor owns the HMD present and the engine's own present is
-//! suppressed for both eyes (`BLOCK_FLIP`, `docs/engine/rendering.md` §7), so the game window would freeze
+//! suppressed for both eyes (`BLOCK_FLIP`, `docs/engine/rendering/rendering.md` §7), so the game window would freeze
 //! on a stale frame. This module presents the game's own swapchain itself -- exactly once per frame,
 //! unsynced -- with one eye's capture drawn into the back buffer.
 //!
@@ -15,7 +15,7 @@
 //!
 //! The pre-compensation below exists for the paths where it is not: with `vr.own_back_buffer` off,
 //! the engine's swapchain buffers are resized to the per-eye render resolution
-//! (`vr.native_resolution`, `docs/engine/rendering.md` §9), which is near-square, while the Win32 window
+//! (`vr.native_resolution`, `docs/engine/rendering/rendering.md` §9), which is near-square, while the Win32 window
 //! keeps its original (usually 16:9) client rect. DXGI's BitBlt present then stretches the whole back
 //! buffer onto the window client rect, so a straight full-buffer draw would be distorted.
 //! [`mirror_viewport`] computes a viewport *in buffer space* such that, after the buffer→window
@@ -194,7 +194,7 @@ unsafe fn present_mirror_inner(eye: usize) -> anyhow::Result<()> {
         zoom,
     );
 
-    // The engine wraps swapchain back buffer 0 (`docs/engine/rendering.md` §7); drawing into its resource and
+    // The engine wraps swapchain back buffer 0 (`docs/engine/rendering/rendering.md` §7); drawing into its resource and
     // then presenting the swapchain is the engine's own present path, minus the vsync/bookkeeping.
     let back_texture = &back_buffer.m_Texture;
 

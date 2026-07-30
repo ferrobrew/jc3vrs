@@ -175,7 +175,7 @@ pub fn dispatch_ordinal() -> usize {
 /// the DXGI swapchain's buffer. Stock, the two are the same surface -- the engine builds
 /// `m_BackBufferLinear` as a format alias of swapchain buffer 0 -- but they answer different
 /// questions, and they diverge outright while the mod owns the back buffer, which is the default in
-/// a session (`docs/mod/swapchain-ownership.md`). Anything sizing a resource *to the render* --
+/// a session (`docs/mod/stereo/swapchain-ownership.md`). Anything sizing a resource *to the render* --
 /// capture textures, HUD targets -- wants this; only code addressing the presented surface wants the
 /// swapchain's.
 pub fn render_size() -> Option<(u32, u32)> {

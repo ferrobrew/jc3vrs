@@ -76,7 +76,7 @@ pub(crate) fn log_hook_thread(hook: &'static str, last_thread_id: &AtomicU32) {
 /// registered resize callback, so a plain no-op would leave the whole pipeline at the old size.
 /// Writing the device info without touching DXGI lets `ApplyResize` run verbatim -- scene targets,
 /// pass pools, UI reset, and camera aspect all follow the render size -- while the swapchain stays
-/// where it is. See `docs/mod/swapchain-ownership.md` §5.1.
+/// where it is. See `docs/mod/stereo/swapchain-ownership.md` §5.1.
 ///
 /// `device->m_BackBuffer`'s own dimensions are written only by the real function, so under the
 /// substitute they keep reporting the true swapchain size: after this, `m_BackBuffer` means "the
@@ -117,7 +117,7 @@ fn device_resize_buffers(device: *mut HDevice_t, width: u32, height: u32) -> boo
 /// The back-buffer substitution point: every path that rebuilds the engine's swapchain-derived render
 /// setups funnels through `CreateRenderSetups` (its only callers are `InitializeSystem` and
 /// `ApplyResize`), so an epilogue here cannot be missed. Inert unless the mod owns the back buffer;
-/// see [`crate::vr::back_buffer`] and `docs/mod/swapchain-ownership.md`.
+/// see [`crate::vr::back_buffer`] and `docs/mod/stereo/swapchain-ownership.md`.
 #[detour(
     address = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::CreateRenderSetups_ADDRESS
 )]

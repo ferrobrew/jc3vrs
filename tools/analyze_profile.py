@@ -163,7 +163,7 @@ def main() -> None:
     if not frame_ms:
         sys.exit(
             "analyze_profile: no 'CGame::Update' frame scopes found — the capture is missing its "
-            "scope names (see docs/mod/profiler.md); lane data exists but cannot be attributed"
+            "scope names (see docs/mod/performance/profiler.md); lane data exists but cannot be attributed"
         )
 
     print("\n== frame time")

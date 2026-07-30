@@ -4,7 +4,7 @@ While a VR session runs, the engine renders into a texture the mod allocates rat
 
 Controlled by `vr.own_back_buffer` (default on). Implemented in `payload/src/vr/back_buffer.rs`, with two hooks in `payload/src/hooks/graphics_engine/graphics_engine.rs` and the transitions in `payload/src/vr/resolution.rs`.
 
-Addresses are release RVAs from the 2026 Denuvo-less Steam build. The engine-side behaviour this rests on is documented in [`render-setups-reinit.md`](../engine/render-setups-reinit.md) and [`rendering.md`](../engine/rendering.md); this document is the mod-side design.
+Addresses are release RVAs from the 2026 Denuvo-less Steam build. The engine-side behaviour this rests on is documented in [`render-setups-reinit.md`](../../engine/rendering/render-setups-reinit.md) and [`rendering.md`](../../engine/rendering/rendering.md); this document is the mod-side design.
 
 ## 1. Why
 

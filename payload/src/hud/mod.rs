@@ -145,7 +145,7 @@ pub fn panel_height(scale: f32, distance: f32, aspect: f32) -> f32 {
 /// cursor mapping's window basis (its fallback for the client rect). Everything sized against the
 /// *render* -- the reset proxy and the engine-binding restore -- reads
 /// [`crate::stereo::render_size`] instead, because the two diverge once the mod substitutes its own
-/// back buffer (`docs/mod/swapchain-ownership.md`). The HUD texture's own size is neither: it is the
+/// back buffer (`docs/mod/stereo/swapchain-ownership.md`). The HUD texture's own size is neither: it is the
 /// mod's choice (see [`hud_target_size`]), as is its aspect.
 pub fn tick(device: &Device, window_width: u32, window_height: u32) {
     let mut hud = HUD_STATE.lock();

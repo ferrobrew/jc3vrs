@@ -102,7 +102,7 @@ provisions:
 ./scripts/dxbc.sh disasm Shaders_F.shaders/sh_0467_0016b270.dxbc | less
 ```
 
-See [`tools/shaders/README.md`](../../tools/shaders/README.md) for the one-time prerequisites. The output
+See [`tools/shaders/README.md`](../../../tools/shaders/README.md) for the one-time prerequisites. The output
 is standard FXC-style SM5 assembly: a commented reflection header (cbuffers, resource bindings, the
 input/output signatures) followed by the instruction stream.
 

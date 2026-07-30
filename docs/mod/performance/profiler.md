@@ -1,7 +1,7 @@
 # The in-game profiler (issue #34)
 
 The mod carries its own frame profiler because the engine's is dead in retail: the 15-phase
-`CpuProfiler` is never written (`docs/engine/profiling.md` §1.1), the `CGPUProfiler` read-back is
+`CpuProfiler` is never written (`docs/engine/performance/profiling.md` §1.1), the `CGPUProfiler` read-back is
 stubbed (§2.2), and the on-screen frame graph is stripped (§1.4). What survives — the live D3D11
 timestamp-query wrappers and the hookable frame-phase functions — is exactly enough to rebuild the
 pipeline mod-side, which is what `payload/src/profiler/` does on top of
@@ -41,7 +41,7 @@ CPU scopes, draw thread: `RenderEngine::PreDraw` / `DrawGBuffer` / `Draw (scene)
 
 Inside each pass there is also one scope per render-block-type run, named by the type
 (`CRenderPass::ChangeRenderBlockType` mirrors the engine's own compiled-out scope markers; see
-`docs/engine/profiling.md` §1.5) — but that layer is **off by default**. It is hundreds of scopes
+`docs/engine/performance/profiling.md` §1.5) — but that layer is **off by default**. It is hundreds of scopes
 per frame, each a lock and a stream push, sitting on the draw-submission path, so leaving it on
 inflates the cost a capture is usually taken to measure. The checkbox next to the enable toggle
 turns it on for the cases where the per-type timeline is actually the question.

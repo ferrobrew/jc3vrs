@@ -13,7 +13,7 @@ listed under "Off by default" so the ground truth is complete, but they are not 
 interaction.
 
 The engine's own frame pipeline and the double-Draw machinery are documented in
-[`engine/rendering.md`](../engine/rendering.md) (§2 camera, §11–13 the double-Draw); this doc is the
+[`engine/rendering.md`](../../engine/rendering/rendering.md) (§2 camera, §11–13 the double-Draw); this doc is the
 mod-side companion focused on the shared per-frame state.
 
 ## The double-draw loop

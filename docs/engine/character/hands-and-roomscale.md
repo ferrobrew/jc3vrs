@@ -10,8 +10,8 @@ interface points with the aim and grapple pipelines.
 All addresses are release-build RVAs (`JustCause3.exe`, 2026 no-Denuvo IDB), read from the release
 decompile; the 2016 symbol dump was the locator only. This is design/RE notes, not shipped code.
 
-Related: `docs/engine/humanik.md` (the solver, effector ids, the injection seam), `docs/engine/skeleton.md` (the
-Joint API and pose pipeline), `docs/mod/head-and-body.md` (the "Boneworks alignment" topology this
+Related: `docs/engine/character/humanik.md` (the solver, effector ids, the injection seam), `docs/engine/character/skeleton.md` (the
+Joint API and pose pipeline), `docs/mod/body/head-and-body.md` (the "Boneworks alignment" topology this
 implements). Interface points with the concurrent aim and grapple work are flagged inline.
 
 ## 1. Weapon-to-hand attachment (the props system)
@@ -88,7 +88,7 @@ Two consequences for controller-driven hands:
 - **Placement is fully splittable.** Each gun has an independent attach bone, so `SetJoint` on gun
   0's bone → right controller and gun 1's bone → left controller places the two pistols in two hands
   pointing two ways, with no shared transform to fight. Combined with the per-barrel aim-target write
-  (`docs/engine/aim-pipeline.md`, dual-wield) each gun fires at its own hand's target.
+  (`docs/engine/gameplay/aim-pipeline.md`, dual-wield) each gun fires at its own hand's target.
 - **State is shared, and that is the seam.** The whole pair has one `m_State`, one aim-flag, and one
   reload/equip/holster animation; `GetCurrentBoneAttachement` is gated on that single `m_State`. So
   the override is clean only in the free-aim states (`E_WS_WIELDING`, `E_WS_DUAL_WIELDING`) — when
@@ -119,7 +119,7 @@ Two consequences for the aim pipeline:
   control, not from the muzzle bone (the muzzle is cosmetic). This is the clean seam with the
   **aim-pipeline agent**: moving the *rendered* gun to a controller does not change where shots go —
   that stays entirely on the aim pipeline's camera/aim-control path (`GetCameraMatrix`,
-  `CPlayerAimControl`, see `docs/engine/aim-pipeline.md` "The camera getters"). If controller-relative firing is
+  `CPlayerAimControl`, see `docs/engine/gameplay/aim-pipeline.md` "The camera getters"). If controller-relative firing is
   wanted, that is a change to the aim pipeline's ray origin/direction, decoupled from this section.
 
 ## 2. Per-arm aim IK — pointing the arms
@@ -150,7 +150,7 @@ rotation (axis + `acos` angle) and calls `AddEffectorTargetRotation` (axis-vecto
 `m_TargetReachR[effector]` (`CHumanIK+0x330`, dword index `+204`).
 
 **Interaction risk (own head effector).** Because the gun-aim IK drives the **head effector (15)**
-itself, it competes with the mod's head override and the body-IK head target from `docs/engine/humanik.md`.
+itself, it competes with the mod's head override and the body-IK head target from `docs/engine/character/humanik.md`.
 When the player aims, the game already turns the head toward the aim reticle. The VR head must win;
 the aim IK's head effector should be suppressed (drop `AET_HEAD` from the loop, or zero its reach)
 when the headpose owns the head.
@@ -179,7 +179,7 @@ references from task-descriptor tables (`0x142a3c204`/`0x142a3bbf4` and the `0x1
 i.e. they run when the corresponding state is active in the character state machine (weapon-aim
 state → right-arm IK; grapple reel-in state → reel-in IK). Both queue their targets *during*
 animation-graph evaluation, well before the `HasTargets(PASS_MAIN)` gate in
-`UpdatePassFinalizePose_Parallel` (`docs/engine/humanik.md`), so their targets and the mod's head target
+`UpdatePassFinalizePose_Parallel` (`docs/engine/character/humanik.md`), so their targets and the mod's head target
 coexist on the same solve (the pass step is the max; effectors are keyed by id).
 
 **Driving both arms from controller rays is feasible and low-risk**, using the exact pattern the mod
@@ -191,7 +191,7 @@ already uses for the head effector (`payload/src/hooks/character.rs`,
   `m_TargetReachR`. Rotation effectors on distinct effector ids do not collide.
 - **Hand *position* effectors** can place the wrists at controller positions outright:
   `GetEffectorIdFromBoneIndex(m_HIK, wristBoneIndex)` yields effector **3 (left wrist)** / **4 (right
-  wrist)** (see the effector table in `docs/engine/humanik.md`), then
+  wrist)** (see the effector table in `docs/engine/character/humanik.md`), then
   `AddEffectorTargetPosition(effector, posModel, …)` + `m_TargetReachT[effector] = w` on `PASS_MAIN`
   or `PASS_SECONDARY`. `PASS_SECONDARY` is the game's own hand/grip pass
   (`UpdateSecondaryHandIKPass`), so the game already does exactly this for grip — putting the wrist
@@ -262,7 +262,7 @@ world velocity directly to `CPfxCharacterInstance + 0x3C`, and the roomscale add
 Ride point 1 is the recommendation: it is the same seam the game itself uses to move the proxy, it
 is collision-correct by construction, and it is a small per-frame add rather than a state-machine
 change. The residual XZ error between the player's real position and the (collision-clamped) capsule
-is the "positional tracking through geometry" pitfall from `docs/mod/head-and-body.md` — mitigate with a
+is the "positional tracking through geometry" pitfall from `docs/mod/body/head-and-body.md` — mitigate with a
 fade on deep penetration, not a hard freeze.
 
 ### Vehicles — roomscale must disable (seat-lock)
@@ -274,7 +274,7 @@ and while attached the character's transform is parented to the vehicle seat rat
 the character proxy. Roomscale locomotion must
 be gated off whenever the character is seat-attached (`m_attachType != NONE` / the in-vehicle state):
 the body is fixed to the seat, the head stays free (this is the "easy case" from
-`docs/mod/head-and-body.md` — no body-yaw decoupling in vehicles), and adding wanted velocity to a
+`docs/mod/body/head-and-body.md` — no body-yaw decoupling in vehicles), and adding wanted velocity to a
 seat-locked character would fight the parent transform.
 
 ### Teleport / warp API (for reference — not the walking path)
@@ -315,7 +315,7 @@ handling the capsule-clamp residual (the through-geometry fade) rather than free
 ## Open questions
 
 - **Head-effector arbitration.** The gun-aim IK (`NRightArmAimIK`, `AET_HEAD`), the mod's head
-  `SetJoint`, and the body-IK head target (`docs/engine/humanik.md`) all touch the head. Exact suppression
+  `SetJoint`, and the body-IK head target (`docs/engine/character/humanik.md`) all touch the head. Exact suppression
   order for the aim IK's head effector when the HMD owns the head is untested.
 - **Reel-in ↔ grapple targeting handoff.** Whether the controller-grapple should feed the reel-in
   IK a synthetic hook position (`GetGrapplingHook`) or bypass it and drive the arm effector directly
@@ -328,7 +328,7 @@ handling the capsule-clamp residual (the through-geometry fade) rather than free
 - **`dt` and tick timing.** `EvaluateCharacterDisplacement` and the effect velocity both assume the
   fixed sim tick (the `·30` in `SAttachedInstance::UpdateTransform`); the roomscale delta must be
   mapped to that tick timeline, not the render frame (the same tick-vs-frame care as the headpose in
-  `docs/mod/head-and-body.md`).
+  `docs/mod/body/head-and-body.md`).
 - **Capsule size in roomscale.** Leaning/ducking physically moves the head but the proxy capsule is
   a fixed shape (`m_PendingProxyState`); whether crouch/lean should reshape the capsule or only
   offset the head is unresolved.
@@ -347,7 +347,7 @@ xref: the only callers of `NStateTask_LocoUtil::EvaluateCharacterOrientation` (*
 this task, `NStateTask_MovementStuntingTask::Update` (**0x14082B440**), and
 `NPhysicalAnchorWarpTask::Update` (**0x14083E210**). The mod's mode detector already observes its
 `ORIENTATION_EVAL_CALLS` counter (the `EvaluateCharacterOrientation` detour) advancing on every
-on-foot tick including idle (`docs/mod/head-and-body.md`); on-foot idle is neither stunting nor
+on-foot tick including idle (`docs/mod/body/head-and-body.md`); on-foot idle is neither stunting nor
 warping, so the advancing counter *is* the locomotion task ticking. The "move/aim task counters stop
 while idle" the mod saw are a narrower, action-specific task, not this one.
 
@@ -543,7 +543,7 @@ switches `CGameStateRun` into its paused update, which runs `UpdateRenderPaused`
 systems — landscape LOD, UI prerender, video, `WaitForCPUDrawToFinish`, resource streaming — and it
 **reads** the active camera's already-computed `m_TransformF`, but it does **not** call
 `GameCameraManager::UpdateRender` or `CameraTree::UpdateRenderContexts`. Those are the very seams the
-mod's camera hook rides (`docs/mod/head-and-body.md`), so **under a real pause the camera transform
+mod's camera hook rides (`docs/mod/body/head-and-body.md`), so **under a real pause the camera transform
 is frozen and the HMD view stops tracking the head** — unacceptable for VR. Entering pause also sets
 `CPhysicsSystem::m_Pause = 1` and `CClock::Pause(true)`; leaving it clears both
 (`CGameStateRun.cpp`: `m_Pause = 0; CClock::Pause(instance, 0)`).
@@ -589,7 +589,7 @@ gate the sim update, rather than invoking the game's own pause, which darkens th
 
 ## 5. Per-tick mode detection — the action-set selector
 
-The recon for the mode detector the controllers-and-roomscale phase 0 (`docs/mod/controllers-and-roomscale.md`)
+The recon for the mode detector the controllers-and-roomscale phase 0 (`docs/mod/input/controllers-and-roomscale.md`)
 depends on: reliable per-tick signals, readable from the local `CCharacter` (or a cheap singleton),
 that discriminate the player's mode finely enough to drive OpenXR action-set selection — on foot,
 in a vehicle (and its class), wingsuit, parachute, grapple traversal, and game-UI-up. Today's headpose
@@ -724,7 +724,7 @@ both:
 
 1. **Hard pause (pause menu).** `CGameStateRun` propagates an update-context `m_Paused` flag into
    `CPhysicsSystem::m_Pause` (`Base::CSingle<CPhysicsSystem>::Instance->m_Pause = m_Paused`) and
-   `CClock::Pause(true)` (the game-clock game-pause bool, `docs/engine/hands-and-roomscale.md` §4.6b). The
+   `CClock::Pause(true)` (the game-clock game-pause bool, `docs/engine/character/hands-and-roomscale.md` §4.6b). The
    physics-system singleton is `qword_142EDC120` (§4.2); its `m_Pause` byte is nonzero for the whole real
    pause. This is the cleanest per-tick "gameplay is frozen" read. **Caveat:** a real pause also freezes
    the camera seam (§4.6b) — the VR pause must *not* enter this state, so when the mod owns the freeze it

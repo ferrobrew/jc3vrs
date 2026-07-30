@@ -13,7 +13,7 @@
 //!   type, closed by the next switch or by the pass draw's tail (see `render_pass::do_draw`).
 //!
 //! The engine's own scope-marker calls (`Graphics::BeginScopeMarker` / `EndScopeMarker`, §1.5 of
-//! `docs/engine/profiling.md`) are *not* detoured: they are three-byte `ret` stubs, too small to
+//! `docs/engine/performance/profiling.md`) are *not* detoured: they are three-byte `ret` stubs, too small to
 //! hook without risking the shared trampoline, and a failed detour would abort the whole hook
 //! library. The per-render-block-type names they would have carried are recovered from
 //! `ChangeRenderBlockType` above instead.

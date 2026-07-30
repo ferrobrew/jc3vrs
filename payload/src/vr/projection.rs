@@ -4,7 +4,7 @@
 //! each eye needs an off-centre perspective built from the four `XrFovf` half-angles (`angleLeft`,
 //! `angleRight`, `angleUp`, `angleDown`). This module turns those angles into a matrix laid out the
 //! way the engine's `Camera::m_Projection` is: **row-major, row-vector** (`clip = p · M`), the D3D
-//! convention documented in `docs/engine/rendering.md` §2.6.
+//! convention documented in `docs/engine/rendering/rendering.md` §2.6.
 //!
 //! The math is built with `glam`, which is column-major, column-vector (`clip = M * p`). A row-major
 //! row-vector matrix's flat 16-float array is bit-identical to `to_cols_array()` of the
@@ -14,13 +14,13 @@
 //!
 //! The `standard_depth` matrix is built element-for-element the way the engine's
 //! `CMatrix4f::PerspectiveOffCenter` builds `Camera::m_Projection` (verified against the release
-//! build, `docs/engine/rendering.md` §2.9): the engine passes near-plane extents (`near·tan θ`),
+//! build, `docs/engine/rendering/rendering.md` §2.9): the engine passes near-plane extents (`near·tan θ`),
 //! this module passes the tangents directly, and `near` cancels out of every term except the depth
 //! column, so the two matrices are identical. The engine's finite far plane defaults to `38400` and
 //! near to `0.1` (the `Camera` constructor values, §2.9); the mod feeds the same near/far so the
 //! frustum matches and the horizon does not clip.
 //!
-//! Two depth conventions are produced (see `docs/engine/rendering.md` §2.7, §2.9):
+//! Two depth conventions are produced (see `docs/engine/rendering/rendering.md` §2.7, §2.9):
 //!
 //! - [`OffAxisProjection::standard_depth`]: a standard (non-reversed) projection, NDC z in `[0, 1]`
 //!   with near → 0 and far → 1. **This is the one to write into `m_Projection` before
@@ -58,7 +58,7 @@ pub struct Fov {
 pub struct OffAxisProjection {
     /// Standard depth (NDC z in `[0, 1]`, near → 0, far → 1). Write this into `m_Projection`
     /// *before* `SetupRenderCamera` so the engine reverse-Z's and jitters it once (the preferred
-    /// path, `docs/engine/rendering.md` §2.7).
+    /// path, `docs/engine/rendering/rendering.md` §2.7).
     pub standard_depth: Matrix4,
     /// Reverse-Z depth (near → 1, far → 0), the engine's `z' = w - z` remap already applied. Write
     /// this *after* `SetupRenderCamera` (the §2.7 alternative path); you then own jitter and the
@@ -104,7 +104,7 @@ fn perspective_off_center_rh(fov: Fov, near: f32, far: f32) -> Mat4 {
 
 /// Apply the engine's reverse-Z remap (`z' = w - z`) to a standard-depth projection: for each row,
 /// column 2 becomes column 3 minus column 2. This is exactly what `SetupRenderCamera` /
-/// `RecalcProjection` do to `m_Projection` on a render camera (`docs/engine/rendering.md` §2.3, §2.7).
+/// `RecalcProjection` do to `m_Projection` on a render camera (`docs/engine/rendering/rendering.md` §2.3, §2.7).
 ///
 /// In glam terms (engine row `i` == glam column `i`, engine column `j` == glam component `j`), the
 /// remap becomes: each column's `.z` component becomes that column's `.w` minus its `.z`.
@@ -207,7 +207,7 @@ mod tests {
     }
 
     /// The `standard_depth` matrix must match the engine's `CMatrix4f::PerspectiveOffCenter`
-    /// element-for-element (`docs/engine/rendering.md` §2.9). The engine builds it from the
+    /// element-for-element (`docs/engine/rendering/rendering.md` §2.9). The engine builds it from the
     /// near-plane extents `x = near·tan θ`, `y = near·tan φ`; this reproduces those exact formulas
     /// with the game's real default near/far and asserts equality against the mod's builder.
     #[test]

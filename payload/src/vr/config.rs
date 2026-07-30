@@ -41,7 +41,7 @@ fn render_pass_id_from_i32(raw: i32) -> Option<RenderPassId> {
 }
 
 /// Which depth convention the per-eye off-axis projection is written in, and where in the
-/// `SetupRenderCamera` sequence it lands (`docs/engine/rendering.md` §2.7, `docs/mod/vr-runtime.md` blocker 1).
+/// `SetupRenderCamera` sequence it lands (`docs/engine/rendering/rendering.md` §2.7, `docs/mod/vr-runtime.md` blocker 1).
 /// The coordinate/depth conventions are the least-verifiable part of the pipeline without a headset,
 /// so this is a runtime tweakable rather than a compile-time choice.
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -50,7 +50,7 @@ pub enum ProjectionConvention {
     /// `m_Projection` *before* the engine's `SetupRenderCamera`, so the engine applies its reverse-Z
     /// remap and TAA jitter to it exactly once, matching every other camera. `SetupRenderCamera`
     /// consumes the pre-written `m_Projection` in place rather than rebuilding it from FOV/near/far
-    /// (settled against the engine, `docs/engine/rendering.md` §2.9), so this write reaches the GPU.
+    /// (settled against the engine, `docs/engine/rendering/rendering.md` §2.9), so this write reaches the GPU.
     #[default]
     EnginePreReverseZ,
     /// **Fallback / escape hatch.** Write an already-reverse-Z'd off-axis projection *after*
@@ -58,7 +58,7 @@ pub enum ProjectionConvention {
     /// manually. TAA jitter is not applied on this path.
     ///
     /// The consume-vs-rebuild question this guarded against is now settled against the engine
-    /// (`docs/engine/rendering.md` §2.9): `Camera::SetupRenderCamera` *consumes* whatever is in
+    /// (`docs/engine/rendering/rendering.md` §2.9): `Camera::SetupRenderCamera` *consumes* whatever is in
     /// `m_Projection`, applying `z' = w - z` to it in place — it never rebuilds from FOV/near/far —
     /// so the pre-call [`EnginePreReverseZ`](Self::EnginePreReverseZ) write flows through correctly
     /// and is the verified-correct default. This variant is retained only as a runtime escape hatch
@@ -159,7 +159,7 @@ pub struct VrConfig {
     /// first camera update publishes the engine's live plane. The mod reads the active camera's actual
     /// `m_Near` each frame as the source of truth (see
     /// [`crate::hooks::camera::main_camera_planes_or`]); this default (`0.1`) mirrors the engine's
-    /// `Camera` constructor value (`docs/engine/rendering.md` §2.9) so the bootstrap frame matches.
+    /// `Camera` constructor value (`docs/engine/rendering/rendering.md` §2.9) so the bootstrap frame matches.
     pub near_clip: f32,
     /// Fallback far clip plane, in metres, for the per-eye off-axis projection, used only until the
     /// first camera update publishes the engine's live plane. The mod reads the active camera's actual
@@ -231,7 +231,7 @@ pub struct VrConfig {
     pub auto_recenter_on_gameplay: bool,
     /// Substitute a mod-owned render target for the engine's swapchain-derived back buffer, so the
     /// render resolution and the DXGI swapchain size stop being the same number (see
-    /// [`crate::vr::back_buffer`] and `docs/mod/swapchain-ownership.md`).
+    /// [`crate::vr::back_buffer`] and `docs/mod/stereo/swapchain-ownership.md`).
     ///
     /// The engine builds its final composite target as a format alias of DXGI back buffer 0, so
     /// driving the scene to the per-eye render resolution resizes the swapchain with it, and the
@@ -317,7 +317,7 @@ impl Default for VrConfig {
 /// Static foveated rendering (issue #29): a radial stencil mask drops a dithered fraction of the
 /// peripheral pixels before the expensive scene passes shade them, and a fill-in pass reconstructs them
 /// from their neighbours. On by default (validated in-headset); costs the mask + fill passes but saves
-/// peripheral shading. See `docs/mod/foveation.md`.
+/// peripheral shading. See `docs/mod/stereo/foveation.md`.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FoveationConfig {

@@ -441,7 +441,7 @@ pub struct EyeView {
     pub fov: xr::Fovf,
     /// The off-axis projection for [`fov`](Self::fov). Write [`standard_depth`]
     /// (`OffAxisProjection::standard_depth`) into `m_Projection` before `SetupRenderCamera`
-    /// (`docs/engine/rendering.md` §2.7 / blocker 1).
+    /// (`docs/engine/rendering/rendering.md` §2.7 / blocker 1).
     pub projection: OffAxisProjection,
 }
 

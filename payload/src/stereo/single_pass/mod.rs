@@ -1,6 +1,6 @@
 //! Single-pass stereo (experimental): render the G-buffer geometry once, emitting both eyes via
 //! instancing + `SV_ViewportArrayIndex` routing into a double-wide render target, instead of the
-//! double-draw (two full `game.Draw` walks, one per eye). See `docs/mod/single-pass-stereo.md` for
+//! double-draw (two full `game.Draw` walks, one per eye). See `docs/mod/stereo/single-pass-stereo.md` for
 //! the design.
 //!
 //! This module owns the mod-side state that the double-draw path does not need:
@@ -414,7 +414,7 @@ fn drain_slot13_census() -> Vec<(u8, u32)> {
 /// The exposure counters are per *frame*, but the G-buffer range is entered once per
 /// `DrawRenderPassRange` call -- three times per dispatch under the collapse (`DrawGBuffer`
 /// `0x2F..0x55`, `Draw` `0x56..0x96`, `DrawPosteffects` `0x96..0x97`; see
-/// `docs/mod/single-pass-stereo.md`). Folding them at a range boundary therefore cut the frame into
+/// `docs/mod/stereo/single-pass-stereo.md`). Folding them at a range boundary therefore cut the frame into
 /// three unequal windows and reported each as if it were a frame; the fold belongs here, where a
 /// frame actually begins.
 pub fn begin_frame() {

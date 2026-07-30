@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Headset-driven upper-body IK: drive the player's spine and head toward the headpose target by
 /// feeding the engine's own HumanIK `MAIN` pass an effector target for the head bone, so the body
 /// leans, ducks, and turns to follow where the player looks. Queued pre-solve in
-/// [`crate::hooks::character`] (see `docs/engine/humanik.md`); the `UpdatePropEffects` head-bone override
+/// [`crate::hooks::character`] (see `docs/engine/character/humanik.md`); the `UpdatePropEffects` head-bone override
 /// still sets the exact head orientation on top of the HIK-bent spine.
 #[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct BodyIkConfig {

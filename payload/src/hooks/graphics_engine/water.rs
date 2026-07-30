@@ -49,7 +49,7 @@
 //! projective screen UV the first half of this module corrects (that fix is deliberately *not*
 //! reprojected, precisely because the geometry still lands at the centre view). The two are one
 //! change, and the surface grid additionally has no per-eye re-issue of its own to hang it off.
-//! See `docs/mod/single-pass-stereo.md`.
+//! See `docs/mod/stereo/single-pass-stereo.md`.
 
 use std::{
     ffi::c_void,

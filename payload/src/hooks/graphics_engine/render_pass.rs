@@ -1,5 +1,5 @@
 //! Detours that gate per-frame render-list state so it advances only once per *real* frame, even
-//! though we render the scene twice (once per eye). See `docs/mod/single-pass-stereo.md`.
+//! though we render the scene twice (once per eye). See `docs/mod/stereo/single-pass-stereo.md`.
 //!
 //! Each gate is toggleable at runtime (debug UI) so the working combination can be found in-game.
 //! `SetupRenderFrameData` (the per-batch list *build*, not the swap) and `HandBackBuffers`
@@ -538,7 +538,7 @@ fn commit_render_pass_settings(this: *mut ShadowManager, ctx: *mut c_void) {
 // dispatch, so `dispatch_ordinal()` is never > 0 and PreDraw already runs exactly once per frame.
 // There is no second walk of the prepasses to elide, which is why extending the collapse over
 // PreDraw would save nothing -- see "Why `PreDraw` is outside the collapse" in
-// docs/mod/single-pass-stereo.md.
+// docs/mod/stereo/single-pass-stereo.md.
 #[detour(address = jc3gi::graphics_engine::render_engine::RenderEngine::PreDraw_ADDRESS)]
 fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
     // The first seam of a dispatch: label this thread's puffin lane (a no-op on single-core,

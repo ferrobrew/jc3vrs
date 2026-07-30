@@ -57,7 +57,7 @@ const REPROJECT_NAME_PREFIXES: &[&str] = &[
 /// rewrite the scene families take covers it completely. The other vegetation families
 /// (`vegetationfoliage*`, `vegetationbark*`, `grass`, `leaves`) are deliberately absent: their dominant
 /// draw is GPU-indirect and shares the VS, so reprojecting it would break the indirect path -- they need
-/// the coordinated indirect handling (see `docs/mod/single-pass-render-blocks.md`).
+/// the coordinated indirect handling (see `docs/mod/stereo/single-pass-render-blocks.md`).
 const VEGETATION_REPROJECT_NAME_PREFIXES: &[&str] = &["treeimpostor"];
 
 /// Whether a no-`cb0` vertex shader named `name` should be reprojected for single-pass: either the

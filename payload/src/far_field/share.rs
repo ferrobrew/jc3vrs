@@ -7,7 +7,7 @@
 //! far G-buffer back in — after the engine's clears and Z prepass, before the geometry passes — so
 //! the stock deferred lighting then resolves a *complete* G-buffer per eye, bit-identical to a
 //! full render. Sharing the G-buffer (rather than a lit far image) sidesteps the lighting-resolve
-//! masking problem entirely; the cost is that lighting stays per-eye. See `docs/mod/far-field.md`.
+//! masking problem entirely; the cost is that lighting stays per-eye. See `docs/mod/stereo/far-field.md`.
 //!
 //! Eye 0's composite is an identity mapping (the far dispatch used its pose and projection); eye
 //! 1's maps through the per-axis affine NDC reprojection between the two off-axis projections

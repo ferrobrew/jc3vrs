@@ -4,7 +4,7 @@
 //!
 //! The engine sizes every scene render target from `device->m_DeviceInfo.m_DisplayWidth`/
 //! `m_DisplayHeight` through `CreateRenderSetups`, re-run at runtime only by `ApplyResize`
-//! (`docs/engine/render-setups-reinit.md`). Rather than call `ApplyResize` directly, this drives the
+//! (`docs/engine/rendering/render-setups-reinit.md`). Rather than call `ApplyResize` directly, this drives the
 //! engine's **own deferred display-mode state**: it writes the pending dimensions into
 //! [`m_WindowWidth`](GraphicsEngine::m_WindowWidth)/[`m_WindowHeight`](GraphicsEngine::m_WindowHeight)
 //! and sets [`m_HasNewWindowSettings`](GraphicsEngine::m_HasNewWindowSettings), exactly as
@@ -13,14 +13,14 @@
 //! prologue (which runs inside the first eye's `game.Draw`, see `payload/src/hooks/game.rs`), then
 //! calls `ApplyResize(m_WindowWidth, m_WindowHeight)` at the exact frame boundary the engine chose --
 //! previous dispatch drained, this frame not yet dispatched -- so the idle-context assumption
-//! `ApplyResize` needs holds by construction (`docs/engine/render-setups-reinit.md` §2/§6). We populate the
+//! `ApplyResize` needs holds by construction (`docs/engine/rendering/render-setups-reinit.md` §2/§6). We populate the
 //! request from the frame top ([`apply_native_resolution`], before the eye loop) so it is visible to
 //! that prologue.
 //!
 //! Driving the full `ApplyResize`, rather than a scene-only `CreateRenderSetups`, is what makes the
 //! *whole* pipeline follow: the pass-owned pools resize through the registered callbacks and the
 //! Scaleform view size through the UI reset, neither of which `CreateRenderSetups` touches
-//! (`docs/engine/render-setups-reinit.md` §3/§5). It also sets `CameraManager.m_AspectRatio` from the
+//! (`docs/engine/rendering/render-setups-reinit.md` §3/§5). It also sets `CameraManager.m_AspectRatio` from the
 //! per-eye `width/height`, so flatscreen-built projections do not render squashed. It **never touches
 //! the Win32 window** (§4: it never calls `SetWindowPos`).
 //!

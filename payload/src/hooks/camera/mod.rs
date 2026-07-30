@@ -47,7 +47,7 @@ pub fn last_dtf() -> f32 {
 /// The scene render camera is the engine-owned copy (`GraphicsEngine::m_RenderCamera`), rebuilt
 /// each Draw by `SetupRenderCamera` (reverse-Z + jitter, then `m_ViewProjection`/`m_ViewProjectionF`
 /// from `m_View`). For the stereo double-Draw we offset that copy's `m_View` laterally per eye,
-/// *before* the rebuild, so the two dispatches diverge. See `docs/engine/rendering.md` section 2.
+/// *before* the rebuild, so the two dispatches diverge. See `docs/engine/rendering/rendering.md` section 2.
 #[detour(address = jc3gi::camera::camera::Camera::SetupRenderCamera_ADDRESS)]
 fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
     let is_render_camera = unsafe {
@@ -279,7 +279,7 @@ fn freeze_render_camera(camera: &mut Camera) {
     camera.m_View = Matrix4::from(world.inverse());
 }
 
-/// The camera pipeline within a frame (see `docs/engine/rendering.md` §2.2): `CameraTree::
+/// The camera pipeline within a frame (see `docs/engine/rendering/rendering.md` §2.2): `CameraTree::
 /// UpdateRenderContexts` fills the control contexts, `PushRenderContext` copies the next render
 /// context's transform into the active camera's `m_TransformT0` and `m_TransformT1` (running it
 /// through a rotation jitter filter that snaps sub-epsilon deltas), and `Camera::UpdateRender`

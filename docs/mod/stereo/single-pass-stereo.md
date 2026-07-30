@@ -4,7 +4,7 @@ Double-draw stereo renders the scene twice per frame — one full CPU walk of th
 eye. Profiling showed the frame is **draw-call-submission bound**, not GPU bound: ~20k draw calls per
 frame (~9,900 per eye, doubled), GPU only ~41% utilised, no queue syncs. Single-pass collapses the two
 geometry walks into one, so the GPU is fed from a single submission. See
-[`profiler.md`](profiler.md) for how the bottleneck was measured, and
+[`profiler.md`](../performance/profiler.md) for how the bottleneck was measured, and
 [`single-pass-render-blocks.md`](single-pass-render-blocks.md) for the per-render-block treatment.
 
 Single-pass is opt-in and off by default. It is inert without the DXVK viewport-routing capability.
@@ -613,7 +613,7 @@ is marked with its actual default.
 
 ## Why `PreDraw` is outside the collapse, and why extending it over it would save nothing
 
-`PreDraw` is the second-largest GPU item in the frame (~2.16 ms, `docs/mod/performance.md`) and does
+`PreDraw` is the second-largest GPU item in the frame (~2.16 ms, `docs/mod/performance/performance.md`) and does
 not come through `DrawRenderPassRange`, so it is natural to read it as a large pool of draws the
 collapse has not claimed. It is not. **Under the collapse there is exactly one dispatch, so `PreDraw`
 already runs exactly once per frame.** `hooks/game.rs` builds the dispatch list as `&[(0, false)]`

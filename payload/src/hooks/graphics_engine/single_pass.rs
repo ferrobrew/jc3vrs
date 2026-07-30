@@ -1,4 +1,4 @@
-//! Render-thread detours for single-pass stereo (experimental; see `docs/mod/single-pass-stereo.md`
+//! Render-thread detours for single-pass stereo (experimental; see `docs/mod/stereo/single-pass-stereo.md`
 //! and [`crate::stereo::single_pass`]).
 //!
 //! When single-pass is active, the patched vertex shaders read their position from the mod-owned

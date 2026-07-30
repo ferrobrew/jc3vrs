@@ -162,12 +162,12 @@ while the final-composite half (`BackBufferLinear` and the two back-buffer setup
 the live back buffer through `GetDeviceSurface(BACK_BUFFER)`. Freeing that half means replacing those
 three objects after `CreateRenderSetups` has built them, which is a thing the engine offers no seam
 for and mod code must do itself. Nothing has to be suppressed alongside it: there is no final resolve
-into the back buffer, because the composite writes straight into the alias (`docs/engine/rendering.md`
-§12). JC3VRS does exactly this; see [`docs/mod/swapchain-ownership.md`](../mod/swapchain-ownership.md).
+into the back buffer, because the composite writes straight into the alias (`docs/engine/rendering/rendering.md`
+§12). JC3VRS does exactly this; see [`docs/mod/stereo/swapchain-ownership.md`](../../mod/stereo/swapchain-ownership.md).
 
 ## 5. Viewports and other size-derived state
 
-**Viewports follow automatically**, confirming `docs/engine/rendering.md` §9. `Graphics::SetRenderSetup`, on
+**Viewports follow automatically**, confirming `docs/engine/rendering/rendering.md` §9. `Graphics::SetRenderSetup`, on
 binding a setup, sets the viewport to the bound colour/depth target's own `m_Width`/`m_Height`
 (`vp = {0, 0, target->m_Width, target->m_Height, 0, 1}`), so every pass's viewport is its bound RT's
 size. Re-running `CreateRenderSetups` at a new size re-creates the RTs at that size and the per-pass
@@ -206,8 +206,8 @@ frame boundary. And it must be the *whole* walk, not just `CreateRenderSetups`: 
 follow only through the registered resize callbacks in step 7, and the Scaleform view size only
 through the UI reset in steps 3 and 9 (§3, §5).
 
-For how JC3VRS drives it, see [`docs/mod/vr-runtime.md`](../mod/vr-runtime.md) and
-[`docs/mod/swapchain-ownership.md`](../mod/swapchain-ownership.md).
+For how JC3VRS drives it, see [`docs/mod/vr-runtime.md`](../../mod/vr-runtime.md) and
+[`docs/mod/stereo/swapchain-ownership.md`](../../mod/stereo/swapchain-ownership.md).
 
 ## 7. Open unknowns
 

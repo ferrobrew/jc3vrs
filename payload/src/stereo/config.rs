@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// can be read or skipped as a unit, which is what a paused feature wants.
 #[derive(Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SinglePassConfig {
-    /// Master switch for single-pass stereo (experimental; see `docs/mod/single-pass-stereo.md`).
+    /// Master switch for single-pass stereo (experimental; see `docs/mod/stereo/single-pass-stereo.md`).
     /// Instead of the double-draw (two full `game.Draw` walks, one per eye), render the G-buffer
     /// geometry once with the vertex shaders patched to emit both eyes via instancing +
     /// `SV_ViewportArrayIndex` routing into a double-wide render target. Off by default: the whole
@@ -52,7 +52,7 @@ pub struct SinglePassConfig {
     /// directory on a shader reload.
     ///
     /// The reprojection allowlist is baked in and the census it was built from is committed to
-    /// `docs/mod/single-pass-stereo.md`, so this is off by default. It earns a runtime flag rather
+    /// `docs/mod/stereo/single-pass-stereo.md`, so this is off by default. It earns a runtime flag rather
     /// than a rebuild because a census only sees the shaders created while it runs: an area that
     /// never loaded a family leaves that family out, and re-censusing is the way to catch one --
     /// which is a thing to do in a session, not a thing to recompile for.
@@ -616,7 +616,7 @@ pub struct StereoConfig {
     /// block against the camera manager's active-camera frustum planes (`CModelInstance::AddToRender` ->
     /// `CCamera::IsBoxVisible`), a second gate the scene-cull widen above does not touch -- so large
     /// buildings pop out at the combined-eye edge even with the scene cull widened (see
-    /// `docs/engine/model-culling.md`). This detours `Camera::UpdateFrustum` and, for the active camera,
+    /// `docs/engine/rendering/model-culling.md`). This detours `Camera::UpdateFrustum` and, for the active camera,
     /// rebuilds its six frustum planes from the union projection (restoring `m_ViewProjection` so
     /// rendering is untouched), which also fixes the instant-hide-instead-of-fade pop, road meshes, and
     /// far lights that read the same planes. Once per frame; VR only.

@@ -2,7 +2,7 @@
 
 The monoscopic far field: identify the far-regime scene work, skip it for dial-in, and (next)
 render it once per frame and share it between the eyes. The engine-side ground truth and the
-dead-end record live in [`../issues/32-monoscopic-far-field.md`](../issues/32-monoscopic-far-field.md);
+dead-end record live in [`../issues/32-monoscopic-far-field.md`](../../issues/32-monoscopic-far-field.md);
 this is the mod design.
 
 ## Increment 1 — classification (shipped, `payload/src/far_field.rs`)

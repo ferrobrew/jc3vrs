@@ -32,7 +32,7 @@ pub(super) static DRAW: DetourSlot<DrawFn> = DetourSlot::new();
 /// by the instance id, so doubling the count reads past the instance data. Instead [`instanced_per_eye`]
 /// makes the parity irrelevant, re-issuing the draw once per eye with both `cb13` eye slots and both
 /// viewport slots pinned to that eye -- the bucket-(d) mechanism in
-/// `docs/mod/single-pass-render-blocks.md`.
+/// `docs/mod/stereo/single-pass-render-blocks.md`.
 pub(super) static DRAW_INDEXED_INSTANCED: DetourSlot<DrawIndexedInstancedFn> = DetourSlot::new();
 
 /// Handle a `DrawIndexed` while the dual-eye G-buffer geometry is drawing. A **patched** shader is

@@ -257,7 +257,7 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
             drop(snapshot_scope);
 
             // The per-eye camera offset is injected on the render camera in the SetupRenderCamera
-            // hook (see hooks::camera and docs/engine/rendering.md section 2); here we just drive
+            // hook (see hooks::camera and docs/engine/rendering/rendering.md section 2); here we just drive
             // the dispatches and tag each with its eye index via STEREO_STATE.draw_index.
             // present_eye_0 picks which eye reaches the screen (the other's flip is blocked), so
             // each eye can be compared live. A share frame (issue #32) prepends a far-only

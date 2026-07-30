@@ -1,6 +1,6 @@
 # Input
 
-Just Cause 3's local-player input runs through a single action-effector map plus a separate movie-facing mouse pipeline for the Scaleform UI. This is the engine's own read/write surface for both — the effector accessors, the action-ID table, the write API, an anti-tamper protection to avoid, the mouse/UI pipeline, and the semantic button-mapping layer above the raw actions — as ground truth for whatever mod code taps or drives it (see `docs/mod/input.md`).
+Just Cause 3's local-player input runs through a single action-effector map plus a separate movie-facing mouse pipeline for the Scaleform UI. This is the engine's own read/write surface for both — the effector accessors, the action-ID table, the write API, an anti-tamper protection to avoid, the mouse/UI pipeline, and the semantic button-mapping layer above the raw actions — as ground truth for whatever mod code taps or drives it (see `docs/mod/input/input.md`).
 
 ## Action effectors
 
@@ -37,7 +37,7 @@ For ground-truth debugging, `MovieImpl.MouseStates[0].LastPosition` (stage twips
 
 ## The semantic button layer
 
-`CButtonMapping::EMapping` partitions mappings by mode with `END_*` markers: generic, on-foot plus context-specific on-foot, generic vehicle, land (car/motorcycle), sea (boat/jetski), air (heli/plane), UI, weaponized wingsuit, and mech. On foot only `MAPPING_FIRE_RIGHT` exists — there is no fire-left; dual-wield alternates barrels internally off one input, and `FIRE_LEFT` is consulted only in vehicle/mounted contexts. The mapping-to-action table is **code-built** (not a data file), recovered below. `CPlayerActionObserver` keys button-hint prompts off it. The default *key/axis* bindings ship separately as `settings/keymap_gamepad.bin` and `keymap_keyboard.bin` (RTPC containers, extractable with the Gibbed tools per the RE skill; see `docs/mod/controllers-and-roomscale.md` for the extracted gamepad layout); those bind physical inputs to the action IDs, while the table below binds each semantic mapping to the action ID(s) it consults.
+`CButtonMapping::EMapping` partitions mappings by mode with `END_*` markers: generic, on-foot plus context-specific on-foot, generic vehicle, land (car/motorcycle), sea (boat/jetski), air (heli/plane), UI, weaponized wingsuit, and mech. On foot only `MAPPING_FIRE_RIGHT` exists — there is no fire-left; dual-wield alternates barrels internally off one input, and `FIRE_LEFT` is consulted only in vehicle/mounted contexts. The mapping-to-action table is **code-built** (not a data file), recovered below. `CPlayerActionObserver` keys button-hint prompts off it. The default *key/axis* bindings ship separately as `settings/keymap_gamepad.bin` and `keymap_keyboard.bin` (RTPC containers, extractable with the Gibbed tools per the RE skill; see `docs/mod/input/controllers-and-roomscale.md` for the extracted gamepad layout); those bind physical inputs to the action IDs, while the table below binds each semantic mapping to the action ID(s) it consults.
 
 ## The mapping → action table
 

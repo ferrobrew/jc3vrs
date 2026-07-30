@@ -1,7 +1,7 @@
 //! Mod-owned back buffer: substitute a mod-allocated render target for the engine's swapchain-derived
 //! one, so the render resolution and the swapchain size stop being the same number.
 //!
-//! See `docs/mod/swapchain-ownership.md` for the full design and the reverse-engineering behind it.
+//! See `docs/mod/stereo/swapchain-ownership.md` for the full design and the reverse-engineering behind it.
 //! The short version: the engine builds `m_BackBufferLinear` as a *format alias of DXGI back buffer
 //! 0*, so resizing the scene to the per-eye render resolution drags the swapchain along with it, and
 //! the desktop present then rescales the whole frame onto a window of a different size and shape.
@@ -29,7 +29,7 @@
 //!
 //! Substitution is live only while it buys something: [`crate::vr::resolution`] takes ownership only
 //! while it is driving a render size of its own -- an XR session with `vr.native_resolution` on --
-//! and only with `vr.own_back_buffer` set (`docs/mod/swapchain-ownership.md` §8). Outside that, every
+//! and only with `vr.own_back_buffer` set (`docs/mod/stereo/swapchain-ownership.md` §8). Outside that, every
 //! path here is inert and the engine's own objects stand untouched.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -445,7 +445,7 @@ unsafe fn substitute(engine: &mut GraphicsEngine) -> anyhow::Result<()> {
 }
 
 /// Create the mod-owned backing texture: a plain single-mip render target in the format the engine's
-/// own back buffer uses, so no alias is needed to bridge a format gap (`docs/mod/swapchain-ownership.md` §4.5).
+/// own back buffer uses, so no alias is needed to bridge a format gap (`docs/mod/stereo/swapchain-ownership.md` §4.5).
 ///
 /// # Safety
 /// `device` must be the live graphics device.

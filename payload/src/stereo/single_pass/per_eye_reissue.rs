@@ -505,7 +505,7 @@ pub(super) static SET_VERTEX_PROGRAM_CONSTANTS: DetourSlot<SetVertexProgramConst
 /// The transform is applied entry-wise (`M_eye · cb[k]`) because the vertex shaders that consume these
 /// registers build clip with a multiply-add chain (`clip = Σ_i p_i · cb[k+i]`) rather than four `dp4`s:
 /// each register is a *column* of the baked matrix, not a row. Confirmed against the bundle's Bark,
-/// Foliage and Occluder vertex shaders; see `docs/mod/single-pass-render-blocks.md`. (`cb13`'s own
+/// Foliage and Occluder vertex shaders; see `docs/mod/stereo/single-pass-render-blocks.md`. (`cb13`'s own
 /// `M_eye` block is the opposite convention -- the rewriter's epilogue *is* a `dp4` chain -- so
 /// [`write_meye`] stores rows there.)
 pub(super) unsafe extern "system" fn set_vertex_program_constants_detour(

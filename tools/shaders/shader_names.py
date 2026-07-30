@@ -3,7 +3,7 @@
 
 The bundle is an ADF container holding a single ``ShaderLibrary`` instance, which carries six arrays
 of ``Shader`` records — one per program type. Each record names a shader and points at its DXBC blob,
-so the bundle names every blob it contains; see ``docs/engine/shaders.md`` for the layout.
+so the bundle names every blob it contains; see ``docs/engine/rendering/shaders.md`` for the layout.
 
 If the ADF header does not parse (a truncated file, or a bundle from another build whose header
 differs), this falls back to a backwards scan for the null-padded ASCII that precedes each ``DXBC``
