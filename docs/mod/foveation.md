@@ -102,11 +102,22 @@ The design above is implemented, on by default, across:
   foveal_first_pass, foveal_last_pass}` (`config.rs`), surfaced in the "Foveation" debug section.
   `enabled` defaults **true**.
 
+## Hardware findings
+
+The first in-headset validation caught a raw-state hazard the design missed: the fill-in draw runs on
+the immediate context with the pipeline state it binds itself, and it originally bound everything
+*except* a blend state — so it inherited whatever blend the engine's last scene block left on the
+context. An inherited additive/alpha state made the fill add its neighbour-averaged reconstruction
+over the entire already-shaded frame (~2x global brightness), latched for as long as the scene kept
+producing the same leftover state and flipping with head pose. `bind_fullscreen` now binds an
+explicit opaque blend (the state backup already restored the engine's blend afterwards). The lesson
+generalizes: a raw pass on the engine's context must bind *every* state stage it depends on, not
+just the ones it obviously uses.
+
 ## Open items (needs in-headset validation)
 
-The feature ships on by default. It is untested on hardware and touches the hottest render path, so it
-can be disabled (config or debug UI) if it perturbs the concurrent #30 / #31 validation. What
-still needs confirming in a headset:
+The feature ships on by default and touches the hottest render path, so it can be disabled (config
+or debug UI) if it perturbs concurrent validation work. What still needs confirming in a headset:
 
 - **The default foveated pass range** (`0x41 RP_MODELS_DYNAMIC` … `0x4B RP_CREATURES`) is a starting
   guess. It must sit *after* the depth prepass (so dropped pixels keep full-resolution depth) and cover
