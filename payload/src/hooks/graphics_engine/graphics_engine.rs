@@ -19,6 +19,7 @@ use crate::{
     debug::trace::{TraceEvent, TraceState},
     hud,
     hud::egui_panel::draw_quad,
+    screenshot::CaptureSource,
     stereo::single_pass::{collapse_active, set_collapse_ui_eye},
 };
 
@@ -327,14 +328,31 @@ fn render_engine_post_draw(render_engine: *mut RenderEngine, context: *mut Conte
                 context.m_Context.CopyResource(dst, &src.m_Texture);
             }
 
-            // Service an F12 screenshot request: the linear back buffer is this frame's final render
-            // (under collapse, both eye-halves side by side). A no-op unless one was requested.
+            // Service an F12 screenshot request with a source that carries both eyes. Under
+            // collapse the linear back buffer already holds the two eye-halves side by side; in
+            // two-pass stereo it only holds the eye that just rendered, so the per-eye capture
+            // textures (copied just above) are stitched instead -- serviced on the second eye's
+            // dispatch, when both hold the current frame. A no-op unless one was requested.
             if let Some(device) = graphics_engine.m_Device.as_ref() {
-                crate::screenshot::capture_if_requested(
-                    &device.m_Device,
-                    &context.m_Context,
-                    &src.m_Texture,
-                );
+                let two_pass_stereo = crate::stereo::active() && !collapse_active();
+                let source = if !two_pass_stereo {
+                    Some(CaptureSource::Full(&src.m_Texture))
+                } else if index != 1 || crate::stereo::far_phase() {
+                    None
+                } else if let [Some(left), Some(right)] = &eye_textures {
+                    Some(CaptureSource::Eyes([left, right]))
+                } else {
+                    // A missing eye capture (the pair is being rebuilt across a resize) still
+                    // yields a screenshot -- of this eye's back buffer -- rather than none.
+                    Some(CaptureSource::Full(&src.m_Texture))
+                };
+                if let Some(source) = source {
+                    crate::screenshot::capture_if_requested(
+                        &device.m_Device,
+                        &context.m_Context,
+                        source,
+                    );
+                }
             }
         }
 
