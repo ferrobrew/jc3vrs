@@ -417,7 +417,7 @@ fn force_face_camera(
 /// Under the **flatscreen sim** it is the decoupled-idle-not-aiming state: the latch owns body
 /// turning past its threshold, and while idle within the cone the head moves freely, so the body is
 /// held only in that specific window.
-fn head_decoupled(character: &Character) -> bool {
+pub(super) fn head_decoupled(character: &Character) -> bool {
     if !crate::headpose::is_active() {
         return false;
     }

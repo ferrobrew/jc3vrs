@@ -72,6 +72,16 @@ pub struct MovementConfig {
     /// decoupled (the VR source), routing the jump through its non-aiming fallback (current forward
     /// plus stick-gated steer). Restored immediately after. See `crate::hooks::input::locomotion`.
     pub suppress_air_aim_facing: bool,
+    /// Remove the camera-relative look-steer from the parachute's steering for the local player
+    /// while the head is decoupled. The parachute steering helper
+    /// (`NParachuteMovement::GetParachuteSteeringValues`) mixes the *camera input matrix* (the HMD
+    /// in VR) into the parachute's steering values and its yaw/pitch velocity springs through the
+    /// look-steer block (`m_LookSteer*`, deadzone + max-yaw + exponential shaping) -- so turning
+    /// the head past the deadzone turns the chute with no stick input. This subtracts that
+    /// look-steer contribution from the steering outputs and zeroes `look_steer_out` while the
+    /// head is decoupled, keeping the stick input and the velocity alignment intact. Inert without
+    /// a headpose (flatscreen without the latch). See `crate::hooks::input::parachute`.
+    pub suppress_parachute_look_steer: bool,
     /// Suppress Rico's periodic idle fidget for the local player -- the weight-shifts and
     /// look-arounds the game plays while standing still. The idle input task
     /// (`NStateTask_InputLocoIdleTask`) queues `ACT_TO_IDLE_ONE_OFF` on an idle timer to drive the
@@ -108,6 +118,7 @@ impl MovementConfig {
             slide_skip_starts: true,
             suppress_reverse_look: true,
             suppress_air_aim_facing: true,
+            suppress_parachute_look_steer: true,
             suppress_idle_fidget: true,
             suppress_idle_breathing: false,
         }

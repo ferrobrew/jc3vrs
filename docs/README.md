@@ -29,6 +29,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering/rendering.md)
 - [input.md](engine/gameplay/input.md) — the action effector system, action ids, the write API, the semantic button-mapping layer, and the mouse/UI pipeline.
 - [aim-pipeline.md](engine/gameplay/aim-pipeline.md) — how the player aims and fires: the per-consumer aim target cache, shot construction, dual-wield, auto-aim, and the camera getters.
 - [grapple-pipeline.md](engine/gameplay/grapple-pipeline.md) — grapple targeting, hook flight and attach, and the zip/tether/retract dispatch.
+- [parachute-locomotion.md](engine/gameplay/parachute-locomotion.md) — the parachute state task and steering core, and how the camera input matrix is mixed into the chute's steering through the look-steer block.
 
 ## mod/
 
@@ -59,6 +60,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering/rendering.md)
 
 - [head-and-body.md](mod/body/head-and-body.md) — how head and body yaw relate in VR: coupling schemes, the headpose abstraction, the head-bone override, head hiding, and body IK.
 - [grapple-comfort.md](mod/body/grapple-comfort.md) — the grapple body-frame filter (issue #36): the hold from fire to landing, the yaw handoff, the landing-snap absorber, and the telemetry capture.
+- [parachute-yaw.md](mod/body/parachute-yaw.md) — parachute head-yaw suppression (issue #48): removing the camera-relative look-steer from the chute's steering so the head does not turn it.
 
 ### input/
 

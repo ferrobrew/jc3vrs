@@ -11,9 +11,12 @@ use crate::{
     config,
     hooks::{
         self,
-        input::locomotion::{
-            AIM_RELATIVE_TASK_CALLS, FACE_CAMERA_CALLS, INSTANT_SPEED_FLOORS, MOVE_TASK_CALLS,
-            SHIMMED_CALLS, SKIPPED_STARTS, SLIDE_CALLS,
+        input::{
+            locomotion::{
+                AIM_RELATIVE_TASK_CALLS, FACE_CAMERA_CALLS, INSTANT_SPEED_FLOORS, MOVE_TASK_CALLS,
+                SHIMMED_CALLS, SKIPPED_STARTS, SLIDE_CALLS,
+            },
+            parachute::PARACHUTE_LOOK_STEER_SUPPRESSIONS,
         },
     },
     ui::util::{patch_slider, patchbox},
@@ -122,6 +125,17 @@ pub fn egui_debug_game(ui: &mut egui::Ui) {
                  sliding, when the animation state machine accepts it (the game's own TryAct \
                  pre-flight guards the swap; the native starts run as the fallback).",
                 );
+                ui.checkbox(
+                    &mut cfg.movement.suppress_parachute_look_steer,
+                    "Suppress parachute look-steer (head must not turn the chute)",
+                )
+                .on_hover_text(
+                    "Remove the camera-relative look-steer from the parachute's steering while \
+                     the head is decoupled (VR). The parachute steering helper mixes the camera \
+                     input matrix into the chute's steering and its yaw/pitch velocity springs, \
+                     so turning the head past the deadzone turns the chute with no stick input. \
+                     Stick steering and velocity banking stay.",
+                );
             }
             // The game's own relaxed (no-aim) strafe support, left in release from the dev menu:
             // while enabled, `QueueMoveActions` queues `ACT_MOVE_NO_AIM_STRAFE` -- a neutral-stance
@@ -156,6 +170,10 @@ pub fn egui_debug_game(ui: &mut egui::Ui) {
                 SLIDE_CALLS.load(Ordering::Relaxed),
                 SKIPPED_STARTS.load(Ordering::Relaxed),
                 INSTANT_SPEED_FLOORS.load(Ordering::Relaxed),
+            ));
+            ui.label(format!(
+                "Parachute: look-steer suppressions {}",
+                PARACHUTE_LOOK_STEER_SUPPRESSIONS.load(Ordering::Relaxed),
             ));
             match hooks::input::locomotion::debug_blackboard_snapshot() {
                 Some(snapshot) => {
