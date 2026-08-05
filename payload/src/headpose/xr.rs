@@ -39,12 +39,14 @@ use glam::{Quat, Vec3};
 use parking_lot::Mutex;
 
 use crate::{
+    config::Config,
     grapple,
     headpose::{
         HeadPose,
         config::{HeadPoseConfig, VrTurnMode},
         sim,
     },
+    hooks::input::swim::swimming,
 };
 
 /// Compose a world-space head pose from a cockpit-frame center pose and the body frame. Pure and
@@ -118,9 +120,21 @@ pub fn cockpit_pose() -> Option<CockpitPose> {
 /// on-foot tick after a gap, so landing on foot never snaps the body, and cleared while off foot so
 /// the next landing re-seeds. `look_x` follows the same sign convention as the flatscreen head yaw:
 /// a rightward look turns the heading clockwise (a negative rotation about +Y).
-pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &HeadPoseConfig) {
+///
+/// `swimming` is passed separately from `on_foot` only to keep the accumulator alive: the swim
+/// family never runs the on-foot orientation evaluator, so without it the accumulator would clear
+/// the moment the player entered water and the right stick would stop steering the body. The lead
+/// clamp below applies identically in both, since in water the body now turns because of the target
+/// too (see [`crate::hooks::input::swim`]).
+pub fn advance_body_yaw(
+    look_x: f32,
+    delta_based: bool,
+    on_foot: bool,
+    swimming: bool,
+    config: &HeadPoseConfig,
+) {
     let mut s = BODY_YAW.lock();
-    if !on_foot {
+    if !on_foot && !swimming {
         s.yaw = None;
         s.snap_armed = true;
         // Any pending grapple retarget is left unconsumed: it is aimed at the next on-foot tick.
@@ -134,6 +148,13 @@ pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &
     }
 
     let turn = &config.vr_turn;
+    // Swimming tracks the accumulator one-for-one, where on foot the game's executor rate smooths
+    // it, so the same input turns faster. Snap keeps its step: a scaled snap is a different size.
+    let rate_scale = if swimming {
+        turn.swim_scale.max(0.0)
+    } else {
+        1.0
+    };
     let mut yaw = s
         .yaw
         .unwrap_or_else(|| sim::body_yaw_of(body_rotation_raw()));
@@ -145,10 +166,13 @@ pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &
                 // scale with no deadzone (a slow mouse move is a small real delta, not stick drift).
                 // Running it through the stick rate (sensitivity * smooth_scale) oversteers and the
                 // deadzone drops slow motion -- the reported overshoot and stop-start.
-                yaw = sim::wrap_angle(yaw - (look_x * turn.mouse_turn_scale).to_radians());
+                yaw = sim::wrap_angle(
+                    yaw - (look_x * turn.mouse_turn_scale * rate_scale).to_radians(),
+                );
             } else if look_x.abs() >= turn.deadzone {
                 // Stick: an absolute axis integrated as a per-tick rate.
-                let delta = (look_x * config.mouse_sensitivity * turn.smooth_scale).to_radians();
+                let delta = (look_x * config.mouse_sensitivity * turn.smooth_scale * rate_scale)
+                    .to_radians();
                 yaw = sim::wrap_angle(yaw - delta);
             }
         }
@@ -165,10 +189,9 @@ pub fn advance_body_yaw(look_x: f32, delta_based: bool, on_foot: bool, config: &
         }
     }
 
-    // Clamp how far the accumulated target may lead the body's current facing: the body chases the
-    // target at a rate limit, so a big input jump (a mouse flick) otherwise keeps the body turning for
-    // many ticks after the input stops, and once the lead passes 180° the shortest-arc catch-up
-    // reverses -- the "keeps turning" and "wrong direction" reports.
+    // Clamp how far the target may lead the body, re-anchoring it each tick: the body chases at a
+    // rate limit, so a big input jump otherwise keeps it turning after the input stops, and past a
+    // 180° lead the shortest-arc catch-up reverses.
     let body = sim::body_yaw_of(body_rotation_raw());
     let max_lead = turn.max_body_lead_deg.max(0.0).to_radians();
     let lead = sim::wrap_angle(yaw - body).clamp(-max_lead, max_lead);
@@ -204,7 +227,7 @@ struct VrBodyYaw {
 /// full rotational authority (see [`crate::grapple`]). Consumers that steer the actual character
 /// rather than the view must use [`body_rotation_raw`] instead.
 pub fn body_rotation() -> Quat {
-    grapple::filter_body_rotation(body_rotation_raw())
+    level_while_swimming(grapple::filter_body_rotation(body_rotation_raw()))
 }
 
 /// The local player character's world rotation as the engine holds it, unfiltered. The body-yaw
@@ -219,9 +242,30 @@ pub fn body_rotation_raw() -> Quat {
 /// engine's sub-frame interpolation smooths body rotation (vehicles, parachuting) rather than
 /// stepping it at the tick rate.
 pub fn body_rotation_prev() -> Quat {
-    grapple::filter_body_rotation(body_rotation_from(|character| {
-        glam::Mat4::from(character.m_WorldMatrixT0)
-    }))
+    level_while_swimming(grapple::filter_body_rotation(body_rotation_from(
+        |character| glam::Mat4::from(character.m_WorldMatrixT0),
+    )))
+}
+
+/// Drop the body's pitch and roll from the view frame while swimming, leaving its yaw, so the camera
+/// moves with the head alone and the body's dive pitch only steers the swim. Deliberately scoped to
+/// swimming: a banking wingsuit wants its pitch and roll in the view.
+fn level_while_swimming(rotation: Quat) -> Quat {
+    if !Config::lock_query(|c| c.headpose.swim_level_view) || !swimming() {
+        return rotation;
+    }
+    yaw_only(rotation)
+}
+
+/// `rotation` with its pitch and roll removed: the rotation about +Y that takes -Z to the ground
+/// projection of `rotation`'s forward. Falls back to the euler yaw when the forward is vertical and
+/// that projection has no direction.
+fn yaw_only(rotation: Quat) -> Quat {
+    let forward = rotation * Vec3::NEG_Z;
+    match Vec3::new(forward.x, 0.0, forward.z).try_normalize() {
+        Some(flat) => Quat::from_rotation_arc(Vec3::NEG_Z, flat),
+        None => Quat::from_rotation_y(sim::body_yaw_of(rotation)),
+    }
 }
 
 /// Extract the local player's world rotation from the world matrix `world_of` selects. Identity when
@@ -245,6 +289,32 @@ fn body_rotation_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Levelling keeps the heading and removes everything else: a body pitched and rolled hard still
+    /// yields a pure yaw about +Y whose forward matches the original's ground projection.
+    #[test]
+    fn yaw_only_keeps_heading_and_drops_pitch_and_roll() {
+        let rotation = Quat::from_euler(glam::EulerRot::YXZ, 0.7, -0.9, 0.4);
+        let levelled = yaw_only(rotation);
+        let forward = levelled * Vec3::NEG_Z;
+        assert!(forward.y.abs() < 1e-5, "levelled forward must be flat");
+        assert!(
+            (levelled * Vec3::Y).distance(Vec3::Y) < 1e-5,
+            "up must stay up"
+        );
+        let want = (rotation * Vec3::NEG_Z) * Vec3::new(1.0, 0.0, 1.0);
+        assert!(
+            forward.angle_between(want.normalize()) < 1e-4,
+            "heading must be preserved"
+        );
+    }
+
+    /// A body already upright is left alone, so the levelling is inert outside water-like poses.
+    #[test]
+    fn yaw_only_is_identity_for_an_upright_body() {
+        let rotation = Quat::from_rotation_y(-1.2);
+        assert!(yaw_only(rotation).angle_between(rotation) < 1e-5);
+    }
 
     /// With an upright body, identity cockpit orientation, and unit scale, the world pose is the
     /// anchor plus the cockpit translation, oriented by the body.

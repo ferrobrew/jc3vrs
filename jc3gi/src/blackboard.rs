@@ -100,6 +100,12 @@ impl ObjectBlackboard {
     /// The id of the float speed value the input locomotion tasks branch on (`<= 0` routes into
     /// the stop acts).
     pub const SPEED_ID: u32 = 3396837917;
+    /// The id of the float turn angle (degrees) the swim input tasks write when they latch an
+    /// animated turn: the XZ angle from the body forward to the desired direction, measured by
+    /// `CControllerUtility::GetDeltaAngleFromOrientation` and stored alongside the
+    /// `m_AnimatedTurnBaseDir`/`m_AnimatedTurnTargetDir` pair the swim movement actuators slerp
+    /// between across the angle-correction animation segment.
+    pub const SWIM_TURN_ANGLE_ID: u32 = 2828323117;
     /// The id of the target face direction (`CVector3f`): the desired body facing the orientation
     /// executor yaws toward in its tracking mode. Written per-state by the game's
     /// `SetUpTargetFaceDir` tasks.

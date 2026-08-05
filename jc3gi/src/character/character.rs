@@ -93,6 +93,21 @@ impl AnimationController {
             f(self as *const Self as _, hash)
         }
     }
+    pub const GetRawRootVelocity_ADDRESS: usize = 0x140434F20;
+    /// The current animation's unfiltered root velocity, in the character's local frame. The
+    /// movement actuators take its horizontal magnitude as the character's speed for the frame, so
+    /// the shipped clips are what set how fast a given locomotion state travels -- both swim
+    /// movement cores scale their wanted velocity by it.
+    pub unsafe fn GetRawRootVelocity(&self) -> *const crate::types::math::Vector3 {
+        unsafe {
+            let f: unsafe extern "system" fn(
+                this: *const Self,
+            ) -> *const crate::types::math::Vector3 = ::std::mem::transmute(
+                Self::GetRawRootVelocity_ADDRESS,
+            );
+            f(self as *const Self as _)
+        }
+    }
     pub const GetBoneMatrix_ADDRESS: usize = 0x14043FE70;
     pub unsafe fn GetBoneMatrix(
         &self,
@@ -188,14 +203,27 @@ pub struct Character {
     /// [`HumanIK`](crate::animation::ik::HumanIK) for the per-pass lifecycle.
     pub m_HIK: crate::animation::ik::HumanIK,
     pub m_AnimatedModel: crate::character::character::AnimatedModel,
-    _field_19c0: [u8; 1696],
+    _field_19c0: [u8; 1680],
+    /// The character's physics-side body instance. The movement actuators drive the character
+    /// through it: they write the wanted velocity into its input and its orientation through
+    /// [`SetOrientation`](crate::physics::PfxCharacterInstance::SetOrientation).
+    pub m_PfxCharacter: crate::types::shared_ptr::SharedPtr<
+        crate::physics::PfxCharacterInstance,
+    >,
     /// The character's embedded [`ObjectBlackboard`](crate::blackboard::ObjectBlackboard) (`lea rcx, [character+2060h]` at every
     /// blackboard call site in the loco tasks).
     pub m_Blackboard: crate::blackboard::ObjectBlackboard,
     _field_2090: [u8; 97],
     /// Packed aiming-state bit-flags; see [`AimState`](crate::character::character::AimState).
     pub m_AimFlags: crate::character::character::AimState,
-    _field_20f2: [u8; 1336],
+    _field_20f2: [u8; 930],
+    /// How the character's motion is integrated this frame (`CCharacter::EMotionState`), read by
+    /// the dispatch in `CCharacter::UpdateIntegratingPhysics`. Each movement actuator sets it as
+    /// part of its per-frame update. Left as a raw integer because only a few of its ~25 values have
+    /// been confirmed against the release build: `MOTION_STATE_SWIMMING` and `MOTION_STATE_RAGDOLL`
+    /// on this type.
+    pub m_CurrentMotionState: u32,
+    _field_2498: [u8; 402],
     pub m_IsLocalCharacter: bool,
     _field_262b: [u8; 353],
     /// Per-character LOD/update-gating flags; see [`CharacterLodFlags`](crate::character::character::CharacterLodFlags).
@@ -219,7 +247,10 @@ pub struct Character {
     /// play a one-off idle break, then resets it to a random ~8.5-12 s the next time the character's
     /// aim reference moves.
     pub m_IdleFidgetTimer: f32,
-    _field_2bb4: [u8; 2444],
+    _field_2bb4: [u8; 1104],
+    /// The swim locomotion family's per-character state; see [`SwimActionParams`](crate::character::swim_action_params::SwimActionParams).
+    pub m_SwimActionParams: crate::character::swim_action_params::SwimActionParams,
+    _field_3280: [u8; 704],
 }
 fn _Character_size_check() {
     unsafe {
@@ -390,6 +421,12 @@ impl Character {
             f(self as *mut Self as _, act)
         }
     }
+}
+impl Character {
+    /// `m_CurrentMotionState` while ragdolling.
+    pub const MOTION_STATE_RAGDOLL: u32 = 20;
+    /// `m_CurrentMotionState` while swimming, written by both swim movement cores every frame.
+    pub const MOTION_STATE_SWIMMING: u32 = 24;
 }
 impl std::convert::AsRef<Character> for Character {
     fn as_ref(&self) -> &Character {

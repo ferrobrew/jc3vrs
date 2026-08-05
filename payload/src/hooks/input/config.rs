@@ -64,6 +64,27 @@ pub struct MovementConfig {
     /// with a player-driven head, looking behind is the player's job, and the forced body turn is
     /// discomforting.
     pub suppress_reverse_look: bool,
+    /// Give the right stick the swim heading. The swim family bypasses the on-foot orientation
+    /// executor and steers by the *camera*-relative stick in act-sized chunks, which in VR -- where
+    /// the view rides the body frame -- snaps the whole world. This aims both the move direction and
+    /// the cores' heading rotation at the right-stick body-yaw target instead, and refuses backward
+    /// input (there is no backstroke). See `crate::hooks::input::swim`. Inert without a headpose
+    /// body-yaw target, so flatscreen keeps the native behaviour.
+    pub smooth_swim_yaw: bool,
+    /// The rate, in degrees per second, the body is turned toward the swim heading. Must stay above
+    /// the look input's own rate, or the body trails the target and the turn continues after the
+    /// stick is released; the shipped rates (~69 at the surface, ~30 underwater) are far below it.
+    /// Capped per frame by the angle `DoRotate` eases out over, so it cannot overshoot.
+    pub swim_turn_rate_deg_s: f32,
+    /// The head pitch, in degrees, within which the underwater dive control does nothing, so a
+    /// resting head does not slowly dive or surface the swimmer.
+    pub swim_pitch_deadzone_deg: f32,
+    /// The furthest the underwater dive control will pitch the body, in degrees. Kept short of
+    /// vertical, where a heading is undefined.
+    pub swim_pitch_limit_deg: f32,
+    /// How fast, in degrees per second, the underwater dive pitch follows the head. Slower than the
+    /// yaw rate on purpose: a dive that snaps as fast as a turn reads as the world tipping over.
+    pub swim_pitch_rate_deg_s: f32,
     /// Suppress the head-driven body turn during a jump. The airborne actuator
     /// (`NStateTask_MovementJumpTask::Update`) faces the body at the weapon-aim target while
     /// [`m_AimingWeapon`](jc3gi::character::character::AimState::m_AimingWeapon) is set, and in VR
@@ -116,6 +137,11 @@ impl MovementConfig {
             slide_rotation_deg: 0.0,
             slide_instant_speed: true,
             slide_skip_starts: true,
+            smooth_swim_yaw: true,
+            swim_turn_rate_deg_s: 360.0,
+            swim_pitch_deadzone_deg: 12.0,
+            swim_pitch_limit_deg: 55.0,
+            swim_pitch_rate_deg_s: 60.0,
             suppress_reverse_look: true,
             suppress_air_aim_facing: true,
             suppress_parachute_look_steer: true,

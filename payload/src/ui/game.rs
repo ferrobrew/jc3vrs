@@ -17,6 +17,10 @@ use crate::{
                 SHIMMED_CALLS, SKIPPED_STARTS, SLIDE_CALLS,
             },
             parachute::PARACHUTE_LOOK_STEER_SUPPRESSIONS,
+            swim::{
+                SWIM_BACKWARD_REFUSALS, SWIM_DIRECTION_OVERRIDES, SWIM_EVAL_CALLS,
+                SWIM_ROTATE_OVERRIDES, SWIM_TURN_SUPPRESSIONS,
+            },
         },
     },
     ui::util::{patch_slider, patchbox},
@@ -126,6 +130,62 @@ pub fn egui_debug_game(ui: &mut egui::Ui) {
                  pre-flight guards the swap; the native starts run as the fallback).",
                 );
                 ui.checkbox(
+                    &mut cfg.movement.smooth_swim_yaw,
+                    "Smooth swim yaw (right-stick heading in water)",
+                )
+                .on_hover_text(
+                    "Aim both the swim move direction and the body's heading rotation at the \
+                 heading you own with the right stick: the camera has no influence, the left stick \
+                 swims forward along that heading (backward is refused -- there is no backstroke), \
+                 and the game's act-quantized turn steps never trigger. Inert on flatscreen or \
+                 before the right-stick yaw target seeds.",
+                );
+                ui.checkbox(
+                    &mut cfg.headpose.swim_level_view,
+                    "Level the view while swimming (camera follows the head only)",
+                )
+                .on_hover_text(
+                    "Compose the head onto the body's yaw only while swimming, so the camera moves \
+                     exactly with your head and the body's dive pitch just steers the swim. Off, \
+                     the body's pitch adds to your head's and the view swings further than you \
+                     moved. Costs the surface bob and roll.",
+                );
+                ui.add(
+                    egui::Slider::new(&mut cfg.headpose.vr_turn.swim_scale, 0.1..=2.0)
+                        .text("Swim turn sensitivity (x on-foot look rate)"),
+                )
+                .on_hover_text(
+                    "Scales the right-stick turn rate while swimming. In water the body tracks the \
+                     look input one-for-one, where on foot the game's own executor rate smooths it, \
+                     so the same input turns faster there.",
+                );
+                ui.add(
+                    egui::Slider::new(&mut cfg.movement.swim_turn_rate_deg_s, 180.0..=540.0)
+                        .text("Swim body turn rate (deg/s)"),
+                )
+                .on_hover_text(
+                    "How fast the body is allowed to rotate toward the heading you own with the \
+                     right stick. Below the look input's own rate (roughly 250 deg/s times the \
+                     sensitivity above) the body lags the target and the turn keeps going after \
+                     you let go.",
+                );
+                ui.add(
+                    egui::Slider::new(&mut cfg.movement.swim_pitch_limit_deg, 0.0..=80.0)
+                        .text("Swim dive pitch limit (deg)"),
+                )
+                .on_hover_text(
+                    "How far underwater diving and surfacing may pitch the body. Zero pins the \
+                     swimmer level; the control is the head's pitch relative to the body.",
+                );
+                ui.add(
+                    egui::Slider::new(&mut cfg.movement.swim_pitch_rate_deg_s, 10.0..=180.0)
+                        .text("Swim dive pitch rate (deg/s)"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut cfg.movement.swim_pitch_deadzone_deg, 0.0..=45.0)
+                        .text("Swim dive pitch deadzone (deg)"),
+                );
+                ui.checkbox(
                     &mut cfg.movement.suppress_parachute_look_steer,
                     "Suppress parachute look-steer (head must not turn the chute)",
                 )
@@ -170,6 +230,15 @@ pub fn egui_debug_game(ui: &mut egui::Ui) {
                 SLIDE_CALLS.load(Ordering::Relaxed),
                 SKIPPED_STARTS.load(Ordering::Relaxed),
                 INSTANT_SPEED_FLOORS.load(Ordering::Relaxed),
+            ));
+            ui.label(format!(
+                "Swim: cores {}  dir-overrides {}  rotate-overrides {}  turn-suppressions {}  \
+                 backward-refusals {}",
+                SWIM_EVAL_CALLS.load(Ordering::Relaxed),
+                SWIM_DIRECTION_OVERRIDES.load(Ordering::Relaxed),
+                SWIM_ROTATE_OVERRIDES.load(Ordering::Relaxed),
+                SWIM_TURN_SUPPRESSIONS.load(Ordering::Relaxed),
+                SWIM_BACKWARD_REFUSALS.load(Ordering::Relaxed),
             ));
             ui.label(format!(
                 "Parachute: look-steer suppressions {}",

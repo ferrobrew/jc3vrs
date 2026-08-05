@@ -84,6 +84,13 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     s.mode = detect_mode(s.last_orientation_evals, evals);
     s.last_orientation_evals = evals;
 
+    // The in-water counterpart, from the swim movement cores (the swim family never runs the
+    // orientation evaluator). Kept out of `HeadMode` deliberately: swimming only extends the VR
+    // body-yaw accumulator below, while the flatscreen latch machinery stays off-foot in water.
+    let swim_evals = crate::hooks::input::swim::SWIM_EVAL_CALLS.load(Ordering::Relaxed);
+    let swimming = swim_evals > s.last_swim_evals;
+    s.last_swim_evals = swim_evals;
+
     // Advance the grapple reel-in body-frame filter on this tick, likewise before the VR
     // early-return: the blend it smooths (and the pre-reel frame it holds) is applied by both
     // sources' body-frame composition (here at publish, and in `xr::body_rotation`). The VR frame
@@ -104,10 +111,14 @@ pub fn on_input_tick(look_x: f32, look_y: f32, look_x_delta: bool, dt: f32) {
     // look effectors do not steer the HMD-driven head, so they are consumed here to turn the body
     // instead (the flatscreen head-yaw path below owns this for the sim source).
     if crate::headpose::source() == crate::headpose::Source::Vr {
+        // Swimming keeps the accumulator seeded: the swim yaw override
+        // (`crate::hooks::input::swim`) consumes the same body-yaw target, and clearing the
+        // accumulator in water would hand the body back to the game's act-quantized turns.
         crate::headpose::xr::advance_body_yaw(
             look_x,
             look_x_delta,
             s.mode == HeadMode::OnFoot,
+            swimming,
             &config,
         );
         return;
@@ -253,6 +264,8 @@ struct SimState {
     mode: HeadMode,
     /// Last frame's orientation-evaluator counter value (for mode detection).
     last_orientation_evals: u64,
+    /// Last tick's swim movement-core counter value (for the in-water body-yaw seeding).
+    last_swim_evals: u64,
     /// The body yaw at the last processed input tick, for the on-foot compensation.
     last_body_yaw: Option<f32>,
     /// The smoothed animation-posture swing (see [`posture_swing`] and the low-pass in
@@ -269,6 +282,7 @@ const SIM_DEFAULT: SimState = SimState {
     latch: LatchState::Decoupled,
     mode: HeadMode::Other,
     last_orientation_evals: 0,
+    last_swim_evals: 0,
     last_body_yaw: None,
     posture: Quat::IDENTITY,
     body_yaw_target: None,

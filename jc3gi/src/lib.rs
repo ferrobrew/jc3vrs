@@ -115,6 +115,7 @@ pub mod graphics_engine;
 pub mod hash;
 pub mod input;
 pub mod patch_system;
+pub mod physics;
 pub mod spawn_system;
 pub mod state;
 pub mod types;

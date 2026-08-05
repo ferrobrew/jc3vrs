@@ -5,6 +5,7 @@
 //! slots including `LOOK_LEFT` / `LOOK_RIGHT` / `LOOK_UP` / `LOOK_DOWN`. These are the mouse-look
 //! deltas the game's camera system reads. We intercept them post-call: read the values, clear the
 //! effectors so the game's camera doesn't respond, and feed the deltas into the headpose simulation.
+//! The same seam is where [`crate::hooks::input::swim`] refuses backward movement in water.
 
 use detours_macro::detour;
 use jc3gi::input::{
@@ -47,6 +48,9 @@ fn input_device_manager_update(manager: *mut InputDeviceManager, dt: f32) {
         clear_effector(map, Action::LOOK_RIGHT);
         clear_effector(map, Action::LOOK_UP);
         clear_effector(map, Action::LOOK_DOWN);
+        // Swimming refuses backward input outright; done here so the game's own input never carries
+        // it, rather than unpicking its effects downstream.
+        crate::hooks::input::swim::suppress_backward_input(map);
 
         headpose::sim::on_input_tick(look_x, look_y, look_x_delta, dt);
     }

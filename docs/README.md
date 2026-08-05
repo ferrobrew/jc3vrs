@@ -29,6 +29,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering/rendering.md)
 - [input.md](engine/gameplay/input.md) — the action effector system, action ids, the write API, the semantic button-mapping layer, and the mouse/UI pipeline.
 - [aim-pipeline.md](engine/gameplay/aim-pipeline.md) — how the player aims and fires: the per-consumer aim target cache, shot construction, dual-wield, auto-aim, and the camera getters.
 - [grapple-pipeline.md](engine/gameplay/grapple-pipeline.md) — grapple targeting, hook flight and attach, and the zip/tether/retract dispatch.
+- [swim-locomotion.md](engine/gameplay/swim-locomotion.md) — the swim state-task family: act-quantized turn dispatch (120° clips past 65°), the two heading paths (animated-turn slerp vs continuous `DoRotate`), the swimming capsule offsets that make `SetOrientation` receive a pitched frame, and why none of the on-foot orientation machinery applies in water.
 - [parachute-locomotion.md](engine/gameplay/parachute-locomotion.md) — the parachute state task and steering core, and how the camera input matrix is mixed into the chute's steering through the look-steer block.
 
 ## mod/
@@ -60,6 +61,7 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering/rendering.md)
 
 - [head-and-body.md](mod/body/head-and-body.md) — how head and body yaw relate in VR: coupling schemes, the headpose abstraction, the head-bone override, head hiding, and body IK.
 - [grapple-comfort.md](mod/body/grapple-comfort.md) — the grapple body-frame filter (issue #36): the hold from fire to landing, the yaw handoff, the landing-snap absorber, and the telemetry capture.
+- [swim-yaw.md](mod/body/swim-yaw.md) — the right stick owns the swim heading: the `DoRotate` target override, the forward/back-only move direction, the accumulator seeding, and the turn-act suppression.
 - [parachute-yaw.md](mod/body/parachute-yaw.md) — parachute head-yaw suppression (issue #48): removing the camera-relative look-steer from the chute's steering so the head does not turn it.
 
 ### input/
@@ -74,3 +76,4 @@ One deliberate exception: [`engine/rendering.md`](engine/rendering/rendering.md)
 - [20-animation-judder.md](issues/20-animation-judder.md) — animation judder (issue #20).
 - [32-monoscopic-far-field.md](issues/32-monoscopic-far-field.md) — the render-pass sort/depth-bucket machinery as the distance-split mechanism for a shared far field (issue #32).
 - [40-terrain-black-tiles.md](issues/40-terrain-black-tiles.md) — terrain walls and cave ceilings rendering black at grazing angles (issue #40).
+- [swim-yaw-endless-spin.md](issues/swim-yaw-endless-spin.md) — the swimming body flipping 180° the moment it moved: the crawl capsule offset's gimbal lock under the old `SetOrientation` yaw chase, and which `DoRotate` call actually turns the body.

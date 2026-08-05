@@ -1,0 +1,65 @@
+# Smooth swim yaw
+
+Why body yaw snapped in water, and how the mod gives the right stick the swim heading. The engine-side mechanism is [engine/gameplay/swim-locomotion.md](../../engine/gameplay/swim-locomotion.md); the implementation is `payload/src/hooks/input/swim.rs` behind `MovementConfig::smooth_swim_yaw` (default on).
+
+## The problem
+
+In VR the view is composed on the body frame (`body × cockpit`), so the body's yaw *is* the view's yaw. On foot that yaw is smooth because the mod drives the game's own rate-limited orientation executor every frame. The swim locomotion family bypasses that executor entirely, and turns the body two ways, neither of which the player owns:
+
+- **The camera steers it.** Outside a turn act the movement core rotates the body toward the world move direction, which is the *camera*-relative stick. Look somewhere and push forward, and the body follows the camera.
+- **Turn acts quantize it.** Past a 65° threshold the input tasks dispatch a discrete 120° turn clip, and while that clip runs the core replaces its rotation with a slerp across the clip window. Each act-sized step rotated the whole world under the player.
+
+Two compounding effects made water worse:
+
+- The headpose's on-foot detector counts orientation-evaluator calls, which stop in water, so the VR body-yaw accumulator cleared and the stick stopped steering the body at all.
+- The armed-idle turn dispatch measures against the *aim direction*, which follows the HMD — treading water with a weapon and looking around fired 120° quickturns.
+
+## The fix
+
+Five detours plus a seeding change, all scoped to the local player and gated on a recent swim-core run plus the toggle:
+
+1. **Window + signal** — the two swim movement cores (`UpdateSurfaceMovement`, `UpdateUnderwaterMovement`) are wrapped to mark a per-thread window around their call and advance `SWIM_EVAL_CALLS`. The headpose sim reads that counter exactly like the orientation evaluator's: an advance since the last input tick means "swimming", which is passed into `xr::advance_body_yaw` so the VR body-yaw accumulator stays seeded in water rather than clearing the moment the player leaves foot. `HeadMode` itself is deliberately untouched: the flatscreen latch machinery stays off-foot in water, so the override is inert on flatscreen, where the free camera already hides the quantization.
+2. **Heading rotation** — `DoRotate`'s target is replaced with `headpose::body_yaw_target()`. This is the seam that actually turns the body: the core hands `DoRotate`'s output straight to `CMatrix4f::CreateOrientation`, so the right stick's heading takes over while the game keeps its water-surface roll blend and capsule composition. It also covers what the direction override cannot reach — with the stick neutral the core aims at the character's own forward (no rotation at all), while aiming it aims at the weapon target, and the underwater core never routes its direction through the override at all. Two things beyond the target are replaced:
+   - **The rate** (`swim_turn_rate_deg_s`, default 360°/s). The shipped rates cap the body at ~69°/s at the surface and ~30°/s underwater, against the right stick's ~250°/s. See the inertia section below.
+   - **The pitch, underwater only.** The body-yaw target is flat by construction, and the underwater core swims along its *facing* — so a flat target pinned the swimmer to a horizontal plane with no way to ascend, and rotating a pitched body toward a flat target spent the entire rate budget levelling out rather than yawing (underwater the body did not turn at all). Folding a dive pitch in restores both: look up or down to climb or dive, yaw still owned by the right stick. The surface core overwrites the vertical component with the water plane's, so the target stays flat there. See the dive control below for where that pitch comes from.
+3. **Move direction** — `CControllerUtility::TransformInputDirToWorldDir` returns the body-yaw-target forward instead of the camera-relative stick direction, so the camera loses all influence over where the swimmer goes. Gated on the swim-core window, because the helper is general: fifteen call sites across locomotion, jump, melee, grapple, aim, and AI steering, only two of them swim. The swim *input* tasks call it outside that window and are left alone — their output picks a turn act, which detour 4 already suppresses, and feeds the dive check, which is better served by the real camera-relative direction. The underwater core builds its own direction inline and does not route through here at all.
+4. **Turn-act suppression** — `CControllerUtility::GetDeltaAngleFromOrientation` reports zero, so the input tasks never cross their 65° threshold. This matters for more than the animation: while a turn act runs, the core replaces its `DoRotate` rotation with the animated-turn slerp, which detour 2 cannot reach. AI behaviours are unaffected (they run for non-local characters), but the local player's on-foot aim-blend sampler and facing conditions do share the helper — which is why "swimming" has to mean swimming *now*, not recently.
+5. **Backward refusal** — the `MOVE_BACKWARD` effector is cleared in the same `InputDeviceManager::Update` detour that consumes the look effectors, so the game never sees backward input at all: no act is queued, no stroke animation plays, the forward axis nets to zero, and both movement cores take their idle branch. Backward input cannot simply be reversed — the swim family ships no backstroke, and pointing the move direction against the heading made the character paddle in place, re-orient, or drift sideways depending on which core and animation segment was live. Refusing it at the source is the only version that reads as "you are not holding back".
+
+### The dive control
+
+The view is **levelled while swimming**: the head is composed onto the body's yaw only, dropping its pitch and roll (`headpose.swim_level_view`, default on). The body frame normally carries both into the view — right for a banking wingsuit, wrong in water, where the dive control deliberately pitches the body toward where the player is looking. The two then add. A capture measured it exactly: `camera_pitch = body_pitch + head_pitch` to within 0.04°, and over one underwater stretch the head travelled 530° while the camera travelled 866° — **1.63×**, which reads as the world swinging out from under you. Levelled, the camera moves precisely with the head and the body's pitch does only what it is for: steering the swim. The cost is the surface bob and roll, which ride the same frame.
+
+With the view levelled the dive control is pure feedforward, but it still takes its command from the head's pitch **relative to the body** rather than the camera's world pitch. The two differ by exactly the body's own pitch, and using the world pitch is unstable: the VR view is composed on the body frame, so pitching the body toward where the camera points pitches the camera further, which pitches the body further. Before the view was levelled the two differed by the body's own pitch, and driving the body from the world pitch was a runaway: pitching the body toward where the camera points pitched the camera further. In a capture the swimmer rolled to vertical within a second, and the ground-plane camera heading swung ±160° per frame as it crossed the singularity. Taking the command from the neck angle — which the body's own motion cannot change — removed the loop even before the levelling did, and keeps the control correct if the levelling is ever turned off: hold your head down to descend, level it to level out.
+
+Three knobs shape it, all on the Game tab: `swim_pitch_deadzone_deg` (12) keeps a resting head from drifting the swimmer, `swim_pitch_limit_deg` (55) stops well short of vertical where a heading is undefined, and `swim_pitch_rate_deg_s` (60) slews the held pitch so a dive eases rather than snapping at the yaw rate. The held pitch resets to level whenever the surface core runs.
+
+### What "swimming" means
+
+Every gate keys on the character's `m_CurrentMotionState` reading `SWIMMING_MOTION`, which both movement cores write each frame they run. An earlier version used a 250 ms recency stamp instead, which quietly leaked all four detours onto foot for that window after leaving the water: backward input was refused as the player walked out, and the on-foot heading and aim-blend paths saw the swim overrides. A stamp cannot express "not any more"; the motion state can.
+
+### Turn rate and the lead clamp
+
+The body must be able to keep up with the stick, or the mechanism fails in three ways at once. Measured from a capture: the shipped surface rate holds the body to 1.99°/frame (~69°/s) while the accumulator sweeps at 7.36°/frame (~250°/s). The target ran away, the lead exceeded 90° on 11% of frames and reached a full 180° on 1%, and past 180° the shortest-arc rotation reverses. That single cause produced the overshoot, the yaw continuing after release, and the mid-turn fights-back — plus 88 frames where the measured turn angle railed past 65° and fired a 120° act despite the suppression.
+
+The body now tracks the target to within 2° on 93% of frames and 10° on 100%, with zero flips. But tracking one-for-one also means the turn *rate* is now the look input's own, where on foot the game's executor rate smooths it — the same input turns noticeably faster in water. `vr_turn.swim_scale` (0.5) trades that back.
+
+Two changes close the lead itself. `swim_turn_rate_deg_s` (360) is passed to `DoRotate` — capped per call at the 15° angle `DoRotate` eases out over, since it scales its step by `min(error / 15°, 1)` *without* clamping to the remaining error, so a larger step overshoots and twice that diverges. It in place of the game's rate, computed against the `dt` the core was called with, so the body tracks the stick rather than trailing it. And `xr::advance_body_yaw`'s lead clamp (`max_body_lead_deg`, 120°) now applies in water exactly as it does on foot, re-anchoring the accumulator to the body each tick — the structural guarantee that the lead can never wrap past 180° no matter how fast the input moves. That clamp used to be skipped while swimming, back when the body turned on its own and re-anchoring made the target a rubber band; now the body only turns because of the target, so the on-foot reasoning applies unchanged.
+
+"Engaged" means the toggle is on *and* the headpose has a body-yaw target — the VR accumulator is seeded or the flatscreen latch is following. Without a target every detour passes through.
+
+### What is deliberately not hooked
+
+`CPfxCharacterInstance::SetOrientation`. An earlier revision rewrote the yaw of the matrix passed to it, which worked while treading water and broke the instant the swimmer moved: that matrix is the orientation composed with the frame's swimming capsule offset, and the surface crawl offset is a quarter turn about X — exact gimbal lock for a yaw/pitch/roll decomposition. The rewrite landed 180° out on every moving frame and the body thrashed between the two attractors. See [issues/swim-yaw-endless-spin.md](../../issues/swim-yaw-endless-spin.md).
+
+`DoRotate` is called a second time per swim frame, inside `ProcessMotion`, to slerp the *velocity* direction; a `ProcessMotion` detour sets a thread-local so the heading override skips that nested call.
+
+**Known gap:** the surface core's single `DoRotate` site carries every branch it can aim at — move direction, aim target, grapple target, and planted-explosive target. The override takes them all, so a grapple or explosive warp begun while swimming is faced at the right-stick heading rather than at its target. Not observed as a problem in play, and distinguishing the branches is not possible from inside `DoRotate`.
+
+## Validation
+
+The Game tab's movement section shows `Swim: cores / dir-overrides / rotate-overrides / turn-suppressions / backward-refusals`. In water under VR the first four advance; on foot all hold still. In-headset checks: the right stick spins the body in place with no left-stick input and stops promptly on release, with no overshoot and no fighting back mid-turn; the left stick moves forward along the current heading and never turns the body; pulling back does nothing at all, with no stroke animation; the camera has no influence on the heading; underwater, looking up and pushing forward climbs to the surface, and the view pitches exactly as far as your head does and no further; no 120° snap when looking around with a weapon out; dive and surface transitions intact; surface bob and roll still present.
+
+On flatscreen the whole mechanism is inert: `HeadMode` is derived from the on-foot orientation evaluator, which never runs in water, so the flatscreen latch yields no body-yaw target and every detour passes through to the game's native swim behaviour.
+
+This was tuned against a per-frame NDJSON trace and a companion analyzer, both removed once the behaviour settled; the git history has them if a regression ever needs the same treatment.

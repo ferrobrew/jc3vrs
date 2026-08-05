@@ -11,6 +11,11 @@ use crate::grapple::GrappleComfortConfig;
 pub struct HeadPoseConfig {
     /// Master switch for headpose-driven head control.
     pub enabled: bool,
+    /// Hold the view level while swimming: compose the head onto the body's *yaw* only, dropping its
+    /// pitch and roll. The body frame otherwise carries both into the view -- right for a banking
+    /// wingsuit, wrong in water, where the dive control pitches the body toward where the player is
+    /// looking and the two add, so the view moves further than the head did. Costs the surface bob.
+    pub swim_level_view: bool,
     /// On-foot: the half-angle (degrees) of the decoupled cone. Beyond this, body yaw begins
     /// following the head.
     pub latch_threshold_deg: f32,
@@ -77,6 +82,7 @@ impl HeadPoseConfig {
     pub const fn new() -> Self {
         Self {
             enabled: true,
+            swim_level_view: true,
             latch_threshold_deg: 75.0,
             latch_disengage_threshold_deg: 65.0,
             free_look_yaw_limit_deg: 135.0,
@@ -142,6 +148,9 @@ pub struct VrTurnConfig {
     /// target far ahead and the body keeps turning for many ticks after the input stops -- and once the
     /// lead exceeds 180° the shortest-arc catch-up reverses direction. Clamping the lead caps both.
     pub max_body_lead_deg: f32,
+    /// Scales the turn rate while swimming, where the body tracks the accumulator one-for-one
+    /// rather than through the game's own executor rate, so the same look input turns faster.
+    pub swim_scale: f32,
 }
 
 impl VrTurnConfig {
@@ -154,6 +163,7 @@ impl VrTurnConfig {
             deadzone: 0.02,
             mouse_turn_scale: 5.0,
             max_body_lead_deg: 120.0,
+            swim_scale: 0.5,
         }
     }
 }
