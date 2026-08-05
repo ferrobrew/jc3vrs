@@ -46,11 +46,14 @@ pub enum LatchState {
 }
 
 /// The current head mode, detected from the locomotion orientation-evaluator counter.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum HeadMode {
     /// On foot: the latch applies.
     OnFoot,
-    /// Other (vehicle, wingsuit, etc.): free-look with clamping.
+    /// Other (vehicle, wingsuit, etc.): free-look with clamping. The default, since it is the
+    /// mode that assumes least: the on-foot latch and body-turn coupling only apply once the
+    /// locomotion evaluator has actually been seen to tick.
+    #[default]
     Other,
 }
 

@@ -5,7 +5,7 @@ use jc3gi::types::math::Matrix4;
 
 use crate::{
     config, grapple, headpose, headpose::config::VrTurnMode, hooks, hooks::character::BodyIkConfig,
-    vr, vr::FreezeMode,
+    logging, vr, vr::FreezeMode,
 };
 
 pub fn egui_debug_camera(ui: &mut egui::Ui) {
@@ -63,13 +63,135 @@ fn egui_debug_body_ik(ui: &mut egui::Ui, ik: &mut BodyIkConfig) {
     ui.add(Slider::new(&mut ik.weight, 0.0..=1.0).text("Master weight"));
     ui.add(Slider::new(&mut ik.head_reach_t, 0.0..=1.0).text("Head reach (translation)"));
     ui.add(Slider::new(&mut ik.head_reach_r, 0.0..=1.0).text("Head reach (rotation)"));
+    ui.add(Slider::new(&mut ik.head_pull, 0.0..=1.0).text("Head pull (body follow)"))
+        .on_hover_text(
+            "How much reaching the head target carries into the shoulders, chest, and spine. At \
+             zero the neck absorbs it all and the torso does not move.",
+        );
+    ui.add(Slider::new(&mut ik.head_resist, 0.0..=1.0).text("Head resist"))
+        .on_hover_text("How much the head resists being displaced by other effectors' pull.");
     ui.checkbox(&mut ik.interpolation, "Interpolation (ease reach in)");
     ui.add(Slider::new(&mut ik.interpolation_rate, 0.0..=10.0).text("Interpolation rate"));
-    ui.checkbox(&mut ik.blend_out, "Blend out");
+    ui.checkbox(&mut ik.blend_out, "Blend out").on_hover_text(
+        "Ease the reach back out when a target stops being supplied. Off by default: the \
+             engine keeps a blending-out target alive with the stale pose it was queued with, so \
+             every gate flip leaves the hands chasing an old animation frame for the decay tail.",
+    );
     ui.add(Slider::new(&mut ik.blend_out_rate, 0.0..=10.0).text("Blend-out rate"));
+    ui.add(Slider::new(&mut ik.lean_share, 0.0..=1.0).text("Torso lean share"))
+        .on_hover_text(
+            "How much of your lean the spine takes, as a swing about its base. This is what keeps \
+             the torso under the camera; the rest is absorbed by the neck.",
+        );
+    ui.add(Slider::new(&mut ik.pivot_drop, 0.0..=1.0).text("Pivot drop (spine → hips)"))
+        .on_hover_text(
+            "Where the torso bends. 0 is the base of the spine, right for a sideways lean; higher \
+             moves it toward the hips, which is what a forward lean actually hinges about. Lower \
+             pivot means less angle but more shoulder travel.",
+        );
+    ui.add(Slider::new(&mut ik.lean_max_deg, 0.0..=90.0).text("Torso lean max (deg)"))
+        .on_hover_text(
+            "The spine's range of motion. Also bounds the lean model where it stops being valid: \
+             with the head near or below the pivot's height there is no sane spine bend, so it \
+             saturates here rather than folding over.",
+        );
+    ui.add(Slider::new(&mut ik.yaw_share, 0.0..=1.0).text("Torso yaw share"))
+        .on_hover_text("How much of the head's turn the torso takes, about the same pivot.");
+    ui.add(Slider::new(&mut ik.shoulder_reach_t, 0.0..=1.0).text("Shoulder reach (translation)"));
+    ui.add(Slider::new(&mut ik.shoulder_pull, 0.0..=1.0).text("Shoulder pull (into the spine)"));
+    ui.add(Slider::new(&mut ik.chest_reach_r, 0.0..=1.0).text("Chest reach (rotation)"));
+    ui.checkbox(&mut ik.defer_while_aiming, "Defer to the game while aiming")
+        .on_hover_text(
+            "Stand the torso targets and hand pins down while aiming a weapon or the grapple, \
+             leaving only the head target. The game's aim IK needs the arm chain free to swing the \
+             weapon onto the aim direction; holding the wrists and girdle clamps aiming to the \
+             authored sweep cone.",
+        );
+    ui.checkbox(&mut ik.pin_hands, "Pin hands to the animated pose")
+        .on_hover_text(
+            "Hold the hands where the animation put them while the shoulders move, so the arms \
+             articulate instead of the hands sliding off the wheel.",
+        );
+    ui.add(Slider::new(&mut ik.hand_reach_t, 0.0..=1.0).text("Hand pin (position)"));
+    ui.add(Slider::new(&mut ik.hand_reach_r, 0.0..=1.0).text("Hand pin (rotation)"))
+        .on_hover_text(
+            "Holds the hands' animated orientation as well as their place. Without it they keep \
+             station but spin, and the wielded weapon's aim spins with them.",
+        );
+    ui.add(Slider::new(&mut ik.hand_resist, 0.0..=1.0).text("Hand resist"))
+        .on_hover_text("How much the hands refuse to be dragged by the shoulders' pull.");
     ui.add(Slider::new(&mut ik.target_offset.x, -1.0..=1.0).text("Target offset X (m)"));
     ui.add(Slider::new(&mut ik.target_offset.y, -1.0..=1.0).text("Target offset Y (m)"));
     ui.add(Slider::new(&mut ik.target_offset.z, -1.0..=1.0).text("Target offset Z (m)"));
+
+    ui.separator();
+    let target = hooks::character::BODY_IK_TARGET;
+    let mut verbose = logging::is_target_debug(target);
+    if ui
+        .checkbox(&mut verbose, "Log body-IK state to the session log (1 Hz)")
+        .on_hover_text(
+            "Turns this subsystem up to DEBUG, for reading the numbers below after the fact \
+             instead of mid-lean. Equivalent to a body_ik=debug directive in the Diagnostics tab's \
+             filter box, without the typing.",
+        )
+        .changed()
+        && let Err(error) = logging::set_target_debug(target, verbose)
+    {
+        tracing::warn!(%error, "could not change the body-IK log level");
+    }
+
+    match hooks::character::body_ik_status() {
+        None => {
+            ui.label("Status: the character hook has not run yet.");
+        }
+        Some(status) => match status.skip {
+            Some(skip) => {
+                ui.label(format!(
+                    "Status: queuing nothing — {} (mode {:?}).",
+                    skip.label(),
+                    status.mode
+                ));
+            }
+            None => {
+                ui.label(format!(
+                    "Mode: {:?}   State id: {:#010x}",
+                    status.mode, status.state_id
+                ));
+                ui.label(format!(
+                    "Effectors: head {}, chest end {}",
+                    status.head_effector, status.chest_effector
+                ));
+                ui.label(format!(
+                    "Head target delta: {:.3} m   Room-scale offset: {:.3} m ({:+.2}, {:+.2}, \
+                     {:+.2})",
+                    status.target_delta,
+                    status.head_offset.length(),
+                    status.head_offset.x,
+                    status.head_offset.y,
+                    status.head_offset.z
+                ));
+                ui.label(format!(
+                    "Torso lean: {:.1}°   Torso yaw: {:+.1}°   Shoulders: {}/2 driven, {}/2 \
+                     mapped   Chest driven: {}   Hands pinned: {}/2{}",
+                    status.torso_lean_deg,
+                    status.torso_yaw_deg,
+                    status.shoulders_driven,
+                    status.shoulders_mapped,
+                    if status.chest_driven { "yes" } else { "no" },
+                    status.hands_pinned,
+                    if status.deferred_to_aim {
+                        "   (deferring to the game's aim)"
+                    } else {
+                        ""
+                    }
+                ));
+                ui.label(format!(
+                    "Engine-side head values: reachT {:.2}, reachR {:.2}, pull {:.2}",
+                    status.engine_reach_t, status.engine_reach_r, status.engine_pull
+                ));
+            }
+        },
+    }
 }
 
 fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
@@ -77,7 +199,9 @@ fn egui_debug_headpose(ui: &mut egui::Ui, hp: &mut headpose::HeadPoseConfig) {
     ui.label(format!("Mode: {:?}", headpose::sim::mode()));
     ui.label(format!("Latch: {:?}", headpose::sim::latch_state()));
 
-    let (yaw, pitch, roll) = headpose::sim::euler_angles();
+    // The body-relative rotation rather than the sim's raw angles: under the VR source the sim never
+    // accumulates them, so the raw angles read as a permanent zero.
+    let (yaw, pitch, roll) = headpose::body_relative_rotation().to_euler(glam::EulerRot::YXZ);
     ui.label(format!("Yaw (body-relative): {:+.1}°", yaw.to_degrees()));
     ui.label(format!("Pitch: {:+.1}°", pitch.to_degrees()));
     ui.label(format!("Roll:  {:+.1}°", roll.to_degrees()));

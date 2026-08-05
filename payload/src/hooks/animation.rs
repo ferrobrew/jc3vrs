@@ -82,7 +82,7 @@ unsafe fn should_freeze(controller: *mut AnimationController) -> bool {
 /// The character's active animation rule-state id (`hashlittle(state_name)`, e.g. `S_IDLE`), read
 /// through its first (body) rule system's state machine, mirroring `CCharacter::IsInVehicleAttachState`.
 /// `None` if any link in the chain is absent (loading, no rule system).
-unsafe fn active_state_type_id(character: &Character) -> Option<u32> {
+pub(crate) unsafe fn active_state_type_id(character: &Character) -> Option<u32> {
     unsafe {
         Some(
             character

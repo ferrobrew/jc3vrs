@@ -1,4 +1,40 @@
 #![cfg_attr(any(), rustfmt::skip)]
+#[repr(i32)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
+/// The effector slot a HumanIK node drives, as assigned by the engine's node-to-effector mapping.
+/// The mapping is a fixed switch over `HIKNodeId`, so these ids are constant across characterizations;
+/// a node with no effector maps to [`EFFECTOR_SLOTS`](crate::animation::ik::HumanIK::EFFECTOR_SLOTS) instead, and
+/// [`GetEffectorIdFromBoneIndex`](crate::animation::ik::HumanIK::GetEffectorIdFromBoneIndex) reports `-1` for a bone that
+/// is not mapped at all.
+///
+/// Only nodes the characterization actually uses are present in a given solver, so an id here is the
+/// slot a node *would* occupy rather than a promise that the rig has that node.
+pub enum Effector {
+    HIPS = 0isize as _,
+    LEFT_ANKLE = 1isize as _,
+    RIGHT_ANKLE = 2isize as _,
+    LEFT_WRIST = 3isize as _,
+    RIGHT_WRIST = 4isize as _,
+    LEFT_KNEE = 5isize as _,
+    RIGHT_KNEE = 6isize as _,
+    LEFT_ELBOW = 7isize as _,
+    RIGHT_ELBOW = 8isize as _,
+    WAIST = 9isize as _,
+    CHEST_END = 10isize as _,
+    LEFT_FOOT = 11isize as _,
+    RIGHT_FOOT = 12isize as _,
+    LEFT_SHOULDER = 13isize as _,
+    RIGHT_SHOULDER = 14isize as _,
+    HEAD = 15isize as _,
+    LEFT_HIP = 16isize as _,
+    RIGHT_HIP = 17isize as _,
+}
+fn _Effector_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x4], Effector>([0u8; 0x4]);
+    }
+    unreachable!()
+}
 #[repr(C, align(4))]
 /// A chain entry in the effector-id hash table (`THashTable<int, unsigned int, 1, unsigned short>`
 /// bucket-chain element): skeleton bone index to effector id.
@@ -28,8 +64,17 @@ impl std::convert::AsMut<EffectorIdChain> for EffectorIdChain {
 #[repr(C, align(8))]
 /// The skeleton-bone-index to effector-id map (an open-chained hash table). Built at
 /// [`Init`](crate::animation::ik::HumanIK::Init) time: for every used HumanIK node, the node's skeleton bone index keys
-/// the node's effector-id mapping (0..44). [`GetEffectorIdFromBoneIndex`](crate::animation::ik::HumanIK::GetEffectorIdFromBoneIndex)
+/// the node's [`Effector`](crate::animation::ik::Effector) id. [`GetEffectorIdFromBoneIndex`](crate::animation::ik::HumanIK::GetEffectorIdFromBoneIndex)
 /// queries it.
+///
+/// The key is the bone whose *name matches the HumanIK node's own name*: `Init` takes
+/// `HIKNodeNameFromNodeId(node)`, hashes it, and resolves it through
+/// `CSkeleton::GetBoneIndexByHashedName`. Membership therefore follows Autodesk's node naming rather
+/// than any of the engine's own bone-naming schemes, and the two coincide only where a rig happens
+/// to use the same name for the same joint. A bone the characterization does not name is absent from
+/// the table entirely. To go the other way — from an effector to the bone it drives — walk
+/// [`m_HIKNodeAndBonePairs`](crate::animation::ik::HumanIK::m_HIKNodeAndBonePairs), which holds the same relation in a form
+/// that can be scanned.
 pub struct EffectorIdTable {
     /// The bucket array: `m_HashTableLength` `u16` slots, each `0xFFFF` (empty) or an index into
     /// `m_ChainPool`.
@@ -70,6 +115,14 @@ pub struct EffectorTargetPosition {
     _field_12: [u8; 2],
     pub effector_interpolation_rate: f32,
     pub effector_blend_out_rate: f32,
+    /// Whether this entry was (re-)queued since the last solve. Set by
+    /// [`AddEffectorTargetPosition`](crate::animation::ik::HumanIK::AddEffectorTargetPosition), cleared by
+    /// [`ClearTargets`](crate::animation::ik::HumanIK::ClearTargets) after the solve consumes the pass. A cleared entry is
+    /// *retained* — [`UpdateEffectorsFromTargets`](crate::animation::ik::HumanIK::UpdateEffectorsFromTargets) keeps
+    /// applying its (now stale) position while
+    /// [`DriveAllCurrentEffectorControlValues`](crate::animation::ik::HumanIK::DriveAllCurrentEffectorControlValues)
+    /// blends its reach weight toward zero — and is removed only once that reach reaches zero. So a
+    /// set flag distinguishes a target actively supplied this frame from a leftover blending out.
     pub is_valid: bool,
     _field_1d: [u8; 3],
     pub solve_step: crate::animation::ik::SolveStep,
@@ -105,6 +158,8 @@ pub struct EffectorTargetRotation {
     _field_1a: [u8; 2],
     pub effector_interpolation_rate: f32,
     pub effector_blend_out_rate: f32,
+    /// Whether this entry was (re-)queued since the last solve; the semantics are those of
+    /// [`EffectorTargetPosition::is_valid`](crate::animation::ik::EffectorTargetPosition::is_valid).
     pub is_valid: bool,
     _field_25: [u8; 3],
     pub solve_step: crate::animation::ik::SolveStep,
@@ -151,9 +206,15 @@ impl std::convert::AsMut<EffectorTargetRotation> for EffectorTargetRotation {
 ///    [`Solve`](Self::Solve) → [`IKToCharacterState`](Self::IKToCharacterState) (writing the
 ///    solved pose back into the character's `hkaPose`).
 /// 4. [`ResetSolveStep`](crate::animation::ik::HumanIK::ResetSolveStep), then [`ClearTargets`](crate::animation::ik::HumanIK::ClearTargets)
-///    drops consumed targets (and returns whether the pass is now empty).
+///    invalidates consumed targets (and returns whether the pass is now empty).
 ///
 /// A target queued before the `HasTargets` gate for a pass is therefore consumed in the same frame.
+/// It is not *removed* that frame, though: `ClearTargets` only clears the entry's `is_valid` flag,
+/// and the entry — stale data and all — keeps being applied by
+/// [`UpdateEffectorsFromTargets`](crate::animation::ik::HumanIK::UpdateEffectorsFromTargets) with a decaying reach weight
+/// until a later `ClearTargets` removes it (immediately on the next frame without the blend-out
+/// flag, after the blend-out decay with it). A supplier that re-queues per frame re-validates the
+/// same entry before the gate each time, so the entry's data never goes stale.
 pub struct HumanIK {
     /// The Autodesk HIK character (`HIKCharacter*`); opaque solver handle.
     pub m_HIKCharacter: u64,
@@ -178,9 +239,19 @@ pub struct HumanIK {
     pub m_UsedHIKNodeIds: *mut i32,
     pub m_TQS: crate::types::std_vector::Vector<crate::animation::ik::Tqs>,
     pub m_EffectorIds: crate::animation::ik::EffectorIdTable,
-    /// The target pull weight per effector (interpolation destination for `m_Pull`).
+    /// The target pull weight per effector: how much satisfying this effector's target propagates
+    /// into the rest of the body rather than being absorbed by the chain the effector terminates.
+    /// An effector reached with zero pull moves only its local chain, leaving the torso on the
+    /// animated pose. Copied into [`m_Pull`](crate::animation::ik::HumanIK::m_Pull) — verbatim, not eased — by
+    /// [`DriveAllCurrentEffectorControlValues`](crate::animation::ik::HumanIK::DriveAllCurrentEffectorControlValues), for
+    /// each effector carrying a queued *positional* target. The foot and hip IK writes this
+    /// alongside [`m_TargetReachT`](crate::animation::ik::HumanIK::m_TargetReachT); the aim IK, which queues only rotational
+    /// targets, leaves it alone.
     pub m_TargetPull: [f32; 44],
-    /// The target resistance weight per effector (interpolation destination for `m_Resist`).
+    /// The target resistance weight per effector: how much this effector resists being displaced by
+    /// other effectors' pull. Copied into [`m_Resist`](crate::animation::ik::HumanIK::m_Resist) — verbatim, not eased — by
+    /// [`DriveAllCurrentEffectorControlValues`](crate::animation::ik::HumanIK::DriveAllCurrentEffectorControlValues), for
+    /// each effector carrying a queued *rotational* target.
     pub m_TargetResist: [f32; 44],
     /// The target translation-reach weight per effector: how strongly a positional target pulls the
     /// effector. Callers write this directly after queuing a positional target (interpolation
@@ -189,9 +260,15 @@ pub struct HumanIK {
     /// The target rotation-reach weight per effector: how strongly a rotational target orients the
     /// effector (interpolation destination for `m_ReachR`).
     pub m_TargetReachR: [f32; 44],
-    /// The current pull weight per effector, driven toward `m_TargetPull`.
+    /// The current pull weight per effector, driven toward
+    /// [`m_TargetPull`](crate::animation::ik::HumanIK::m_TargetPull) and pushed into the effector-set state via
+    /// `HIKSetPull` by
+    /// [`UpdateEffectorsFromTargets`](crate::animation::ik::HumanIK::UpdateEffectorsFromTargets).
     pub m_Pull: [f32; 44],
-    /// The current resistance weight per effector, driven toward `m_TargetResist`.
+    /// The current resistance weight per effector, driven toward
+    /// [`m_TargetResist`](crate::animation::ik::HumanIK::m_TargetResist) and pushed into the effector-set state via
+    /// `HIKSetResist` by
+    /// [`UpdateEffectorsFromTargets`](crate::animation::ik::HumanIK::UpdateEffectorsFromTargets).
     pub m_Resist: [f32; 44],
     /// The current translation-reach weight per effector, driven toward `m_TargetReachT`.
     pub m_ReachT: [f32; 44],
@@ -282,6 +359,10 @@ impl HumanIK {
     /// blend_out_rate=1.5)` and then writes `m_TargetReachT`(HumanIK::m_TargetReachT)`[effector]`
     /// with the desired reach weight.
     ///
+    /// A pass holds at most one position target per effector: if an entry for `effector` already
+    /// exists — including one [`ClearTargets`](crate::animation::ik::HumanIK::ClearTargets) has invalidated but not yet
+    /// removed — it is overwritten in place and re-validated rather than a second entry being added.
+    ///
     /// **Provenance:** the prototype is verified against the debug PDB.
     pub unsafe fn AddEffectorTargetPosition(
         &mut self,
@@ -324,7 +405,8 @@ impl HumanIK {
     /// target for the same effector. `rotation_offset` is in radians. This is the axis-enum overload
     /// of the engine's `AddEffectorTargetRotation`; see
     /// [`AddEffectorTargetRotationVector`](crate::animation::ik::HumanIK::AddEffectorTargetRotationVector) for the
-    /// explicit-axis overload.
+    /// explicit-axis overload. The one-live-entry-per-effector update semantics are those of
+    /// [`AddEffectorTargetPosition`](crate::animation::ik::HumanIK::AddEffectorTargetPosition), on the pass's rotation list.
     pub unsafe fn AddEffectorTargetRotation(
         &mut self,
         effector: i32,
@@ -413,6 +495,29 @@ impl HumanIK {
     /// Interpolates the active pass's current control values (`m_Pull`(HumanIK::m_Pull) etc.)
     /// toward their targets (`m_TargetPull`(HumanIK::m_TargetPull) etc.) by `dt`, per each queued
     /// target's interpolation/blend-out settings.
+    ///
+    /// The pass's two target lists are walked separately, and each drives a different pair of
+    /// control values:
+    ///
+    /// - The **position**-target list drives [`m_ReachT`](crate::animation::ik::HumanIK::m_ReachT), and copies
+    ///   [`m_TargetPull`](crate::animation::ik::HumanIK::m_TargetPull) into [`m_Pull`](crate::animation::ik::HumanIK::m_Pull) verbatim, with no
+    ///   interpolation.
+    /// - The **rotation**-target list drives [`m_ReachR`](crate::animation::ik::HumanIK::m_ReachR) from
+    ///   [`m_TargetReachR`](crate::animation::ik::HumanIK::m_TargetReachR) the same way, and copies
+    ///   [`m_TargetResist`](crate::animation::ik::HumanIK::m_TargetResist) into [`m_Resist`](crate::animation::ik::HumanIK::m_Resist) verbatim.
+    ///
+    /// The reach drive branches on the entry's `is_valid` flag:
+    ///
+    /// - **Valid** (queued since the last solve): the reach is `SpeedLerp`ed toward the target reach
+    ///   when the entry carries the interpolation flag, and snapped to it otherwise. The blend-out
+    ///   flag plays no part.
+    /// - **Invalid** (a leftover [`ClearTargets`](crate::animation::ik::HumanIK::ClearTargets) has not yet removed): the
+    ///   reach is `SpeedLerp`ed toward zero at the blend-out rate when the entry carries the
+    ///   blend-out flag, and zeroed outright otherwise. The interpolation flag plays no part.
+    ///
+    /// So an effector's pull is only refreshed in a frame where it carries a positional target, and
+    /// its resistance only in a frame where it carries a rotational one — and both copies run for
+    /// invalid leftovers too, all the way until removal.
     pub unsafe fn DriveAllCurrentEffectorControlValues(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
@@ -435,6 +540,21 @@ impl HumanIK {
     pub const UpdateEffectorsFromTargets_ADDRESS: usize = 0x1403F4530;
     /// Pushes the active pass's queued targets into the HIK effector-set state and promotes the
     /// pass's [`SolveStep`](crate::animation::ik::SolveStep), then applies the current per-effector control values.
+    ///
+    /// Every entry in the pass's lists is applied, whether or not it `is_valid`: an invalidated
+    /// leftover keeps steering its effector with its stale data while its reach weight blends out.
+    /// A position target replaces the effector state's translation and keeps its rotation; a
+    /// rotation target multiplies its angle-axis quaternion onto the effector state's current
+    /// rotation (an *offset*, not an absolute orientation — a zero angle targets the state as it
+    /// stands) and keeps its translation. The effector states themselves were just rebuilt from the
+    /// character's pre-solve pose (`HIKEffectorSetFromCharacter` at entry), so "current" here means
+    /// this frame's animated pose.
+    ///
+    /// The final stage loops over all [`EFFECTOR_SLOTS`](crate::animation::ik::HumanIK::EFFECTOR_SLOTS) slots — not just the
+    /// ones with queued targets — and pushes four values into the effector-set state:
+    /// `HIKSetTranslationActive` from [`m_ReachT`](crate::animation::ik::HumanIK::m_ReachT), `HIKSetRotationActive` from
+    /// [`m_ReachR`](crate::animation::ik::HumanIK::m_ReachR), `HIKSetPull` from [`m_Pull`](crate::animation::ik::HumanIK::m_Pull), and
+    /// `HIKSetResist` from [`m_Resist`](crate::animation::ik::HumanIK::m_Resist).
     pub unsafe fn UpdateEffectorsFromTargets(&mut self, dt: f32) {
         unsafe {
             let f: unsafe extern "system" fn(this: *mut Self, dt: f32) = ::std::mem::transmute(
@@ -480,6 +600,14 @@ impl HumanIK {
     pub const ClearTargets_ADDRESS: usize = 0x1404020F0;
     /// Drops targets whose reach weight has fully blended out, and marks the rest not-valid for the
     /// next frame. Returns whether the pass is now empty of targets.
+    ///
+    /// An entry is removed only when its effector's current reach weight is zero *and* it is
+    /// already invalid; every other entry survives with `is_valid` cleared, and
+    /// [`UpdateEffectorsFromTargets`](crate::animation::ik::HumanIK::UpdateEffectorsFromTargets) keeps applying it until a
+    /// later `ClearTargets` removes it. With the blend-out flag set that takes as long as the reach
+    /// takes to decay (`SpeedLerp` at the blend-out rate); without it,
+    /// [`DriveAllCurrentEffectorControlValues`](crate::animation::ik::HumanIK::DriveAllCurrentEffectorControlValues) zeroes
+    /// the reach on the next driven frame and the entry dies there.
     pub unsafe fn ClearTargets(&mut self, pass: crate::animation::ik::Pass) -> bool {
         unsafe {
             let f: unsafe extern "system" fn(

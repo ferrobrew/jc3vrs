@@ -85,6 +85,30 @@ pub fn query_prev() -> HeadPose {
     state().lock().prev_pose
 }
 
+/// The head's rotation *relative to the body frame*: how far the head is turned from neutral, with
+/// the body's own facing (and, under the sim source, its animation-posture swing) divided out. The
+/// identity means the head faces exactly where the body does.
+///
+/// Both sources compose their published world orientation as `body × (…) × this`, so this is the
+/// factor each contributes — the sim's accumulated look angles, or the HMD's orientation relative to
+/// the recenter baseline. Consumers that place the head *bone* want this rather than
+/// [`query`]`().orientation`: the bone is posed in the character's model space, where the body frame
+/// is already the identity, and this is the only part of the pose that is not the body's own
+/// rotation. It is also rest-frame-free — neutral is the identity regardless of how the head bone's
+/// rest orientation relates to the model axes — so it can be compared against zero, unlike a
+/// difference taken against an animated bone orientation.
+///
+/// The identity until the VR source has published its first frame.
+pub fn body_relative_rotation() -> Quat {
+    match source() {
+        Source::Sim => {
+            let (yaw, pitch, roll) = sim::euler_angles();
+            Quat::from_euler(glam::EulerRot::YXZ, yaw, pitch, roll)
+        }
+        Source::Vr => xr::cockpit_pose().map_or(Quat::IDENTITY, |pose| pose.orientation),
+    }
+}
+
 /// Rotate the pose pair: the current pose becomes the previous pose. Called by the source at the
 /// start of each input tick, so the previous/current pair spans exactly one tick.
 pub fn snapshot_prev() {

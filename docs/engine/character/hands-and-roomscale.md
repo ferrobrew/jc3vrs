@@ -183,7 +183,7 @@ animation-graph evaluation, well before the `HasTargets(PASS_MAIN)` gate in
 coexist on the same solve (the pass step is the max; effectors are keyed by id).
 
 **Driving both arms from controller rays is feasible and low-risk**, using the exact pattern the mod
-already uses for the head effector (`payload/src/hooks/character.rs`,
+already uses for the head effector (`payload/src/hooks/character/mod.rs`,
 `AddEffectorTargetRotationVector` on `PASS_MAIN`):
 
 - Queue an `AddEffectorTargetRotation` for the right-hand/right-arm effectors from the right

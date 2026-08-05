@@ -65,7 +65,7 @@ UpdatePassFinalizePose_Parallel(context):                        [0x1407F9B10]
 
 Key ordering facts:
 - The MAIN solve is **gated by `HasTargets(PASS_MAIN)`**. No targets ⇒ the entire body solve is skipped that frame.
-- `ClearTargets(PASS_MAIN)` runs **after** the solve, so targets queued before the gate survive to be consumed the same frame; then they are dropped/blended out for the next.
+- `ClearTargets(PASS_MAIN)` runs **after** the solve, so targets queued before the gate survive to be consumed the same frame; then they are invalidated — not removed — for the next (see "Target entry lifetime" below).
 - The mod's current seam, `UpdatePropEffects`, is the **very last** call in this function — after both IK passes *and* after `CalculateModelSpacePose`. That is why the shipped head override there works as a direct `SetJoint`, but it is **too late for the HumanIK route**.
 
 ## The injection seam
@@ -83,6 +83,8 @@ An alternative to a distinct hook is to keep using the `UpdatePropEffects` hook 
 ## Effector-id model
 
 `GetEffectorIdFromBoneIndex(m_HIK, boneIndex)` (**0x1403E2BF0**) maps a **skeleton bone index** to a HumanIK effector id in `0..44`, or returns `-1` if the bone has no effector mapping. The bone index is in the *same integer space* the character's bone matrices/joints use (`AnimationController::GetBoneIndex`/`GetJoint`, and the value `Character::GetSafeBoneMatrix` resolves a `SafeBoneIndex` to). In `UpdateSecondaryHandIKPass` the hand bone indices come straight out of `Character::m_SafeBoneIndices` and are handed to `GetEffectorIdFromBoneIndex` unchanged — so `Character::GetSafeIndex(SafeBoneIndex::HEAD)` (already used by the mod) yields exactly the index to feed here.
+
+That coincidence does **not** generalize. The table is keyed by the bone whose name matches the *HumanIK node's* name (see the `EffectorIdTable` def), a different naming scheme from the safe bones: the head happens to agree, but the game's shoulder safe bone is not the bone HumanIK calls a shoulder, and the lookup returns `-1`. The general reverse mapping — effector to the bone it drives — is a scan of `m_HIKNodeAndBonePairs`.
 
 The mapping (`GetEffectorIdMapping`, node→effector) fixes the important ids:
 
@@ -123,10 +125,43 @@ AddEffectorTargetPosition(
 
 After queuing a positional target, the engine also writes the reach weight: `m_HIK.m_TargetReachT[effector] = weight` (1.0 = full reach). Skipping this leaves the reach at zero and the target has no effect.
 
+### The four control values, and which list drives which
+
+Queuing a target is only half the recipe. `UpdateEffectorsFromTargets` (**0x1403F4530**) ends with a loop over **all 44** effector slots that pushes four per-effector control values into the Autodesk effector-set state:
+
+| Call | Source array | Meaning |
+|---|---|---|
+| `HIKSetTranslationActive` | `m_ReachT` (0x540) | how strongly the positional target is reached |
+| `HIKSetRotationActive` | `m_ReachR` (0x5F0) | how strongly the rotational target is reached |
+| `HIKSetPull` | `m_Pull` (0x3E0) | how much reaching this effector **propagates into the rest of the body** |
+| `HIKSetResist` | `m_Resist` (0x490) | how much this effector resists being displaced by *other* effectors' pull |
+
+`DriveAllCurrentEffectorControlValues` (**0x1403EC970**), which runs immediately before the solve, populates those current arrays from the `m_Target*` ones — and it walks the pass's **two target lists separately**:
+
+- The **position**-target list drives `m_ReachT[eff]` (eased by `SpeedLerp` when the target's `effector_interpolation`/`effector_blend_out` flags are set, snapped otherwise) and copies `m_Pull[eff] = m_TargetPull[eff]` **verbatim — no interpolation**.
+- The **rotation**-target list drives `m_ReachR[eff]` the same way and copies `m_Resist[eff] = m_TargetResist[eff]` verbatim.
+
+Two consequences that are easy to get wrong:
+
+- **Pull rides the position target and resist rides the rotation target.** Writing `m_TargetPull` for an effector that has only a rotation target queued does nothing that frame, and vice versa.
+- **Reach without pull is a local solve.** An effector with `ReachT` and no `Pull` arrives at its target by bending only the chain it terminates — a head target with pull 0 is absorbed by the neck and the shoulders, chest, and spine stay on the animated pose. The game's own foot/hip IK (`NStuntIKTask`) writes `m_TargetReachT` and `m_TargetPull` together for exactly this reason; the aim IK (`NRightArmAimIK`) writes only `m_TargetReachR`, which is why aiming turns the head without dragging the torso.
+
+The solve-step enum's `FULL_BODY_NO_PULL` (0xE1F8) versus `FULL_BODY` (0xFFF9) is the same distinction expressed in the Autodesk solver bitmask.
+
+### Target entry lifetime and the `is_valid` flag
+
+A pass holds at most one position entry and one rotation entry per effector: `AddEffectorTarget*` scans the list first and, on a hit, overwrites the entry in place and sets its `is_valid` flag rather than appending. `ClearTargets`, which runs after the solve, is the flag's other half: it does **not** remove a consumed entry — it clears `is_valid` and keeps the entry, removing it only once the effector's reach weight is zero *and* the entry is already invalid.
+
+The consequences that matter to any external supplier:
+
+- **An invalidated entry keeps steering.** `UpdateEffectorsFromTargets` applies every entry in the lists, valid or not, so a leftover keeps pushing its effector toward the (now stale) pose it was queued with while `DriveAllCurrentEffectorControlValues` runs its reach down — `SpeedLerp` toward zero at the blend-out rate when the entry carries the blend-out flag (the game's 1.5/s hand-pass default gives a ~0.7 s tail from full reach), zeroed outright on the next driven frame without it. For valid entries the reach drive is the mirror image: `SpeedLerp` toward the target reach with the interpolation flag, snap without it — each flag governs only its own direction.
+- **Presence in the list is not a claim; `is_valid` is.** Every system that queued recently has entries sitting in the lists mid-decay. Only a set `is_valid` means the supplier queued since the last solve — the game's own systems re-queue their active targets every frame, so "the game is driving this effector this frame" is exactly the set of valid entries at pose-finalization entry. Matching on presence alone mistakes leftovers (including one's own from the previous frame) for live targets.
+- **Re-queuing per frame refreshes, never duplicates.** A supplier that re-adds each frame re-validates and overwrites the same entry before the gate, so its data never goes stale; with `interpolation=false` the reach also snaps back to the written `m_TargetReach*` each frame.
+
 Defaults the game itself uses:
 
 - **Hand pass (position), world-space target →** `solve_step` per-hand, `pass=PASS_SECONDARY`, `interpolation=false`, `interp_rate=3.0`, `blend_out=true`, `blend_out_rate=1.5`, then `m_TargetReachT[eff]=weight`.
-- **Aim IK (rotation) on the body →** `NRightArmAimIK::UpdateAimEffector` (0x140838EC0) calls `AddEffectorTargetRotationVector(m_HIK, eff, angle, &axis, HIK_SOLVE_UPPER_BODY /*7*/, PASS_MAIN /*0*/, interp=false, 0, blend_out=false, 0)` and writes `m_TargetReachR[eff]`. This is the concrete precedent for **driving the upper body on PASS_MAIN**: use **`SolveStep::UPPER_BODY` (7)** (or `SPINE_HEAD_ONLY` (2) for spine+head only).
+- **Aim IK (rotation) on the body →** `NRightArmAimIK::UpdateAimEffector` (0x140838EC0) calls `AddEffectorTargetRotationVector(m_HIK, eff, angle, &axis, HIK_SOLVE_UPPER_BODY /*7*/, PASS_MAIN /*0*/, interp=false, 0, blend_out=false, 0)` and writes `m_TargetReachR[eff]`. This is the concrete precedent for **driving the upper body on PASS_MAIN**. The step choice is a joint-mask choice: `UPPER_BODY` (7) admits the arms to the whole pass's solve, `SPINE_HEAD_ONLY` (2) does not — and a solver allowed to move the arms will happily reach a head target by swinging one, since pull does not arbitrate *how* a requirement is met. Pick the step from which joints may move, not from which effector is targeted.
 
 `SolveStep` maps to the Autodesk solver bitmask in `Solve`: `SPINE_ONLY`→0x4000, `SPINE_HEAD_ONLY`→0x6000, `ARMS`→0x60, `UPPER_BODY`→0x6679, `SPINE_HEAD_LOWER_BODY`→0xE180, `FULL_BODY_NO_PULL`→0xE1F8, `FULL_BODY`→0xFFF9. A pass's effective step is the **max** of its queued targets' steps (with an arm-combining special case), so a single head target at `UPPER_BODY` pulls the whole upper body.
 
@@ -137,11 +172,29 @@ There are two `AddEffectorTargetRotation` overloads: the axis-enum variant `AddE
 1. Pre-call hook on `UpdatePassFinalizePose_Parallel`.
 2. `eff = GetEffectorIdFromBoneIndex(m_HIK, GetSafeIndex(HEAD))` (expect 15).
 3. `posModel = inverse(characterWorldT1) · desiredHeadWorld`.
-4. `AddEffectorTargetPosition(m_HIK, eff, &posModel, SolveStep::UPPER_BODY, Pass::MAIN, false, 3.0, true, 1.5)`.
+4. `AddEffectorTargetPosition(m_HIK, eff, &posModel, SolveStep::SPINE_HEAD_ONLY, Pass::MAIN, false, 3.0, false, 1.5)` — `SPINE_HEAD_ONLY` so the pass cannot recruit the arms to reach the head (see the step-as-joint-mask note above), and `blend_out=false` for a per-frame re-queued target: blend-out is only safe for a target that stays meaningful while fading, and a pose-anchored target does not (see "Target entry lifetime").
 5. `m_HIK.m_TargetReachT[eff] = 1.0`.
-6. Optionally a rotation target for head orientation via `AddEffectorTargetRotationVector(..., Pass::MAIN)` + `m_TargetReachR[eff]`.
+6. `m_HIK.m_TargetPull[eff] = w` — without this the spine and shoulders do not follow (see "The four control values" above).
+7. Optionally a rotation target for head orientation via `AddEffectorTargetRotationVector(..., Pass::MAIN)` + `m_TargetReachR[eff]`, and `m_TargetResist[eff]` alongside it.
 
-The engine clears and resets the pass after solving, so re-queue every frame.
+The engine invalidates the pass's targets after solving, so re-queue every frame.
+
+### Recipe to twist the torso
+
+A head target does not reach the chest: reach is satisfied by the neck chain, and pull only propagates a *positional* requirement. To turn the torso, drive the chest-end effector directly — which is what `NReelInAimIK::Update` does to swing the chest toward the grapple hook:
+
+```
+chestEnd = GetChestEndEffectorId(m_HIK)            [0x1403BCDD0]
+AddEffectorTargetRotation(m_HIK, chestEnd, yawRadians, RotationAxis::Y,
+                          SolveStep::UPPER_BODY, Pass::MAIN, false, 2.0, true, 1.5)
+m_HIK.m_TargetReachR[chestEnd] = weight
+```
+
+The angle is an **offset applied to the effector's current rotation**, not an absolute orientation: `UpdateEffectorsFromTargets` reads the effector's current state, builds a quaternion from the queued angle-axis, and multiplies it onto that. The shoulder effectors (13/14) are children of the chest and follow it, so the chest-end target covers them for rotation.
+
+To *displace* the torso rather than turn it, target the shoulder effectors positionally instead. A solver asked only to reach a moved head target has several ways to do it — bending the neck, swinging the arms — and pull does not choose among them; it only decides how far the requirement travels. Constraining the girdle directly (positional target + `m_TargetReachT` + `m_TargetPull` on effectors 13/14, resolved via `GetEffectorIdFromBoneIndex` from the shoulder bones) removes the ambiguity. This is the recipe `NStuntIKTask` uses for the feet and hips.
+
+Where those shoulder targets should *go* is a rig question rather than a solver one, and the answer is a rotation: the spine articulates about its base, so a target derived by carrying each animated shoulder position through a rotation about the spine-base joint stays on the arc the rig can actually reach. Deriving it as a straight-line displacement instead asks the spine to change length, which it cannot, and cannot rotate the girdle at all when both shoulders take the same offset.
 
 ## Open risks
 

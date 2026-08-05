@@ -35,7 +35,7 @@ The pose is finalized in the SIM phase and consumed (camera, then skinning) in t
               -> Camera::UpdateRender
             ... KickSkinningJob -> render submit
 
-The mod overrides at the **`Character::UpdatePropEffects` hook** (`payload/src/hooks/character.rs`), in its post-call block: it's the last thing in `UpdatePassFinalizePose_Parallel`, after the model-space pose is built, in the SIM phase — so a `SetJoint` there is consumed by both the camera (which reads the same model-space buffer in the RENDER phase) and the skinning job.
+The mod overrides at the **`Character::UpdatePropEffects` hook** (`payload/src/hooks/character/mod.rs`), in its post-call block: it's the last thing in `UpdatePassFinalizePose_Parallel`, after the model-space pose is built, in the SIM phase — so a `SetJoint` there is consumed by both the camera (which reads the same model-space buffer in the RENDER phase) and the skinning job.
 
 ## The head-bone override (shipped)
 
