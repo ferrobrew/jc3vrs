@@ -126,7 +126,7 @@ pub(super) static CRASH_LOG: AtomicIsize = AtomicIsize::new(0);
 
 /// Append the current UTC wall-clock time as `YYYY-MM-DD HH:MM:SS.mmm UTC `. `GetSystemTime`
 /// fills a plain struct with no allocation or locking, so this is safe from the handler, and the
-/// UTC base matches the tracing subscriber's timestamps in `jc3vrs.log` for cross-correlation.
+/// UTC base matches the tracing subscriber's timestamps in `jc3vr.log` for cross-correlation.
 pub(super) fn stamp(line: &mut Line) {
     let time = unsafe { GetSystemTime() };
     line.dec_pad(time.wYear as u64, 4)

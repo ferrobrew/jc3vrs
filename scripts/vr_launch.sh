@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch Just Cause 3 with the VR-specific environment jc3vrs needs, then hand off
+# Launch Just Cause 3 with the VR-specific environment jc3vr needs, then hand off
 # to jc3boot's neutral launcher. jc3boot stays service-agnostic (it just spawns
 # the game inside the pressure-vessel container with a launcher service so a
 # payload can inject); the VR runtime policy lives here, with the VR mod.

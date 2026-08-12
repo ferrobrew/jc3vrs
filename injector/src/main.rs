@@ -2,7 +2,7 @@ use anyhow::Context;
 use re_utilities_injector as injector;
 
 fn main() -> anyhow::Result<()> {
-    let payload_name = "jc3vrs_payload.dll".to_string();
+    let payload_name = "jc3vr_payload.dll".to_string();
     let file_name = "JustCause3.exe".to_string();
 
     let payload_path = std::env::current_exe()?

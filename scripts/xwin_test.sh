@@ -8,7 +8,7 @@ set -e
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
 . "$here/wine_prefix.sh"
-jc3vrs_ensure_wine_prefix
+jc3vr_ensure_wine_prefix
 cd "$repo"
 
 # The workspace's `default-members` is just the injector, so a bare `cargo xwin test` runs the

@@ -2,7 +2,7 @@
 # Fetch the official Khronos OpenXR loader and stage it beside the built payload.
 #
 # The payload loads the OpenXR loader dynamically at runtime, from an `openxr_loader.dll` next to
-# `jc3vrs_payload.dll` (the `openxr` crate's `static` feature does not cross-build on Linux -- see the
+# `jc3vr_payload.dll` (the `openxr` crate's `static` feature does not cross-build on Linux -- see the
 # note in `payload/Cargo.toml`). This script provides that DLL from a pinned, checksum-verified
 # Khronos release, so it never has to be staged by hand and a clean rebuild can restore it in one
 # command. The download is cached under `.openxr/`; only the first run needs the network.

@@ -163,7 +163,7 @@ the live back buffer through `GetDeviceSurface(BACK_BUFFER)`. Freeing that half 
 three objects after `CreateRenderSetups` has built them, which is a thing the engine offers no seam
 for and mod code must do itself. Nothing has to be suppressed alongside it: there is no final resolve
 into the back buffer, because the composite writes straight into the alias (`docs/engine/rendering/rendering.md`
-§12). JC3VRS does exactly this; see [`docs/mod/stereo/swapchain-ownership.md`](../../mod/stereo/swapchain-ownership.md).
+§12). jc3vr does exactly this; see [`docs/mod/stereo/swapchain-ownership.md`](../../mod/stereo/swapchain-ownership.md).
 
 ## 5. Viewports and other size-derived state
 
@@ -206,7 +206,7 @@ frame boundary. And it must be the *whole* walk, not just `CreateRenderSetups`: 
 follow only through the registered resize callbacks in step 7, and the Scaleform view size only
 through the UI reset in steps 3 and 9 (§3, §5).
 
-For how JC3VRS drives it, see [`docs/mod/vr-runtime.md`](../../mod/vr-runtime.md) and
+For how jc3vr drives it, see [`docs/mod/vr-runtime.md`](../../mod/vr-runtime.md) and
 [`docs/mod/stereo/swapchain-ownership.md`](../../mod/stereo/swapchain-ownership.md).
 
 ## 7. Open unknowns

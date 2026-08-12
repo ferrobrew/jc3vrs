@@ -1,4 +1,4 @@
-// A thin C shim over the FSR2 DX11 backend, exposing just what the JC3VRS payload needs as a flat C
+// A thin C shim over the FSR2 DX11 backend, exposing just what the jc3vr payload needs as a flat C
 // API of opaque pointers and PODs -- so the Rust side never has to transcribe FSR's by-value structs
 // (FfxResource, the ~30-field dispatch description, wchar_t name arrays). Everything Ffx stays on the
 // C++ side of this boundary; Rust binds the handful of functions below.

@@ -941,7 +941,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jc3vrs_injector"
+name = "jc3vr_injector"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -949,7 +949,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "jc3vrs_payload"
+name = "jc3vr_payload"
 version = "0.1.0"
 dependencies = [
  "anyhow",

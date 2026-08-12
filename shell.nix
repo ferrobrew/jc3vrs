@@ -1,6 +1,6 @@
 { pkgs ? import <nixpkgs> { } }:
 
-# Development shell for cross-compiling jc3vrs to x86-64 Windows from Linux.
+# Development shell for cross-compiling jc3vr to x86-64 Windows from Linux.
 #
 # We rely on the system `rustup`/`cargo` toolchain (with the
 # `x86_64-pc-windows-msvc` target installed) and `cargo-xwin`, which drives

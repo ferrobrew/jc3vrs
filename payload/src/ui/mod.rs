@@ -170,7 +170,7 @@ pub fn startup_banner(ctx: &egui::Context) {
     if age > BANNER_SECONDS {
         return;
     }
-    egui::Area::new(egui::Id::new("jc3vrs_build_banner"))
+    egui::Area::new(egui::Id::new("jc3vr_build_banner"))
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0))
         .interactable(false)
         .show(ctx, |ui| {
@@ -179,7 +179,7 @@ pub fn startup_banner(ctx: &egui::Context) {
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(format!(
-                            "jc3vrs injected — build {}",
+                            "jc3vr injected — build {}",
                             crate::BUILD_STAMP
                         ))
                         .size(26.0)
@@ -207,7 +207,7 @@ pub fn egui_debug_window(ui: &mut egui::Ui, renderer: &mut egui_directx11::Rende
     // already gates the floating-window close buttons): a closed tab is unrecoverable until
     // relaunch.
     egui_dock::DockArea::new(state)
-        .id(egui::Id::new("jc3vrs_dock"))
+        .id(egui::Id::new("jc3vr_dock"))
         .style(egui_dock::Style::from_egui(ui.style().as_ref()))
         .show_close_buttons(false)
         .show_leaf_close_all_buttons(false)

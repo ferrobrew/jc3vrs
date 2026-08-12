@@ -356,7 +356,7 @@ impl TraceState {
         }
     }
 
-    /// Write the collected log to an NDJSON file next to the injected DLL (same place as `jc3vrs.log`)
+    /// Write the collected log to an NDJSON file next to the injected DLL (same place as `jc3vr.log`)
     /// and record its path for the UI (caller holds the lock).
     fn dump(&mut self) {
         let Some(dir) = trace_dir(&self.stamp) else {

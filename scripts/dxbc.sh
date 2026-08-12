@@ -16,7 +16,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/.." && pwd)
 . "$here/wine_prefix.sh"
-jc3vrs_require_d3dcompiler
+jc3vr_require_d3dcompiler
 
 exe="$repo/target/x86_64-pc-windows-msvc/debug/dxbc-tool.exe"
 cargo xwin build --xwin-cache-dir "$repo/.xwin" --target x86_64-pc-windows-msvc -p dxbc-tool >&2

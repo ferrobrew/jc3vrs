@@ -8,5 +8,5 @@ fn main() {
     // from rather than the last time this script happened to run.
     println!("cargo:rerun-if-changed=src");
     let stamp = jiff::Zoned::now().strftime("%Y-%m-%d %H:%M:%S").to_string();
-    println!("cargo:rustc-env=JC3VRS_BUILD_STAMP={stamp}");
+    println!("cargo:rustc-env=jc3vr_build_stamp={stamp}");
 }

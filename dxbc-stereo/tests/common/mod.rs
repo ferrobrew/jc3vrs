@@ -13,7 +13,7 @@ use std::path::PathBuf;
 /// without the extract -- including a fresh clone and CI -- so an assertion as load-bearing as "all
 /// 455 vertex shaders round-trip" never ran, and a real regression in the rewriter went unnoticed
 /// until it was found by inspection.
-pub const ALLOW_MISSING: &str = "JC3VRS_ALLOW_MISSING_SHADER_CORPUS";
+pub const ALLOW_MISSING: &str = "JC3VR_ALLOW_MISSING_SHADER_CORPUS";
 
 /// The local extracted-shader directory. Panics with instructions when it is absent, unless
 /// [`ALLOW_MISSING`] is set, in which case it returns `None` and the caller skips.

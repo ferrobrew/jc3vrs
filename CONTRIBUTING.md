@@ -1,10 +1,10 @@
-# JC3VRS
+# jc3vr
 
-JC3VRS is a VR mod for Just Cause 3. It renders the game in stereo for an HMD via OpenXR, presenting per-eye textures for the world view and a separate composited "floating panel" layer for UI.
+jc3vr is a VR mod for Just Cause 3. It renders the game in stereo for an HMD via OpenXR, presenting per-eye textures for the world view and a separate composited "floating panel" layer for UI.
 
 ## Architecture
 
-JC3VRS is a Cargo workspace with three crates:
+jc3vr is a Cargo workspace with three crates:
 
 - **injector**: DLL injection using `re-utilities`. Launches the JC3 process and injects the payload.
 - **payload**: The injected mod code. Runs inside the JC3 process and contains all the hooks for rendering, input, camera manipulation, and post-processing effects.
@@ -18,7 +18,7 @@ The `.pyxis` files are the project's ground-truth record of the game's internals
 
 A def's doc-comments describe the game **as it is**: what a function does, what a field means, which engine systems read or write it, the conditions and mechanisms involved. Write them as if the mod did not exist.
 
-**Never document a downstream (mod-side) use case in a pyxis def.** How JC3VRS *uses* a hook — that it clears a flag for VR, widens a projection to cover both eyes, overrides a field to stabilize the view for the HMD — belongs in the payload code that does it, not in the def. The def says what the game does; the payload comment says what we do about it. Mixing the two rots the ground truth (the mod's intent drifts over time; the game's behavior does not) and couples the shared, multi-game defs to this one consumer.
+**Never document a downstream (mod-side) use case in a pyxis def.** How jc3vr *uses* a hook — that it clears a flag for VR, widens a projection to cover both eyes, overrides a field to stabilize the view for the HMD — belongs in the payload code that does it, not in the def. The def says what the game does; the payload comment says what we do about it. Mixing the two rots the ground truth (the mod's intent drifts over time; the game's behavior does not) and couples the shared, multi-game defs to this one consumer.
 
 ### pyxis-defs workflow
 
@@ -34,7 +34,7 @@ A def's doc-comments describe the game **as it is**: what a function does, what 
 - **Platform**: Targeting the Windows DX11 build of JC3, run through Proton/Wine.
 - **Debugging**: Primarily log review via `tracing`. Attaching a debugger is difficult due to the Proton/Wine virtualization layers.
 - **Hook placement**: New hooks should generally follow the `pyxis-defs` hierarchy for a 1:1 connection between defined types and hooked code.
-- **The wine prefix**: every tool that runs a Windows binary on Linux shares one prefix, resolved and provisioned by `scripts/wine_prefix.sh` (source it, call `jc3vrs_ensure_wine_prefix`). It lives under `target/`, so it is disposable — delete it and the next run rebuilds it — and it is provisioned with a native `d3dcompiler_47.dll`, because wine's built-in reimplementation mis-parses some of the game's shaders. One prefix rather than one per tool: the requirements differ, and a prefix that satisfies only some of them fails in ways that look like a bug in the caller. The game's own Proton prefix is separate and belongs to Steam; reach it through `scripts/proton_run.sh`.
+- **The wine prefix**: every tool that runs a Windows binary on Linux shares one prefix, resolved and provisioned by `scripts/wine_prefix.sh` (source it, call `jc3vr_ensure_wine_prefix`). It lives under `target/`, so it is disposable — delete it and the next run rebuilds it — and it is provisioned with a native `d3dcompiler_47.dll`, because wine's built-in reimplementation mis-parses some of the game's shaders. One prefix rather than one per tool: the requirements differ, and a prefix that satisfies only some of them fails in ways that look like a bug in the caller. The game's own Proton prefix is separate and belongs to Steam; reach it through `scripts/proton_run.sh`.
 - **Unit tests**: The payload targets Windows, so its tests are cross-compiled and run under wine. On Linux use `./scripts/xwin_test.sh` (which forwards its arguments to `cargo xwin test`), not `cargo test` — the payload does not build for a Linux target. Much of the payload needs a live game to exercise, so the tests cover the pure logic that does not: projection and viewport math, pose composition, and similar.
 - **Documentation**: The `docs/` directory is organized by nature, then by subject. The top split is `docs/engine/` for reverse-engineered ground truth about the game as it is, `docs/mod/` for the mod's design and implementation, and `docs/issues/` for issue-scoped investigations; within `engine/` and `mod/`, subject subdirectories mirror each other and the payload's module map (`rendering/`, `performance/`, `stereo/`, `body/`, `input/`, ...), with single-doc subjects staying at the split's root. `docs/README.md` is the index. New findings go in the directory matching their nature and subject, and a doc that would mix engine and mod material should be split along the nature line.
 - **Reverse-engineering**: Done through IDA Pro with its MCP integration, alongside a folder of decompiler output from a debug build of the game. The IDB and decompiler output locations can be provided on request.
