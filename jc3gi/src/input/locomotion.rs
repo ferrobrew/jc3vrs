@@ -83,10 +83,10 @@ for NStateTask_InputLocoAimRelativeTask {
 pub struct NStateTask_InputLocoIdleTask {}
 impl NStateTask_InputLocoIdleTask {
     pub const Update_ADDRESS: usize = 0x140817D70;
-    /// The per-frame idle update. When the idle countdown at `character + 0x2BB0` (a `f32`) is
-    /// negative and the character is idle, calm, and off-vehicle, it queues `ACT_TO_IDLE_ONE_OFF`
-    /// and returns; otherwise it decrements the countdown (while idle) or resets it, then queues the
-    /// applicable on-spot or start acts.
+    /// The per-frame idle update. When the idle countdown at [`Character::m_IdleFidgetTimer`](crate::character::character::Character::m_IdleFidgetTimer) (a
+    /// `f32`) is negative and the character is idle, calm, and off-vehicle, it queues
+    /// `ACT_TO_IDLE_ONE_OFF` and returns; otherwise it decrements the countdown (while idle) or
+    /// resets it, then queues the applicable on-spot or start acts.
     pub unsafe fn Update(
         ctx: *mut crate::state::StateContext,
         p1: *mut ::std::ffi::c_void,
@@ -154,7 +154,7 @@ impl std::convert::AsMut<NStateTask_InputLocoMoveTask> for NStateTask_InputLocoM
 /// The locomotion task that reads the movement effectors and writes the move direction to the
 /// character blackboard. Like the other `NStateTask` functions, `self` is the *character* -- the
 /// task types are namespaces over free functions that take the character as `this` (the blackboard
-/// at `+0x2060` and the body forward at `+0x2850` are read straight off it).
+/// at [`Character::m_Blackboard`](crate::character::character::Character::m_Blackboard) and the body-forward vector reading straight off it).
 pub struct NStateTask_InputLocoSetTargetDirTask {}
 impl NStateTask_InputLocoSetTargetDirTask {
     pub const SetupTargetDir_ADDRESS: usize = 0x14081E130;

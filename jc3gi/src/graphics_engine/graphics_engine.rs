@@ -693,12 +693,25 @@ impl std::convert::AsMut<HVertexDeclaration_t> for HVertexDeclaration_t {
     }
 }
 pub use windows::Win32::Foundation::HWND as HWND;
-#[repr(C, align(8))]
+#[repr(C, align(1))]
 /// The scene occluder / beam-frustum-based-culling manager. Its cull frustum is built (and cached
 /// per camera and time) from a camera's `m_View` and `m_ProjectionF`, and every scene-geometry,
 /// terrain, streaming, and occlusion consumer reads it through
 /// [`GetBFBCFrustumParamsForCameraAndTime`](crate::graphics_engine::graphics_engine::OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime).
-pub struct OccluderCollectionManager {}
+///
+/// The main cull camera is the manager's own copy of the active centre camera, embedded at
+/// [`CULLING_CAMERA_OFFSET`](crate::graphics_engine::graphics_engine::OccluderCollectionManager::CULLING_CAMERA_OFFSET) (the consumer identity every main-view BFBC
+/// consumer passes; shadow and reflection culls use separate functions). The layout around it is not
+/// yet mapped, so the offset is carried as a named constant rather than a field.
+pub struct OccluderCollectionManager {
+    _field_0: [u8; 8],
+}
+fn _OccluderCollectionManager_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x8], OccluderCollectionManager>([0u8; 0x8]);
+    }
+    unreachable!()
+}
 impl OccluderCollectionManager {
     pub const GetBFBCFrustumParamsForCameraAndTime_ADDRESS: usize = 0x1400D68B0;
     /// Build or fetch the cached BFBC cull-frustum parameters for `camera` at `time`. The frustum is
@@ -726,6 +739,13 @@ impl OccluderCollectionManager {
             f(self as *mut Self as _, camera, time, out_params, out_state)
         }
     }
+}
+impl OccluderCollectionManager {
+    /// The main cull camera the manager embeds at [`CULLING_CAMERA_OFFSET`](crate::graphics_engine::graphics_engine::OccluderCollectionManager::CULLING_CAMERA_OFFSET):
+    /// a verbatim copy of the active centre camera, used as the identity every main-view BFBC consumer
+    /// (terrain, dynamic/static models, streaming, AO volumes) passes to
+    /// [`GetBFBCFrustumParamsForCameraAndTime`](crate::graphics_engine::graphics_engine::OccluderCollectionManager::GetBFBCFrustumParamsForCameraAndTime).
+    pub const CULLING_CAMERA_OFFSET: u64 = 8;
 }
 impl std::convert::AsRef<OccluderCollectionManager> for OccluderCollectionManager {
     fn as_ref(&self) -> &OccluderCollectionManager {
@@ -812,7 +832,21 @@ pub struct RenderContext {
     /// ambient specular source the material shaders sample. Written per frame from the render
     /// engine's composite cube.
     pub m_EnvCubeTexture: *mut ::std::ffi::c_void,
-    _field_338: [u8; 76],
+    /// The dynamic (planar) reflection colour texture. `CNvWaterHighEndRenderBlock::Setup` binds it
+    /// on fragment slot 1 (clearing the slot when the pointer is null).
+    pub m_DynamicReflectionColorTexture: *mut crate::graphics_engine::texture::Texture,
+    /// The dynamic (planar) reflection alpha texture, paired with
+    /// [`m_DynamicReflectionColorTexture`](crate::graphics_engine::graphics_engine::RenderContext::m_DynamicReflectionColorTexture).
+    /// `CNvWaterHighEndRenderBlock::Setup` binds it on fragment slot 12 (clearing the slot when the
+    /// pointer is null).
+    pub m_DynamicReflectionAlphaTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_348: [u8; 8],
+    /// The scene colour texture as of this pass, the screen-space refraction source.
+    /// `CNvWaterHighEndRenderBlock::Setup` binds it on fragment slot 3.
+    pub m_BackBufferTexture: *mut crate::graphics_engine::texture::Texture,
+    /// The scene depth texture. `CNvWaterHighEndRenderBlock::Setup` binds it on fragment slot 0.
+    pub m_DepthBufferTexture: *mut crate::graphics_engine::texture::Texture,
+    _field_360: [u8; 36],
     pub m_Flags: crate::graphics_engine::graphics_engine::RenderContextFlags,
     _field_385: [u8; 3],
     /// The night-light reference level for the current time of day, interpolated from the

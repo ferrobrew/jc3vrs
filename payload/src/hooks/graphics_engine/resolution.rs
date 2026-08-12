@@ -57,7 +57,8 @@ struct FogHalveSite {
     original: [u8; 8],
 }
 
-// `mulss xmm0, dword cs:0x1422FE254` (the 0.5 constant) at each halving site; verified before patching.
+// The `mulss` reads the 0.5 constant (the fog halving scale) at each halving site; verified before
+// patching.
 const FOG_HALVE_SITES: [FogHalveSite; 2] = [
     FogHalveSite {
         address: 0x1_4010_C7DF,

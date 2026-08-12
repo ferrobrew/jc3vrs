@@ -25,6 +25,7 @@ use jc3gi::graphics_engine::{
     render_block::{RBIInfo, RenderBlockTerrainDetail},
     render_engine::{
         RenderBlockTypeRegistry, RenderEngine, TerrainDetailBudgetPatchSites as BudgetSites,
+        TerrainDetailBudgetValues,
     },
 };
 use re_utilities::hook_library::HookLibrary;
@@ -72,15 +73,30 @@ pub fn request_detail_budget_apply() {
     BUDGET_APPLY_REQUESTED.store(true, Ordering::Relaxed);
 }
 
-/// The five buffer-size immediates and their shipped values (see
-/// [`TerrainDetailBudgetPatchSites`](jc3gi::graphics_engine::render_engine::TerrainDetailBudgetPatchSites)):
-/// the detail vertex/index/texel budgets the GPU pipeline allocates from.
+/// The five buffer-size immediates (via their [`TerrainDetailBudgetPatchSites`] addresses) and their
+/// shipped values (via [`TerrainDetailBudgetValues`]): the detail vertex/index/texel budgets the GPU
+/// pipeline allocates from.
 const BUDGET_SITES: [(u64, u32); 5] = [
-    (BudgetSites::VERTEX_COUNT, 0x1_0000),
-    (BudgetSites::DEBUG_VERTEX_COUNT, 0x1_0000),
-    (BudgetSites::INDEX_BYTES, 0x4_0000),
-    (BudgetSites::TEXEL_COUNT, 0x8000),
-    (BudgetSites::INDEX_VIEW_COUNT, 0x8000),
+    (
+        BudgetSites::VERTEX_COUNT_ADDRESS,
+        TerrainDetailBudgetValues::VERTEX_COUNT,
+    ),
+    (
+        BudgetSites::DEBUG_VERTEX_COUNT_ADDRESS,
+        TerrainDetailBudgetValues::DEBUG_VERTEX_COUNT,
+    ),
+    (
+        BudgetSites::INDEX_BYTES_ADDRESS,
+        TerrainDetailBudgetValues::INDEX_BYTES,
+    ),
+    (
+        BudgetSites::TEXEL_COUNT_ADDRESS,
+        TerrainDetailBudgetValues::TEXEL_COUNT,
+    ),
+    (
+        BudgetSites::INDEX_VIEW_COUNT_ADDRESS,
+        TerrainDetailBudgetValues::INDEX_VIEW_COUNT,
+    ),
 ];
 
 /// If an apply was requested, patch the detail-budget buffer sizes to `shipped * scale` and

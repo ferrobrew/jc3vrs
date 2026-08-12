@@ -143,8 +143,8 @@ impl std::convert::AsMut<DisplayInfo> for DisplayInfo {
 }
 #[repr(C, align(1))]
 /// A Scaleform `GFx::DisplayObjectBase`: the display-side object behind a display-list entry.
-/// Reached from a managed display-object [`Value`](crate::ui::scaleform::Value) at `mValue + 0x88` (guarded by the traits
-/// check `GetDisplayInfo` performs on `mValue + 0x28`).
+/// Reached from a managed display-object [`Value`](crate::ui::scaleform::Value)'s [`Object::m_DisplayObject`](crate::ui::scaleform::Object::m_DisplayObject) (guarded by the
+/// traits check `GetDisplayInfo` performs through [`Object::m_Traits`](crate::ui::scaleform::Object::m_Traits)).
 pub struct DisplayObjectBase {
     _field_0: [u8; 8],
 }
@@ -334,7 +334,7 @@ impl std::convert::AsMut<MouseState> for MouseState {
 /// points at. The engine drives the movie through this interface's virtuals; the bound
 /// [`SetVariable`](crate::ui::scaleform::Movie::SetVariable) / [`GetVariable`](crate::ui::scaleform::Movie::GetVariable) /
 /// [`Invoke`](crate::ui::scaleform::Movie::Invoke) are its concrete implementations. The vtable is `MovieRoot`'s at
-/// `0x142_621_780`.
+/// [`VFTABLE`](crate::ui::scaleform::Movie::VFTABLE).
 pub struct Movie {
     vftable: *const crate::ui::scaleform::MovieVftable,
     _field_8: [u8; 8],

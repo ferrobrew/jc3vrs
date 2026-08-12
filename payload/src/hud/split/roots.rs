@@ -489,8 +489,8 @@ unsafe fn release_entry(entry: *mut TreeNode) {
 }
 
 /// Resolve a clip handle's render node: the managed display-object [`Value`]'s AS3 object at
-/// `mValue`, its `DisplayObjectBase` at `+0x88` (guarded by the traits check `GetDisplayInfo`
-/// itself performs on `+0x28`), then `GetRenderNode`.
+/// `mValue`, its `DisplayObjectBase` (guarded by the traits check `GetDisplayInfo`
+/// itself performs on the traits), then `GetRenderNode`.
 unsafe fn clip_render_node(handle: &ClipHandle) -> Option<*mut TreeNode> {
     // SAFETY: capture seam; the handle's value is pinned and managed.
     unsafe {

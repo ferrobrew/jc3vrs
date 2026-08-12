@@ -3,7 +3,9 @@
 
 /// The engine's debug name for a pass id, via `GetRenderPassName`.
 pub(super) fn render_pass_name(id: i16) -> &'static str {
-    if !(0..0x9D).contains(&i32::from(id)) {
+    if !(0..jc3gi::graphics_engine::render_engine::RenderPassId::RP_RENDERPASS_COUNT as i32)
+        .contains(&i32::from(id))
+    {
         return "(out of range)";
     }
     // SAFETY: the id is in the enum's verified range, and the engine returns static strings.

@@ -70,9 +70,10 @@ fn calc_histogram_mid_bright(
 // With the real 3-arg signature this is the canonical place to (a) pin the applied exposure for the A/B,
 // and (b) read the exposure internals. The target divisor is m_Histogram2's mid-point -- what the
 // converged exposure tracks, NOT m_Histogram. Update also advances internal histogram ring indices
-// (notably the occlusion-query slot selector at this+0x57C); running it on both eyes steps those
-// indices twice per real frame and can read back a stale histogram once head motion makes
-// consecutive frames diverge. Gate it to eye 0 under its own toggle so the effect is isolatable.
+// (notably the occlusion-query slot selector, [`ToneMappingEffect::m_OcclusionQuerySlotSelector`]);
+// running it on both eyes steps those indices twice per real frame and can read back a stale
+// histogram once head motion makes consecutive frames diverge. Gate it to eye 0 under its own toggle
+// so the effect is isolatable.
 #[detour(address = jc3gi::graphics_engine::tone_mapping::ToneMappingEffect::Update_ADDRESS)]
 fn tonemapping_update(
     this: *mut ToneMappingEffect,

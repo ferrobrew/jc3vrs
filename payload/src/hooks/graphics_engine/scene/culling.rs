@@ -17,7 +17,8 @@
 //! the engine builds the params it optionally drops the *software-occlusion* frustums (occluders cast
 //! from the single centre viewpoint, wrong for two offset eyes). The per-eye *render* projections are
 //! untouched, and every correction is scoped to the main cull camera by its exact identity
-//! (`camera == this + 0x8`) -- shadow and reflection culls use different functions, and any other
+//! ([`camera == this + OccluderCollectionManager::CULLING_CAMERA_OFFSET`]) -- shadow and reflection
+//! culls use different functions, and any other
 //! camera through this hook fails the check. See
 //! [`StereoConfig::widen_cull_frustum`](crate::stereo::config::StereoConfig),
 //! [`cull_size_fov_deg`](crate::stereo::config::StereoConfig::cull_size_fov_deg), and
@@ -71,8 +72,9 @@ fn get_bfbc_frustum_params(
     out_params: *mut *mut BFBCFrustumCullParameters,
     out_state: *mut u64,
 ) {
-    // The main cull camera is the manager's own `m_CullingCamera` at `this + 0x8` -- the exact
-    // identity every main-view consumer passes. All three corrections are scoped to it.
+    // The main cull camera is the manager's own `m_CullingCamera` at
+    // [`OccluderCollectionManager::CULLING_CAMERA_OFFSET`] -- the exact identity every main-view
+    // consumer passes. All three corrections are scoped to it.
     let main = is_main_cull_camera(this, camera);
 
     // Widen the frustum (and relax the size cull) before the engine builds the params from it.
@@ -116,11 +118,13 @@ fn get_bfbc_frustum_params(
 }
 
 /// Whether `camera` is the main-view cull camera: the occluder manager's own `m_CullingCamera`, at
-/// `OccluderCollectionManager + 0x8`. Every main-view consumer (terrain, dynamic/static models,
-/// streaming, AO volumes) passes exactly this camera; shadow and reflection culls use different
-/// functions, and any other camera through this hook fails the check.
+/// [`OccluderCollectionManager::CULLING_CAMERA_OFFSET`]. Every main-view consumer (terrain,
+/// dynamic/static models, streaming, AO volumes) passes exactly this camera; shadow and reflection
+/// culls use different functions, and any other camera through this hook fails the check.
 fn is_main_cull_camera(this: *const OccluderCollectionManager, camera: *const Camera) -> bool {
-    !this.is_null() && camera as usize == this as usize + 0x8
+    !this.is_null()
+        && camera as usize
+            == this as usize + OccluderCollectionManager::CULLING_CAMERA_OFFSET as usize
 }
 
 /// Whether `camera` is the camera manager's active camera -- the one gameplay drives and the spawn
@@ -300,8 +304,9 @@ fn patch_spawn_budgets(spawn_system: *mut SpawnSystem, scale: f32) {
     }
 }
 
-/// Drop the main view's software-occlusion frustums: set `m_FrustumCount` (`+0x1280`, = occluder
-/// count + 1) to 1, leaving only the widened camera frustum at index 0, so software occlusion no longer
+/// Drop the main view's software-occlusion frustums: set `m_FrustumCount` (the occluder
+/// count + 1 field, at [`BFBCFrustumCullParameters::m_FrustumCount`]) to 1, leaving only the
+/// widened camera frustum at index 0, so software occlusion no longer
 /// culls edge geometry that the centre viewpoint hides but an offset eye can see. The occluder data
 /// stays in place, just un-iterated; view-frustum culling (index 0) is unchanged.
 ///

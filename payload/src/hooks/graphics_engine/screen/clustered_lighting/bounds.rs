@@ -80,6 +80,8 @@ pub(super) fn tile_bounds_from_projection(
 
 #[cfg(test)]
 mod tests {
+    use jc3gi::camera::camera::Camera;
+
     use super::*;
     use crate::{
         hooks::graphics_engine::clustered_lighting::split::TILE_SIZE,
@@ -121,7 +123,9 @@ mod tests {
             up: half_fov_y,
             down: -half_fov_y,
         };
-        let proj = OffAxisProjection::new(fov, 0.1, 38400.0).standard_depth;
+        let proj =
+            OffAxisProjection::new(fov, Camera::DEFAULT_NEAR_PLANE, Camera::DEFAULT_FAR_PLANE)
+                .standard_depth;
 
         let cb1 = tile_bounds_from_projection(&proj, TILE_COUNT_X, TILE_COUNT_Y, 0);
 
@@ -169,7 +173,12 @@ mod tests {
     /// when given an asymmetric projection matrix.
     #[test]
     fn test_off_axis_produces_asymmetric_bounds() {
-        let proj = OffAxisProjection::new(asymmetric_fov(), 0.1, 38400.0).standard_depth;
+        let proj = OffAxisProjection::new(
+            asymmetric_fov(),
+            Camera::DEFAULT_NEAR_PLANE,
+            Camera::DEFAULT_FAR_PLANE,
+        )
+        .standard_depth;
 
         let cb1 = tile_bounds_from_projection(&proj, TILE_COUNT_X, TILE_COUNT_Y, 0);
 
@@ -215,7 +224,9 @@ mod tests {
             up: 40.0_f32.to_radians(),
             down: -40.0_f32.to_radians(),
         };
-        let proj = OffAxisProjection::new(fov, 0.1, 38400.0).standard_depth;
+        let proj =
+            OffAxisProjection::new(fov, Camera::DEFAULT_NEAR_PLANE, Camera::DEFAULT_FAR_PLANE)
+                .standard_depth;
 
         let (right, left, top, bottom) = frustum_bounds(&proj);
 
@@ -232,7 +243,12 @@ mod tests {
     /// tiles that does not start at column 0.
     #[test]
     fn per_eye_tile_bounds_are_affine_in_the_absolute_tile_index() {
-        let proj = OffAxisProjection::new(asymmetric_fov(), 0.1, 38400.0).standard_depth;
+        let proj = OffAxisProjection::new(
+            asymmetric_fov(),
+            Camera::DEFAULT_NEAR_PLANE,
+            Camera::DEFAULT_FAR_PLANE,
+        )
+        .standard_depth;
         let (right, left, top, bottom) = frustum_bounds(&proj);
         let half_tiles = TILE_COUNT_X / 2.0;
 
@@ -271,7 +287,12 @@ mod tests {
     /// other's absolute tile range.
     #[test]
     fn per_eye_tile_bounds_cover_each_half_exactly_once() {
-        let proj = OffAxisProjection::new(asymmetric_fov(), 0.1, 38400.0).standard_depth;
+        let proj = OffAxisProjection::new(
+            asymmetric_fov(),
+            Camera::DEFAULT_NEAR_PLANE,
+            Camera::DEFAULT_FAR_PLANE,
+        )
+        .standard_depth;
         let (right, left, _, _) = frustum_bounds(&proj);
         let half_tiles = TILE_COUNT_X / 2.0;
 

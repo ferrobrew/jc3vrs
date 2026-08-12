@@ -186,9 +186,9 @@ pub unsafe fn pass_scope(pass: *mut RenderPass) -> Option<PassScope> {
         return None;
     }
     // Call the pass-name lookup through a raw `i32` signature rather than the generated
-    // `RenderPassId` enum: `m_Index` can hold an unnamed id (e.g. `0x82`) that is not a valid enum
-    // discriminant, and transmuting such a value into the enum would be undefined behaviour. The
-    // engine's lookup returns `"NONE"` for those.
+    // `RenderPassId` enum: `m_Index` can hold an unnamed id (a pass id outside the named range)
+    // that is not a valid enum discriminant, and transmuting such a value into the enum would be
+    // undefined behaviour. The engine's lookup returns `"NONE"` for those.
     let name = unsafe {
         let index = i32::from((*pass).m_Index);
         let lookup: unsafe extern "system" fn(i32) -> *const u8 =

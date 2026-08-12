@@ -36,7 +36,7 @@ use std::{
 
 use jc3gi::graphics_engine::{
     graphics_engine::RenderContext,
-    render_engine::RenderBlockTypeRegistry,
+    render_engine::{RenderBlockTypeRegistry, RenderPassId},
     render_pass::{RBILists, RenderInstance, RenderPass, RenderPassSortMethod, SortContext},
 };
 use parking_lot::Mutex;
@@ -312,11 +312,11 @@ static LAST_SYNCED_GATES: Mutex<Option<String>> = Mutex::new(None);
 /// fullscreen blocks that must never be skipped; the far-regime block types among them are gated
 /// at type level instead ([`sync_type_gates`]).
 const SPLIT_PASSES: &[i16] = &[
-    0x41, // RP_MODELS_DYNAMIC
-    0x42, // RP_MODELS_DYNAMIC_MASK_DAMAGE_POST_EFFECT
-    0x43, // RP_MODELS_STATIC
-    0x44, // RP_MODELS_REFLECTION
-    0x4B, // RP_CREATURES
+    RenderPassId::RP_MODELS_DYNAMIC as i16,
+    RenderPassId::RP_MODELS_DYNAMIC_MASK_DAMAGE_POST_EFFECT as i16,
+    RenderPassId::RP_MODELS_STATIC as i16,
+    RenderPassId::RP_MODELS_REFLECTION as i16,
+    RenderPassId::RP_CREATURES as i16,
 ];
 
 /// The `IsEnabled` replacement for the gated far-regime types: report disabled exactly when the

@@ -40,12 +40,19 @@ use crate::{
 pub(super) fn hook_library() -> HookLibrary {
     HookLibrary::new()
         .with_static_binder(&GAME_UPDATE_BINDER)
-        // CGame::Update + 0x787: nop the `m_UpdateFlags & 4` check (the jz), we will _always_ be UpdateRender-ing.
-        .with_patch(Game::Update_ADDRESS + 0x787, &[0x90; 2])
+        // Nop the `m_UpdateFlags & 4` gate (the `jz`) at
+        // [`Game::UPDATE_RENDER_GATE_OFFSET`], so we will _always_ be UpdateRender-ing.
+        .with_patch(
+            Game::Update_ADDRESS + Game::UPDATE_RENDER_GATE_OFFSET as usize,
+            &[0x90; 2],
+        )
         .with_static_binder(&GAME_UPDATE_RENDER_BINDER)
-        // CGame::Update + 0x7A2: nop everything between UpdateRender and ++this->m_RenderCount;
-        // we'll be doing that ourselves!
-        .with_patch(Game::Update_ADDRESS + 0x7A2, &[0x90; 0x3A])
+        // Nop everything between UpdateRender and ++m_RenderCount at
+        // [`Game::UPDATE_RENDER_LENGTH_OFFSET`]; we'll be doing that ourselves!
+        .with_patch(
+            Game::Update_ADDRESS + Game::UPDATE_RENDER_LENGTH_OFFSET as usize,
+            &[0x90; 0x3A],
+        )
 }
 
 #[detour(address = jc3gi::game::Game::Update_ADDRESS)]

@@ -50,7 +50,7 @@ pub(super) unsafe fn record_exception(info: *mut EXCEPTION_POINTERS) {
                     info0: std::ptr::read_volatile(&raw const (*rec_ptr).ExceptionInformation[0]),
                     info1: std::ptr::read_volatile(&raw const (*rec_ptr).ExceptionInformation[1]),
                 };
-                if FATAL_CODES.contains(&record.code) {
+                if FATAL_CODES.contains(&record.code) && !EXCLUDED_CODES.contains(&record.code) {
                     let ctx = ep.ContextRecord;
                     let ctx = if readable(ctx as usize, std::mem::size_of::<CONTEXT>()) {
                         ctx
@@ -83,8 +83,17 @@ pub(super) unsafe fn log_backtrace() {
     }
 }
 
-/// Fatal codes worth recording -- skip C++ exceptions (0xE06D7363), debug/breakpoint events and
-/// benign first-chance ones (stack guard-page growth is 0x80000001, not in this list).
+/// The MSVC C++ exception code: the SEH top-level filter reports any `throw` as this, so it is a
+/// deliberate handling path, not a fatal condition to record.
+const MSVC_CPP_EXCEPTION_CODE: u32 = 0xE06D7363;
+
+/// `STATUS_GUARD_PAGE_VIOLATION`: the first-chance fault Windows raises when a stack guard page is
+/// touched during growth. Benign when handled by the OS; not worth recording as a crash.
+const GUARD_PAGE_VIOLATION_CODE: u32 = 0x80000001;
+
+/// Fatal codes worth recording -- skip C++ exceptions ([`MSVC_CPP_EXCEPTION_CODE`]),
+/// debug/breakpoint events and benign first-chance ones ([`GUARD_PAGE_VIOLATION_CODE`], not in
+/// this list).
 const FATAL_CODES: &[u32] = &[
     0xC0000005, // ACCESS_VIOLATION
     0xC000001D, // ILLEGAL_INSTRUCTION
@@ -97,6 +106,11 @@ const FATAL_CODES: &[u32] = &[
     0xC0000374, // HEAP_CORRUPTION
     0xC0000409, // STACK_BUFFER_OVERRUN / FAIL_FAST
 ];
+
+/// Codes that must never be logged as fatal even if present: MSVC C++ exceptions (handled by the
+/// C++ runtime) and the benign first-chance guard-page fault. Kept as a separate gate so the
+/// exclusion is enforced in code, not just documented.
+const EXCLUDED_CODES: &[u32] = &[MSVC_CPP_EXCEPTION_CODE, GUARD_PAGE_VIOLATION_CODE];
 
 /// The fields of an `EXCEPTION_RECORD` the logger uses, copied out by value in `handler` so no
 /// code path dereferences the record after its one probed read window.

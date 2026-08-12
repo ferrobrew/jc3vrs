@@ -436,8 +436,8 @@ fn dump_tree(movie_impl: &MovieImpl, movie_root: &Movie) {
 }
 
 /// A tree node's instance name. The `name` field is a `Scaleform::String`: its `pData` carries
-/// heap flags in the pointer's low bits, and the characters live at `+0xC` past the `DataDesc`
-/// header (u64 size, i32 refcount), NUL-terminated.
+/// heap flags in the pointer's low bits, and the characters live at
+/// [`StringDataDesc::m_Data`](jc3gi::ui::scaleform::StringDataDesc::m_Data), NUL-terminated.
 unsafe fn node_name(node: &AmpMovieObjectDesc) -> String {
     // SAFETY: forwarded from the tree walk; the string data outlives the node.
     let Some(desc) = (unsafe { node.name_data() }) else {

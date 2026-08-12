@@ -79,6 +79,11 @@ pub fn publish_player_rbi_infos(infos: &[usize; PLAYER_MODEL_SLOTS]) {
 /// The number of model-instance slots on `CAnimatedModel`, as a `usize` for array sizing.
 pub const PLAYER_MODEL_SLOTS: usize = AnimatedModel::MODEL_INSTANCE_SLOTS as usize;
 
+/// The largest skeleton bone index `publish_collapse_bones` accepts. Skeleton indices beyond an
+/// `i16`'s range are implausible (the engine's bone index space is i16-sized), so they are dropped
+/// rather than risking a whole-body collapse.
+const MAX_BONE_INDEX: u32 = 0x7FFF;
+
 /// Publish the NECK bone's model-space position, from the character hook: the collapse target
 /// point. Collapsed vertices contract here (inside the collar) rather than to each bone's own
 /// position — vertices blended between a collapsed and a kept bone form a stretch cone to the
@@ -105,7 +110,7 @@ pub fn publish_collapse_target(position: glam::Vec3) {
 pub fn publish_collapse_bones(indices: &[u32]) {
     let mut len = 0;
     for &index in indices {
-        if index == 0 || index > 0x7FFF || len >= COLLAPSE_BONES.len() {
+        if index == 0 || index > MAX_BONE_INDEX || len >= COLLAPSE_BONES.len() {
             continue;
         }
         COLLAPSE_BONES[len].store(index, Ordering::Relaxed);

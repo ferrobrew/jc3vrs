@@ -16,7 +16,9 @@ use std::{
 use detours_macro::detour;
 use jc3gi::graphics_engine::{
     graphics_engine::RenderContextFlags,
-    post_effects::{AAMode, AntiAliasingEffect, PostEffectContext, SunHaloEffect},
+    post_effects::{
+        AAMode, AntiAliasingEffect, PostEffectContext, PostEffectsManager, SunHaloEffect,
+    },
 };
 use re_utilities::hook_library::HookLibrary;
 
@@ -41,18 +43,20 @@ pub(super) fn hook_library() -> HookLibrary {
         .with_static_binder(&ANTI_ALIASING_APPLY_BINDER)
 }
 
-/// Dispatch FSR for the current eye, reading the chain's current slot color (`mgr[slot + 83]`) as
+/// Dispatch FSR for the current eye, reading the chain's current slot color
+/// (`mgr[slot + PostEffectsManager::RESULT_TEXTURE_SLOT_BASE]`) as
 /// input and writing the anti-aliased result back into it. Returns whether FSR ran (in which case the
 /// engine AA should be neutralized to a passthrough). Mirrors `capture_post_result`'s slot access.
 fn fsr_dispatch(mgr: *mut c_void, slot: u32, sharpness: Option<f32>) -> bool {
     if mgr.is_null() {
         return false;
     }
-    // SAFETY: at the AA stage `mgr[slot + 83]` is the chain's current result texture (the LDR,
-    // post-tonemap color), and the engine buffers are live on the render thread.
+    // SAFETY: at the AA stage
+    // `mgr[slot + PostEffectsManager::RESULT_TEXTURE_SLOT_BASE]` is the chain's current result
+    // texture (the LDR, post-tonemap color), and the engine buffers are live on the render thread.
     let ran = unsafe {
         let slot_color = (mgr as *const *mut jc3gi::graphics_engine::texture::Texture)
-            .add(slot as usize + 83)
+            .add(slot as usize + PostEffectsManager::RESULT_TEXTURE_SLOT_BASE as usize)
             .read();
         let Some(ge) = jc3gi::graphics_engine::graphics_engine::GraphicsEngine::get() else {
             return false;
@@ -204,7 +208,8 @@ fn anti_aliasing_apply(
     r
 }
 
-/// Read a stage's slot result texture (`CTX[slot+83]`, where `CTX` is the manager arg) and capture
+/// Read a stage's slot result texture
+/// (`CTX[slot + PostEffectsManager::RESULT_TEXTURE_SLOT_BASE]`, where `CTX` is the manager arg) and capture
 /// it for the current eye into the debug overlay's per-stage preview. Debug-only: gated on the
 /// Previews tab actually being open, so the CopyResource isn't paid for every dispatch by everyone.
 fn capture_post_result(stage: usize, mgr: *mut c_void, slot: u32) {
@@ -214,7 +219,7 @@ fn capture_post_result(stage: usize, mgr: *mut c_void, slot: u32) {
     let eye = draw_index();
     unsafe {
         let result = (mgr as *const *mut jc3gi::graphics_engine::texture::Texture)
-            .add(slot as usize + 83)
+            .add(slot as usize + PostEffectsManager::RESULT_TEXTURE_SLOT_BASE as usize)
             .read();
         crate::ui::render::capture_post_stage(stage, eye, result);
     }

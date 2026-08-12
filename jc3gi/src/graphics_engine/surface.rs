@@ -190,12 +190,13 @@ fn _PoolType_size_check() {
 #[repr(i32)]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
 /// A texture/surface pixel format. The values are the `DXGI_FORMAT` codes the backend passes
-/// straight to D3D11 (so `ABGR32` is `DXGI_FORMAT_R8G8B8A8_UNORM`), with a handful of
-/// platform-independent names above `0x3E8` for formats D3D11 has no direct equivalent for.
-/// `Unknown` (0) means "take the format from the source data".
+/// straight to D3D11 (so [`ABGR32`](crate::graphics_engine::surface::SurfaceFormat::ABGR32) is `DXGI_FORMAT_R8G8B8A8_UNORM`), with a handful
+/// of platform-independent names above [`ARGB32`](crate::graphics_engine::surface::SurfaceFormat::ARGB32) for formats D3D11 has no direct
+/// equivalent for. `Unknown` (0) means "take the format from the source data".
 ///
 /// The engine's enumeration carries many aliases that resolve to the same code (`RGBA32`,
-/// `BGRA32`, and `FB_A8R8G8B8` are all `0x1C`); only one name per value is listed here.
+/// `BGRA32`, and `FB_A8R8G8B8` all share [`ABGR32`](crate::graphics_engine::surface::SurfaceFormat::ABGR32)'s code); only one name per
+/// value is listed here.
 pub enum SurfaceFormat {
     Unknown = 0isize as _,
     A32B32G32R32F = 2isize as _,

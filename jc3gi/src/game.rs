@@ -85,6 +85,15 @@ impl Game {
         }
     }
 }
+impl Game {
+    /// The intra-`Update` site at which the game's per-frame render bookkeeping starts: the
+    /// `m_UpdateFlags & 4` check (the `jz`) that normally gates `UpdateRender` (and everything
+    /// after it) on the frame-pacing mode sits here.
+    pub const UPDATE_RENDER_GATE_OFFSET: u64 = 1927;
+    /// The intra-`Update` site at which the render bookkeeping ends: `++m_RenderCount`, the last
+    /// step of the `UpdateRender` tail.
+    pub const UPDATE_RENDER_LENGTH_OFFSET: u64 = 1954;
+}
 impl std::convert::AsRef<Game> for Game {
     fn as_ref(&self) -> &Game {
         self

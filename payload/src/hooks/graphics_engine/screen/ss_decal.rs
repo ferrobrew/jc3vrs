@@ -335,6 +335,8 @@ const UV_TO_NDC: [f32; 16] = [
 
 #[cfg(test)]
 mod tests {
+    use jc3gi::camera::camera::Camera;
+
     use super::*;
     use crate::vr::projection::{Fov, OffAxisProjection};
 
@@ -346,8 +348,8 @@ mod tests {
                 up: 35.0_f32.to_radians(),
                 down: -45.0_f32.to_radians(),
             },
-            0.1,
-            38400.0,
+            Camera::DEFAULT_NEAR_PLANE,
+            Camera::DEFAULT_FAR_PLANE,
         )
         .reverse_z
     }
@@ -407,8 +409,8 @@ mod tests {
                 up: 40.0_f32.to_radians(),
                 down: -40.0_f32.to_radians(),
             },
-            0.1,
-            38400.0,
+            Camera::DEFAULT_NEAR_PLANE,
+            Camera::DEFAULT_FAR_PLANE,
         )
         .reverse_z;
         let right = OffAxisProjection::new(
@@ -418,8 +420,8 @@ mod tests {
                 up: 40.0_f32.to_radians(),
                 down: -40.0_f32.to_radians(),
             },
-            0.1,
-            38400.0,
+            Camera::DEFAULT_NEAR_PLANE,
+            Camera::DEFAULT_FAR_PLANE,
         )
         .reverse_z;
 

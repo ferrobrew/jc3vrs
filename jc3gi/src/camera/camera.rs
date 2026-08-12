@@ -122,6 +122,14 @@ impl Camera {
         }
     }
 }
+impl Camera {
+    /// The far-plane default the engine's `Camera` constructor applies; the engine
+    /// reads the live value from `m_Far`.
+    pub const DEFAULT_FAR_PLANE: f32 = 38400.0;
+    /// The near-plane default the engine's `Camera` constructor applies; the engine reads the
+    /// live value from `m_Near`.
+    pub const DEFAULT_NEAR_PLANE: f32 = 0.1;
+}
 impl std::convert::AsRef<Camera> for Camera {
     fn as_ref(&self) -> &Camera {
         self

@@ -455,7 +455,8 @@ fn offaxis_inverse(near: f32, far: f32) -> Option<Matrix4> {
     let applies = enabled && near_ok && far_ok;
     // The `Matrix4` <-> glam bridge transposes each way, so `Matrix4::from(Mat4::from(engine).inverse())`
     // yields the inverse back in engine row-major format -- the same pattern the camera hook uses to
-    // write `m_View`. The engine's `PerspectiveFovInverse` (0x1400390E0) produces a REVERSE-Z clip->view
+    // write `m_View`. The engine's `PerspectiveFovInverse`
+    // ([`Matrix4::PerspectiveFovInverse_ADDRESS`]) produces a REVERSE-Z clip->view
     // inverse (its depth entries `m23 = (far-near)/(far*near)`, `m33 = 1/far`, `m32 = -1` reconstruct
     // near->NDC z 1, far->0), matching the reverse-Z depth buffer the game renders. So invert the
     // reverse-Z off-axis projection, not the standard-depth one: `inverse(projection_reverse_z)`
@@ -772,6 +773,8 @@ pub(super) fn with_immediate_context<R>(f: impl FnOnce(&ID3D11DeviceContext) -> 
 
 #[cfg(test)]
 mod tests {
+    use jc3gi::camera::camera::Camera;
+
     use super::*;
     use crate::vr::projection::{Fov, OffAxisProjection};
 
@@ -808,8 +811,11 @@ mod tests {
             up: 45.0_f32.to_radians(),
             down: -45.0_f32.to_radians(),
         };
-        let inverse =
-            glam::Mat4::from(OffAxisProjection::new(fov, 0.1, 38400.0).reverse_z).inverse();
+        let inverse = glam::Mat4::from(
+            OffAxisProjection::new(fov, Camera::DEFAULT_NEAR_PLANE, Camera::DEFAULT_FAR_PLANE)
+                .reverse_z,
+        )
+        .inverse();
 
         for eye in 0..2 {
             let remapped = inverse * half_target_remap(eye);

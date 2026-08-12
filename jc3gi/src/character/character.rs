@@ -32,7 +32,8 @@ pub struct AnimatedModel {
     /// The model-instance slots (`NModelSystem::CModelInstance*`, null when unused): the base
     /// body model plus attachments and variants. `CAnimatedModel::GetModel`/`SetModel` index this
     /// array directly. Each instance embeds its render-block-instance info (`CRBIInfo`) at
-    /// instance + 0x50, which is the `info` pointer its render blocks are drawn with.
+    /// [`MODEL_INSTANCE_RBI_INFO_OFFSET`](crate::character::character::AnimatedModel::MODEL_INSTANCE_RBI_INFO_OFFSET), which is the
+    /// `info` pointer its render blocks are drawn with.
     pub m_ModelInstances: [u64; 8],
 }
 fn _AnimatedModel_size_check() {
@@ -63,7 +64,7 @@ impl AnimatedModel {
     /// numeric indices land on arbitrary bones.
     pub const BODY_MODEL_SLOT: u64 = 0;
     /// The offset of a model instance's embedded render-block-instance info (`CRBIInfo`) within
-    /// `NModelSystem::CModelInstance` (`CModelInstance::AddToPass` passes `this + 0x50` to
+    /// `NModelSystem::CModelInstance` (`CModelInstance::AddToPass` passes this offset to
     /// `ForEachRb`); that pointer is the `info` every one of its block draws receives. A constant
     /// rather than a field because the instance type itself is unmapped.
     pub const MODEL_INSTANCE_RBI_INFO_OFFSET: u64 = 80;

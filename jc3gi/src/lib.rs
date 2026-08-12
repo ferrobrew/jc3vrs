@@ -120,4 +120,5 @@ pub mod spawn_system;
 pub mod state;
 pub mod types;
 pub mod ui;
+pub mod water_patch_manager;
 pub mod window;

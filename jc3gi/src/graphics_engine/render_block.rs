@@ -38,7 +38,33 @@ impl std::convert::AsMut<Matrix3x4> for Matrix3x4 {
 /// from the tessellation cvar and the block's above/below-surface flag. It also owns the two
 /// constant buffers those permutations read: a 10-register buffer bound to **vertex and domain slot
 /// 1** and a 15-register buffer bound to **fragment slot 1**.
-pub struct NvWaterHighEndRenderBlock {}
+pub struct NvWaterHighEndRenderBlock {
+    _field_0: [u8; 389],
+    /// When set, [`Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw) skips the ocean simulation step
+    /// ([`WaveWorksSimulationStep`](crate::graphics_engine::render_block::WaveWorksSimulationStep)) and `UpdateSimulation` stops
+    /// advancing [`m_RenderTime`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::m_RenderTime), freezing the simulated sea state. Driven by
+    /// the camera's altitude above the water.
+    pub m_AltitudeSimulationPause: bool,
+    _field_186: [u8; 30],
+    /// Whether the camera is below the ocean surface. [`Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw) selects the below-water
+    /// vertex/fragment permutations when set, and [`Setup`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Setup) stages the underwater
+    /// tweak set (specular, transparency depth, refraction disturbance) instead of the above-water
+    /// one.
+    pub m_UnderWater: bool,
+    _field_1a5: [u8; 15723],
+    /// The ocean simulation clock in seconds, advanced once per game frame by `UpdateSimulation`
+    /// (`m_deltaTime * m_TimeScale` per step, skipped while
+    /// [`m_AltitudeSimulationPause`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::m_AltitudeSimulationPause) is set). [`Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw)
+    /// hands it to the simulation step as the simulation time, and [`Setup`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Setup) bakes it
+    /// into the vertex/domain constants as the shader time.
+    pub m_RenderTime: f64,
+}
+fn _NvWaterHighEndRenderBlock_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0x3F18], NvWaterHighEndRenderBlock>([0u8; 0x3F18]);
+    }
+    unreachable!()
+}
 impl NvWaterHighEndRenderBlock {
     pub const Setup_ADDRESS: usize = 0x140365040;
     /// Bakes the per-view WaveWorks matrices and stages both of the block type's constant buffers.
@@ -124,6 +150,66 @@ impl std::convert::AsRef<NvWaterHighEndRenderBlock> for NvWaterHighEndRenderBloc
 }
 impl std::convert::AsMut<NvWaterHighEndRenderBlock> for NvWaterHighEndRenderBlock {
     fn as_mut(&mut self) -> &mut NvWaterHighEndRenderBlock {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The WaveWorks water render block *type*
+/// (`CNvWaterHighEndRenderBlock::CNvWaterHighEndRenderBlockType` singleton): the shared state
+/// behind every [`NvWaterHighEndRenderBlock`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock) draw — the `NvWater*` shader family, the two shared
+/// constant buffers, and the shared water textures
+/// [`Setup`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Setup)/[`Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw) bind.
+pub struct NvWaterHighEndRenderBlockType {
+    _field_0: [u8; 36],
+    /// The tessellation option (`ETessellationOptions`): `1` selects the tessellated shader
+    /// permutations, and indexes the vertex-shader pair the draw binds.
+    pub m_TessellationOptions: i32,
+    _field_28: [u8; 320],
+    /// The top-down water modulation texture, bound on vertex (or domain, when tessellating)
+    /// slot 0 by [`Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw).
+    pub m_WaterModTexture: *mut crate::graphics_engine::texture::Texture,
+    /// The foam detail texture, bound on fragment slot 5 by
+    /// [`Setup`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Setup).
+    pub m_FoamTexture: *mut crate::graphics_engine::texture::Texture,
+    /// The water normal-detail (bump) texture, bound on fragment slot 4 by
+    /// [`Setup`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Setup).
+    pub m_WaterBumpTexture: *mut crate::graphics_engine::texture::Texture,
+    /// The distant (backdrop) planar reflection texture. When
+    /// `CWaterPatchManager::m_EnableScreenSpaceWaterReflection` is set,
+    /// [`Draw`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Draw) re-binds fragment slot 2 to this in place of
+    /// [`m_FullReflectionTexture`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlockType::m_FullReflectionTexture).
+    pub m_DistantReflectionTexture: *mut crate::graphics_engine::texture::Texture,
+    /// The full planar reflection texture, bound on fragment slot 2 by
+    /// [`Setup`](crate::graphics_engine::render_block::NvWaterHighEndRenderBlock::Setup).
+    pub m_FullReflectionTexture: *mut crate::graphics_engine::texture::Texture,
+}
+fn _NvWaterHighEndRenderBlockType_size_check() {
+    unsafe {
+        ::std::mem::transmute::<
+            [u8; 0x190],
+            NvWaterHighEndRenderBlockType,
+        >([0u8; 0x190]);
+    }
+    unreachable!()
+}
+impl NvWaterHighEndRenderBlockType {
+    pub unsafe fn get() -> Option<&'static mut Self> {
+        unsafe {
+            let ptr: *mut Self = *(5417947816usize as *mut *mut Self);
+            ptr.as_mut()
+        }
+    }
+}
+impl NvWaterHighEndRenderBlockType {}
+impl std::convert::AsRef<NvWaterHighEndRenderBlockType>
+for NvWaterHighEndRenderBlockType {
+    fn as_ref(&self) -> &NvWaterHighEndRenderBlockType {
+        self
+    }
+}
+impl std::convert::AsMut<NvWaterHighEndRenderBlockType>
+for NvWaterHighEndRenderBlockType {
+    fn as_mut(&mut self) -> &mut NvWaterHighEndRenderBlockType {
         self
     }
 }
@@ -830,7 +916,26 @@ impl std::convert::AsMut<RenderBlockSSDecal> for RenderBlockSSDecal {
 /// The screen-space reflection render block. Its `Draw` reconstructs world position from depth via
 /// [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) and ray-marches a scene colour capture
 /// taken earlier in the frame.
-pub struct RenderBlockScreenSpaceReflection {}
+pub struct RenderBlockScreenSpaceReflection {
+    _field_0: [u8; 2664],
+    /// The block's own working resolution for the blur: the size the separable blur dispatches and
+    /// constants are derived from.
+    pub m_WorkingWidth: u32,
+    pub m_WorkingHeight: u32,
+    _field_a70: [u8; 4],
+    /// Selects the blur path: the two-draw separable blur when set, the compute blur when clear.
+    pub m_ComputeBlur: bool,
+    _field_a75: [u8; 3],
+}
+fn _RenderBlockScreenSpaceReflection_size_check() {
+    unsafe {
+        ::std::mem::transmute::<
+            [u8; 0xA78],
+            RenderBlockScreenSpaceReflection,
+        >([0u8; 0xA78]);
+    }
+    unreachable!()
+}
 impl RenderBlockScreenSpaceReflection {
     pub const Draw_ADDRESS: usize = 0x140191E10;
     /// Draws the screen-space reflection pass.
@@ -839,7 +944,7 @@ impl RenderBlockScreenSpaceReflection {
     /// phase that calls [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) (uploaded as vertex
     /// constants 1..4) and which writes the block's reflection-colour and reflection-alpha targets
     /// through a stencil test; and then a separable blur of those two targets, on one of two mutually
-    /// exclusive paths selected by the block's compute-blur flag at `+0xA74`.
+    /// exclusive paths selected by [`m_ComputeBlur`](crate::graphics_engine::render_block::RenderBlockScreenSpaceReflection::m_ComputeBlur).
     ///
     /// The pixel-shader path is two fullscreen draws ping-ponging the colour/alpha pair against a
     /// second pair, so the blurred result lands back in the first pair. The compute path is two
@@ -850,7 +955,8 @@ impl RenderBlockScreenSpaceReflection {
     /// - The second blurs vertically, dispatched `ceil(height / 256)` by `width` groups, with the
     ///   source and destination pairs exchanged so the result again ends up in the first pair.
     ///
-    /// `width` and `height` are the block's own working resolution at `+0xA68` and `+0xA6C`. They are
+    /// [`m_WorkingWidth`](crate::graphics_engine::render_block::RenderBlockScreenSpaceReflection::m_WorkingWidth) and [`m_WorkingHeight`](crate::graphics_engine::render_block::RenderBlockScreenSpaceReflection::m_WorkingHeight) are the
+    /// block's own working resolution. They are
     /// also uploaded as `x` and `y` of compute constant 0, whose `w` is the axis flag that tells the
     /// program which way to blur (1.0 horizontal, 0.0 vertical) by transposing its thread-id-to-texel
     /// mapping; there is no origin or offset term in either constant buffer, and the program addresses
@@ -894,13 +1000,27 @@ for RenderBlockScreenSpaceReflection {
 /// The screen-space subsurface-scattering render block for skin. Its `Draw` reconstructs from depth
 /// via [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) and blurs the lit skin in screen
 /// space.
-pub struct RenderBlockScreenSpaceSubSurfaceSkin {}
+pub struct RenderBlockScreenSpaceSubSurfaceSkin {
+    _field_0: [u8; 24],
+    /// Selects the draw path: the single-draw path when set, the full diffusion chain when clear.
+    pub m_DrawMode: u8,
+    _field_19: [u8; 7],
+}
+fn _RenderBlockScreenSpaceSubSurfaceSkin_size_check() {
+    unsafe {
+        ::std::mem::transmute::<
+            [u8; 0x20],
+            RenderBlockScreenSpaceSubSurfaceSkin,
+        >([0u8; 0x20]);
+    }
+    unreachable!()
+}
 impl RenderBlockScreenSpaceSubSurfaceSkin {
     pub const Draw_ADDRESS: usize = 0x140192D60;
-    /// Draws the subsurface-scattering pass, on one of two mutually exclusive paths selected by the
-    /// block's own byte at `+0x18`: a single-draw path, and the full diffusion chain (a screen-space
-    /// gather into the SSS targets, then six separable blur draws ping-ponging between them). Each
-    /// path builds the depth-reconstruction basis with exactly one
+    /// Draws the subsurface-scattering pass, on one of two mutually exclusive paths selected by
+    /// [`m_DrawMode`](crate::graphics_engine::render_block::RenderBlockScreenSpaceSubSurfaceSkin::m_DrawMode): a single-draw path, and the full diffusion chain (a
+    /// screen-space gather into the SSS targets, then six separable blur draws ping-ponging between
+    /// them). Each path builds the depth-reconstruction basis with exactly one
     /// [`Matrix4::PerspectiveFovInverse`](crate::types::math::Matrix4) call, before its first render-setup
     /// bind, and uploads it as vertex constants 1..4.
     pub unsafe fn Draw(
@@ -1215,8 +1335,9 @@ impl RenderBlockTypeAddFogVolume {
         }
     }
     /// Whether render passes draw blocks of this type: `CRenderPass::DoDraw` dispatches this
-    /// per type run (vtable offset `0x90`) and skips every block whose type reports disabled.
-    /// In the release build the base implementation is compiled to a constant `true`.
+    /// per type run (vtable slot [`IsEnabled`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume::IsEnabled)) and skips every block whose
+    /// type reports disabled. In the release build the base implementation is compiled to a
+    /// constant `true`.
     pub unsafe fn IsEnabled(&self) -> bool {
         unsafe {
             let f = (&raw const (*self.vftable()).IsEnabled).read();
@@ -1466,8 +1587,9 @@ impl RenderBlockTypeParticle {
         }
     }
     /// Whether render passes draw blocks of this type: `CRenderPass::DoDraw` dispatches this
-    /// per type run (vtable offset `0x90`) and skips every block whose type reports disabled.
-    /// In the release build the base implementation is compiled to a constant `true`.
+    /// per type run (vtable slot [`IsEnabled`](crate::graphics_engine::render_block::RenderBlockTypeAddFogVolume::IsEnabled)) and skips every block whose
+    /// type reports disabled. In the release build the base implementation is compiled to a
+    /// constant `true`.
     pub unsafe fn IsEnabled(&self) -> bool {
         unsafe {
             let f = (&raw const (*self.vftable()).IsEnabled).read();
@@ -1593,8 +1715,9 @@ impl std::convert::AsMut<RenderBlockTypeSSDecal> for RenderBlockTypeSSDecal {
 /// Its `SetupConstantBuffers` uploads the per-LOD-slot hull/domain tessellation constant buffer —
 /// which bakes the dispatch's
 /// [`RenderContext::m_OffsetViewProjection`](crate::graphics_engine::graphics_engine::RenderContext::m_OffsetViewProjection),
-/// camera position, and tessellation factors — into `m_HDTypeConstants[slot]` (22 constant-buffer
-/// handles at `0x60`), caching it per slot keyed on the frame the upload was made for.
+/// camera position, and tessellation factors — into
+/// [`m_HDTypeConstants`](crate::graphics_engine::render_block::RenderBlockTypeTerrain::m_HDTypeConstants) (22 constant-buffer handles), caching it per slot
+/// keyed on the frame the upload was made for.
 pub struct RenderBlockTypeTerrain {
     _field_0: [u8; 76],
     /// The debug visualization mode. When `<= 0`, `Setup` selects the normal shading fragment
@@ -1602,7 +1725,10 @@ pub struct RenderBlockTypeTerrain {
     /// instead (LOD colours, tessellation, and similar overlays; the program array holds 21
     /// entries, so 1..=7 are valid).
     pub m_DebugMode: i32,
-    _field_50: [u8; 192],
+    _field_50: [u8; 16],
+    /// The constant-buffer handle array, per-LOD-slot, whose entries the type's
+    /// `SetupConstantBuffers` bakes the tessellation constants into.
+    pub m_HDTypeConstants: [u64; 22],
     /// Per-LOD-slot cache stamp: the
     /// [`RenderContext::m_RenderFrameNo`](crate::graphics_engine::graphics_engine::RenderContext::m_RenderFrameNo)
     /// of the frame whose tessellation constants were last uploaded into that slot's constant buffer.
@@ -1689,10 +1815,11 @@ pub struct RenderBlockTypeTerrainPatch {
     /// programs; when `> 0`, it selects the debug fragment program at index `m_DebugMode + 60` instead
     /// (LOD colours, tessellation, and similar overlays).
     pub m_DebugMode: i32,
-    _field_50: [u8; 208],
-    /// Per-LOD-slot cache stamp; see [`RenderBlockTypeTerrain::m_WasCBApplied`](crate::graphics_engine::render_block::RenderBlockTypeTerrain::m_WasCBApplied). The constant-buffer
-    /// handle array (`m_HDTypeConstants[22]`) sits at `0x70` for this variant, so the stamp array
-    /// follows at `0x120`.
+    _field_50: [u8; 32],
+    /// The constant-buffer handle array, per-LOD-slot.
+    pub m_HDTypeConstants: [u64; 22],
+    /// Per-LOD-slot cache stamp; see [`RenderBlockTypeTerrain::m_WasCBApplied`](crate::graphics_engine::render_block::RenderBlockTypeTerrain::m_WasCBApplied). Sits after
+    /// [`m_HDTypeConstants`](crate::graphics_engine::render_block::RenderBlockTypeTerrainPatch::m_HDTypeConstants).
     pub m_WasCBApplied: [u32; 22],
     _field_178: [u8; 264],
     /// The hull-program holders, indexed by clip type (each holder is two pointers; the first is

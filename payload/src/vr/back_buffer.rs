@@ -80,6 +80,11 @@ static BYPASS_RESIZE_SUBSTITUTE: AtomicBool = AtomicBool::new(false);
 /// compiled out of this build, so it is only ever seen by someone reading a memory dump.
 const BACKING_NAME: &std::ffi::CStr = c"VrBackBuffer";
 
+/// The packed `CreateRenderSetupParams::m_Flags` the engine uses for both of its back-buffer
+/// setups: `m_AutoResolve = 1` (bit 0), `m_EDRAMLayout = 0` (bits 1-2), and `m_UAVStart = 15`
+/// (bits 3-6, the "immediately after the colour targets" sentinel).
+const BACK_BUFFER_SETUP_FLAGS: u32 = 0x79;
+
 /// Whether the mod currently owns the engine's back-buffer objects.
 ///
 /// Read by both hook gates on the render thread and written by the session transitions on the game
@@ -500,10 +505,9 @@ unsafe fn create_setup(
         (*p).m_ColorTargets[0] = colour;
         (*p).m_MultisampleFormat = MultisampleFormat::None;
         (*p).m_Mask = 15;
-        // `m_AutoResolve = 1`, `m_EDRAMLayout = 0`, `m_UAVStart = 15` (the "immediately after the
-        // colour targets" sentinel) -- the values `CreateRenderSetups` uses for both back-buffer
-        // setups.
-        (*p).m_Flags = 0x79;
+        // The same packed `m_Flags` (`BACK_BUFFER_SETUP_FLAGS`) both of the engine's own back-buffer
+        // setups use.
+        (*p).m_Flags = BACK_BUFFER_SETUP_FLAGS;
     }
 
     let setup = unsafe { CreateRenderSetup(device, p.cast_const()) };

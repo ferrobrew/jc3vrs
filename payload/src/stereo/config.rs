@@ -384,7 +384,7 @@ pub struct StereoConfig {
     pub gate_hand_back_buffers: bool,
     /// Zero the post-effect dt on eye 1 (so once-per-frame accumulators do not double-step).
     pub gate_eye1_dt: bool,
-    /// Drain the engine's draw-dispatch CPU fragment (`GraphicsEngine+0x30`, `m_DrawThreadWorkSignal`)
+    /// Drain the engine's draw-dispatch CPU fragment (`m_DrawThreadWorkSignal`)
     /// after each eye's `Draw`, which `WaitForCPUDrawToFinish` does not. `DispatchDraw` kicks that
     /// fragment to run the render passes asynchronously, and the engine only waits on it at the *next*
     /// `Draw`'s entry -- so without this, eye 0's fragment is still in flight when the between-eye
@@ -436,8 +436,9 @@ pub struct StereoConfig {
     /// frame segment that injects it. Each sample drains the GPU, so traces run slower.
     pub diagnose_main_color_means: bool,
     /// Diagnostic: while tracing, record the MainColor mean after every late-scene render pass
-    /// (`0x67..=0x95`, eye 0, every 2nd frame) -- the per-pass ladder that walks a global change to
-    /// the pass that injects it. Much heavier than the stage brackets.
+    /// (`RP_SKY_GRADIENT` through `RP_PARTICLE_ONSCREEN`, eye 0, every 2nd frame) -- the per-pass
+    /// ladder that walks a global change to the pass that injects it. Much heavier than the stage
+    /// brackets.
     pub diagnose_pass_sweep: bool,
     /// Diagnostic: while tracing, dump the render engine's FP/VP global constant staging blocks at
     /// the scene composite and at frame end, for good-vs-bad frame diffing.
@@ -455,7 +456,7 @@ pub struct StereoConfig {
     /// from the second. A crude test of whether the AO asymmetry is the artifact (a real shared-AO fix
     /// needs reprojection, not omission).
     pub ssao_eye0_only: bool,
-    /// Diagnostic: restore the `RenderEngine` per-Draw constant-buffer ring index (`+0x16C0`) between
+    /// Diagnostic: restore the `RenderEngine` per-Draw constant-buffer ring index (`m_ConstantBufferRingIndex`) between
     /// the two stereo eyes. This ring advances once per `Draw` and is *not* one of the engine frame
     /// counters [`restore_frame_counters`](Self::restore_frame_counters) rewinds, so the two eyes
     /// otherwise land on different constant-buffer pool slots -- any pass that reads the previous slot
@@ -485,9 +486,10 @@ pub struct StereoConfig {
     /// Diagnostic: the inclusive render-pass index range `[start, end]` to skip while
     /// [`skip_pass_range_enabled`](Self::skip_pass_range_enabled), for bisecting which pass an
     /// artifact originates in ([`RenderPassId`](jc3gi::graphics_engine::render_engine::RenderPassId)
-    /// maps every index; GBuffer 0x2F..0x55, lighting/main 0x56..0x96).
+    /// maps every index; GBuffer `RP_Z_OCCLUDERS`..`RP_LAST_GBUFFER`, lighting/main
+    /// `RP_REFLECTIVE_WATER_PLANES`..`RP_POSTEFFECTS`).
     pub skip_pass_range: (i32, i32),
-    /// Restore the SSAO temporal history index (`CSSAOPass +0x9A0`/`+0x9A4`) between the two stereo
+    /// Restore the SSAO temporal history index (`m_PrevFrameIndex`/`m_CurrFrameIndex`) between the two stereo
     /// eyes. The index advances once per SSAO draw and is *not* reset by the `m_FirstPass` force, so the
     /// two eyes resolve against different history slots -- half the per-eye MainColor divergence. Pinning
     /// it (snapshot before eye 0, restore before eye 1) makes both eyes sample the same slot. **On by
@@ -799,7 +801,12 @@ impl StereoConfig {
             skip_gi: false,
             skip_ao_volumes: false,
             skip_pass_range_enabled: false,
-            skip_pass_range: (0x56, 0x56),
+            skip_pass_range: (
+                jc3gi::graphics_engine::render_engine::RenderPassId::RP_REFLECTIVE_WATER_PLANES
+                    as i32,
+                jc3gi::graphics_engine::render_engine::RenderPassId::RP_REFLECTIVE_WATER_PLANES
+                    as i32,
+            ),
             restore_ssao_history: true,
             restore_gi_cascade: true,
             patch_shadow_pcf_hash: true,

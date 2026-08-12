@@ -199,14 +199,26 @@ impl std::convert::AsMut<DepthOfFieldEffect> for DepthOfFieldEffect {
 }
 #[repr(C, align(8))]
 /// The bokeh depth-of-field downscale prepass: a 2x2 pack plus focus.
-pub struct DownScale2x2PackFocus {}
+pub struct DownScale2x2PackFocus {
+    _field_0: [u8; 192],
+    /// The effect's own working resolution, at a quarter of the scene's.
+    pub m_Width: u32,
+    pub m_Height: u32,
+}
+fn _DownScale2x2PackFocus_size_check() {
+    unsafe {
+        ::std::mem::transmute::<[u8; 0xC8], DownScale2x2PackFocus>([0u8; 0xC8]);
+    }
+    unreachable!()
+}
 impl DownScale2x2PackFocus {
     pub const Apply_ADDRESS: usize = 0x1400C82E0;
     /// Runs the prepass: a near-field circle-of-confusion prologue built entirely out of compute
     /// dispatches, then the packing draw.
     ///
     /// The prologue works on a quarter-resolution pair of single-channel textures (the effect's own
-    /// `m_Width`/`m_Height` at `+0xC0`/`+0xC4` divided by four in each dimension), and every
+    /// [`m_Width`](crate::graphics_engine::post_effects::DownScale2x2PackFocus::m_Width)/[`m_Height`](crate::graphics_engine::post_effects::DownScale2x2PackFocus::m_Height) divided by four in each dimension),
+    /// and every
     /// [`Dispatch`](crate::graphics_engine::draw::Dispatch) in it is sized `ceil(width / 4 / 32)` by
     /// `ceil(height / 4 / 8)` groups of 32x8 threads, covering that whole texture:
     ///
@@ -541,6 +553,12 @@ impl PostEffectsManager {
             f(self as *const Self as _, proj, width, height)
         }
     }
+}
+impl PostEffectsManager {
+    /// The slot-base the slot-returning effects' result textures live at in the manager's texture
+    /// array: a stage's current result is `CTX[slot + 83]`, where `CTX` is the manager argument the
+    /// post block passes to the effect chain and `slot` is the effect's declared slot index.
+    pub const RESULT_TEXTURE_SLOT_BASE: u64 = 83;
 }
 impl std::convert::AsRef<PostEffectsManager> for PostEffectsManager {
     fn as_ref(&self) -> &PostEffectsManager {

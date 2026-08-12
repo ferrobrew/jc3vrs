@@ -174,8 +174,8 @@ fn setup_render_camera(camera: *mut Camera, jitter: bool) -> *mut c_void {
         }
     }
 
-    // Per-eye parallax: shift the camera world position (m_TransformF translation == camera+0x84,
-    // the CameraPosition the camera-relative scene render subtracts) per eye. In VR the offset is the
+    // Per-eye parallax: shift the camera world position (`m_TransformF` translation, the
+    // CameraPosition the camera-relative scene render subtracts) per eye. In VR the offset is the
     // TRUE per-eye delta from `locate_views` (a full 3D vector); on flatscreen stereo it is the
     // synthetic +/- half-IPD along the camera right axis. Either way, re-derive m_View from the moved
     // m_TransformF and rebuild the view-projections, so the offset reaches the full-m_ViewProjection

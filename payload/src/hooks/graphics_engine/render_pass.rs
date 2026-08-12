@@ -70,7 +70,8 @@ fn render_pass_draw(this: *mut RenderPass) {
 }
 
 /// The late-scene pass ids the sweep covers: `RP_SKY_GRADIENT` through `RP_PARTICLE_ONSCREEN`.
-const SWEEP_PASS_RANGE: std::ops::RangeInclusive<i16> = 0x67..=0x95;
+const SWEEP_PASS_RANGE: std::ops::RangeInclusive<i16> =
+    RenderPassId::RP_SKY_GRADIENT as i16..=RenderPassId::RP_PARTICLE_ONSCREEN as i16;
 
 // RenderPass::SetupRenderFrameData -- the per-batch list *build*: appends `count` render-block-items
 // to the active add-list. Runs on worker threads during the sim, not during our Draw calls, so the
@@ -144,9 +145,11 @@ const RP_GLOBAL_ILLUMINATION: i32 = RenderPassId::RP_GLOBAL_ILLUMINATION as i32;
 
 // RenderEngine::DrawRenderPassRange -- draws the half-open pass-index range [first, last). The engine
 // calls it three times per dispatch, from `CGraphicsEngine::HandleDrawThreadTask` in this order:
-// `DrawGBuffer` (0x2F..0x55), `Draw` (0x56..0x96), and `DrawPosteffects` (0x96..0x97); the bounds are
-// compile-time constants at each call site, so the ranges never vary between frames. `PreDraw` (the
-// shadow, reflection, and vegetation prepasses) runs before all three and does not come through here.
+// `DrawGBuffer` (`RP_Z_OCCLUDERS`..`RP_LAST_GBUFFER`), `Draw`
+// (`RP_REFLECTIVE_WATER_PLANES`..`RP_POSTEFFECTS`), and `DrawPosteffects`
+// (`RP_POSTEFFECTS`..`RP_LAST_MAIN`); the bounds are compile-time constants at each call site, so
+// the ranges never vary between frames. `PreDraw` (the shadow, reflection, and vegetation prepasses)
+// runs before all three and does not come through here.
 //
 // The per-eye-divergence and flicker diagnostics drop passes by splitting the range around them, so
 // every other pass runs untouched: SSR (reads a previous-frame scene capture regenerated each Draw)
@@ -575,12 +578,20 @@ fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
 }
 
 /// The pre-pass categories ([`RenderPassId`] indices) that render identically for both eyes and whose
-/// outputs persist for the whole frame, so eye 1 can reuse eye 0's: planar + environment reflections
-/// (`9..=17`), cloud shadows (`18`), the static/dynamic/reflective sun-shadow cascade atlas (`22..=40`,
-/// which also fixes the per-eye shadow flicker #31), and the water-simulation compute (`41..=44`).
-/// Terrain-patch prep (`1..=7`, per-eye), the sky-lighting LUT (`8`), vegetation (`19..=21`), and the
-/// rain occluder (`45`) are held per-eye for this conservative first cut.
-const SHARED_PREPASS_CATEGORIES: &[(usize, usize)] = &[(9, 18), (22, 44)];
+/// outputs persist for the whole frame, so eye 1 can reuse eye 0's output instead of re-running
+/// them: the reflection chain (which also fixes the per-eye shadow flicker #31), the sun-shadow
+/// cascade atlas, and the water-simulation compute. Terrain-patch prep, the sky-lighting LUT,
+/// vegetation, and the rain occluder are held per-eye for this conservative first cut.
+const SHARED_PREPASS_CATEGORIES: &[(usize, usize)] = &[
+    (
+        RenderPassId::PRE_RP_REFLECTION_PRE as usize,
+        RenderPassId::PRE_RP_CLOUDSHADOWS as usize,
+    ),
+    (
+        RenderPassId::PRE_RP_STATIC_SHADOW_0 as usize,
+        RenderPassId::PRE_RP_WATER_DISPLACEMENT_PRE as usize,
+    ),
+];
 
 /// Clear [`RenderPassState::m_Enabled`] on every enabled pass in the shared pre-pass categories so
 /// `PreDraw`'s loop skips them, returning the passes cleared so [`reenable_passes`] can restore them.

@@ -71,8 +71,9 @@ impl RenderBlockTypeBase {
         }
     }
     /// Whether render passes draw blocks of this type: `CRenderPass::DoDraw` dispatches this
-    /// per type run (vtable offset `0x90`) and skips every block whose type reports disabled.
-    /// In the release build the base implementation is compiled to a constant `true`.
+    /// per type run (vtable slot [`IsEnabled`](crate::graphics_engine::render_engine::RenderBlockTypeBase::IsEnabled)) and skips every block whose
+    /// type reports disabled. In the release build the base implementation is compiled to a
+    /// constant `true`.
     pub unsafe fn IsEnabled(&self) -> bool {
         unsafe {
             let f = (&raw const (*self.vftable()).IsEnabled).read();
@@ -179,8 +180,9 @@ pub struct RenderBlockTypeBaseVftable {
         this: *mut crate::graphics_engine::render_engine::RenderBlockTypeBase,
     ),
     /// Whether render passes draw blocks of this type: `CRenderPass::DoDraw` dispatches this
-    /// per type run (vtable offset `0x90`) and skips every block whose type reports disabled.
-    /// In the release build the base implementation is compiled to a constant `true`.
+    /// per type run (vtable slot [`IsEnabled`](crate::graphics_engine::render_engine::RenderBlockTypeBase::IsEnabled)) and skips every block whose
+    /// type reports disabled. In the release build the base implementation is compiled to a
+    /// constant `true`.
     pub IsEnabled: unsafe extern "system" fn(
         this: *const crate::graphics_engine::render_engine::RenderBlockTypeBase,
     ) -> bool,
@@ -264,7 +266,7 @@ impl RenderBlockTypeInstances {
     /// The first slot of the table.
     pub const ADDRESS: u64 = 5417824192;
     /// The number of slots; the constructor's scan bound is the address one past the last slot
-    /// (`0x142_ED7_3C0`).
+    /// ([`ADDRESS`](crate::graphics_engine::render_engine::RenderBlockTypeInstances::ADDRESS) + [`CAPACITY`](crate::graphics_engine::render_engine::RenderBlockTypeInstances::CAPACITY) slots).
     pub const CAPACITY: u64 = 128;
 }
 impl std::convert::AsRef<RenderBlockTypeInstances> for RenderBlockTypeInstances {
@@ -613,10 +615,10 @@ impl std::convert::AsMut<RenderEngine> for RenderEngine {
 /// type.
 ///
 /// Verified against the retail pass-name switch ([`GetRenderPassName`](crate::graphics_engine::render_engine::GetRenderPassName)): relative to the 2016 dump's
-/// `ERenderPass` header, retail inserts `RP_VEGETATION_TRANSPARENT_AOIT` at `0x74`, shifting
-/// everything above by one. `RP_PARTICLE_RIBBON` (`0x82`) is the one id the name switch does not
-/// name — it returns `"NONE"` for it — but the pass itself is live: the effect system creates it and
-/// the ribbon instantiator enqueues onto it, so the id is not a hole.
+/// `ERenderPass` header, retail inserts [`RenderPassId::RP_VEGETATION_TRANSPARENT_AOIT`](crate::graphics_engine::render_engine::RenderPassId::RP_VEGETATION_TRANSPARENT_AOIT), shifting
+/// everything above by one. [`RenderPassId::RP_PARTICLE_RIBBON`](crate::graphics_engine::render_engine::RenderPassId::RP_PARTICLE_RIBBON) is the one id the name switch does
+/// not name — it returns `"NONE"` for it — but the pass itself is live: the effect system creates it
+/// and the ribbon instantiator enqueues onto it, so the id is not a hole.
 pub enum RenderPassId {
     RP_NONE = 0isize as _,
     RP_TERRAINPATCH_CLEAR = 1isize as _,
@@ -870,21 +872,26 @@ impl std::convert::AsMut<ShaderCache> for ShaderCache {
 /// `0x14032C000` and `CRenderBlockTerrainSetup::Create` at `0x14032EA10`). The detail-quad
 /// pipeline allocates from these buffers with unbounded GPU cursors, so their sizes are the hard
 /// budget of the detail tessellation skin; each constant is the address of a 32-bit element-count
-/// immediate, paired with the shipped value.
+/// immediate, paired with the shipped value in [`TerrainDetailBudgetValues`](crate::graphics_engine::render_engine::TerrainDetailBudgetValues).
 pub struct TerrainDetailBudgetPatchSites {}
 impl TerrainDetailBudgetPatchSites {}
 impl TerrainDetailBudgetPatchSites {
-    /// "Detail debug tessellation vertex buffer": 0x10000 elements of 80 bytes.
-    pub const DEBUG_VERTEX_COUNT: u64 = 5372035357;
-    /// "Detail tessellation index texture buffer" (the raw index buffer): 0x40000 bytes.
-    pub const INDEX_BYTES: u64 = 5372035429;
+    /// "Detail debug tessellation vertex buffer": the address of its element-count immediate
+    /// (shipped value in [`TerrainDetailBudgetValues::DEBUG_VERTEX_COUNT`](crate::graphics_engine::render_engine::TerrainDetailBudgetValues::DEBUG_VERTEX_COUNT)).
+    pub const DEBUG_VERTEX_COUNT_ADDRESS: u64 = 5372035357;
+    /// "Detail tessellation index texture buffer" (the raw index buffer): the address of its
+    /// size immediate (shipped value in [`TerrainDetailBudgetValues::INDEX_BYTES`](crate::graphics_engine::render_engine::TerrainDetailBudgetValues::INDEX_BYTES)).
+    pub const INDEX_BYTES_ADDRESS: u64 = 5372035429;
     /// "Detail tessellation index texture buffer" (the 4-byte-typed view on the setup type):
-    /// 0x8000 elements.
-    pub const INDEX_VIEW_COUNT: u64 = 5372046286;
-    /// "Detail tessellation texel buffer": 0x8000 elements of 16 bytes.
-    pub const TEXEL_COUNT: u64 = 5372035501;
-    /// "Detail tessellation vertex buffer": 0x10000 elements of 16 bytes.
-    pub const VERTEX_COUNT: u64 = 5372035278;
+    /// the address of its element-count immediate
+    /// (shipped value in [`TerrainDetailBudgetValues::INDEX_VIEW_COUNT`](crate::graphics_engine::render_engine::TerrainDetailBudgetValues::INDEX_VIEW_COUNT)).
+    pub const INDEX_VIEW_COUNT_ADDRESS: u64 = 5372046286;
+    /// "Detail tessellation texel buffer": the address of its element-count immediate
+    /// (shipped value in [`TerrainDetailBudgetValues::TEXEL_COUNT`](crate::graphics_engine::render_engine::TerrainDetailBudgetValues::TEXEL_COUNT)).
+    pub const TEXEL_COUNT_ADDRESS: u64 = 5372035501;
+    /// "Detail tessellation vertex buffer": the address of its element-count immediate
+    /// (shipped value in [`TerrainDetailBudgetValues::VERTEX_COUNT`](crate::graphics_engine::render_engine::TerrainDetailBudgetValues::VERTEX_COUNT)).
+    pub const VERTEX_COUNT_ADDRESS: u64 = 5372035278;
 }
 impl std::convert::AsRef<TerrainDetailBudgetPatchSites>
 for TerrainDetailBudgetPatchSites {
@@ -895,6 +902,34 @@ for TerrainDetailBudgetPatchSites {
 impl std::convert::AsMut<TerrainDetailBudgetPatchSites>
 for TerrainDetailBudgetPatchSites {
     fn as_mut(&mut self) -> &mut TerrainDetailBudgetPatchSites {
+        self
+    }
+}
+#[repr(C, align(8))]
+/// The shipped sizes of the terrain detail-tessellation budget buffers, as the immediate operands
+/// at the [`TerrainDetailBudgetPatchSites`](crate::graphics_engine::render_engine::TerrainDetailBudgetPatchSites) addresses encode them.
+pub struct TerrainDetailBudgetValues {}
+impl TerrainDetailBudgetValues {}
+impl TerrainDetailBudgetValues {
+    /// The detail debug tessellation vertex buffer: this many elements of 80 bytes.
+    pub const DEBUG_VERTEX_COUNT: u32 = 65536;
+    /// The detail tessellation index texture buffer (the raw index buffer): this many bytes.
+    pub const INDEX_BYTES: u32 = 262144;
+    /// The detail tessellation index texture buffer (the 4-byte-typed view on the setup type):
+    /// this many elements.
+    pub const INDEX_VIEW_COUNT: u32 = 32768;
+    /// The detail tessellation texel buffer: this many elements of 16 bytes.
+    pub const TEXEL_COUNT: u32 = 32768;
+    /// The detail tessellation vertex buffer: this many elements of 16 bytes.
+    pub const VERTEX_COUNT: u32 = 65536;
+}
+impl std::convert::AsRef<TerrainDetailBudgetValues> for TerrainDetailBudgetValues {
+    fn as_ref(&self) -> &TerrainDetailBudgetValues {
+        self
+    }
+}
+impl std::convert::AsMut<TerrainDetailBudgetValues> for TerrainDetailBudgetValues {
+    fn as_mut(&mut self) -> &mut TerrainDetailBudgetValues {
         self
     }
 }

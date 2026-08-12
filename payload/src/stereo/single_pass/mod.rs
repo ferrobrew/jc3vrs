@@ -361,9 +361,12 @@ fn in_gbuffer_range() -> bool {
 /// The render pass currently being walked, published by the `RenderPass::DoDraw` detour so the draw
 /// detours -- which see only a D3D context -- can tell which pass a draw belongs to. [`NO_PASS`]
 /// stands for "outside any pass"; no real id collides with it (`m_Index` is a byte and the engine's
-/// highest pass is `0x96`).
+/// highest real pass is [`RenderPassId::RP_POSTEFFECTS`]).
 static CURRENT_PASS: AtomicU8 = AtomicU8::new(NO_PASS);
 
+/// A pass id outside any real pass: the sentinel [`CURRENT_PASS`] holds before the first `DoDraw`
+/// and while a draw belongs to no walkable pass. Deliberately larger than any byte-range pass id
+/// the engine can publish.
 const NO_PASS: u8 = 0xFF;
 
 /// Publish the pass being drawn for the duration of one `DoDraw`. Returns the previous value so the
@@ -413,7 +416,9 @@ fn drain_slot13_census() -> Vec<(u8, u32)> {
 ///
 /// The exposure counters are per *frame*, but the G-buffer range is entered once per
 /// `DrawRenderPassRange` call -- three times per dispatch under the collapse (`DrawGBuffer`
-/// `0x2F..0x55`, `Draw` `0x56..0x96`, `DrawPosteffects` `0x96..0x97`; see
+/// [`RenderPassId::RP_Z_OCCLUDERS`]..[`RenderPassId::RP_LAST_GBUFFER`], `Draw`
+/// [`RenderPassId::RP_REFLECTIVE_WATER_PLANES`]..[`RenderPassId::RP_POSTEFFECTS`],
+/// `DrawPosteffects` [`RenderPassId::RP_POSTEFFECTS`]..[`RenderPassId::RP_LAST_MAIN`]; see
 /// `docs/mod/stereo/single-pass-stereo.md`). Folding them at a range boundary therefore cut the frame into
 /// three unequal windows and reported each as if it were a frame; the fold belongs here, where a
 /// frame actually begins.

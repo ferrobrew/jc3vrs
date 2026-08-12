@@ -16,8 +16,10 @@
 //! `CMatrix4f::PerspectiveOffCenter` builds `Camera::m_Projection` (verified against the release
 //! build, `docs/engine/rendering/rendering.md` §2.9): the engine passes near-plane extents (`near·tan θ`),
 //! this module passes the tangents directly, and `near` cancels out of every term except the depth
-//! column, so the two matrices are identical. The engine's finite far plane defaults to `38400` and
-//! near to `0.1` (the `Camera` constructor values, §2.9); the mod feeds the same near/far so the
+//! column, so the two matrices are identical. The engine's finite far plane defaults to
+//! [`Camera::DEFAULT_FAR_PLANE`](jc3gi::camera::camera::Camera::DEFAULT_FAR_PLANE) and near to
+//! [`Camera::DEFAULT_NEAR_PLANE`](jc3gi::camera::camera::Camera::DEFAULT_NEAR_PLANE) (the `Camera`
+//! constructor values, §2.9); the mod feeds the same near/far so the
 //! frustum matches and the horizon does not clip.
 //!
 //! Two depth conventions are produced (see `docs/engine/rendering/rendering.md` §2.7, §2.9):
@@ -31,7 +33,9 @@
 //!   remap -- the §2.7 wedge bug.
 //! - [`OffAxisProjection::reverse_z`]: the same projection with the engine's reverse-Z remap already
 //!   applied (near → 1, far → 0). This is for the §2.7 *alternative* path -- writing the projection
-//!   *after* `SetupRenderCamera` has run (when bit `0x20` is set, so the engine will not re-reverse
+//!   *after* `SetupRenderCamera` has run (when
+//!   [`CameraState::m_IsRenderCamera`](jc3gi::camera::camera::CameraState::m_IsRenderCamera) is
+//!   set, so the engine will not re-reverse
 //!   it) -- and must be paired with a manual jitter / VP rebuild. Not the preferred path; provided so
 //!   both conventions are available and explicitly labelled.
 //!
@@ -125,6 +129,7 @@ fn remap_col_z(col: Vec4) -> Vec4 {
 #[cfg(test)]
 mod tests {
     use glam::Mat4 as GlamMat4;
+    use jc3gi::camera::camera::Camera;
 
     use super::*;
 
@@ -219,9 +224,10 @@ mod tests {
             up: 40.0_f32.to_radians(),
             down: -38.0_f32.to_radians(),
         };
-        // The engine's Camera constructor defaults: m_Near = 0.1, m_Far = 38400 (0x47160000).
-        let near = 0.1_f32;
-        let far = 38400.0_f32;
+        // The engine's Camera constructor defaults: [`Camera::DEFAULT_NEAR_PLANE`],
+        // [`Camera::DEFAULT_FAR_PLANE`].
+        let near = Camera::DEFAULT_NEAR_PLANE;
+        let far = Camera::DEFAULT_FAR_PLANE;
 
         // Near-plane extents, exactly what RecalcProjection passes to PerspectiveOffCenter.
         let x_min = near * fov.left.tan();
@@ -248,7 +254,8 @@ mod tests {
     /// The engine's reverse-Z remap (`SetupRenderCamera` / `RecalcProjection`, §2.9) is
     /// `col2 = col3 - col2` on the row-major matrix. Applying it to the engine's own standard
     /// projection must produce the mod's `reverse_z` matrix element-for-element, and map far → 0 at
-    /// the game's real 38400 far plane.
+    /// the game's real
+    /// [`Camera::DEFAULT_FAR_PLANE`](jc3gi::camera::camera::Camera::DEFAULT_FAR_PLANE) far plane.
     #[test]
     fn reverse_z_matches_engine_remap_at_real_far() {
         let fov = Fov {
@@ -257,7 +264,7 @@ mod tests {
             up: 40.0_f32.to_radians(),
             down: -40.0_f32.to_radians(),
         };
-        let (near, far) = (0.1_f32, 38400.0_f32);
+        let (near, far) = (Camera::DEFAULT_NEAR_PLANE, Camera::DEFAULT_FAR_PLANE);
         let p = OffAxisProjection::new(fov, near, far);
 
         // Engine remap applied by hand to the standard matrix: e[row*4+2] = e[row*4+3] - e[row*4+2].

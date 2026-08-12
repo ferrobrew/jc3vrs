@@ -1,10 +1,10 @@
 //! VR runtime configuration. See [`crate::vr`] and `docs/mod/vr-runtime.md`.
 
-use jc3gi::graphics_engine::render_engine::RenderPassId;
+use jc3gi::{camera::camera::Camera, graphics_engine::render_engine::RenderPassId};
 use serde::{Deserialize, Serialize};
 
 /// Serialize a [`RenderPassId`] as its `i32` discriminant, matching the pre-typing on-disk format
-/// (`0x41` etc.) so existing config files stay readable.
+/// (e.g. [`RenderPassId::RP_MODELS_DYNAMIC`]'s discriminant) so existing config files stay readable.
 fn serialize_render_pass_id<S: serde::Serializer>(
     pass: &RenderPassId,
     serializer: S,
@@ -157,8 +157,8 @@ pub struct VrConfig {
     /// Fallback near clip plane, in metres, for the per-eye off-axis projection, used only until the
     /// first camera update publishes the engine's live plane. The mod reads the active camera's actual
     /// `m_Near` each frame as the source of truth (see
-    /// [`crate::hooks::camera::main_camera_planes_or`]); this default (`0.1`) mirrors the engine's
-    /// `Camera` constructor value (`docs/engine/rendering/rendering.md` §2.9) so the bootstrap frame matches.
+    /// [`crate::hooks::camera::main_camera_planes_or`]); this default (`[Camera::DEFAULT_NEAR_PLANE]`)
+    /// mirrors the engine's `Camera` constructor value (`docs/engine/rendering/rendering.md` §2.9) so the bootstrap frame matches.
     pub near_clip: f32,
     /// Fallback far clip plane, in metres, for the per-eye off-axis projection, used only until the
     /// first camera update publishes the engine's live plane. The mod reads the active camera's actual
@@ -166,7 +166,7 @@ pub struct VrConfig {
     /// [`crate::hooks::camera::main_camera_planes_or`]) — the game renders a finite-far reverse-Z
     /// frustum and sets its own runtime far, so matching the live value keeps the eyes, the cull
     /// frustum, and the depth reconstruction consistent and the horizon unclipped. This default
-    /// (`38400`) mirrors the engine's `Camera` constructor value (`0x47160000`) for the bootstrap frame.
+    /// (`[Camera::DEFAULT_FAR_PLANE]`) mirrors the engine's `Camera` constructor value for the bootstrap frame.
     pub far_clip: f32,
     /// Which depth convention the per-eye off-axis projection is written in (see
     /// [`ProjectionConvention`]). Defaults to the preferred pre-`SetupRenderCamera` write.
@@ -288,8 +288,8 @@ impl VrConfig {
             retry_interval_secs: 10,
             world_scale: 1.0,
             loader_path: None,
-            near_clip: 0.1,
-            far_clip: 38400.0,
+            near_clip: Camera::DEFAULT_NEAR_PLANE,
+            far_clip: Camera::DEFAULT_FAR_PLANE,
             projection_convention: ProjectionConvention::EnginePreReverseZ,
             blit_srgb_gamma: BlitGamma::Linearize,
             native_resolution: true,
@@ -331,7 +331,7 @@ pub struct FoveationConfig {
     /// The maximum fraction of peripheral pixels dropped (and reconstructed), reached at
     /// [`outer_fraction`](Self::outer_fraction) and beyond. `0.5` drops half the far periphery.
     pub max_drop: f32,
-    /// The stencil bit the mask tags dropped pixels with. Default `0x80` (bit 7): the engine's own
+    /// The stencil bit the mask tags dropped pixels with. Default bit 7: the engine's own
     /// stencil use is bits 0, 1, 5, 6, so bit 7 is free; change it if an effect corrupts with foveation
     /// on (a data-driven pass may write it).
     pub mask_bit: u32,
