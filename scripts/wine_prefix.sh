@@ -1,10 +1,10 @@
 #!/bin/sh
 # The project's single wine prefix, shared by every tool that runs a Windows binary on Linux.
 #
-# Source this, then call `jc3vrs_ensure_wine_prefix` before invoking wine:
+# Source this, then call `jc3vr_ensure_wine_prefix` before invoking wine:
 #
 #   . "$(dirname "$0")/wine_prefix.sh"
-#   jc3vrs_ensure_wine_prefix
+#   jc3vr_ensure_wine_prefix
 #   wine "$some_exe"
 #
 # It exports `WINEPREFIX` (and quiets `WINEDEBUG` unless the caller set it), so anything run
@@ -27,11 +27,11 @@
 # The game's own Proton prefix is deliberately *not* this one: it belongs to Steam, has a different
 # lifetime, and is reached through the container (see `proton_run.sh`).
 #
-# Override the location with `JC3VRS_WINEPREFIX`. Deleting the prefix is always safe -- the next
-# `jc3vrs_ensure_wine_prefix` rebuilds it.
+# Override the location with `JC3VR_WINEPREFIX`. Deleting the prefix is always safe -- the next
+# `jc3vr_ensure_wine_prefix` rebuilds it.
 
-jc3vrs_wine_prefix_repo=$(cd "$(dirname "$0")/.." && pwd)
-WINEPREFIX="${JC3VRS_WINEPREFIX:-$jc3vrs_wine_prefix_repo/target/wine}"
+jc3vr_wine_prefix_repo=$(cd "$(dirname "$0")/.." && pwd)
+WINEPREFIX="${JC3VR_WINEPREFIX:-$jc3vr_wine_prefix_repo/target/wine}"
 export WINEPREFIX
 export WINEDEBUG="${WINEDEBUG:--all}"
 
@@ -52,23 +52,23 @@ export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-d3dcompiler_47=n}"
 # prefix looks provisioned, and the caller fails later with an exit code and no output, which is
 # indistinguishable from a bug in the caller. Size is the discriminator that needs no wine invocation:
 # the built-in is a few hundred KB, the native DLL a few MB.
-_jc3vrs_is_native_d3dcompiler() {
+_jc3vr_is_native_d3dcompiler() {
     [ -f "$1" ] || return 1
-    _jc3vrs_size=$(wc -c <"$1" 2>/dev/null || echo 0)
-    [ "$_jc3vrs_size" -ge 1048576 ]
+    _jc3vr_size=$(wc -c <"$1" 2>/dev/null || echo 0)
+    [ "$_jc3vr_size" -ge 1048576 ]
 }
 
-jc3vrs_ensure_wine_prefix() {
-    _jc3vrs_sys32="$WINEPREFIX/drive_c/windows/system32"
-    if _jc3vrs_is_native_d3dcompiler "$_jc3vrs_sys32/d3dcompiler_47.dll"; then
+jc3vr_ensure_wine_prefix() {
+    _jc3vr_sys32="$WINEPREFIX/drive_c/windows/system32"
+    if _jc3vr_is_native_d3dcompiler "$_jc3vr_sys32/d3dcompiler_47.dll"; then
         return 0
     fi
 
-    if [ ! -d "$_jc3vrs_sys32" ]; then
+    if [ ! -d "$_jc3vr_sys32" ]; then
         echo "wine prefix: creating $WINEPREFIX" >&2
         mkdir -p "$WINEPREFIX"
         wineboot -i >/dev/null 2>&1 || true
-        if [ ! -d "$_jc3vrs_sys32" ]; then
+        if [ ! -d "$_jc3vr_sys32" ]; then
             echo "wine prefix: wineboot failed to create the prefix; wine may be misconfigured" >&2
             return 1
         fi
@@ -76,12 +76,12 @@ jc3vrs_ensure_wine_prefix() {
 
     # `shadergen` downloads and installs the native DLL; reuse its copy if a previous run left one,
     # rather than downloading a second time.
-    for _jc3vrs_donor in \
-        "$jc3vrs_wine_prefix_repo/target/fsr-shader-build/wineprefix/drive_c/windows/system32/d3dcompiler_47.dll" \
+    for _jc3vr_donor in \
+        "$jc3vr_wine_prefix_repo/target/fsr-shader-build/wineprefix/drive_c/windows/system32/d3dcompiler_47.dll" \
         "${D3DCOMPILER_DLL:-}"; do
-        if [ -n "$_jc3vrs_donor" ] && _jc3vrs_is_native_d3dcompiler "$_jc3vrs_donor"; then
-            cp "$_jc3vrs_donor" "$_jc3vrs_sys32/d3dcompiler_47.dll"
-            echo "wine prefix: installed d3dcompiler_47 from $_jc3vrs_donor" >&2
+        if [ -n "$_jc3vr_donor" ] && _jc3vr_is_native_d3dcompiler "$_jc3vr_donor"; then
+            cp "$_jc3vr_donor" "$_jc3vr_sys32/d3dcompiler_47.dll"
+            echo "wine prefix: installed d3dcompiler_47 from $_jc3vr_donor" >&2
             return 0
         fi
     done
@@ -92,9 +92,9 @@ jc3vrs_ensure_wine_prefix() {
 }
 
 # Fail loudly for the callers that genuinely cannot work without the native compiler.
-jc3vrs_require_d3dcompiler() {
-    jc3vrs_ensure_wine_prefix
-    if ! _jc3vrs_is_native_d3dcompiler "$WINEPREFIX/drive_c/windows/system32/d3dcompiler_47.dll"; then
+jc3vr_require_d3dcompiler() {
+    jc3vr_ensure_wine_prefix
+    if ! _jc3vr_is_native_d3dcompiler "$WINEPREFIX/drive_c/windows/system32/d3dcompiler_47.dll"; then
         echo "error: this tool needs the native d3dcompiler_47.dll (wine's built-in mis-parses some shaders)" >&2
         echo "       run: nix-shell shell.nix --run 'cargo run -p shadergen --target x86_64-unknown-linux-gnu'" >&2
         exit 1

@@ -1,6 +1,6 @@
 # Hands, arms, and roomscale
 
-Scoping VR motion controllers for JC3VRS: virtual hands that hold weapons, both arms aimable at
+Scoping VR motion controllers for jc3vr: virtual hands that hold weapons, both arms aimable at
 independent targets (right gun one way, left grapple another), and roomscale locomotion where
 physically walking moves the in-game character. This is a reverse-engineering recon of the three
 systems that would carry those features — the weapon-attachment (prop) chain, the shipped per-arm

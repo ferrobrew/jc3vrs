@@ -63,7 +63,7 @@ Both advances share one mutex, and it is the innermost lock in the headpose's SI
 
 ## Telemetry
 
-`payload/src/grapple/telemetry.rs` captures the filter's inputs and outputs — hook phase, blend, raw/filtered/held body frames, HMD cockpit pose, composed head pose, anchor — to a timestamped `jc3vrs-grapple-<stamp>.csv` beside the payload DLL, one row per input tick and per rendered VR frame. Toggle it from the Camera tab ("Log reel telemetry"; off by default); each enable starts a fresh file. Every behaviour above was diagnosed and verified against these captures, and they remain the tool of choice when a comfort report is hard to reproduce by feel.
+`payload/src/grapple/telemetry.rs` captures the filter's inputs and outputs — hook phase, blend, raw/filtered/held body frames, HMD cockpit pose, composed head pose, anchor — to a timestamped `jc3vr-grapple-<stamp>.csv` beside the payload DLL, one row per input tick and per rendered VR frame. Toggle it from the Camera tab ("Log reel telemetry"; off by default); each enable starts a fresh file. Every behaviour above was diagnosed and verified against these captures, and they remain the tool of choice when a comfort report is hard to reproduce by feel.
 
 ## Configuration
 

@@ -4,8 +4,8 @@
 //! backtrace of the faulting thread, and a backtrace of every other thread the moment a fatal
 //! exception is *raised* -- before any handler unwinds. This covers the case where the game catches a
 //! fault itself and turns it into a clean exit: Wine prints no backtrace and the window just
-//! vanishes, but the record still lands in the session's crash log (`jc3vrs-crash.log`) -- a
-//! dedicated file, separate from `jc3vrs.log` because the handler writes it through a raw file handle
+//! vanishes, but the record still lands in the session's crash log (`jc3vr-crash.log`) -- a
+//! dedicated file, separate from `jc3vr.log` because the handler writes it through a raw file handle
 //! with no allocation and no dependence on the tracing subscriber (see below), so a record survives a
 //! fault that has already broken the normal logging path; each record head carries a UTC timestamp
 //! matching the tracing log's, for cross-correlation. A panic hook does the same for Rust panics,
@@ -74,7 +74,7 @@ use crate::crash::{
 };
 
 pub fn install() {
-    // Open the crash log with a raw handle. It is a *separate* file from `jc3vrs.log` because the
+    // Open the crash log with a raw handle. It is a *separate* file from `jc3vr.log` because the
     // vectored handler writes it directly (raw `WriteFile`, no allocation, no tracing subscriber), so
     // a record survives a fault that has already broken the normal logging path. It lives in the
     // session directory (see [`crate::session`]), opened append-only; each record is timestamped to
@@ -82,7 +82,7 @@ pub fn install() {
     if let Some(dir_result) = crate::session::dir() {
         match dir_result {
             Ok(dir) => {
-                let path = dir.join("jc3vrs-crash.log");
+                let path = dir.join("jc3vr-crash.log");
                 let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
                 wide.push(0);
                 // SAFETY: `wide` is a null-terminated UTF-16 path; all other arguments are plain flags.
@@ -125,7 +125,7 @@ pub fn install() {
     // ones -- the sentinel and location touch nothing heap-derived.
     //
     // The previously installed hook (lib.rs installs the tracing hook before this runs) is
-    // chained afterwards, so panics still reach jc3vrs.log: set_hook replaces rather than stacks,
+    // chained afterwards, so panics still reach jc3vr.log: set_hook replaces rather than stacks,
     // which silently disabled the tracing hook until this chaining. The allocation-free crash-log
     // lines land first, so a fault in the richer tracing path cannot mask them.
     let previous_hook = std::panic::take_hook();

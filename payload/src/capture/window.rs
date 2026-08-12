@@ -40,7 +40,7 @@ use windows::{
 
 /// The window-class name. Registered once per process; the static atom guards against double
 /// registration.
-const CLASS_NAME: PCWSTR = windows::core::w!("JC3VRSCapture");
+const CLASS_NAME: PCWSTR = windows::core::w!("jc3vr_capture");
 static CLASS_ATOM: OnceLock<u16> = OnceLock::new();
 
 /// The capture window and its swapchain, sized to fit both eyes side by side.
@@ -177,7 +177,7 @@ fn create_hwnd(hinstance: HINSTANCE, width: i32, height: i32) -> anyhow::Result<
         CreateWindowExW(
             WS_EX_NOACTIVATE,
             CLASS_NAME,
-            windows::core::w!("JC3VRS Capture"),
+            windows::core::w!("jc3vr Capture"),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             0,
             0,

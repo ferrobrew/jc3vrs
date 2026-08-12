@@ -1,6 +1,6 @@
-# JC3VRS roadmap
+# jc3vr roadmap
 
-JC3VRS is a VR mod for Just Cause 3: render the game in stereo for an HMD, drive the head and body from the player, float the HUD as a panel in 3D, and map VR controllers onto the game's input — across on-foot, vehicles, and wingsuit.
+jc3vr is a VR mod for Just Cause 3: render the game in stereo for an HMD, drive the head and body from the player, float the HUD as a panel in 3D, and map VR controllers onto the game's input — across on-foot, vehicles, and wingsuit.
 
 The strategy is **flatscreen first, then OpenXR**. The whole render-and-control pipeline is built and tuned against the flat desktop — stereo as a side-by-side preview, the mouse standing in for the headset — before the OpenXR runtime is wired up. That lets us get stereo correctness, the head/body scheme, the HUD, and input feeling right without a headset in the loop; the OpenXR layer then swaps the desktop present and the mouse stand-in for real HMD pose, field of view, and swapchains.
 

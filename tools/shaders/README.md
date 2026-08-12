@@ -26,7 +26,7 @@ under wine. Prerequisites (all already used elsewhere in this repo):
 
 - the xwin sysroot at `.xwin/xwin` — run `scripts/xwin_build.sh` once if absent;
 - the shared wine prefix and `d3dcompiler_47.dll`, provisioned by
-  `scripts/wine_prefix.sh` — source it and call `jc3vrs_ensure_wine_prefix` (run
+  `scripts/wine_prefix.sh` — source it and call `jc3vr_ensure_wine_prefix` (run
   `cargo run -p shadergen --target x86_64-unknown-linux-gnu` once to trigger provisioning);
 - `wine` on `PATH`.
 

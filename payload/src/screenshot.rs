@@ -269,7 +269,7 @@ unsafe fn map_out(
             height: desc.Height,
             bgra,
             format: format!("{:?}", desc.Format),
-            file_name: format!("jc3vrs-{n:04}.png"),
+            file_name: format!("jc3vr-{n:04}.png"),
             diagnostics: crate::stereo::single_pass::last_frame_diagnostics(),
         })
     }
@@ -282,7 +282,7 @@ fn spawn_writer(pending: PendingWrite) {
     // also sees every write the thread performed before decrementing it.
     PENDING_WRITES.fetch_add(1, Ordering::Release);
     let spawned = std::thread::Builder::new()
-        .name("jc3vrs-screenshot".to_owned())
+        .name("jc3vr-screenshot".to_owned())
         .spawn(move || {
             match write_screenshot(pending) {
                 Ok(path) => tracing::info!("screenshot: wrote {}", path.display()),

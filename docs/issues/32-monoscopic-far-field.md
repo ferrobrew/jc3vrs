@@ -1,6 +1,6 @@
 # #32 monoscopic far-field — distance-split mechanism investigation
 
-RE groundwork for [#32](https://github.com/ferrobrew/jc3vrs/issues/32): render the distant scene
+RE groundwork for [#32](https://github.com/ferrobrew/jc3vr/issues/32): render the distant scene
 once and share it between the eyes. The issue's first open question — *how* to split the scene by
 distance when the engine cleaves passes by type, not range — has an engine-native answer: the
 render-pass **sort machinery** already computes a per-instance camera distance every frame, and

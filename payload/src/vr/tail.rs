@@ -56,7 +56,7 @@ pub fn submit(job: Box<TailJob>) -> Result<(), Box<TailJob>> {
     let sender = SENDER.get_or_init(|| {
         let (tx, rx) = mpsc::channel();
         std::thread::Builder::new()
-            .name("jc3vrs-frame-tail".to_owned())
+            .name("jc3vr-frame-tail".to_owned())
             .spawn(move || worker(rx))
             .expect("spawning the frame-tail worker");
         tx

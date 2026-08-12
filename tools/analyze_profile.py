@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Analyze a jc3vrs profiler capture (`jc3vrs-profile-*.json`, issue #34).
+"""Analyze a jc3vr profiler capture (`jc3vr-profile-*.json`, issue #34).
 
 Reads the Chrome trace-event JSON the in-game profiler dumps (F9 / the Performance tab) and
 reports where the frame budget goes:
@@ -28,7 +28,7 @@ Reading notes baked into the numbers:
   * The per-render-block-type scopes are off by default (they inflate the draw path they measure),
     so a capture may have no render-block ranking; the block counts go to the log instead.
 
-Usage: uv run tools/analyze_profile.py <jc3vrs-profile-*.json> [--worst N] [--top N] [--csv out.csv]
+Usage: uv run tools/analyze_profile.py <jc3vr-profile-*.json> [--worst N] [--top N] [--csv out.csv]
 """
 
 import argparse
@@ -124,7 +124,7 @@ class Frames:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("trace", help="a jc3vrs-profile-*.json capture")
+    ap.add_argument("trace", help="a jc3vr-profile-*.json capture")
     ap.add_argument("--worst", type=int, default=5, help="worst frames to detail (default 5)")
     ap.add_argument("--top", type=int, default=15, help="rows in the pass/type rankings (default 15)")
     ap.add_argument("--csv", help="also write a per-frame CSV to this path")
@@ -139,7 +139,7 @@ def main() -> None:
     draw = [e for lane, evs in by_lane.items() if lane == "draw" for e in evs]
     gpu = by_lane.get("GPU", [])
     if not game:
-        sys.exit("analyze_profile: no 'game' lane in the trace — is this a jc3vrs profiler capture?")
+        sys.exit("analyze_profile: no 'game' lane in the trace — is this a jc3vr profiler capture?")
 
     frame_events = [e for e in game if e["name"] == "CGame::Update"]
     frames = Frames(frame_events)

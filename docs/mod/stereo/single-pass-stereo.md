@@ -174,7 +174,7 @@ Validation runs at four levels:
    them.
 
 The extract is game-derived and git-ignored. A missing extract **fails** the corpus tests; set
-`JC3VRS_ALLOW_MISSING_SHADER_CORPUS=1` to skip them instead.
+`JC3VR_ALLOW_MISSING_SHADER_CORPUS=1` to skip them instead.
 
 ## Reprojection: the non-`cb0` families
 

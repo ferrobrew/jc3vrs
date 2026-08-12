@@ -3,7 +3,7 @@
 //!
 //! While enabled (from the debug UI's Camera tab; off by default), one row is written per input
 //! tick (`tick`) and per rendered VR frame (`frame`) to a timestamped
-//! `jc3vrs-grapple-<yyyymmdd-hhmmss>.csv` beside the payload DLL. The file is created lazily on
+//! `jc3vr-grapple-<yyyymmdd-hhmmss>.csv` beside the payload DLL. The file is created lazily on
 //! the first row, and toggling off and on starts a fresh file, so captures with different settings
 //! stay separate. A dedicated file rather than the tracing stack because the capture is a dense
 //! machine-read stream that must survive log-filter changes and re-injection.
@@ -145,7 +145,7 @@ fn write_row(kind: &str, fields: &str) {
 fn open_capture() -> Option<TelemetryWriter> {
     let Some(path) = crate::session::subdir("grapple")
         .and_then(|r| r.ok())
-        .map(|dir| dir.join(format!("jc3vrs-grapple-{}.csv", crate::session::stamp())))
+        .map(|dir| dir.join(format!("jc3vr-grapple-{}.csv", crate::session::stamp())))
     else {
         tracing::warn!("grapple telemetry: could not resolve the session grapple directory");
         return None;

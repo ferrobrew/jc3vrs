@@ -31,9 +31,9 @@ pub(super) fn acquire_instance(
     entry
         .create_instance(
             &xr::ApplicationInfo {
-                application_name: "jc3vrs",
+                application_name: "jc3vr",
                 application_version: 0,
-                engine_name: "jc3vrs",
+                engine_name: "jc3vr",
                 engine_version: 0,
                 api_version: xr::Version::new(1, 0, 0),
             },
@@ -112,8 +112,8 @@ pub(super) fn clear_persisted() {
 /// uninject, so a payload static cannot survive; the game process's environment block does. The
 /// runtime allows only a small number of instances *and* sessions per process, so a reinject must
 /// reuse both rather than create new ones.
-const INSTANCE_STASH_VAR: windows::core::PCWSTR = windows::core::w!("JC3VRS_XR_INSTANCE");
-const SESSION_STASH_VAR: windows::core::PCWSTR = windows::core::w!("JC3VRS_XR_SESSION");
+const INSTANCE_STASH_VAR: windows::core::PCWSTR = windows::core::w!("jc3vr_xr_instance");
+const SESSION_STASH_VAR: windows::core::PCWSTR = windows::core::w!("jc3vr_xr_session");
 
 /// Store a handle value in the game process's environment under `var`, as hex.
 fn stash_handle(var: windows::core::PCWSTR, raw: u64) {

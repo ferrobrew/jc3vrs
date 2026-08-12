@@ -97,7 +97,7 @@ fn initialize_startup() {
     }));
 
     logging::install();
-    tracing::info!(build = BUILD_STAMP, "JC3VRS startup");
+    tracing::info!(build = BUILD_STAMP, "jc3vr startup");
     crash::install();
     hooks::install();
 }
@@ -209,7 +209,7 @@ static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 /// banner, and the debug window): an uninject can leave the module resident (a hung shutdown
 /// thread keeps the DLL mapped), and a failed re-inject then silently reactivates the stale code —
 /// the stamp is how a stale payload is caught at a glance.
-pub const BUILD_STAMP: &str = env!("JC3VRS_BUILD_STAMP");
+pub const BUILD_STAMP: &str = env!("jc3vr_build_stamp");
 
 /// Request that we shut down and exit
 fn shutdown() {

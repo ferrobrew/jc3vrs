@@ -28,7 +28,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STEAM="${STEAM_ROOT:-$HOME/.steam/steam}"
 PROTON="${PROTON_DIR:-$STEAM/steamapps/common/Proton - Experimental}"
-BUS="${JC3_BUS_NAME:-com.jc3vrs.JustCause3}"
+BUS="${JC3_BUS_NAME:-com.jc3vr.JustCause3}"
 LAUNCH_CLIENT="$STEAM/steamapps/common/SteamLinuxRuntime_sniper/pressure-vessel/bin/steam-runtime-launch-client"
 
 PROFILE=debug
@@ -42,12 +42,12 @@ for arg in "$@"; do
     ARGS+=("$arg")
   fi
 done
-INJECTOR="$DIR/target/x86_64-pc-windows-msvc/$PROFILE/jc3vrs_injector.exe"
+INJECTOR="$DIR/target/x86_64-pc-windows-msvc/$PROFILE/jc3vr_injector.exe"
 
 # Build with the cross toolchain (cargo-xwin lives in the nix shell, not under
 # steam-run/Proton — keep the two invocations separate).
 nix-shell "$DIR/shell.nix" --run \
-  "cd '$DIR' && cargo xwin build --xwin-cache-dir .xwin --target x86_64-pc-windows-msvc -p jc3vrs_payload -p jc3vrs_injector $CARGO_PROFILE_FLAG"
+  "cd '$DIR' && cargo xwin build --xwin-cache-dir .xwin --target x86_64-pc-windows-msvc -p jc3vr_payload -p jc3vr_injector $CARGO_PROFILE_FLAG"
 
 # Send the injector into the game's container. The command inherits the
 # container's environment (STEAM_COMPAT_DATA_PATH etc.), so `proton runinprefix`
