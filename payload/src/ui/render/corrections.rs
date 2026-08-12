@@ -75,6 +75,32 @@ pub(super) fn section(ui: &mut egui::Ui, cfg: &mut config::Config) {
              shadows look wrong in one eye, turn this off.",
         );
         ui.checkbox(
+            &mut cfg.stereo.share_water_simulation,
+            "Share the WaveWorks ocean step across eyes (one simulation kick per frame)",
+        )
+        .on_hover_text(
+            "Without this the second eye advances the ocean simulation again and renders a later \
+             sea state, so the sun-glint sparkle decorrelates between the eyes (issue #47).",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.per_eye_water_reflection,
+            "Per-eye water reflection (re-mirror + re-render the planar reflection per eye)",
+        )
+        .on_hover_text(
+            "The water samples its reflection map at each pixel's own screen position, so a map \
+             rendered from one mirrored camera only matches one eye (issue #47). Costs one extra \
+             reflection render per frame.",
+        );
+        ui.checkbox(
+            &mut cfg.stereo.disable_screen_space_water_reflection,
+            "Disable screen-space water reflection (A/B for the per-eye water mismatch)",
+        )
+        .on_hover_text(
+            "Forces the water onto the full-reflection binding. If the eyes then agree, the \
+             screen-space reflection sampling is the seam (issue #47). Restores the engine value \
+             when unchecked.",
+        );
+        ui.checkbox(
             &mut cfg.stereo.force_smaa_1x,
             "Force SMAA 1x (T2X's shared history ghosts across eyes)",
         );

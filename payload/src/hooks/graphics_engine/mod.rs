@@ -25,7 +25,7 @@ pub mod shader;
 mod single_pass;
 
 mod post;
-mod scene;
+pub(crate) mod scene;
 mod screen;
 
 pub(crate) use post::post_effects;
