@@ -45,7 +45,9 @@ use windows::{
     core::Interface as _,
 };
 
-use crate::stereo::single_pass::FrameDiagnostics;
+use crate::{
+    hooks::graphics_engine::scene::water::WaterDrawSnapshot, stereo::single_pass::FrameDiagnostics,
+};
 
 /// What a capture reads its pixels from. Both variants produce one PNG containing both eyes; they
 /// differ in whether the GPU already laid the eyes out side by side.
@@ -144,6 +146,9 @@ struct PendingWrite {
     /// The single-pass state of the captured frame, snapshotted here because by the time the writer
     /// runs the engine is several frames on.
     diagnostics: Option<FrameDiagnostics>,
+    /// The per-eye WaveWorks water-draw inputs of the captured frame (issue #47), snapshotted here
+    /// for the same reason.
+    water: [Option<WaterDrawSnapshot>; 2],
 }
 
 /// The render-thread half: staging copy (or two half-copies for the stitched form), map, memcpy
@@ -271,6 +276,7 @@ unsafe fn map_out(
             format: format!("{:?}", desc.Format),
             file_name: format!("jc3vrs-{n:04}.png"),
             diagnostics: crate::stereo::single_pass::last_frame_diagnostics(),
+            water: crate::hooks::graphics_engine::scene::water::last_water_draws(),
         })
     }
 }
@@ -332,14 +338,17 @@ fn write_screenshot(mut pending: PendingWrite) -> anyhow::Result<PathBuf> {
         .with_context(|| format!("encoding {}", path.display()))?;
 
     // Sidecar JSON: everything relevant about this frame's single-pass state (the per-eye cb13
-    // matrices, the centre transform, the viewport, the config), so the exact matrices that
-    // produced the image can be inspected offline instead of read from a log line.
+    // matrices, the centre transform, the viewport, the config), plus the per-eye water-draw
+    // inputs (issue #47), so the exact state that produced the image can be inspected offline
+    // instead of read from a log line.
     let sidecar = serde_json::json!({
         "image": path.file_name().and_then(|f| f.to_str()),
         "width": pending.width,
         "height": pending.height,
         "format": pending.format,
         "single_pass": serde_json::to_value(&pending.diagnostics)
+            .unwrap_or(serde_json::Value::Null),
+        "water": serde_json::to_value(&pending.water)
             .unwrap_or(serde_json::Value::Null),
     });
     let json_path = path.with_extension("json");

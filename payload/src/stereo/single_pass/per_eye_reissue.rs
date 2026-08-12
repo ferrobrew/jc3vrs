@@ -361,12 +361,99 @@ pub unsafe fn reproject_baked_cb_per_eye_staged(
     true
 }
 
+/// Re-issue a render block's `Draw` once per eye with a *projective screen-UV* constant biased into
+/// that eye's half of the double-wide target, restoring the staged rows afterwards. Returns `false`
+/// when the intercept must not run (the same gate every other per-eye re-issue takes), in which case
+/// the caller draws normally once.
+///
+/// `base` is the four `float4` rows the block's *type* staged at (`cb_index`, `reg_offset`): a
+/// world→screen-UV transform with the NDC→UV `x·0.5 + w·0.5` already folded in, which the vertex
+/// shader applies with a multiply-add chain over the four registers (so they are the matrix's rows in
+/// the row-vector convention) and hands on as a projective `TEXCOORD1` for the pixel shader to divide
+/// by `w`. The resulting UV is normalized over the *viewport*, i.e. over one eye's half, while the
+/// buffers it indexes are the whole double-wide target -- so each eye reads the entire two-eye image
+/// across its surface, and the mismatch slides as the camera moves. Composing one more bias per eye,
+/// `u' = (u + eye) · 0.5`, maps it back into that eye's half; row-wise, and because `u` and `w` are
+/// both per-row sums, that is `row.x ← row.x · 0.5 + row.w · 0.5 · eye`.
+///
+/// Unlike [`reproject_baked_cb_per_eye`] this restages rather than intercepts, because the constant is
+/// staged by the block *type*'s per-pass setup rather than inside the `Draw` being re-issued (the same
+/// reason [`terrain_detail_per_eye`] stages its own rows). It is also deliberately *not* reprojected
+/// by `M_eye`: the geometry these blocks rasterize still comes from the collapsed centre view, so the
+/// UV must describe where that geometry actually landed, not where the eye's own projection would have
+/// put it.
+///
+/// # Safety
+///
+/// `rc` must be the live [`RenderContext`] the detoured `Draw` received, and `draw` must invoke the
+/// block's original `Draw` trampoline.
+pub unsafe fn screen_uv_cb_per_eye(
+    rc: *const RenderContext,
+    cb_index: i32,
+    reg_offset: u32,
+    base: [f32; 16],
+    mut draw: impl FnMut(),
+) -> bool {
+    let Some((_, full, d3d)) =
+        baked_cb_intercept_ready("legacy-water screen UV", BoundVsGate::Checked)
+    else {
+        return false;
+    };
+    // SAFETY: `rc` is live per the caller contract.
+    let ctx = unsafe { render_context_graphics_context(rc) };
+    per_eye_halves(full, d3d, &mut |eye| {
+        let mut rows = base;
+        for k in 0..4 {
+            rows[k * 4] = base[k * 4].mul_add(0.5, base[k * 4 + 3] * 0.5 * eye as f32);
+        }
+        // SAFETY: `ctx` is the render context's live graphics context; `rows` is four float4 rows.
+        unsafe { SetVertexProgramConstants(ctx, cb_index, reg_offset, rows.as_ptr(), 4) };
+        draw();
+    });
+    // Put the type's own rows back. It stages them once per pass, ahead of every block it covers, so
+    // leaving the second eye's bias behind would hand it to any later draw this intercept declines.
+    // SAFETY: as above; `base` is the four rows the type staged.
+    unsafe { SetVertexProgramConstants(ctx, cb_index, reg_offset, base.as_ptr(), 4) };
+    true
+}
+
 /// Run `render` once per eye with that eye's half-viewport pinned on both slots, restoring the
 /// collapse's full viewport afterwards. Returns `false` when the intercept must not run -- the same
 /// gate every other per-eye re-issue takes ([`baked_cb_intercept_ready`]) -- in which case the caller
 /// must do its work itself, exactly once.
+///
+/// The bare form of [`reproject_baked_cb_per_eye`] and [`screen_uv_cb_per_eye`], for a block whose
+/// per-eye state is not a vertex constant this module knows how to transform: `render` receives the
+/// eye and does whatever staging that block needs before invoking its own `Draw`. Each call is
+/// bracketed by [`PER_EYE_REISSUE`], so the draw and viewport detours leave the block's own
+/// submissions alone instead of splitting them a second time.
+/// `site` names the calling block for the decline diagnostic (see
+/// [`warn_intercept_declined_on_patched_vs`]); it is the caller's identity rather than this helper's,
+/// because a bound-shader decline is a fact about that block's own shaders.
 pub fn draw_per_eye_half(site: &'static str, mut render: impl FnMut(usize)) -> bool {
     let Some((_, full, d3d)) = baked_cb_intercept_ready(site, BoundVsGate::Checked) else {
+        return false;
+    };
+    per_eye_halves(full, d3d, &mut render);
+    true
+}
+
+/// [`draw_per_eye_half`] for a block that binds its own vertex programs *inside* the `Draw` being
+/// re-issued, so the shader bound when the gate runs is the previous draw's and says nothing about
+/// this one.
+///
+/// [`baked_cb_intercept_ready`]'s bound-shader gate exists to leave already-patched geometry to the
+/// patched path, and it reads the shader that `VSSetShader` last saw. For a block whose type binds
+/// its programs in a per-pass setup that is a fair proxy; for one that binds them per draw it is a
+/// coin flip on whatever drew before it, which would make the re-issue fire intermittently. Callers
+/// take this variant only when the block's own vertex programs are provably outside the rewrite.
+///
+/// "Builds clip from a constant buffer of its own" is *not* on its own enough to establish that: the
+/// rewrite claims any shader referencing the per-eye `cb0` entries, and `cb0[4]` is a camera position
+/// that such a family may still read for shading. Where a family reads it, the shader has to be
+/// declined at creation instead ([`baked_cb_block_owns_vs`]).
+pub fn draw_per_eye_half_ignoring_bound_vs(mut render: impl FnMut(usize)) -> bool {
+    let Some((_, full, d3d)) = eye_split_state() else {
         return false;
     };
     per_eye_halves(full, d3d, &mut render);

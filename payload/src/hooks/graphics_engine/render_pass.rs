@@ -25,6 +25,7 @@ use crate::{
         stereo_diff::op_total,
         trace::{TraceEvent, TraceState, tracing_active},
     },
+    hooks::graphics_engine::scene::water,
     profiler::gpu::seam,
     stereo::{STEREO_STATE, draw_index, is_second_eye},
     vr::foveation::{FORCE_STENCIL_TEST, FoveationParams},
@@ -561,6 +562,12 @@ fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
     // rather than from the game thread, which runs concurrently with it once the frame tail is
     // deferred.
     crate::stereo::single_pass::begin_dispatch();
+    // The water-simulation once-per-frame latch resets at the same seam, for the same
+    // concurrency reason (see its doc comment).
+    water::begin_dispatch();
+    // Re-mirror the water reflection camera for this dispatch's eye before the reflection
+    // pre-passes (which the un-sharing below lets run per eye) read it.
+    water::apply_per_eye_reflection_camera();
     let original = PRE_DRAW.get().unwrap();
     let share_cfg =
         Config::lock_query(|c| c.stereo.share_prepasses && c.stereo.restore_frame_counters);
@@ -569,12 +576,42 @@ fn pre_draw(this: *mut RenderEngine, ctx: *mut HContext_t) -> u64 {
         // engine-owned, null-checked pass pointers; the `m_Enabled` flag write mirrors the shadow
         // scheduler's own store in `commit_render_pass_settings`.
         let disabled = unsafe { disable_shared_prepasses(this) };
+        unsafe { record_reflection_pass_count(this) };
         let r = original.call(this, ctx);
         unsafe { reenable_passes(&disabled) };
         r
     } else {
+        // SAFETY: as above, read-only.
+        unsafe { record_reflection_pass_count(this) };
         original.call(this, ctx)
     }
+}
+
+/// Record how many reflection-chain passes (the categories
+/// [`RenderPassId::PRE_RP_REFLECTION_PRE`] through [`RenderPassId::PRE_RP_REFLECTION_POST`]) are
+/// enabled for this dispatch's pre-pass loop, for the water diagnostics snapshot (issue #47): zero
+/// on an eye that should have re-rendered them means the per-eye reflection re-render never ran.
+///
+/// # Safety
+///
+/// `this` must be the live render engine.
+unsafe fn record_reflection_pass_count(this: *mut RenderEngine) {
+    let Some(engine) = (unsafe { this.as_ref() }) else {
+        return;
+    };
+    let mut enabled = 0;
+    for cat in
+        RenderPassId::PRE_RP_REFLECTION_PRE as usize..=RenderPassId::PRE_RP_REFLECTION_POST as usize
+    {
+        for &pass in unsafe { engine.m_RenderPasses[cat].as_slice() } {
+            if let Some(pass) = (unsafe { pass.as_ref() })
+                && pass.m_StateFlags.contains(RenderPassState::m_Enabled)
+            {
+                enabled += 1;
+            }
+        }
+    }
+    water::record_reflection_passes_enabled(enabled);
 }
 
 /// The pre-pass categories ([`RenderPassId`] indices) that render identically for both eyes and whose
@@ -593,6 +630,22 @@ const SHARED_PREPASS_CATEGORIES: &[(usize, usize)] = &[
     ),
 ];
 
+/// The shared categories with the water planar-reflection chain carved out, used while
+/// [`per_eye_water_reflection`](crate::stereo::config::StereoConfig::per_eye_water_reflection) is
+/// on: those passes re-render on the second eye's dispatch from that eye's re-mirrored reflection
+/// camera (see `scene::water::apply_per_eye_reflection_camera`), while the environment cube, cloud
+/// shadows, and the shadow/water-sim block stay shared.
+const SHARED_PREPASS_CATEGORIES_PER_EYE_REFLECTION: &[(usize, usize)] = &[
+    (
+        RenderPassId::PRE_RP_ENVREFLECTION as usize,
+        RenderPassId::PRE_RP_CLOUDSHADOWS as usize,
+    ),
+    (
+        RenderPassId::PRE_RP_STATIC_SHADOW_0 as usize,
+        RenderPassId::PRE_RP_WATER_DISPLACEMENT_PRE as usize,
+    ),
+];
+
 /// Clear [`RenderPassState::m_Enabled`] on every enabled pass in the shared pre-pass categories so
 /// `PreDraw`'s loop skips them, returning the passes cleared so [`reenable_passes`] can restore them.
 ///
@@ -603,8 +656,13 @@ unsafe fn disable_shared_prepasses(this: *mut RenderEngine) -> Vec<*mut RenderPa
     let Some(engine) = (unsafe { this.as_mut() }) else {
         return Vec::new();
     };
+    let categories = if Config::lock_query(|c| c.stereo.per_eye_water_reflection) {
+        SHARED_PREPASS_CATEGORIES_PER_EYE_REFLECTION
+    } else {
+        SHARED_PREPASS_CATEGORIES
+    };
     let mut disabled = Vec::new();
-    for &(lo, hi) in SHARED_PREPASS_CATEGORIES {
+    for &(lo, hi) in categories {
         for cat in lo..=hi {
             for &pass in unsafe { engine.m_RenderPasses[cat].as_slice() } {
                 if let Some(pass) = (unsafe { pass.as_mut() })

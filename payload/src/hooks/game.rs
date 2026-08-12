@@ -93,6 +93,11 @@ fn game_update_render(game: *mut Game, update_contexts: *mut UpdateContexts) {
         // Apply the sun-shadow diagnostic override before the original runs, so this frame's
         // sim-side CShadowManager::UpdateRender sees it and drives the engine's own SetEnabled path.
         apply_sun_shadow_override(Config::lock_query(|c| c.stereo.disable_sun_shadows));
+        // Same discipline for the screen-space water-reflection override: applied here so the
+        // engine's water update and this frame's water draws both see it.
+        graphics_engine::scene::water::apply_ssr_override(Config::lock_query(|c| {
+            c.stereo.disable_screen_space_water_reflection
+        }));
 
         // Apply a requested shader reload here, on the game thread before this frame's draws, so the
         // PCF-patch hook re-creates the already-loaded shaders (injection is normally after the game

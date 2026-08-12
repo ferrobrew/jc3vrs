@@ -378,6 +378,12 @@ pub struct StereoConfig {
     /// shadow flicker (issue #31). Requires [`restore_frame_counters`](Self::restore_frame_counters) so
     /// both eyes share the shadow-atlas parity slot; a no-op without it. VR/stereo only.
     pub share_prepasses: bool,
+    /// Advance the WaveWorks ocean simulation once per frame instead of once per dispatch (issue
+    /// #47): the simulation step inside the main-body water draw runs on the frame's first water
+    /// draw and is suppressed for the rest, so every dispatch renders the same archived
+    /// displacement state. Without it the second eye kicks the simulation again and renders a
+    /// later ocean, decorrelating the sun-glint sparkle between the eyes. VR/stereo only.
+    pub share_water_simulation: bool,
     /// Skip SetupRenderFrameData on eye 1 (experimental; normally inert).
     pub gate_setup_render_frame_data: bool,
     /// Skip HandBackBuffers on eye 1.
@@ -524,6 +530,19 @@ pub struct StereoConfig {
     /// sharpest shadow-pipeline discriminator: an artifact that survives with no shadows at all
     /// cannot be shadow data.
     pub disable_sun_shadows: bool,
+    /// Diagnostic: clear `CWaterPatchManager::m_EnableScreenSpaceWaterReflection`, forcing the
+    /// water onto the full-reflection binding instead of the distant/screen-space path (issue
+    /// #47). The screen-space path samples a reflection map aligned to one view; if the per-eye
+    /// water mismatch dies with this off, that sampling is the seam. The engine value is saved and
+    /// restored when the toggle clears.
+    pub disable_screen_space_water_reflection: bool,
+    /// Render the water's planar reflection per eye (issue #47). The water shader samples its
+    /// reflection maps at the pixel's own screen position, so a map rendered from one mirrored
+    /// camera is only valid for one view; per eye, this re-mirrors the reflection camera with that
+    /// eye's pose delta and lets the reflection pre-passes re-render on the second eye's dispatch,
+    /// so each eye's water samples a map aligned to its own view. Two-pass stereo only; under the
+    /// single-pass collapse the single dispatch keeps the engine's own centre mirror.
+    pub per_eye_water_reflection: bool,
     /// Diagnostic: freeze the sun-shadow atlas by re-clearing the pass-enable flags after
     /// `CommitRenderPassSettings` sets them, so no shadow pass renders and the atlas keeps its last
     /// contents. Shadows stay visible but stop updating: an artifact that survives the freeze is in
@@ -781,6 +800,7 @@ impl StereoConfig {
             present_eye_0: false,
             restore_frame_counters: true,
             share_prepasses: true,
+            share_water_simulation: true,
             gate_setup_render_frame_data: false,
             gate_hand_back_buffers: false,
             gate_eye1_dt: true,
@@ -812,6 +832,8 @@ impl StereoConfig {
             patch_shadow_pcf_hash: true,
             patch_lod_dissolve: false,
             disable_sun_shadows: false,
+            disable_screen_space_water_reflection: false,
+            per_eye_water_reflection: true,
             freeze_shadow_maps: false,
             dedupe_post_block: true,
             invalidate_terrain_cb: true,
